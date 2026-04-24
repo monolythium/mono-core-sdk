@@ -1,0 +1,11 @@
+[package]
+name = "monolythium-core-sdk"
+version = "0.0.1"
+description = "Official Rust SDK for Monolythium v2 / LythiumDAG-BFT"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+path = "src/lib.rs"
