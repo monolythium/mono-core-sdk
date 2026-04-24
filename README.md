@@ -10,7 +10,7 @@ Official Rust + TypeScript SDK for Monolythium v2 (LythiumDAG-BFT)
 
 `mono-core-sdk` is the official client library for talking to Monolythium v2 nodes. It provides typed wrappers around the chain's JSON-RPC surface (both `eth_*` Ethereum-compatible methods and chain-native `protocore_*` methods) so that applications never have to hand-craft RPC payloads. The repo ships two packages: a Rust crate (`monolythium-core-sdk`) and a TypeScript package (`@monolythium/core-sdk`) generated from the same type definitions.
 
-> **Status:** v0.0.1 — scaffold only. The public API lands in v0.1. The current build is a placeholder so dependent surfaces can wire imports without the API churning under them.
+> **Status:** v0.0.1 — typed RPC client now ships in both languages. Higher-level features (signer trait, keychain integration, ethers-compat shim) land in v0.1.
 
 ## Who this is for
 
@@ -32,23 +32,59 @@ pnpm add @monolythium/core-sdk
 
 ## Getting started
 
-The v0.0.1 surface exposes a single `version()` accessor while the typed RPC client is being scaffolded:
+Both packages expose an `RpcClient` that wraps every JSON-RPC method served by a Monolythium node — the EVM-compatible `eth_*` / `net_*` / `web3_*` surface plus the chain-native `protocore_*` and `debug_*` namespaces.
+
+### Rust
 
 ```rust
-use monolythium_core_sdk::version;
+use monolythium_core_sdk::{RpcClient, types::BlockSelector};
 
-fn main() {
-    println!("monolythium-core-sdk v{}", version());
+#[tokio::main]
+async fn main() -> Result<(), monolythium_core_sdk::SdkError> {
+    let client = RpcClient::new("https://rpc.testnet.monolythium.com")?;
+
+    let chain_id = client.eth_chain_id().await?;
+    let head = client.eth_block_number().await?;
+    println!("chain {chain_id} at height {head}");
+
+    let block = client.eth_get_block_by_number(BlockSelector::LATEST).await?;
+    if let Some(block) = block {
+        println!("latest hash: {}", block.hash);
+    }
+
+    let validators = client.protocore_validator_set().await?;
+    println!("{} validators", validators.len());
+
+    Ok(())
 }
 ```
 
-```ts
-import { version } from "@monolythium/core-sdk";
+### TypeScript
 
-console.log(`monolythium-core-sdk v${version}`);
+```ts
+import { RpcClient } from "@monolythium/core-sdk";
+
+const client = new RpcClient("https://rpc.testnet.monolythium.com");
+
+const chainId = await client.ethChainId();
+const head = await client.ethBlockNumber();
+console.log(`chain ${chainId} at height ${head}`);
+
+const block = await client.ethGetBlockByNumber("latest");
+if (block) console.log(`latest hash: ${block.hash}`);
+
+const validators = await client.protocoreValidatorSet();
+console.log(`${validators.length} validators`);
 ```
 
-The full RPC surface (block/tx/account queries, validator-set + cluster introspection, signer trait + keychain-backed implementation) lands in v0.1.
+### Notes
+
+- Both clients accept any HTTP JSON-RPC endpoint exposed by a `mono-core` node.
+- `debug_*` methods are gated server-side via `RpcConfig::debug_enabled` — calls return an `SdkError` carrying the node's `MethodDisabled` code when the namespace is off.
+- `protocore_subscribe` / `protocore_unsubscribe` are WebSocket-only and surface the server's "not implemented" error when called over HTTP. Full WS support is on the roadmap.
+- Integration tests against a live node are deferred — running them from this repo would couple SDK CI to chain infrastructure. Spin up a local node and exercise the client manually until end-to-end harnesses land.
+
+The signer trait, keychain integration, and ethers-compat shim follow in v0.1.
 
 ## Documentation
 
