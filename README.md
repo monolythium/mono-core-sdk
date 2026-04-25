@@ -111,9 +111,4 @@ Found a vulnerability? Please **do not open a public issue**. Email security@mon
 
 ## License
 
-Dual-licensed under either of:
-
-- Apache License, Version 2.0
-- MIT License
-
-at your option.
+Released under the Apache License, Version 2.0. See [LICENSE](./LICENSE) for the full text.
