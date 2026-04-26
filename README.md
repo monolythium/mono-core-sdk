@@ -8,9 +8,9 @@ Official Rust + TypeScript SDK for Monolythium v2 (LythiumDAG-BFT)
 
 ## What this is
 
-`mono-core-sdk` is the official client library for talking to Monolythium v2 nodes. It provides typed wrappers around the chain's JSON-RPC surface (both `eth_*` Ethereum-compatible methods and chain-native `protocore_*` methods) so that applications never have to hand-craft RPC payloads. The repo ships two packages: a Rust crate (`monolythium-core-sdk`) and a TypeScript package (`@monolythium/core-sdk`) generated from the same type definitions.
+`mono-core-sdk` is the official client library for talking to Monolythium v2 nodes. It provides typed wrappers around the chain's JSON-RPC surface (both `eth_*` Ethereum-compatible methods and chain-native `lyth_*` methods, per Law §13.2) so that applications never have to hand-craft RPC payloads. The repo ships two packages: a Rust crate (`monolythium-core-sdk`) and a TypeScript package (`@monolythium/core-sdk`) whose wire types are generated from the same Rust definitions via `ts-rs`.
 
-> **Status:** v0.0.1 — typed RPC client now ships in both languages. Higher-level features (signer trait, keychain integration, ethers-compat shim) land in v0.1.
+> **Status:** v0.1.0 — typed RPC client ships in both languages with `ts-rs`-generated TypeScript bindings. Higher-level features (signer trait, keychain integration, ethers-compat shim) land in v0.2.
 
 ## Who this is for
 
@@ -32,7 +32,7 @@ pnpm add @monolythium/core-sdk
 
 ## Getting started
 
-Both packages expose an `RpcClient` that wraps every JSON-RPC method served by a Monolythium node — the EVM-compatible `eth_*` / `net_*` / `web3_*` surface plus the chain-native `protocore_*` and `debug_*` namespaces.
+Both packages expose an `RpcClient` that wraps every JSON-RPC method served by a Monolythium node — the EVM-compatible `eth_*` / `net_*` / `web3_*` surface plus the chain-native `lyth_*` and `debug_*` namespaces.
 
 ### Rust
 
@@ -52,7 +52,7 @@ async fn main() -> Result<(), monolythium_core_sdk::SdkError> {
         println!("latest hash: {}", block.hash);
     }
 
-    let validators = client.protocore_validator_set().await?;
+    let validators = client.lyth_validator_set().await?;
     println!("{} validators", validators.len());
 
     Ok(())
@@ -73,7 +73,7 @@ console.log(`chain ${chainId} at height ${head}`);
 const block = await client.ethGetBlockByNumber("latest");
 if (block) console.log(`latest hash: ${block.hash}`);
 
-const validators = await client.protocoreValidatorSet();
+const validators = await client.lythValidatorSet();
 console.log(`${validators.length} validators`);
 ```
 
@@ -81,10 +81,10 @@ console.log(`${validators.length} validators`);
 
 - Both clients accept any HTTP JSON-RPC endpoint exposed by a `mono-core` node.
 - `debug_*` methods are gated server-side via `RpcConfig::debug_enabled` — calls return an `SdkError` carrying the node's `MethodDisabled` code when the namespace is off.
-- `protocore_subscribe` / `protocore_unsubscribe` are WebSocket-only and surface the server's "not implemented" error when called over HTTP. Full WS support is on the roadmap.
-- Integration tests against a live node are deferred — running them from this repo would couple SDK CI to chain infrastructure. Spin up a local node and exercise the client manually until end-to-end harnesses land.
+- `lyth_subscribe` / `lyth_unsubscribe` are WebSocket-only and surface the server's "not implemented" error when called over HTTP. Full WS support is on the roadmap.
+- Round-trip integration tests against a live node live in `packages/ts/tests/integration.test.ts`; set `MONO_CORE_RPC_URL` to enable them. They skip cleanly when the variable is unset so CI on dev machines stays green without a chain handy.
 
-The signer trait, keychain integration, and ethers-compat shim follow in v0.1.
+The signer trait, keychain integration, and ethers-compat shim follow in v0.2.
 
 ## Documentation
 
@@ -94,12 +94,26 @@ The signer trait, keychain integration, and ethers-compat shim follow in v0.1.
 ## Building from source
 
 ```bash
-cargo test --workspace
+# Rust crate
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --all-features
+
+# TypeScript package
+pnpm install --frozen-lockfile
 pnpm -r typecheck
 pnpm -r build
+pnpm -r test
 ```
 
-Requirements: Rust 1.82+, Node 22+, pnpm 9+.
+Regenerate TypeScript bindings from the Rust types after a wire-type change:
+
+```bash
+cargo test --features ts-bindings export_bindings
+bash packages/ts/scripts/sync-bindings.sh
+```
+
+Requirements: Rust 1.82+, Node 22+, pnpm 10+.
 
 ## Contributing
 

@@ -73,3 +73,9 @@ coverage/
 # Lockfiles: keep pnpm-lock.yaml; drop others if pnpm is the workspace's package manager
 # package-lock.json
 # yarn.lock
+
+# Pack artifacts
+*.tgz
+
+# Rust-side ts-rs bindings are intermediate — synced into packages/ts/src/bindings/
+crates/core-sdk/bindings/

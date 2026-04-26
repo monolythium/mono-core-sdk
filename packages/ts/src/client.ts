@@ -2,30 +2,33 @@
  * Typed JSON-RPC client for a `mono-core` node.
  *
  * Mirrors the Rust SDK's `RpcClient` — every public method maps 1:1 to
- * a method on the Rust client and returns the same wire-shape value.
+ * a method on the Rust client, returns the same wire-shape value, and
+ * sends the same `lyth_*` / `eth_*` / `debug_*` JSON-RPC method strings
+ * (Law §13.2).
  */
 
 import { SdkError } from "./error.js";
-import {
+import type {
   AccountPolicy,
   AccountProofResponse,
   AssetPolicy,
   BlockHeader,
-  BlockSelector,
   CallRequest,
   FeeHistoryResponse,
   IndexerStatus,
   MempoolSnapshot,
   PeerSummary,
   PendingTxSummary,
+  PrecompileDescriptor,
   RegistryRecord,
   RoundInfo,
   StorageProofBatch,
   SyncStatus,
   TransactionReceipt,
   ValidatorDescriptor,
-  encodeBlockSelector,
-} from "./types.js";
+} from "./bindings/index.js";
+import type { BlockSelector } from "./types.js";
+import { encodeBlockSelector } from "./types.js";
 
 /** Optional per-client configuration. */
 export interface RpcClientOptions {
@@ -49,7 +52,7 @@ interface JsonRpcResponse {
   error?: { code: number; message: string; data?: unknown };
 }
 
-const SDK_VERSION = "0.0.1";
+const SDK_VERSION = "0.1.0";
 
 export class RpcClient {
   readonly endpoint: string;
@@ -115,13 +118,13 @@ export class RpcClient {
   // ---- eth_* / net_* / web3_* ---------------------------------------
 
   /** `eth_chainId` — configured chain id. */
-  async ethChainId(): Promise<number> {
-    return parseQuantity(await this.call<string>("eth_chainId", []));
+  async ethChainId(): Promise<bigint> {
+    return parseQuantityBig(await this.call<string>("eth_chainId", []));
   }
 
   /** `eth_blockNumber` — latest committed height. */
-  async ethBlockNumber(): Promise<number> {
-    return parseQuantity(await this.call<string>("eth_blockNumber", []));
+  async ethBlockNumber(): Promise<bigint> {
+    return parseQuantityBig(await this.call<string>("eth_blockNumber", []));
   }
 
   /** `eth_getBalance` — balance + Merkle proof envelope. */
@@ -149,8 +152,8 @@ export class RpcClient {
   async ethGetTransactionCount(
     address: string,
     block: BlockSelector = "latest",
-  ): Promise<number> {
-    return parseQuantity(
+  ): Promise<bigint> {
+    return parseQuantityBig(
       await this.call<string>("eth_getTransactionCount", [
         address,
         encodeBlockSelector(block),
@@ -194,15 +197,15 @@ export class RpcClient {
   async ethEstimateGas(
     request: CallRequest,
     block: BlockSelector = "latest",
-  ): Promise<number> {
-    return parseQuantity(
+  ): Promise<bigint> {
+    return parseQuantityBig(
       await this.call<string>("eth_estimateGas", [request, encodeBlockSelector(block)]),
     );
   }
 
   /** `eth_gasPrice` — minimum gas price the node will accept. */
-  async ethGasPrice(): Promise<number> {
-    return parseQuantity(await this.call<string>("eth_gasPrice", []));
+  async ethGasPrice(): Promise<bigint> {
+    return parseQuantityBig(await this.call<string>("eth_gasPrice", []));
   }
 
   /** `eth_feeHistory` — base-fee + gas-used history. */
@@ -231,8 +234,8 @@ export class RpcClient {
   }
 
   /** `net_peerCount` — number of connected peers. */
-  async netPeerCount(): Promise<number> {
-    return parseQuantity(await this.call<string>("net_peerCount", []));
+  async netPeerCount(): Promise<bigint> {
+    return parseQuantityBig(await this.call<string>("net_peerCount", []));
   }
 
   /** `net_listening` — whether the node accepts inbound peers. */
@@ -250,80 +253,98 @@ export class RpcClient {
     return this.call("web3_sha3", [data]);
   }
 
-  // ---- protocore_* --------------------------------------------------
+  // ---- lyth_* (Law §13.2 native namespace) --------------------------
 
-  /** `protocore_listProviders` — paged registry enumeration. */
-  async protocoreListProviders(
+  /** `lyth_listProviders` — paged registry enumeration. */
+  async lythListProviders(
     capabilityMask: number,
     cursor: string | null = null,
     limit = 100,
   ): Promise<RegistryRecord[]> {
-    return this.call("protocore_listProviders", [capabilityMask, cursor, limit]);
+    return this.call("lyth_listProviders", [capabilityMask, cursor, limit]);
   }
 
-  /** `protocore_getRegistration` — single registry lookup. */
-  async protocoreGetRegistration(peerId: string): Promise<RegistryRecord | null> {
-    return this.call("protocore_getRegistration", [peerId]);
+  /** `lyth_getRegistration` — single registry lookup. */
+  async lythGetRegistration(peerId: string): Promise<RegistryRecord | null> {
+    return this.call("lyth_getRegistration", [peerId]);
   }
 
-  /** `protocore_registryStateProof` — Merkle proof for a registry entry. */
-  async protocoreRegistryStateProof(peerId: string): Promise<AccountProofResponse> {
-    return this.call("protocore_registryStateProof", [peerId]);
+  /** `lyth_registryStateProof` — Merkle proof for a registry entry. */
+  async lythRegistryStateProof(peerId: string): Promise<AccountProofResponse> {
+    return this.call("lyth_registryStateProof", [peerId]);
   }
 
-  /** `protocore_getAccountPolicy` — privacy posture for an account. */
-  async protocoreGetAccountPolicy(address: string): Promise<AccountPolicy> {
-    return this.call("protocore_getAccountPolicy", [address]);
+  /** `lyth_getAccountPolicy` — privacy posture for an account. */
+  async lythGetAccountPolicy(address: string): Promise<AccountPolicy> {
+    return this.call("lyth_getAccountPolicy", [address]);
   }
 
-  /** `protocore_getAssetPolicy` — privacy posture for an asset. */
-  async protocoreGetAssetPolicy(tokenId: string): Promise<AssetPolicy> {
-    return this.call("protocore_getAssetPolicy", [tokenId]);
+  /** `lyth_getAssetPolicy` — privacy posture for an asset. */
+  async lythGetAssetPolicy(tokenId: string): Promise<AssetPolicy> {
+    return this.call("lyth_getAssetPolicy", [tokenId]);
   }
 
-  /** `protocore_mempoolStatus` — aggregate mempool snapshot. */
-  async protocoreMempoolStatus(): Promise<MempoolSnapshot> {
-    return this.call("protocore_mempoolStatus", []);
+  /** `lyth_mempoolStatus` — aggregate mempool snapshot. */
+  async lythMempoolStatus(): Promise<MempoolSnapshot> {
+    return this.call("lyth_mempoolStatus", []);
   }
 
-  /** `protocore_mempoolPending` — pending txs for a sender. */
-  async protocoreMempoolPending(sender: string): Promise<PendingTxSummary[]> {
-    return this.call("protocore_mempoolPending", [sender]);
+  /** `lyth_mempoolPending` — pending txs for a sender. */
+  async lythMempoolPending(sender: string): Promise<PendingTxSummary[]> {
+    return this.call("lyth_mempoolPending", [sender]);
   }
 
-  /** `protocore_currentRound` — latest committed height. */
-  async protocoreCurrentRound(): Promise<RoundInfo> {
-    return this.call("protocore_currentRound", []);
+  /** `lyth_currentRound` — latest committed height. */
+  async lythCurrentRound(): Promise<RoundInfo> {
+    return this.call("lyth_currentRound", []);
   }
 
-  /** `protocore_validatorSet` — configured validator set. */
-  async protocoreValidatorSet(): Promise<ValidatorDescriptor[]> {
-    return this.call("protocore_validatorSet", []);
+  /** `lyth_validatorSet` — configured validator set. */
+  async lythValidatorSet(): Promise<ValidatorDescriptor[]> {
+    return this.call("lyth_validatorSet", []);
   }
 
-  /** `protocore_indexerStatus` — indexer status; `null` when disabled. */
-  async protocoreIndexerStatus(): Promise<IndexerStatus | null> {
-    const v = await this.call<unknown>("protocore_indexerStatus", []);
+  /**
+   * `lyth_listActivePrecompiles` — milestone-gated precompile catalogue
+   * (OI-0170 / ADR-0015 §5).
+   */
+  async lythListActivePrecompiles(
+    block: BlockSelector = "latest",
+  ): Promise<PrecompileDescriptor[]> {
+    return this.call("lyth_listActivePrecompiles", [encodeBlockSelector(block)]);
+  }
+
+  /** `lyth_indexerStatus` — indexer status; `null` when disabled. */
+  async lythIndexerStatus(): Promise<IndexerStatus | null> {
+    const v = await this.call<unknown>("lyth_indexerStatus", []);
     if (v === null || v === undefined) return null;
     return v as IndexerStatus;
   }
 
-  /** `protocore_getStorageProof` — batched Merkle proofs. */
-  async protocoreGetStorageProof(
+  /** `lyth_getStorageProof` — batched Merkle proofs. */
+  async lythGetStorageProof(
     address: string,
     slots: string[],
   ): Promise<StorageProofBatch> {
-    return this.call("protocore_getStorageProof", [address, slots]);
+    return this.call("lyth_getStorageProof", [address, slots]);
   }
 
-  /** `protocore_subscribe` — WebSocket-only; returns an RPC error over HTTP. */
-  async protocoreSubscribe(channel: string): Promise<unknown> {
-    return this.call("protocore_subscribe", [channel]);
+  /**
+   * `lyth_submitPendingChange` — operator-onboarding transport for the
+   * pending-change ledger. Server validates the envelope shape.
+   */
+  async lythSubmitPendingChange(envelope: unknown): Promise<unknown> {
+    return this.call("lyth_submitPendingChange", [envelope]);
   }
 
-  /** `protocore_unsubscribe` — counterpart to `protocoreSubscribe`. */
-  async protocoreUnsubscribe(subId: string): Promise<unknown> {
-    return this.call("protocore_unsubscribe", [subId]);
+  /** `lyth_subscribe` — WebSocket-only; returns an RPC error over HTTP. */
+  async lythSubscribe(channel: string): Promise<unknown> {
+    return this.call("lyth_subscribe", [channel]);
+  }
+
+  /** `lyth_unsubscribe` — counterpart to `lythSubscribe`. */
+  async lythUnsubscribe(subId: string): Promise<unknown> {
+    return this.call("lyth_unsubscribe", [subId]);
   }
 
   // ---- debug_* ------------------------------------------------------
@@ -369,14 +390,26 @@ export class RpcClient {
   }
 }
 
-/** Decode a `0x`-prefixed hex quantity to a JS number. */
-export function parseQuantity(hex: string): number {
-  if (!hex) return 0;
+/** Decode a `0x`-prefixed hex quantity to a `bigint`. */
+export function parseQuantityBig(hex: string): bigint {
+  if (!hex) return 0n;
   const rest = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
-  if (rest.length === 0) return 0;
-  const n = Number.parseInt(rest, 16);
-  if (Number.isNaN(n)) {
+  if (rest.length === 0) return 0n;
+  if (!/^[0-9a-fA-F]+$/.test(rest)) {
     throw SdkError.malformed(`invalid hex quantity: ${hex}`);
   }
-  return n;
+  return BigInt(`0x${rest}`);
+}
+
+/**
+ * Decode a `0x`-prefixed hex quantity to a JS `number`. Convenience for
+ * small quantities (chain id, block height, gas estimate). Throws if the
+ * value exceeds `Number.MAX_SAFE_INTEGER`.
+ */
+export function parseQuantity(hex: string): number {
+  const big = parseQuantityBig(hex);
+  if (big > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw SdkError.malformed(`hex quantity exceeds safe integer: ${hex}`);
+  }
+  return Number(big);
 }

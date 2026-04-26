@@ -3,7 +3,7 @@
 //! This crate provides a typed [`RpcClient`] that wraps the JSON-RPC
 //! surface served by a `mono-core` node — both the EVM-compatible
 //! `eth_*` / `net_*` / `web3_*` methods and the chain-native
-//! `protocore_*` / `debug_*` methods.
+//! `lyth_*` / `debug_*` methods (per Law §13.2).
 //!
 //! # Example
 //!

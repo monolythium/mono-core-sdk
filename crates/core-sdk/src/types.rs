@@ -3,11 +3,14 @@
 //! These mirror the JSON the node serializes — quantities are
 //! `0x`-prefixed hex strings, hashes / addresses / bytes are
 //! `0x`-prefixed lower-case hex, structured types use camelCase
-//! field names. The SDK does not yet depend on `protocore-types`;
-//! when that dependency lands the wrapper types here forward to it
-//! transparently.
+//! field names. The SDK does not yet depend on any internal
+//! mono-core crates; when those land the wrapper types here forward
+//! to them transparently.
 
 use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "ts-bindings")]
+use ts_rs::TS;
 
 /// `0x`-prefixed hex byte vector. Stored as `String` to match the wire
 /// envelope verbatim — callers can `crate::types::hex_decode` on demand.
@@ -26,6 +29,8 @@ pub type Quantity = String;
 /// EVM block tag. Use [`BlockSelector`] when sending to the wire — this
 /// is the strongly-typed half of an `eth_*` block argument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "BlockTag.ts"))]
 #[serde(rename_all = "lowercase")]
 pub enum BlockTag {
     /// Most recently committed block.
@@ -38,7 +43,7 @@ pub enum BlockTag {
     /// Highest "safe" block — collapses to `latest` until reorg windows
     /// land.
     Safe,
-    /// Pending block (alias of `latest` in Protocore v1).
+    /// Pending block (alias of `latest` on the v0.0.x server).
     Pending,
 }
 
@@ -75,13 +80,18 @@ impl Default for BlockSelector {
 }
 
 /// Account proof envelope returned by `eth_getBalance` /
-/// `eth_getStorageAt` / `protocore_registryStateProof`.
+/// `eth_getStorageAt` / `lyth_registryStateProof`.
 ///
 /// `value` is the raw quantity (or 32-byte word for storage) as returned
 /// by the chain. `state_root` is the trie root the proof is verified
 /// against. `proof` is `null` when the chain provider could not produce
 /// an inclusion proof for this slot at the requested block.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "AccountProofResponse.ts")
+)]
 pub struct AccountProofResponse {
     /// `0x`-hex value (balance, storage word, or peer id depending on
     /// the calling method).
@@ -94,9 +104,10 @@ pub struct AccountProofResponse {
     pub block_number: u64,
     /// Inclusion proof envelope, omitted when the chain didn't produce
     /// one. The shape is intentionally opaque at this layer — callers
-    /// that need to verify the proof bring `protocore-state` in
+    /// that need to verify the proof bring an internal state crate in
     /// directly.
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "unknown | null", optional))]
     pub proof: Option<serde_json::Value>,
 }
 
@@ -106,6 +117,8 @@ pub struct AccountProofResponse {
 /// the v0.0.1 server. A future server version may upgrade to camelCase;
 /// when that happens we add a serde alias.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "BlockHeader.ts"))]
 pub struct BlockHeader {
     /// Block number (height).
     pub number: u64,
@@ -129,6 +142,11 @@ pub struct BlockHeader {
 
 /// Receipt for a confirmed transaction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "TransactionReceipt.ts")
+)]
 pub struct TransactionReceipt {
     /// Transaction hash.
     #[serde(rename = "tx_hash", alias = "txHash")]
@@ -153,6 +171,8 @@ pub struct TransactionReceipt {
 /// when the node is caught up — the SDK surfaces that as
 /// `Option::None`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "SyncStatus.ts"))]
 pub struct SyncStatus {
     /// First block of the current sync batch.
     #[serde(rename = "startingBlock")]
@@ -170,30 +190,43 @@ pub struct SyncStatus {
 /// Every field is optional — the chain rejects payloads that omit
 /// required fields with an `InvalidParams` error.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "CallRequest.ts"))]
 pub struct CallRequest {
     /// Source address.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
     pub from: Option<Address>,
     /// Destination address. `None` is interpreted as contract
     /// creation by the chain.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
     pub to: Option<Address>,
     /// Gas limit.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
     pub gas: Option<Quantity>,
     /// Gas price (legacy / non-EIP-1559).
     #[serde(rename = "gasPrice", skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "gasPrice", optional))]
     pub gas_price: Option<Quantity>,
     /// Wei to transfer.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
     pub value: Option<Quantity>,
     /// Calldata (`data` is canonical; chains accept `input` as alias).
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
     pub data: Option<Hex>,
 }
 
 /// `eth_feeHistory` response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "FeeHistoryResponse.ts")
+)]
 pub struct FeeHistoryResponse {
     /// Hex height of the first block in the window.
     #[serde(rename = "oldestBlock")]
@@ -210,8 +243,10 @@ pub struct FeeHistoryResponse {
     pub reward: Vec<Vec<Quantity>>,
 }
 
-/// `protocore_mempoolStatus` aggregate.
+/// `lyth_mempoolStatus` aggregate.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MempoolSnapshot.ts"))]
 pub struct MempoolSnapshot {
     /// Tx count in the Ready bucket.
     pub count_ready: u64,
@@ -223,8 +258,10 @@ pub struct MempoolSnapshot {
     pub bytes_by_class: [u64; 7],
 }
 
-/// `protocore_mempoolPending` per-tx entry.
+/// `lyth_mempoolPending` per-tx entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "PendingTxSummary.ts"))]
 pub struct PendingTxSummary {
     /// Tx hash.
     #[serde(rename = "txHash")]
@@ -240,19 +277,26 @@ pub struct PendingTxSummary {
     pub ready: bool,
 }
 
-/// `protocore_currentRound` round shape.
+/// `lyth_currentRound` round shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "RoundInfo.ts"))]
 pub struct RoundInfo {
     /// Latest committed height.
     pub height: u64,
 }
 
-/// `protocore_validatorSet` entry.
+/// `lyth_validatorSet` entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "ValidatorDescriptor.ts")
+)]
 pub struct ValidatorDescriptor {
     /// Stable slot id.
     pub id: u16,
-    /// 48-byte BLS public key, `0x` hex.
+    /// Quantum-safe ML-DSA-65 public key, `0x` hex.
     pub pubkey: Hex,
     /// Stake as a decimal string.
     pub stake: String,
@@ -260,23 +304,28 @@ pub struct ValidatorDescriptor {
     pub active: bool,
 }
 
-/// `protocore_indexerStatus` envelope. `null` on the wire surfaces as
+/// `lyth_indexerStatus` envelope. `null` on the wire surfaces as
 /// `Option::None` here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "IndexerStatus.ts"))]
 pub struct IndexerStatus {
     /// Highest block fully ingested.
     #[serde(rename = "currentHeight")]
     pub current_height: u64,
     /// Highest block observed.
     #[serde(rename = "latestHeight")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
     pub latest_height: Option<u64>,
     /// Active schema version.
     #[serde(rename = "schemaVersion")]
     pub schema_version: u32,
 }
 
-/// `protocore_listProviders` / `protocore_getRegistration` record.
+/// `lyth_listProviders` / `lyth_getRegistration` record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "RegistryRecord.ts"))]
 pub struct RegistryRecord {
     /// libp2p peer id, `0x`-hex 32-byte.
     #[serde(rename = "peerId")]
@@ -292,8 +341,10 @@ pub struct RegistryRecord {
     pub uptime_bps: u32,
 }
 
-/// `protocore_getAccountPolicy` response.
+/// `lyth_getAccountPolicy` response.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "AccountPolicy.ts"))]
 pub struct AccountPolicy {
     /// Policy mode label — `"public"`, `"stealth"`, `"confidential"`,
     /// `"shielded"`.
@@ -319,8 +370,10 @@ pub struct AccountPolicy {
     pub explicit: bool,
 }
 
-/// `protocore_getAssetPolicy` response.
+/// `lyth_getAssetPolicy` response.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "AssetPolicy.ts"))]
 pub struct AssetPolicy {
     /// Policy mode label.
     pub mode: String,
@@ -345,8 +398,13 @@ pub struct AssetPolicy {
     pub explicit: bool,
 }
 
-/// `protocore_getStorageProof` batch response.
+/// `lyth_getStorageProof` batch response.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "StorageProofBatch.ts")
+)]
 pub struct StorageProofBatch {
     /// State-root the proofs verify against.
     #[serde(rename = "stateRoot")]
@@ -355,11 +413,32 @@ pub struct StorageProofBatch {
     #[serde(rename = "blockNumber")]
     pub block_number: u64,
     /// One opaque proof envelope per requested slot.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "unknown[]"))]
     pub proofs: Vec<serde_json::Value>,
+}
+
+/// `lyth_listActivePrecompiles` entry — OI-0170 / ADR-0015 §5.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "PrecompileDescriptor.ts")
+)]
+pub struct PrecompileDescriptor {
+    /// 20-byte precompile address, `0x`-hex.
+    pub address: Address,
+    /// Stable identifier (e.g. `"agent"`, `"oracle"`, `"delegation"`).
+    pub name: String,
+    /// Whether the precompile is currently dispatchable.
+    pub active: bool,
+    /// Human-readable status string from the milestone gate registry.
+    pub status: String,
 }
 
 /// `debug_p2pPeers` entry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "PeerSummary.ts"))]
 pub struct PeerSummary {
     /// libp2p peer id (base58).
     #[serde(rename = "peerId")]

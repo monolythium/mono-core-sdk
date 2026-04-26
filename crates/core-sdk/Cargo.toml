@@ -10,12 +10,20 @@ repository.workspace = true
 [lib]
 path = "src/lib.rs"
 
+[features]
+default = []
+# Enables ts-rs derives + the `export_bindings` test that writes the
+# generated TypeScript types into `bindings/`. The TS workspace consumes
+# those files, so production builds keep the dependency dormant.
+ts-bindings = ["dep:ts-rs"]
+
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio = { version = "1.35", features = ["sync"] }
+ts-rs = { version = "10", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1.35", features = ["macros", "rt-multi-thread"] }

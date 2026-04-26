@@ -15,8 +15,8 @@ use crate::error::SdkError;
 use crate::types::{
     AccountPolicy, AccountProofResponse, AssetPolicy, BlockHeader, BlockSelector, CallRequest,
     FeeHistoryResponse, IndexerStatus, MempoolSnapshot, PeerSummary, PendingTxSummary,
-    RegistryRecord, RoundInfo, StorageProofBatch, SyncStatus, TransactionReceipt,
-    ValidatorDescriptor,
+    PrecompileDescriptor, RegistryRecord, RoundInfo, StorageProofBatch, SyncStatus,
+    TransactionReceipt, ValidatorDescriptor,
 };
 
 /// Typed JSON-RPC client for a `mono-core` node.
@@ -49,10 +49,7 @@ impl RpcClient {
             return Err(SdkError::InvalidEndpoint("endpoint cannot be empty".into()));
         }
         let http = reqwest::Client::builder()
-            .user_agent(concat!(
-                "monolythium-core-sdk/",
-                env!("CARGO_PKG_VERSION")
-            ))
+            .user_agent(concat!("monolythium-core-sdk/", env!("CARGO_PKG_VERSION")))
             .build()?;
         Ok(Self {
             inner: Arc::new(Inner {
@@ -188,7 +185,10 @@ impl RpcClient {
         block: BlockSelector,
     ) -> Result<u64, SdkError> {
         let hex: String = self
-            .call("eth_getTransactionCount", json!([address, block.to_param()]))
+            .call(
+                "eth_getTransactionCount",
+                json!([address, block.to_param()]),
+            )
             .await?;
         parse_quantity_u64(&hex)
     }
@@ -200,7 +200,8 @@ impl RpcClient {
         address: &str,
         block: BlockSelector,
     ) -> Result<String, SdkError> {
-        self.call("eth_getCode", json!([address, block.to_param()])).await
+        self.call("eth_getCode", json!([address, block.to_param()]))
+            .await
     }
 
     /// `eth_getBlockByNumber` — fetches a block header by height/tag.
@@ -215,10 +216,7 @@ impl RpcClient {
 
     /// `eth_getBlockByHash` — fetches a block header by hash. Returns
     /// `None` if unknown.
-    pub async fn eth_get_block_by_hash(
-        &self,
-        hash: &str,
-    ) -> Result<Option<BlockHeader>, SdkError> {
+    pub async fn eth_get_block_by_hash(&self, hash: &str) -> Result<Option<BlockHeader>, SdkError> {
         self.call("eth_getBlockByHash", json!([hash])).await
     }
 
@@ -228,7 +226,8 @@ impl RpcClient {
         &self,
         tx_hash: &str,
     ) -> Result<Option<TransactionReceipt>, SdkError> {
-        self.call("eth_getTransactionReceipt", json!([tx_hash])).await
+        self.call("eth_getTransactionReceipt", json!([tx_hash]))
+            .await
     }
 
     /// `eth_sendRawTransaction` — submits a signed raw tx (RLP /
@@ -245,7 +244,8 @@ impl RpcClient {
         request: &CallRequest,
         block: BlockSelector,
     ) -> Result<String, SdkError> {
-        self.call("eth_call", json!([request, block.to_param()])).await
+        self.call("eth_call", json!([request, block.to_param()]))
+            .await
     }
 
     /// `eth_estimateGas` — gas estimate for a dry-run.
@@ -321,115 +321,125 @@ impl RpcClient {
         self.call("web3_sha3", json!([data])).await
     }
 
-    // ---- protocore_* --------------------------------------------------
+    // ---- lyth_* (Law §13.2 native namespace) --------------------------
 
-    /// `protocore_listProviders` — paged registry enumeration.
+    /// `lyth_listProviders` — paged registry enumeration.
     /// `cursor` is opaque; pass the previous page's last cursor
     /// (or `None` for the first page).
-    pub async fn protocore_list_providers(
+    pub async fn lyth_list_providers(
         &self,
         capability_mask: u32,
         cursor: Option<&str>,
         limit: u32,
     ) -> Result<Vec<RegistryRecord>, SdkError> {
         self.call(
-            "protocore_listProviders",
+            "lyth_listProviders",
             json!([capability_mask, cursor, limit]),
         )
         .await
     }
 
-    /// `protocore_getRegistration` — single registry lookup.
-    pub async fn protocore_get_registration(
+    /// `lyth_getRegistration` — single registry lookup.
+    pub async fn lyth_get_registration(
         &self,
         peer_id: &str,
     ) -> Result<Option<RegistryRecord>, SdkError> {
-        self.call("protocore_getRegistration", json!([peer_id])).await
+        self.call("lyth_getRegistration", json!([peer_id])).await
     }
 
-    /// `protocore_registryStateProof` — Merkle proof for a registry
-    /// entry.
-    pub async fn protocore_registry_state_proof(
+    /// `lyth_registryStateProof` — Merkle proof for a registry entry.
+    pub async fn lyth_registry_state_proof(
         &self,
         peer_id: &str,
     ) -> Result<AccountProofResponse, SdkError> {
-        self.call("protocore_registryStateProof", json!([peer_id]))
-            .await
+        self.call("lyth_registryStateProof", json!([peer_id])).await
     }
 
-    /// `protocore_getAccountPolicy` — privacy posture for an account.
-    pub async fn protocore_get_account_policy(
-        &self,
-        address: &str,
-    ) -> Result<AccountPolicy, SdkError> {
-        self.call("protocore_getAccountPolicy", json!([address]))
-            .await
+    /// `lyth_getAccountPolicy` — privacy posture for an account.
+    pub async fn lyth_get_account_policy(&self, address: &str) -> Result<AccountPolicy, SdkError> {
+        self.call("lyth_getAccountPolicy", json!([address])).await
     }
 
-    /// `protocore_getAssetPolicy` — privacy posture for an asset
+    /// `lyth_getAssetPolicy` — privacy posture for an asset
     /// (32-byte token id).
-    pub async fn protocore_get_asset_policy(
-        &self,
-        token_id: &str,
-    ) -> Result<AssetPolicy, SdkError> {
-        self.call("protocore_getAssetPolicy", json!([token_id])).await
+    pub async fn lyth_get_asset_policy(&self, token_id: &str) -> Result<AssetPolicy, SdkError> {
+        self.call("lyth_getAssetPolicy", json!([token_id])).await
     }
 
-    /// `protocore_mempoolStatus` — aggregate mempool snapshot.
-    pub async fn protocore_mempool_status(&self) -> Result<MempoolSnapshot, SdkError> {
-        self.call("protocore_mempoolStatus", json!([])).await
+    /// `lyth_mempoolStatus` — aggregate mempool snapshot.
+    pub async fn lyth_mempool_status(&self) -> Result<MempoolSnapshot, SdkError> {
+        self.call("lyth_mempoolStatus", json!([])).await
     }
 
-    /// `protocore_mempoolPending` — pending txs for a sender.
-    pub async fn protocore_mempool_pending(
+    /// `lyth_mempoolPending` — pending txs for a sender.
+    pub async fn lyth_mempool_pending(
         &self,
         sender: &str,
     ) -> Result<Vec<PendingTxSummary>, SdkError> {
-        self.call("protocore_mempoolPending", json!([sender])).await
+        self.call("lyth_mempoolPending", json!([sender])).await
     }
 
-    /// `protocore_currentRound` — latest committed height.
-    pub async fn protocore_current_round(&self) -> Result<RoundInfo, SdkError> {
-        self.call("protocore_currentRound", json!([])).await
+    /// `lyth_currentRound` — latest committed height.
+    pub async fn lyth_current_round(&self) -> Result<RoundInfo, SdkError> {
+        self.call("lyth_currentRound", json!([])).await
     }
 
-    /// `protocore_validatorSet` — configured validator set.
-    pub async fn protocore_validator_set(&self) -> Result<Vec<ValidatorDescriptor>, SdkError> {
-        self.call("protocore_validatorSet", json!([])).await
+    /// `lyth_validatorSet` — configured validator set.
+    pub async fn lyth_validator_set(&self) -> Result<Vec<ValidatorDescriptor>, SdkError> {
+        self.call("lyth_validatorSet", json!([])).await
     }
 
-    /// `protocore_indexerStatus` — indexer status, `None` if disabled.
-    pub async fn protocore_indexer_status(&self) -> Result<Option<IndexerStatus>, SdkError> {
-        let v: Value = self.call("protocore_indexerStatus", json!([])).await?;
+    /// `lyth_listActivePrecompiles` — milestone-gated precompile catalogue
+    /// (OI-0170 / ADR-0015 §5). `block` selects the height the gate snapshot
+    /// is read from; pass [`BlockSelector::LATEST`] for the live view.
+    pub async fn lyth_list_active_precompiles(
+        &self,
+        block: BlockSelector,
+    ) -> Result<Vec<PrecompileDescriptor>, SdkError> {
+        self.call("lyth_listActivePrecompiles", json!([block.to_param()]))
+            .await
+    }
+
+    /// `lyth_indexerStatus` — indexer status, `None` if disabled.
+    pub async fn lyth_indexer_status(&self) -> Result<Option<IndexerStatus>, SdkError> {
+        let v: Value = self.call("lyth_indexerStatus", json!([])).await?;
         if v.is_null() {
             return Ok(None);
         }
         Ok(Some(serde_json::from_value(v)?))
     }
 
-    /// `protocore_getStorageProof` — batched Merkle proofs for one
+    /// `lyth_getStorageProof` — batched Merkle proofs for one
     /// account across many slots.
-    pub async fn protocore_get_storage_proof(
+    pub async fn lyth_get_storage_proof(
         &self,
         address: &str,
         slots: &[String],
     ) -> Result<StorageProofBatch, SdkError> {
-        self.call("protocore_getStorageProof", json!([address, slots]))
+        self.call("lyth_getStorageProof", json!([address, slots]))
             .await
     }
 
-    /// `protocore_subscribe` — note: this is a WebSocket-only method.
+    /// `lyth_submitPendingChange` — operator-onboarding transport for the
+    /// pending-change ledger. The opaque envelope is forwarded to the node;
+    /// payload validation happens server-side.
+    pub async fn lyth_submit_pending_change(&self, envelope: Value) -> Result<Value, SdkError> {
+        self.call("lyth_submitPendingChange", json!([envelope]))
+            .await
+    }
+
+    /// `lyth_subscribe` — note: this is a WebSocket-only method.
     /// HTTP callers receive [`SdkError::Rpc`] with a "not implemented"
     /// message. Wired here for completeness; full WS support is on
     /// the OI-0069 work track.
-    pub async fn protocore_subscribe(&self, channel: &str) -> Result<Value, SdkError> {
-        self.call("protocore_subscribe", json!([channel])).await
+    pub async fn lyth_subscribe(&self, channel: &str) -> Result<Value, SdkError> {
+        self.call("lyth_subscribe", json!([channel])).await
     }
 
-    /// `protocore_unsubscribe` — counterpart to `protocore_subscribe`.
+    /// `lyth_unsubscribe` — counterpart to `lyth_subscribe`.
     /// HTTP callers receive [`SdkError::Rpc`] until WS lands.
-    pub async fn protocore_unsubscribe(&self, sub_id: &str) -> Result<Value, SdkError> {
-        self.call("protocore_unsubscribe", json!([sub_id])).await
+    pub async fn lyth_unsubscribe(&self, sub_id: &str) -> Result<Value, SdkError> {
+        self.call("lyth_unsubscribe", json!([sub_id])).await
     }
 
     // ---- debug_* ------------------------------------------------------
@@ -457,13 +467,16 @@ impl RpcClient {
 
     /// `debug_traceBlockByNumber` — revm traces for an entire block
     /// (server-side gated; not yet wired in v0.0.x).
-    pub async fn debug_trace_block_by_number(&self, block: BlockSelector) -> Result<Value, SdkError> {
+    pub async fn debug_trace_block_by_number(
+        &self,
+        block: BlockSelector,
+    ) -> Result<Value, SdkError> {
         self.call("debug_traceBlockByNumber", json!([block.to_param()]))
             .await
     }
 
     /// `debug_mempoolDump` — full mempool snapshot (server-side
-    /// gated). Returns the same shape as `protocore_mempoolStatus` in
+    /// gated). Returns the same shape as `lyth_mempoolStatus` in
     /// v0.0.x; the deep-dump lands later.
     pub async fn debug_mempool_dump(&self) -> Result<MempoolSnapshot, SdkError> {
         self.call("debug_mempoolDump", json!([])).await
