@@ -31,6 +31,32 @@ SDK via `ts-rs`; see `src/bindings/`.
 Quantities surface as `bigint` to preserve full precision. Use
 `parseQuantity` only when you know the value fits in `Number.MAX_SAFE_INTEGER`.
 
+### ethers.js v6 compat
+
+The package also ships an ethers v6 compat shim — a `MonolythiumProvider`
+and `MonolythiumSigner` that drop in wherever ethers' `Provider` and
+`Signer` are expected. `ethers` is a peer dependency.
+
+```ts
+import { Wallet, ContractFactory } from "ethers";
+import {
+  MonolythiumProvider,
+  MonolythiumSigner,
+} from "@monolythium/core-sdk";
+
+const provider = new MonolythiumProvider("https://rpc.testnet.monolythium.com");
+const wallet = new Wallet(process.env.PRIVATE_KEY!);
+const signer = MonolythiumSigner.fromEthersWallet(wallet, provider);
+
+const factory = new ContractFactory(abi, bytecode, signer);
+const contract = await factory.deploy();
+await contract.waitForDeployment();
+```
+
+For non-secp256k1 signing sources (OS keychain, hardware wallet, future
+ML-DSA-65 backends), implement `MonolythiumSignerBackend` and pass it to
+`new MonolythiumSigner(backend, provider)`.
+
 ## Development
 
 ```bash

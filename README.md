@@ -10,7 +10,7 @@ Official Rust + TypeScript SDK for Monolythium v2 (LythiumDAG-BFT)
 
 `mono-core-sdk` is the official client library for talking to Monolythium v2 nodes. It provides typed wrappers around the chain's JSON-RPC surface (both `eth_*` Ethereum-compatible methods and chain-native `lyth_*` methods, per Law §13.2) so that applications never have to hand-craft RPC payloads. The repo ships two packages: a Rust crate (`monolythium-core-sdk`) and a TypeScript package (`@monolythium/core-sdk`) whose wire types are generated from the same Rust definitions via `ts-rs`.
 
-> **Status:** v0.1.0 — typed RPC client ships in both languages with `ts-rs`-generated TypeScript bindings. Higher-level features (signer trait, keychain integration, ethers-compat shim) land in v0.2.
+> **Status:** v0.1.0 — typed RPC client ships in both languages with `ts-rs`-generated TypeScript bindings. The TypeScript package additionally ships an ethers.js v6 compat shim (`MonolythiumProvider`, `MonolythiumSigner`); the Rust signer trait + keychain integration land in v0.2.
 
 ## Who this is for
 
@@ -84,7 +84,38 @@ console.log(`${validators.length} validators`);
 - `lyth_subscribe` / `lyth_unsubscribe` are WebSocket-only and surface the server's "not implemented" error when called over HTTP. Full WS support is on the roadmap.
 - Round-trip integration tests against a live node live in `packages/ts/tests/integration.test.ts`; set `MONO_CORE_RPC_URL` to enable them. They skip cleanly when the variable is unset so CI on dev machines stays green without a chain handy.
 
-The signer trait, keychain integration, and ethers-compat shim follow in v0.2.
+## Using with ethers.js
+
+The TypeScript package ships an ethers v6 compat shim that lets existing Solidity tooling (Hardhat, Foundry, ethers-based dApps) target a Monolythium node by swapping the `Provider` / `Signer` instance — no contract or call-site changes required.
+
+`ethers` is a peer dependency. Install it alongside the SDK:
+
+```bash
+pnpm add @monolythium/core-sdk ethers
+```
+
+Drop-in `Provider` + `Signer`:
+
+```ts
+import { Wallet, ContractFactory } from "ethers";
+import {
+  MonolythiumProvider,
+  MonolythiumSigner,
+} from "@monolythium/core-sdk";
+
+const provider = new MonolythiumProvider("https://rpc.testnet.monolythium.com");
+const wallet = new Wallet(process.env.PRIVATE_KEY!);
+const signer = MonolythiumSigner.fromEthersWallet(wallet, provider);
+
+// Deploy + interact with any Solidity contract exactly as you would on Ethereum.
+const factory = new ContractFactory(abi, bytecode, signer);
+const contract = await factory.deploy();
+await contract.waitForDeployment();
+```
+
+The shim is **SDK-level only** — Monolythium keeps its native transaction envelope and tx-hash format. The shim simply translates between ethers' wire shapes and the chain's `eth_*` JSON-RPC namespace inside the SDK boundary, so existing Solidity tools work without any chain-side change.
+
+For non-secp256k1 signing sources (OS keychain, hardware wallet, future ML-DSA-65 backends), implement `MonolythiumSignerBackend` and pass it to `new MonolythiumSigner(backend, provider)` — the shim does not assume an `ethers.Wallet`.
 
 ## Documentation
 
