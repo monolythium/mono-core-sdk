@@ -20,10 +20,12 @@
 //! ```
 
 pub mod client;
+pub mod consts;
 pub mod error;
 pub mod types;
 
 pub use client::RpcClient;
+pub use consts::{burn_addr_hex, BURN_ADDR};
 pub use error::SdkError;
 
 /// Crate version, sourced from `Cargo.toml`.

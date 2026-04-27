@@ -17,6 +17,8 @@ export { RpcClient, parseQuantity, parseQuantityBig } from "./client.js";
 export type { RpcClientOptions } from "./client.js";
 export { SdkError } from "./error.js";
 export * from "./types.js";
+export { BURN_ADDR, PRECOMPILE_ADDRESSES } from "./consts.js";
+export type { PrecompileName, PrecompileAddress } from "./consts.js";
 
 // ethers.js compat shim — ethers is a peerDependency. Importers that
 // don't use the shim never pay for the ethers types.
