@@ -1,20 +1,34 @@
 # mono-core-sdk
 
-Official Rust + TypeScript SDK for Monolythium v2 (LythiumDAG-BFT)
+Official Rust and TypeScript SDK for Monolythium v2 / LythiumDAG-BFT.
 
-> Part of the [Monolythium](https://monolythium.com) ecosystem — a sovereign Layer-1 for finality-first apps.
+This repository is the application boundary for code that should not have to
+know `mono-core` internals. It provides typed JSON-RPC clients, canonical chain
+constants, address-display helpers, precompile calldata builders, and an
+ethers.js v6 compatibility shim for existing Solidity tooling.
 
----
+## Packages
 
-## What this is
+| Package | Path | Status |
+| --- | --- | --- |
+| `monolythium-core-sdk` | `crates/core-sdk` | Rust RPC client, constants, address helpers, precompile ABI helpers |
+| `@monolythium/core-sdk` | `packages/ts` | TypeScript RPC client, generated wire types, address/precompile helpers, ethers v6 shim |
 
-`mono-core-sdk` is the official client library for talking to Monolythium v2 nodes. It provides typed wrappers around the chain's JSON-RPC surface (both `eth_*` Ethereum-compatible methods and chain-native `lyth_*` methods, per Law §13.2) so that applications never have to hand-craft RPC payloads. The repo ships two packages: a Rust crate (`monolythium-core-sdk`) and a TypeScript package (`@monolythium/core-sdk`) whose wire types are generated from the same Rust definitions via `ts-rs`.
+The SDK tracks the live `mono-core` RPC and precompile surface. Wire types under
+`packages/ts/src/bindings/` are generated from the Rust SDK with `ts-rs`.
 
-> **Status:** v0.1.0 — typed RPC client ships in both languages with `ts-rs`-generated TypeScript bindings. The SDK also exports `mono1...` bech32m address helpers and spending-policy precompile calldata/message builders. The TypeScript package additionally ships an ethers.js v6 compat shim (`MonolythiumProvider`, `MonolythiumSigner`); the Rust signer trait + keychain integration land in v0.2.
+## What Ships
 
-## Who this is for
-
-Developers building on Monolythium v2 — wallets, explorers, dapps, agents, and any backend service that needs typed access to a Monolythium node. The TypeScript package additionally ships an ethers.js-compat Signer/Provider shim so existing Solidity tooling can target Monolythium without rewrites; this is **SDK-level compatibility only** and does not retrofit the Ethereum wire format onto the chain.
+- Typed `RpcClient` wrappers for `eth_*`, `net_*`, `web3_*`, `lyth_*`, and
+  gated `debug_*` methods.
+- Canonical precompile address constants, including recent Stage 7 additions:
+  `SPENDING_POLICY` at `0x110C` and `PUBKEY_REGISTRY` at `0x110D`.
+- `mono1...` bech32m display helpers for 20-byte wire addresses.
+- Spending-policy calldata helpers for `setPolicyClaim`, `setPolicy`,
+  `enable`, and `disable`.
+- Pubkey-registry calldata helpers for `registerPubkey`, `lookupPubkey`, and
+  `hasPubkey`, plus return decoders for the view calls.
+- TypeScript ethers v6 provider/signer adapters.
 
 ## Install
 
@@ -30,36 +44,37 @@ TypeScript:
 pnpm add @monolythium/core-sdk
 ```
 
-## Getting started
+For ethers compatibility:
 
-Both packages expose an `RpcClient` that wraps every JSON-RPC method served by a Monolythium node — the EVM-compatible `eth_*` / `net_*` / `web3_*` surface plus the chain-native `lyth_*` and `debug_*` namespaces.
+```bash
+pnpm add @monolythium/core-sdk ethers
+```
 
-### Rust
+## JSON-RPC Client
+
+Rust:
 
 ```rust
-use monolythium_core_sdk::{RpcClient, types::BlockSelector};
+use monolythium_core_sdk::{types::BlockSelector, RpcClient};
 
 #[tokio::main]
 async fn main() -> Result<(), monolythium_core_sdk::SdkError> {
     let client = RpcClient::new("https://rpc.testnet.monolythium.com")?;
 
     let chain_id = client.eth_chain_id().await?;
-    let head = client.eth_block_number().await?;
-    println!("chain {chain_id} at height {head}");
-
+    let height = client.eth_block_number().await?;
     let block = client.eth_get_block_by_number(BlockSelector::LATEST).await?;
+
+    println!("chain {chain_id} height {height}");
     if let Some(block) = block {
         println!("latest hash: {}", block.hash);
     }
-
-    let validators = client.lyth_validator_set().await?;
-    println!("{} validators", validators.len());
 
     Ok(())
 }
 ```
 
-### TypeScript
+TypeScript:
 
 ```ts
 import { RpcClient } from "@monolythium/core-sdk";
@@ -67,19 +82,19 @@ import { RpcClient } from "@monolythium/core-sdk";
 const client = new RpcClient("https://rpc.testnet.monolythium.com");
 
 const chainId = await client.ethChainId();
-const head = await client.ethBlockNumber();
-console.log(`chain ${chainId} at height ${head}`);
-
-const block = await client.ethGetBlockByNumber("latest");
-if (block) console.log(`latest hash: ${block.hash}`);
-
+const height = await client.ethBlockNumber();
 const validators = await client.lythValidatorSet();
-console.log(`${validators.length} validators`);
+
+console.log({ chainId, height, validatorCount: validators.length });
 ```
 
-### Address helpers
+## Address Display
 
-Monolythium addresses are still 20-byte EVM-compatible values on the wire, but user-facing surfaces should display `mono1...` bech32m.
+Monolythium addresses are 20-byte EVM-compatible values on the JSON-RPC wire.
+Wallets, explorers, and user-facing apps should display them as `mono1...`
+bech32m.
+
+TypeScript:
 
 ```ts
 import { addressToBech32, bech32ToAddress } from "@monolythium/core-sdk";
@@ -88,6 +103,8 @@ const display = addressToBech32("0x123456789abcdef0112233445566778899aabbcc");
 const wire = bech32ToAddress(display);
 ```
 
+Rust:
+
 ```rust
 use monolythium_core_sdk::{address_to_bech32, bech32_to_address};
 
@@ -95,98 +112,128 @@ let display = address_to_bech32([0x42; 20]);
 let wire = bech32_to_address(&display).expect("valid mono1 address");
 ```
 
-### Spending-policy helpers
+## Pubkey Registry
 
-Fresh sub-account policy claims must use the signed `setPolicyClaim` path that landed in `mono-core`; legacy `setPolicy` is only for re-claims by an already recorded principal. The SDK exposes the canonical claim message builder and calldata encoders so wallets do not have to hand-roll ABI bytes.
+The pubkey-registry precompile at `0x110D` publishes an account's primary
+ML-DSA-65 pubkey once. This is needed because ML-DSA signatures do not support
+Ethereum-style public-key recovery; contract-context verification must look up
+the pubkey by address.
+
+TypeScript:
 
 ```ts
 import {
+  PRECOMPILE_ADDRESSES,
+  encodeRegisterPubkeyCalldata,
+  encodeLookupPubkeyCalldata,
+  decodeLookupPubkeyReturn,
+} from "@monolythium/core-sdk";
+
+const calldata = encodeRegisterPubkeyCalldata(mlDsa65Pubkey);
+// send a transaction to PRECOMPILE_ADDRESSES.PUBKEY_REGISTRY with `calldata`
+
+const lookup = encodeLookupPubkeyCalldata("0x123456789abcdef0112233445566778899aabbcc");
+// eth_call to PUBKEY_REGISTRY, then:
+const decoded = decodeLookupPubkeyReturn(returnData);
+```
+
+The precompile is milestone-gated in `mono-core` and returns a typed revert
+before activation.
+
+## Spending Policy
+
+Fresh sub-account policy claims must use `setPolicyClaim`, which binds policy
+fields to a sub-account ML-DSA-65 signature. Legacy `setPolicy` is only for
+re-claims by an already recorded principal.
+
+TypeScript:
+
+```ts
+import {
+  PRECOMPILE_ADDRESSES,
   composeClaimBoundMessage,
   encodeSetPolicyClaimCalldata,
 } from "@monolythium/core-sdk";
 
 const message = composeClaimBoundMessage(69420n, policyArgs);
-// Sign `message` with the sub-account ML-DSA-65 key, then:
+// sign `message` with the sub-account ML-DSA-65 key
 const calldata = encodeSetPolicyClaimCalldata(policyArgs, subAccountPubkey, subAccountSig);
+// send a transaction to PRECOMPILE_ADDRESSES.SPENDING_POLICY
 ```
 
-### Notes
+The spending-policy precompile is also milestone-gated and typed-reverts before
+activation.
 
-- Both clients accept any HTTP JSON-RPC endpoint exposed by a `mono-core` node.
-- `debug_*` methods are gated server-side via `RpcConfig::debug_enabled` — calls return an `SdkError` carrying the node's `MethodDisabled` code when the namespace is off.
-- `lyth_subscribe` / `lyth_unsubscribe` are WebSocket-only and surface the server's "not implemented" error when called over HTTP. Full WS support is on the roadmap.
-- Round-trip integration tests against a live node live in `packages/ts/tests/integration.test.ts`; set `MONO_CORE_RPC_URL` to enable them. They skip cleanly when the variable is unset so CI on dev machines stays green without a chain handy.
+## Ethers.js Compatibility
 
-## Using with ethers.js
-
-The TypeScript package ships an ethers v6 compat shim that lets existing Solidity tooling (Hardhat, Foundry, ethers-based dApps) target a Monolythium node by swapping the `Provider` / `Signer` instance — no contract or call-site changes required.
-
-`ethers` is a peer dependency. Install it alongside the SDK:
-
-```bash
-pnpm add @monolythium/core-sdk ethers
-```
-
-Drop-in `Provider` + `Signer`:
+The TypeScript package ships an ethers v6 shim so existing Solidity tooling can
+target Monolythium by swapping provider/signer instances. This is SDK-level
+compatibility only; the chain keeps its native transaction and hash semantics.
 
 ```ts
 import { Wallet, ContractFactory } from "ethers";
-import {
-  MonolythiumProvider,
-  MonolythiumSigner,
-} from "@monolythium/core-sdk";
+import { MonolythiumProvider, MonolythiumSigner } from "@monolythium/core-sdk";
 
 const provider = new MonolythiumProvider("https://rpc.testnet.monolythium.com");
 const wallet = new Wallet(process.env.PRIVATE_KEY!);
 const signer = MonolythiumSigner.fromEthersWallet(wallet, provider);
 
-// Deploy + interact with any Solidity contract exactly as you would on Ethereum.
 const factory = new ContractFactory(abi, bytecode, signer);
 const contract = await factory.deploy();
 await contract.waitForDeployment();
 ```
 
-The shim is **SDK-level only** — Monolythium keeps its native transaction envelope and tx-hash format. The shim simply translates between ethers' wire shapes and the chain's `eth_*` JSON-RPC namespace inside the SDK boundary, so existing Solidity tools work without any chain-side change.
+For non-secp256k1 signing sources, implement `MonolythiumSignerBackend` and pass
+it to `new MonolythiumSigner(backend, provider)`.
 
-For non-secp256k1 signing sources (OS keychain, hardware wallet, future ML-DSA-65 backends), implement `MonolythiumSignerBackend` and pass it to `new MonolythiumSigner(backend, provider)` — the shim does not assume an `ethers.Wallet`.
+## Development
 
-## Documentation
+Requirements:
 
-- Project site: https://monolythium.com
-- Public docs: https://docs.monolythium.com (coming with v0.1)
+- Rust 1.82+
+- Node 22+
+- pnpm 10+ via `corepack`
 
-## Building from source
+Useful commands:
 
 ```bash
-# Rust crate
-cargo fmt --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --all-features
+cargo fmt --all
+cargo test --workspace
 
-# TypeScript package
-pnpm install --frozen-lockfile
-pnpm -r typecheck
-pnpm -r build
-pnpm -r test
+corepack pnpm --dir packages/ts typecheck
+corepack pnpm --dir packages/ts test
+corepack pnpm --dir packages/ts build
 ```
 
-Regenerate TypeScript bindings from the Rust types after a wire-type change:
+Regenerate TypeScript bindings after Rust wire-type changes:
 
 ```bash
 cargo test --features ts-bindings export_bindings
 bash packages/ts/scripts/sync-bindings.sh
 ```
 
-Requirements: Rust 1.82+, Node 22+, pnpm 10+.
+Live TypeScript integration tests are skipped unless `MONO_CORE_RPC_URL` is set:
 
-## Contributing
+```bash
+MONO_CORE_RPC_URL=http://localhost:8545 corepack pnpm --dir packages/ts test
+```
 
-We welcome contributions. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the guidelines.
+## Current Boundaries
+
+- `lyth_subscribe` / `lyth_unsubscribe` are WebSocket-only on the node side;
+  the HTTP clients surface the node's not-implemented error for those calls.
+- TypeScript PQM-1 wallet derivation is intentionally not implemented here yet.
+  The SDK exposes deterministic ABI and address helpers; wallet key generation
+  should use a vetted ML-DSA-65 implementation or a future WASM/native binding.
+- Precompile helpers build calldata and decode return values. They do not decide
+  milestone activation; callers should handle typed reverts from inactive
+  precompiles.
 
 ## Security
 
-Found a vulnerability? Please **do not open a public issue**. Email security@monolythium.com instead. See [SECURITY.md](./SECURITY.md) for the full disclosure policy.
+Please do not open public issues for vulnerabilities. Send reports to
+security@monolythium.com.
 
 ## License
 
-Released under the Apache License, Version 2.0. See [LICENSE](./LICENSE) for the full text.
+Apache-2.0. See [LICENSE](./LICENSE).

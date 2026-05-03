@@ -36,18 +36,18 @@ pub fn burn_addr_hex() -> String {
     out
 }
 
-/// Canonical precompile address map (Law §5.4).
+/// SDK-exposed precompile address map (Law §5.4).
 ///
-/// Sourced 1:1 from `mono-core/crates/runtime/src/precompiles.rs` and
-/// pinned by `mono-core/crates/runtime/tests/precompile_wiring.rs`.
+/// These values are sourced from `mono-core` runtime/precompile
+/// constants and pinned here so wallets, explorers, and apps do not
+/// hand-roll address literals.
 ///
-/// Two slots in the Law §5.4 layout are intentionally absent:
+/// The governance slot is intentionally absent:
 ///
 /// - `0x1006` — governance / deliberation reserved by Law §5.4 but
-///   explicitly unwired after the OI-0140 memo-signalling pivot.
-/// - `0x1101` — VRF slot mandated by Law §5.4 §5.6 but research-gated
-///   on threshold-BLS; the crate has not landed and the address falls
-///   through as a plain EOA today.
+///   wired to a rejecting runtime binding after the OI-0140
+///   memo-signalling pivot. The SDK exposes no governance client
+///   surface.
 pub mod precompile_addresses {
     /// Native fungible-token factory — non-gateable (Law §5.4, foundational).
     pub const TOKEN_FACTORY: [u8; 20] = address([0x10, 0x00]);
@@ -71,12 +71,32 @@ pub mod precompile_addresses {
     pub const DELEGATION: [u8; 20] = address([0x10, 0x0A]);
     /// One-time emergency-key registry (Law §5.4 / §2.9) — non-gateable.
     pub const EMERGENCY_KEY: [u8; 20] = address([0x11, 0x00]);
+    /// VRF precompile (Law §5.4 / §5.6).
+    pub const VRF: [u8; 20] = address([0x11, 0x01]);
     /// Streaming-payments primitive (Law §5.4 / §5.7) — gateable.
     pub const STREAMING_PAYMENTS: [u8; 20] = address([0x11, 0x02]);
     /// Human-readable name registry (Law §5.4 / §5.8) — gateable.
     pub const NAME_REGISTRY: [u8; 20] = address([0x11, 0x03]);
+    /// Cluster-name registry.
+    pub const CLUSTER_NAME_REGISTRY: [u8; 20] = address([0x11, 0x04]);
+    /// Agent-commerce attestation precompile.
+    pub const ATTESTATION: [u8; 20] = address([0x11, 0x05]);
+    /// Agent-commerce consent precompile.
+    pub const CONSENT: [u8; 20] = address([0x11, 0x06]);
+    /// Agent-commerce issuer registry.
+    pub const ISSUER_REGISTRY: [u8; 20] = address([0x11, 0x07]);
+    /// Agent-commerce discovery precompile.
+    pub const DISCOVERY: [u8; 20] = address([0x11, 0x08]);
+    /// Agent-commerce availability precompile.
+    pub const AVAILABILITY: [u8; 20] = address([0x11, 0x09]);
+    /// Agent-commerce escrow precompile.
+    pub const ESCROW: [u8; 20] = address([0x11, 0x0A]);
+    /// Agent-commerce arbiter registry.
+    pub const ARBITER_REGISTRY: [u8; 20] = address([0x11, 0x0B]);
     /// Agent spending policy — gateable, activated by Stage 7 milestones.
     pub const SPENDING_POLICY: [u8; 20] = address([0x11, 0x0C]);
+    /// Primary ML-DSA-65 pubkey registry — gateable, ADR-0034.
+    pub const PUBKEY_REGISTRY: [u8; 20] = address([0x11, 0x0D]);
 
     /// Build a precompile address from its trailing two bytes. The first
     /// 18 bytes are zero — the runtime address layout always pins
@@ -88,7 +108,7 @@ pub mod precompile_addresses {
         out
     }
 
-    /// Every wired precompile address paired with its functional name.
+    /// Every SDK-exposed precompile address paired with its functional name.
     /// Surfaces iterate this when rendering precompile traffic by name.
     pub const ALL: &[(&str, [u8; 20])] = &[
         ("TOKEN_FACTORY", TOKEN_FACTORY),
@@ -102,9 +122,19 @@ pub mod precompile_addresses {
         ("ORACLE", ORACLE),
         ("DELEGATION", DELEGATION),
         ("EMERGENCY_KEY", EMERGENCY_KEY),
+        ("VRF", VRF),
         ("STREAMING_PAYMENTS", STREAMING_PAYMENTS),
         ("NAME_REGISTRY", NAME_REGISTRY),
+        ("CLUSTER_NAME_REGISTRY", CLUSTER_NAME_REGISTRY),
+        ("ATTESTATION", ATTESTATION),
+        ("CONSENT", CONSENT),
+        ("ISSUER_REGISTRY", ISSUER_REGISTRY),
+        ("DISCOVERY", DISCOVERY),
+        ("AVAILABILITY", AVAILABILITY),
+        ("ESCROW", ESCROW),
+        ("ARBITER_REGISTRY", ARBITER_REGISTRY),
         ("SPENDING_POLICY", SPENDING_POLICY),
+        ("PUBKEY_REGISTRY", PUBKEY_REGISTRY),
     ];
 }
 
@@ -150,9 +180,19 @@ mod tests {
             ("ORACLE", expected_addr(0x1009)),
             ("DELEGATION", expected_addr(0x100A)),
             ("EMERGENCY_KEY", expected_addr(0x1100)),
+            ("VRF", expected_addr(0x1101)),
             ("STREAMING_PAYMENTS", expected_addr(0x1102)),
             ("NAME_REGISTRY", expected_addr(0x1103)),
+            ("CLUSTER_NAME_REGISTRY", expected_addr(0x1104)),
+            ("ATTESTATION", expected_addr(0x1105)),
+            ("CONSENT", expected_addr(0x1106)),
+            ("ISSUER_REGISTRY", expected_addr(0x1107)),
+            ("DISCOVERY", expected_addr(0x1108)),
+            ("AVAILABILITY", expected_addr(0x1109)),
+            ("ESCROW", expected_addr(0x110A)),
+            ("ARBITER_REGISTRY", expected_addr(0x110B)),
             ("SPENDING_POLICY", expected_addr(0x110C)),
+            ("PUBKEY_REGISTRY", expected_addr(0x110D)),
         ];
         for ((_, want), &(name, got)) in expected.iter().zip(ALL.iter()) {
             assert_eq!(got, *want, "{name}: address must match runtime");
@@ -168,22 +208,19 @@ mod tests {
     }
 
     #[test]
-    fn precompile_address_map_size_is_fourteen() {
-        // Mirrors the runtime test assertion `expected 14 wired
-        // precompiles` — adding without parallel runtime registration
-        // is a drift.
-        assert_eq!(precompile_addresses::ALL.len(), 14);
+    fn precompile_address_map_size_tracks_sdk_exposed_surface() {
+        // Adding a new SDK-exposed precompile address should update
+        // the explicit assertions above and the TypeScript constants.
+        assert_eq!(precompile_addresses::ALL.len(), 24);
     }
 
     #[test]
     fn unwired_slots_are_not_exposed() {
-        // 0x1006 (governance, OI-0140 pivot) and 0x1101 (VRF, research-
-        // gated) must NOT appear in the address map.
+        // 0x1006 (governance, OI-0140 pivot) must NOT appear in the
+        // address map.
         let unwired_1006 = expected_addr(0x1006);
-        let unwired_1101 = expected_addr(0x1101);
         for &(_, addr) in precompile_addresses::ALL {
             assert_ne!(addr, unwired_1006, "0x1006 must stay unwired");
-            assert_ne!(addr, unwired_1101, "0x1101 must stay unwired");
         }
     }
 

@@ -44,6 +44,18 @@ export {
   spendingPolicyAddressHex,
 } from "./spending-policy.js";
 export type { SpendingPolicyArgs } from "./spending-policy.js";
+export {
+  PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN,
+  PUBKEY_REGISTRY_SELECTORS,
+  PubkeyRegistryError,
+  decodeHasPubkeyReturn,
+  decodeLookupPubkeyReturn,
+  encodeHasPubkeyCalldata,
+  encodeLookupPubkeyCalldata,
+  encodeRegisterPubkeyCalldata,
+  pubkeyRegistryAddressHex,
+} from "./pubkey-registry.js";
+export type { PubkeyLookup } from "./pubkey-registry.js";
 
 // ethers.js compat shim — ethers is a peerDependency. Importers that
 // don't use the shim never pay for the ethers types.
