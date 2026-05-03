@@ -14,6 +14,13 @@ import type {
   AssetPolicy,
   BlockHeader,
   CallRequest,
+  ClusterDelegatorsResponse,
+  ClusterEntityResponse,
+  DagSyncStatus,
+  DelegationCapResponse,
+  DelegationsResponse,
+  EncryptionKeyResponse,
+  EntityRatchetResponse,
   FeeHistoryResponse,
   IndexerStatus,
   MempoolSnapshot,
@@ -24,7 +31,9 @@ import type {
   RoundInfo,
   StorageProofBatch,
   SyncStatus,
+  TpmAttestationResponse,
   TransactionReceipt,
+  TransactionView,
   ValidatorDescriptor,
 } from "./bindings/index.js";
 import type { BlockSelector } from "./types.js";
@@ -178,6 +187,11 @@ export class RpcClient {
     return this.call("eth_getBlockByHash", [hash]);
   }
 
+  /** `eth_getTransactionByHash` — fetch an included transaction by hash. */
+  async ethGetTransactionByHash(txHash: string): Promise<TransactionView | null> {
+    return this.call("eth_getTransactionByHash", [txHash]);
+  }
+
   /** `eth_getTransactionReceipt` — receipt for a confirmed tx. */
   async ethGetTransactionReceipt(txHash: string): Promise<TransactionReceipt | null> {
     return this.call("eth_getTransactionReceipt", [txHash]);
@@ -304,6 +318,16 @@ export class RpcClient {
     return this.call("lyth_validatorSet", []);
   }
 
+  /** `lyth_listActiveValidators` — validators currently eligible to propose / vote. */
+  async lythListActiveValidators(): Promise<ValidatorDescriptor[]> {
+    return this.call("lyth_listActiveValidators", []);
+  }
+
+  /** `lyth_listHealthyValidators` — healthy validator subset. */
+  async lythListHealthyValidators(): Promise<ValidatorDescriptor[]> {
+    return this.call("lyth_listHealthyValidators", []);
+  }
+
   /**
    * `lyth_listActivePrecompiles` — milestone-gated precompile catalogue
    * (OI-0170 / ADR-0015 §5).
@@ -329,12 +353,85 @@ export class RpcClient {
     return this.call("lyth_getStorageProof", [address, slots]);
   }
 
+  /** `lyth_getDelegations` — wallet delegation rows at a block. */
+  async lythGetDelegations(
+    wallet: string,
+    block?: BlockSelector,
+  ): Promise<DelegationsResponse> {
+    const params =
+      block === undefined ? [wallet] : [wallet, encodeBlockSelector(block)];
+    return this.call("lyth_getDelegations", params);
+  }
+
+  /** `lyth_getClusterDelegators` — delegator addresses for a cluster. */
+  async lythGetClusterDelegators(
+    cluster: number,
+    block?: BlockSelector,
+  ): Promise<ClusterDelegatorsResponse> {
+    const params =
+      block === undefined ? [cluster] : [cluster, encodeBlockSelector(block)];
+    return this.call("lyth_getClusterDelegators", params);
+  }
+
+  /** `lyth_getDelegationCap` — active per-cluster cap at a block. */
+  async lythGetDelegationCap(
+    block?: BlockSelector,
+  ): Promise<DelegationCapResponse> {
+    const params = block === undefined ? [] : [encodeBlockSelector(block)];
+    return this.call("lyth_getDelegationCap", params);
+  }
+
+  /** `lyth_getTpmAttestation` — TPM quote digest + EK id for a peer. */
+  async lythGetTpmAttestation(
+    peerId: string,
+    block?: BlockSelector,
+  ): Promise<TpmAttestationResponse> {
+    const params =
+      block === undefined ? [peerId] : [peerId, encodeBlockSelector(block)];
+    return this.call("lyth_getTpmAttestation", params);
+  }
+
+  /** `lyth_getClusterEntity` — entity flag for a cluster. */
+  async lythGetClusterEntity(
+    cluster: number,
+    block?: BlockSelector,
+  ): Promise<ClusterEntityResponse> {
+    const params =
+      block === undefined ? [cluster] : [cluster, encodeBlockSelector(block)];
+    return this.call("lyth_getClusterEntity", params);
+  }
+
+  /** `lyth_getEntityRatchet` — entity-ratchet snapshot at a block. */
+  async lythGetEntityRatchet(
+    block?: BlockSelector,
+  ): Promise<EntityRatchetResponse> {
+    const params = block === undefined ? [] : [encodeBlockSelector(block)];
+    return this.call("lyth_getEntityRatchet", params);
+  }
+
   /**
    * `lyth_submitPendingChange` — operator-onboarding transport for the
    * pending-change ledger. Server validates the envelope shape.
    */
   async lythSubmitPendingChange(envelope: unknown): Promise<unknown> {
     return this.call("lyth_submitPendingChange", [envelope]);
+  }
+
+  /** `lyth_submitEncrypted` — submit a bincode-encoded encrypted envelope hex. */
+  async lythSubmitEncrypted(envelopeHex: string): Promise<string> {
+    return this.call("lyth_submitEncrypted", [envelopeHex]);
+  }
+
+  /** `lyth_getEncryptionKey` — cluster ML-KEM encapsulation key. */
+  async lythGetEncryptionKey(): Promise<EncryptionKeyResponse> {
+    return this.call("lyth_getEncryptionKey", []);
+  }
+
+  /** `lyth_syncStatus` — DAG-sync driver snapshot. */
+  async lythSyncStatus(): Promise<DagSyncStatus | null> {
+    const v = await this.call<unknown>("lyth_syncStatus", []);
+    if (v === null || v === undefined) return null;
+    return v as DagSyncStatus;
   }
 
   /** `lyth_subscribe` — WebSocket-only; returns an RPC error over HTTP. */
