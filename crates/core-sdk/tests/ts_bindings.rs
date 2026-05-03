@@ -12,9 +12,11 @@
 
 use monolythium_core_sdk::types::{
     AccountPolicy, AccountProofResponse, AssetPolicy, BlockHeader, BlockTag, CallRequest,
+    ClusterDelegatorsResponse, ClusterEntityResponse, DagSyncStatus, DelegationCapResponse,
+    DelegationRow, DelegationsResponse, EncryptionKeyResponse, EntityRatchetResponse,
     FeeHistoryResponse, IndexerStatus, MempoolSnapshot, PeerSummary, PendingTxSummary,
     PrecompileDescriptor, RegistryRecord, RoundInfo, StorageProofBatch, SyncStatus,
-    TransactionReceipt, ValidatorDescriptor,
+    TpmAttestationResponse, TransactionReceipt, TransactionView, ValidatorDescriptor,
 };
 use ts_rs::TS;
 
@@ -32,6 +34,14 @@ fn export_bindings() {
     BlockHeader::export_all_to(&out).expect("BlockHeader");
     BlockTag::export_all_to(&out).expect("BlockTag");
     CallRequest::export_all_to(&out).expect("CallRequest");
+    ClusterDelegatorsResponse::export_all_to(&out).expect("ClusterDelegatorsResponse");
+    ClusterEntityResponse::export_all_to(&out).expect("ClusterEntityResponse");
+    DagSyncStatus::export_all_to(&out).expect("DagSyncStatus");
+    DelegationCapResponse::export_all_to(&out).expect("DelegationCapResponse");
+    DelegationRow::export_all_to(&out).expect("DelegationRow");
+    DelegationsResponse::export_all_to(&out).expect("DelegationsResponse");
+    EncryptionKeyResponse::export_all_to(&out).expect("EncryptionKeyResponse");
+    EntityRatchetResponse::export_all_to(&out).expect("EntityRatchetResponse");
     FeeHistoryResponse::export_all_to(&out).expect("FeeHistoryResponse");
     IndexerStatus::export_all_to(&out).expect("IndexerStatus");
     MempoolSnapshot::export_all_to(&out).expect("MempoolSnapshot");
@@ -42,7 +52,9 @@ fn export_bindings() {
     RoundInfo::export_all_to(&out).expect("RoundInfo");
     StorageProofBatch::export_all_to(&out).expect("StorageProofBatch");
     SyncStatus::export_all_to(&out).expect("SyncStatus");
+    TpmAttestationResponse::export_all_to(&out).expect("TpmAttestationResponse");
     TransactionReceipt::export_all_to(&out).expect("TransactionReceipt");
+    TransactionView::export_all_to(&out).expect("TransactionView");
     ValidatorDescriptor::export_all_to(&out).expect("ValidatorDescriptor");
 
     // Sanity check — at least one file should exist.
@@ -51,5 +63,5 @@ fn export_bindings() {
         .filter_map(Result::ok)
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "ts"))
         .count();
-    assert!(count >= 18, "expected 18+ bindings files, got {count}");
+    assert!(count >= 28, "expected 28+ bindings files, got {count}");
 }

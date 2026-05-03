@@ -14,9 +14,11 @@ use serde_json::{json, Value};
 use crate::error::SdkError;
 use crate::types::{
     AccountPolicy, AccountProofResponse, AssetPolicy, BlockHeader, BlockSelector, CallRequest,
-    FeeHistoryResponse, IndexerStatus, MempoolSnapshot, PeerSummary, PendingTxSummary,
-    PrecompileDescriptor, RegistryRecord, RoundInfo, StorageProofBatch, SyncStatus,
-    TransactionReceipt, ValidatorDescriptor,
+    ClusterDelegatorsResponse, ClusterEntityResponse, DagSyncStatus, DelegationCapResponse,
+    DelegationsResponse, EncryptionKeyResponse, EntityRatchetResponse, FeeHistoryResponse,
+    IndexerStatus, MempoolSnapshot, PeerSummary, PendingTxSummary, PrecompileDescriptor,
+    RegistryRecord, RoundInfo, StorageProofBatch, SyncStatus, TpmAttestationResponse,
+    TransactionReceipt, TransactionView, ValidatorDescriptor,
 };
 
 /// Typed JSON-RPC client for a `mono-core` node.
@@ -220,6 +222,16 @@ impl RpcClient {
         self.call("eth_getBlockByHash", json!([hash])).await
     }
 
+    /// `eth_getTransactionByHash` — fetches an included transaction by
+    /// hash. Returns `None` if pending / unknown.
+    pub async fn eth_get_transaction_by_hash(
+        &self,
+        tx_hash: &str,
+    ) -> Result<Option<TransactionView>, SdkError> {
+        self.call("eth_getTransactionByHash", json!([tx_hash]))
+            .await
+    }
+
     /// `eth_getTransactionReceipt` — returns the receipt for a
     /// confirmed tx, or `None` while pending / unknown.
     pub async fn eth_get_transaction_receipt(
@@ -389,6 +401,17 @@ impl RpcClient {
         self.call("lyth_validatorSet", json!([])).await
     }
 
+    /// `lyth_listActiveValidators` — validators currently eligible to
+    /// propose / vote.
+    pub async fn lyth_list_active_validators(&self) -> Result<Vec<ValidatorDescriptor>, SdkError> {
+        self.call("lyth_listActiveValidators", json!([])).await
+    }
+
+    /// `lyth_listHealthyValidators` — healthy validator subset.
+    pub async fn lyth_list_healthy_validators(&self) -> Result<Vec<ValidatorDescriptor>, SdkError> {
+        self.call("lyth_listHealthyValidators", json!([])).await
+    }
+
     /// `lyth_listActivePrecompiles` — milestone-gated precompile catalogue
     /// (OI-0170 / ADR-0015 §5). `block` selects the height the gate snapshot
     /// is read from; pass [`BlockSelector::LATEST`] for the live view.
@@ -420,12 +443,110 @@ impl RpcClient {
             .await
     }
 
+    /// `lyth_getDelegations` — wallet delegation rows at `block`.
+    pub async fn lyth_get_delegations(
+        &self,
+        wallet: &str,
+        block: Option<BlockSelector>,
+    ) -> Result<DelegationsResponse, SdkError> {
+        let params = match block {
+            Some(block) => json!([wallet, block.to_param()]),
+            None => json!([wallet]),
+        };
+        self.call("lyth_getDelegations", params).await
+    }
+
+    /// `lyth_getClusterDelegators` — delegator addresses for a cluster.
+    pub async fn lyth_get_cluster_delegators(
+        &self,
+        cluster: u32,
+        block: Option<BlockSelector>,
+    ) -> Result<ClusterDelegatorsResponse, SdkError> {
+        let params = match block {
+            Some(block) => json!([cluster, block.to_param()]),
+            None => json!([cluster]),
+        };
+        self.call("lyth_getClusterDelegators", params).await
+    }
+
+    /// `lyth_getDelegationCap` — active per-cluster cap at `block`.
+    pub async fn lyth_get_delegation_cap(
+        &self,
+        block: Option<BlockSelector>,
+    ) -> Result<DelegationCapResponse, SdkError> {
+        let params = match block {
+            Some(block) => json!([block.to_param()]),
+            None => json!([]),
+        };
+        self.call("lyth_getDelegationCap", params).await
+    }
+
+    /// `lyth_getTpmAttestation` — TPM quote digest + EK id for a peer.
+    pub async fn lyth_get_tpm_attestation(
+        &self,
+        peer_id: &str,
+        block: Option<BlockSelector>,
+    ) -> Result<TpmAttestationResponse, SdkError> {
+        let params = match block {
+            Some(block) => json!([peer_id, block.to_param()]),
+            None => json!([peer_id]),
+        };
+        self.call("lyth_getTpmAttestation", params).await
+    }
+
+    /// `lyth_getClusterEntity` — entity flag for a cluster.
+    pub async fn lyth_get_cluster_entity(
+        &self,
+        cluster: u32,
+        block: Option<BlockSelector>,
+    ) -> Result<ClusterEntityResponse, SdkError> {
+        let params = match block {
+            Some(block) => json!([cluster, block.to_param()]),
+            None => json!([cluster]),
+        };
+        self.call("lyth_getClusterEntity", params).await
+    }
+
+    /// `lyth_getEntityRatchet` — entity-ratchet snapshot at `block`.
+    pub async fn lyth_get_entity_ratchet(
+        &self,
+        block: Option<BlockSelector>,
+    ) -> Result<EntityRatchetResponse, SdkError> {
+        let params = match block {
+            Some(block) => json!([block.to_param()]),
+            None => json!([]),
+        };
+        self.call("lyth_getEntityRatchet", params).await
+    }
+
     /// `lyth_submitPendingChange` — operator-onboarding transport for the
     /// pending-change ledger. The opaque envelope is forwarded to the node;
     /// payload validation happens server-side.
     pub async fn lyth_submit_pending_change(&self, envelope: Value) -> Result<Value, SdkError> {
         self.call("lyth_submitPendingChange", json!([envelope]))
             .await
+    }
+
+    /// `lyth_submitEncrypted` — submit a bincode-encoded encrypted
+    /// envelope as `0x` hex. Returns the tx hash on admission.
+    pub async fn lyth_submit_encrypted(&self, envelope_hex: &str) -> Result<String, SdkError> {
+        self.call("lyth_submitEncrypted", json!([envelope_hex]))
+            .await
+    }
+
+    /// `lyth_getEncryptionKey` — cluster ML-KEM encapsulation key.
+    pub async fn lyth_get_encryption_key(&self) -> Result<EncryptionKeyResponse, SdkError> {
+        self.call("lyth_getEncryptionKey", json!([])).await
+    }
+
+    /// `lyth_syncStatus` — DAG-sync driver snapshot, or `None` when the
+    /// running node has no driver wired.
+    pub async fn lyth_sync_status(&self) -> Result<Option<DagSyncStatus>, SdkError> {
+        let v: Value = self.call("lyth_syncStatus", json!([])).await?;
+        if v.is_null() {
+            return Ok(None);
+        }
+        Ok(Some(serde_json::from_value(v)?))
     }
 
     /// `lyth_subscribe` — note: this is a WebSocket-only method.

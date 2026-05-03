@@ -167,6 +167,48 @@ pub struct TransactionReceipt {
     pub gas_used: u64,
 }
 
+/// Ethereum-shaped transaction view returned by `eth_getTransactionByHash`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "TransactionView.ts"))]
+pub struct TransactionView {
+    /// Transaction hash.
+    pub hash: Hash,
+    /// Block hash that contains the transaction.
+    #[serde(rename = "blockHash")]
+    pub block_hash: Hash,
+    /// Block height as a hex quantity.
+    #[serde(rename = "blockNumber")]
+    pub block_number: Quantity,
+    /// Transaction index as a hex quantity.
+    #[serde(rename = "transactionIndex")]
+    pub transaction_index: Quantity,
+    /// Sender address.
+    pub from: Address,
+    /// Recipient address, or `null` for contract creation.
+    pub to: Option<Address>,
+    /// Sender nonce as a hex quantity.
+    pub nonce: Quantity,
+    /// Transferred value as a hex quantity.
+    pub value: Quantity,
+    /// Gas limit as a hex quantity.
+    pub gas: Quantity,
+    /// EIP-1559 max fee per gas as a hex quantity.
+    #[serde(rename = "maxFeePerGas")]
+    pub max_fee_per_gas: Quantity,
+    /// EIP-1559 max priority fee per gas as a hex quantity.
+    #[serde(rename = "maxPriorityFeePerGas")]
+    pub max_priority_fee_per_gas: Quantity,
+    /// Calldata or deployment bytecode.
+    pub input: Hex,
+    /// EIP-2718 transaction type. `mono-core` currently renders `"0x2"`.
+    #[serde(rename = "type")]
+    pub tx_type: Quantity,
+    /// Chain id as a hex quantity.
+    #[serde(rename = "chainId")]
+    pub chain_id: Quantity,
+}
+
 /// `eth_syncing` response when the node is mid-sync. Returns `false`
 /// when the node is caught up — the SDK surfaces that as
 /// `Option::None`.
@@ -415,6 +457,169 @@ pub struct StorageProofBatch {
     /// One opaque proof envelope per requested slot.
     #[cfg_attr(feature = "ts-bindings", ts(type = "unknown[]"))]
     pub proofs: Vec<serde_json::Value>,
+}
+
+/// One delegation row in `lyth_getDelegations`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "DelegationRow.ts"))]
+pub struct DelegationRow {
+    /// Cluster id receiving the delegated weight.
+    pub cluster: u32,
+    /// Delegated weight in basis points.
+    #[serde(rename = "weightBps")]
+    pub weight_bps: u16,
+}
+
+/// `lyth_getDelegations` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "DelegationsResponse.ts")
+)]
+pub struct DelegationsResponse {
+    /// Queried wallet address.
+    pub wallet: Address,
+    /// Per-cluster delegation rows.
+    pub rows: Vec<DelegationRow>,
+    /// Sum of row weights.
+    #[serde(rename = "totalBps")]
+    pub total_bps: u32,
+    /// Block selector echoed by the node.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "unknown"))]
+    pub block: serde_json::Value,
+}
+
+/// `lyth_getClusterDelegators` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "ClusterDelegatorsResponse.ts")
+)]
+pub struct ClusterDelegatorsResponse {
+    /// Queried cluster id.
+    pub cluster: u32,
+    /// Delegator wallet addresses.
+    pub delegators: Vec<Address>,
+    /// Number of delegator slots scanned by the node.
+    pub count: u32,
+    /// Block selector echoed by the node.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "unknown"))]
+    pub block: serde_json::Value,
+}
+
+/// `lyth_getDelegationCap` response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "DelegationCapResponse.ts")
+)]
+pub struct DelegationCapResponse {
+    /// Per-cluster cap in basis points. `u32::MAX` means disabled.
+    #[serde(rename = "capBps")]
+    pub cap_bps: u32,
+    /// Height of the most recent milestone that changed the cap.
+    #[serde(rename = "lastChangedAtHeight")]
+    pub last_changed_at_height: u64,
+    /// Block height sampled by the node.
+    #[serde(rename = "blockNumber")]
+    pub block_number: u64,
+}
+
+/// `lyth_getTpmAttestation` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "TpmAttestationResponse.ts")
+)]
+pub struct TpmAttestationResponse {
+    /// 32-byte peer id.
+    #[serde(rename = "peerId")]
+    pub peer_id: Hex,
+    /// 32-byte digest over the canonical TPM quote bytes.
+    #[serde(rename = "quoteDigest")]
+    pub quote_digest: Hash,
+    /// 32-byte EK identifier.
+    #[serde(rename = "ekId")]
+    pub ek_id: Hash,
+    /// Block selector echoed by the node.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "unknown"))]
+    pub block: serde_json::Value,
+}
+
+/// `lyth_getClusterEntity` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "ClusterEntityResponse.ts")
+)]
+pub struct ClusterEntityResponse {
+    /// Queried cluster id.
+    pub cluster: u32,
+    /// Entity label, e.g. `"independent"` or `"mono-labs"`.
+    pub entity: String,
+    /// Raw entity enum discriminant.
+    #[serde(rename = "entityCode")]
+    pub entity_code: u8,
+    /// Block selector echoed by the node.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "unknown"))]
+    pub block: serde_json::Value,
+}
+
+/// `lyth_getEntityRatchet` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "EntityRatchetResponse.ts")
+)]
+pub struct EntityRatchetResponse {
+    /// Active foundation-entity cluster count.
+    pub active: u32,
+    /// Published ratchet threshold. `u32::MAX` means unset.
+    pub threshold: u32,
+    /// Block selector echoed by the node.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "unknown"))]
+    pub block: serde_json::Value,
+}
+
+/// `lyth_getEncryptionKey` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "EncryptionKeyResponse.ts")
+)]
+pub struct EncryptionKeyResponse {
+    /// KEM algorithm tag.
+    pub algo: String,
+    /// Cluster encryption epoch.
+    pub epoch: u64,
+    /// ML-KEM-768 encapsulation key.
+    #[serde(rename = "encapsulationKey")]
+    pub encapsulation_key: Hex,
+}
+
+/// `lyth_syncStatus` DAG-sync driver snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "DagSyncStatus.ts"))]
+pub struct DagSyncStatus {
+    /// Driver state: `idle`, `probing`, `catching`, or `synced`.
+    pub state: String,
+    /// Local anchor frontier round.
+    #[serde(rename = "localRound")]
+    pub local_round: u64,
+    /// Highest peer committed round observed.
+    #[serde(rename = "peerMaxRound")]
+    pub peer_max_round: u64,
+    /// `peerMaxRound - localRound`, saturating at zero.
+    pub lag: u64,
 }
 
 /// `lyth_listActivePrecompiles` entry — OI-0170 / ADR-0015 §5.
