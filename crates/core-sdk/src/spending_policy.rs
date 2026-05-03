@@ -23,6 +23,15 @@ pub const SIGHASH_SET_POLICY: &str = "setPolicy(address,address,uint128,uint128,
 pub const SIGHASH_SET_POLICY_CLAIM: &str =
     "setPolicyClaim(address,address,uint128,uint128,bytes32,bytes32,bytes,bytes)";
 
+/// `claimPolicyByAddress(address,address,uint128,uint128,bytes32,bytes32,bytes)`.
+///
+/// Fresh-claim path that reads the sub-account ML-DSA-65 pubkey from
+/// pubkey-registry (`0x110D`) instead of carrying it in calldata. It
+/// uses the same bound message as [`SIGHASH_SET_POLICY_CLAIM`], so a
+/// wallet can sign once and submit either form.
+pub const SIGHASH_CLAIM_POLICY_BY_ADDRESS: &str =
+    "claimPolicyByAddress(address,address,uint128,uint128,bytes32,bytes32,bytes)";
+
 /// `enable(address)`.
 pub const SIGHASH_ENABLE: &str = "enable(address)";
 
@@ -125,6 +134,12 @@ pub fn selector_set_policy_claim() -> [u8; 4] {
     selector_for(SIGHASH_SET_POLICY_CLAIM)
 }
 
+/// Selector for `claimPolicyByAddress`.
+#[must_use]
+pub fn selector_claim_policy_by_address() -> [u8; 4] {
+    selector_for(SIGHASH_CLAIM_POLICY_BY_ADDRESS)
+}
+
 /// Selector for `enable`.
 #[must_use]
 pub fn selector_enable() -> [u8; 4] {
@@ -213,6 +228,32 @@ pub fn encode_set_policy_claim_calldata(
     Ok(out)
 }
 
+/// Encode `claimPolicyByAddress` calldata for fresh sub-account claims.
+///
+/// This is the preferred fresh-claim path after the sub-account pubkey
+/// has been registered in pubkey-registry (`0x110D`). It saves 1952
+/// calldata bytes compared with [`encode_set_policy_claim_calldata`].
+///
+/// # Errors
+/// Returns [`SpendingPolicyError`] if `sub_account_sig` is not ML-DSA-65
+/// signature length.
+pub fn encode_claim_policy_by_address_calldata(
+    args: &SpendingPolicyArgs,
+    sub_account_sig: &[u8],
+) -> Result<Vec<u8>, SpendingPolicyError> {
+    if sub_account_sig.len() != ML_DSA_65_SIGNATURE_LEN {
+        return Err(SpendingPolicyError::SignatureLength {
+            expected: ML_DSA_65_SIGNATURE_LEN,
+            got: sub_account_sig.len(),
+        });
+    }
+    let mut out = Vec::with_capacity(4 + 6 * 32 + ML_DSA_65_SIGNATURE_LEN);
+    out.extend_from_slice(&selector_claim_policy_by_address());
+    encode_policy_words(&mut out, args);
+    out.extend_from_slice(sub_account_sig);
+    Ok(out)
+}
+
 /// Encode `enable(sub_account)` calldata.
 #[must_use]
 pub fn encode_enable_calldata(sub_account: [u8; 20]) -> Vec<u8> {
@@ -287,6 +328,7 @@ mod tests {
     fn selectors_match_mono_core() {
         assert_eq!(selector_set_policy(), [0xd6, 0xa5, 0x18, 0xb2]);
         assert_eq!(selector_set_policy_claim(), [0x08, 0xd7, 0x8f, 0x9c]);
+        assert_eq!(selector_claim_policy_by_address(), [0xc2, 0x39, 0x7f, 0xe9]);
         assert_eq!(selector_enable(), [0x5b, 0xfa, 0x1b, 0x68]);
         assert_eq!(selector_disable(), [0xe6, 0xc0, 0x9e, 0xdf]);
         assert_eq!(selector_record_spend(), [0xdc, 0xa0, 0x42, 0x92]);
@@ -314,5 +356,13 @@ mod tests {
         let calldata = encode_set_policy_claim_calldata(&args(), &pk, &sig).unwrap();
         assert_eq!(calldata.len(), 5457);
         assert_eq!(&calldata[..4], &selector_set_policy_claim());
+    }
+
+    #[test]
+    fn claim_policy_by_address_calldata_has_canonical_length() {
+        let sig = vec![0x44; ML_DSA_65_SIGNATURE_LEN];
+        let calldata = encode_claim_policy_by_address_calldata(&args(), &sig).unwrap();
+        assert_eq!(calldata.len(), 3505);
+        assert_eq!(&calldata[..4], &selector_claim_policy_by_address());
     }
 }

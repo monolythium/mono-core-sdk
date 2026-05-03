@@ -24,8 +24,8 @@ The SDK tracks the live `mono-core` RPC and precompile surface. Wire types under
 - Canonical precompile address constants, including recent Stage 7 additions:
   `SPENDING_POLICY` at `0x110C` and `PUBKEY_REGISTRY` at `0x110D`.
 - `mono1...` bech32m display helpers for 20-byte wire addresses.
-- Spending-policy calldata helpers for `setPolicyClaim`, `setPolicy`,
-  `enable`, and `disable`.
+- Spending-policy calldata helpers for `claimPolicyByAddress`,
+  `setPolicyClaim`, `setPolicy`, `enable`, and `disable`.
 - Pubkey-registry calldata helpers for `registerPubkey`, `lookupPubkey`, and
   `hasPubkey`, plus return decoders for the view calls.
 - TypeScript ethers v6 provider/signer adapters.
@@ -142,9 +142,12 @@ before activation.
 
 ## Spending Policy
 
-Fresh sub-account policy claims must use `setPolicyClaim`, which binds policy
-fields to a sub-account ML-DSA-65 signature. Legacy `setPolicy` is only for
-re-claims by an already recorded principal.
+Fresh sub-account policy claims must use `claimPolicyByAddress` or
+`setPolicyClaim`, both of which bind policy fields to a sub-account ML-DSA-65
+signature. `claimPolicyByAddress` is the preferred path after the sub-account
+has registered its pubkey in pubkey-registry because it avoids carrying the
+1952-byte pubkey in calldata. Legacy `setPolicy` is only for re-claims by an
+already recorded principal.
 
 TypeScript:
 
@@ -152,14 +155,18 @@ TypeScript:
 import {
   PRECOMPILE_ADDRESSES,
   composeClaimBoundMessage,
+  encodeClaimPolicyByAddressCalldata,
   encodeSetPolicyClaimCalldata,
 } from "@monolythium/core-sdk";
 
 const message = composeClaimBoundMessage(69420n, policyArgs);
 // sign `message` with the sub-account ML-DSA-65 key
-const calldata = encodeSetPolicyClaimCalldata(policyArgs, subAccountPubkey, subAccountSig);
+const calldata = encodeClaimPolicyByAddressCalldata(policyArgs, subAccountSig);
 // send a transaction to PRECOMPILE_ADDRESSES.SPENDING_POLICY
 ```
+
+Use `encodeSetPolicyClaimCalldata(policyArgs, subAccountPubkey, subAccountSig)`
+when the sub-account pubkey has not been registered yet.
 
 The spending-policy precompile is also milestone-gated and typed-reverts before
 activation.

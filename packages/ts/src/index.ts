@@ -37,6 +37,7 @@ export {
   SPENDING_POLICY_SELECTORS,
   SpendingPolicyError,
   composeClaimBoundMessage,
+  encodeClaimPolicyByAddressCalldata,
   encodeDisableCalldata,
   encodeEnableCalldata,
   encodeSetPolicyCalldata,

@@ -3,8 +3,9 @@
  *
  * These helpers build calldata and claim messages for the live
  * `mono-core` spending-policy precompile. Fresh sub-account claims
- * must use `setPolicyClaim`; legacy `setPolicy` is only for re-claims
- * where the principal is already recorded on-chain.
+ * must use `setPolicyClaim` or `claimPolicyByAddress`; legacy
+ * `setPolicy` is only for re-claims where the principal is already
+ * recorded on-chain.
  */
 
 import { hexToAddressBytes, addressBytesToHex } from "./address.js";
@@ -17,6 +18,7 @@ export const ML_DSA_65_SIGNATURE_LEN = 3309;
 export const SPENDING_POLICY_SELECTORS = {
   setPolicy: "0xd6a518b2",
   setPolicyClaim: "0x08d78f9c",
+  claimPolicyByAddress: "0xc2397fe9",
   enable: "0x5bfa1b68",
   disable: "0xe6c09edf",
   recordSpend: "0xdca04292",
@@ -96,6 +98,26 @@ export function encodeSetPolicyClaimCalldata(
       hexToBytes(SPENDING_POLICY_SELECTORS.setPolicyClaim),
       encodePolicyWords(normalized),
       pubkey,
+      sig,
+    ),
+  );
+}
+
+export function encodeClaimPolicyByAddressCalldata(
+  args: SpendingPolicyArgs,
+  subAccountSig: Uint8Array | readonly number[] | string,
+): string {
+  const normalized = normalizeArgs(args);
+  const sig = toBytes(subAccountSig);
+  if (sig.length !== ML_DSA_65_SIGNATURE_LEN) {
+    throw new SpendingPolicyError(
+      `subAccountSig must be ${ML_DSA_65_SIGNATURE_LEN} bytes, got ${sig.length}`,
+    );
+  }
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(SPENDING_POLICY_SELECTORS.claimPolicyByAddress),
+      encodePolicyWords(normalized),
       sig,
     ),
   );
