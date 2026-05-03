@@ -78,6 +78,8 @@ export const PRECOMPILE_ADDRESSES = {
   STREAMING_PAYMENTS: "0x0000000000000000000000000000000000001102",
   /** Human-readable name registry (Law §5.4 / §5.8) — gateable. */
   NAME_REGISTRY: "0x0000000000000000000000000000000000001103",
+  /** Agent spending policy — gateable, activated by Stage 7 milestones. */
+  SPENDING_POLICY: "0x000000000000000000000000000000000000110C",
 } as const;
 
 /** Precompile address-key type — useful for typed maps over the surface. */

@@ -31,6 +31,35 @@ SDK via `ts-rs`; see `src/bindings/`.
 Quantities surface as `bigint` to preserve full precision. Use
 `parseQuantity` only when you know the value fits in `Number.MAX_SAFE_INTEGER`.
 
+### Address helpers
+
+User-facing surfaces should display Monolythium addresses as `mono1...`
+bech32m, while JSON-RPC still uses 20-byte `0x...` hex.
+
+```ts
+import { addressToBech32, bech32ToAddress } from "@monolythium/core-sdk";
+
+const display = addressToBech32("0x123456789abcdef0112233445566778899aabbcc");
+const wire = bech32ToAddress(display);
+```
+
+### Spending-policy helpers
+
+Fresh sub-account policy claims must use `setPolicyClaim`, which binds
+the policy to a sub-account ML-DSA-65 signature. The SDK exposes the
+canonical message builder and calldata encoders.
+
+```ts
+import {
+  composeClaimBoundMessage,
+  encodeSetPolicyClaimCalldata,
+} from "@monolythium/core-sdk";
+
+const message = composeClaimBoundMessage(69420n, policyArgs);
+// Sign `message` with the sub-account ML-DSA-65 key, then:
+const calldata = encodeSetPolicyClaimCalldata(policyArgs, subAccountPubkey, subAccountSig);
+```
+
 ### ethers.js v6 compat
 
 The package also ships an ethers v6 compat shim — a `MonolythiumProvider`

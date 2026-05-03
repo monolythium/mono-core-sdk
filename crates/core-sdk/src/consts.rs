@@ -75,6 +75,8 @@ pub mod precompile_addresses {
     pub const STREAMING_PAYMENTS: [u8; 20] = address([0x11, 0x02]);
     /// Human-readable name registry (Law §5.4 / §5.8) — gateable.
     pub const NAME_REGISTRY: [u8; 20] = address([0x11, 0x03]);
+    /// Agent spending policy — gateable, activated by Stage 7 milestones.
+    pub const SPENDING_POLICY: [u8; 20] = address([0x11, 0x0C]);
 
     /// Build a precompile address from its trailing two bytes. The first
     /// 18 bytes are zero — the runtime address layout always pins
@@ -102,6 +104,7 @@ pub mod precompile_addresses {
         ("EMERGENCY_KEY", EMERGENCY_KEY),
         ("STREAMING_PAYMENTS", STREAMING_PAYMENTS),
         ("NAME_REGISTRY", NAME_REGISTRY),
+        ("SPENDING_POLICY", SPENDING_POLICY),
     ];
 }
 
@@ -149,6 +152,7 @@ mod tests {
             ("EMERGENCY_KEY", expected_addr(0x1100)),
             ("STREAMING_PAYMENTS", expected_addr(0x1102)),
             ("NAME_REGISTRY", expected_addr(0x1103)),
+            ("SPENDING_POLICY", expected_addr(0x110C)),
         ];
         for ((_, want), &(name, got)) in expected.iter().zip(ALL.iter()) {
             assert_eq!(got, *want, "{name}: address must match runtime");
@@ -164,11 +168,11 @@ mod tests {
     }
 
     #[test]
-    fn precompile_address_map_size_is_thirteen() {
-        // Mirrors the runtime test assertion `expected 13 wired
+    fn precompile_address_map_size_is_fourteen() {
+        // Mirrors the runtime test assertion `expected 14 wired
         // precompiles` — adding without parallel runtime registration
         // is a drift.
-        assert_eq!(precompile_addresses::ALL.len(), 13);
+        assert_eq!(precompile_addresses::ALL.len(), 14);
     }
 
     #[test]
