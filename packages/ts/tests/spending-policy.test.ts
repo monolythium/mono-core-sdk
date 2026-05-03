@@ -6,6 +6,7 @@ import {
   SET_POLICY_CLAIM_DOMAIN_TAG,
   SPENDING_POLICY_SELECTORS,
   composeClaimBoundMessage,
+  encodeClaimPolicyByAddressCalldata,
   encodeDisableCalldata,
   encodeEnableCalldata,
   encodeSetPolicyCalldata,
@@ -28,6 +29,7 @@ describe("spending policy ABI helpers", () => {
     expect(SPENDING_POLICY_SELECTORS).toEqual({
       setPolicy: "0xd6a518b2",
       setPolicyClaim: "0x08d78f9c",
+      claimPolicyByAddress: "0xc2397fe9",
       enable: "0x5bfa1b68",
       disable: "0xe6c09edf",
       recordSpend: "0xdca04292",
@@ -65,6 +67,13 @@ describe("spending policy ABI helpers", () => {
     expect((calldata.length - 2) / 2).toBe(5457);
   });
 
+  it("encodes claimPolicyByAddress calldata for the pubkey-registry fresh-claim path", () => {
+    const sig = new Uint8Array(ML_DSA_65_SIGNATURE_LEN).fill(0x44);
+    const calldata = encodeClaimPolicyByAddressCalldata(args, sig);
+    expect(calldata.startsWith(SPENDING_POLICY_SELECTORS.claimPolicyByAddress)).toBe(true);
+    expect((calldata.length - 2) / 2).toBe(3505);
+  });
+
   it("encodes enable and disable one-address calls", () => {
     expect(encodeEnableCalldata(args.subAccount).startsWith(SPENDING_POLICY_SELECTORS.enable)).toBe(true);
     expect(encodeDisableCalldata(args.subAccount).startsWith(SPENDING_POLICY_SELECTORS.disable)).toBe(true);
@@ -74,5 +83,6 @@ describe("spending policy ABI helpers", () => {
   it("rejects wrong ML-DSA-65 material lengths", () => {
     expect(() => encodeSetPolicyClaimCalldata(args, new Uint8Array(1), new Uint8Array(ML_DSA_65_SIGNATURE_LEN))).toThrow();
     expect(() => encodeSetPolicyClaimCalldata(args, new Uint8Array(ML_DSA_65_PUBLIC_KEY_LEN), new Uint8Array(1))).toThrow();
+    expect(() => encodeClaimPolicyByAddressCalldata(args, new Uint8Array(1))).toThrow();
   });
 });

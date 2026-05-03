@@ -45,19 +45,21 @@ const wire = bech32ToAddress(display);
 
 ### Spending-policy helpers
 
-Fresh sub-account policy claims must use `setPolicyClaim`, which binds
-the policy to a sub-account ML-DSA-65 signature. The SDK exposes the
-canonical message builder and calldata encoders.
+Fresh sub-account policy claims must use `claimPolicyByAddress` or
+`setPolicyClaim`, both of which bind the policy to a sub-account ML-DSA-65
+signature. Prefer `claimPolicyByAddress` after the pubkey is registered in
+pubkey-registry; it avoids carrying the 1952-byte pubkey in calldata.
 
 ```ts
 import {
   composeClaimBoundMessage,
+  encodeClaimPolicyByAddressCalldata,
   encodeSetPolicyClaimCalldata,
 } from "@monolythium/core-sdk";
 
 const message = composeClaimBoundMessage(69420n, policyArgs);
 // Sign `message` with the sub-account ML-DSA-65 key, then:
-const calldata = encodeSetPolicyClaimCalldata(policyArgs, subAccountPubkey, subAccountSig);
+const calldata = encodeClaimPolicyByAddressCalldata(policyArgs, subAccountSig);
 ```
 
 ### Pubkey-registry helpers
