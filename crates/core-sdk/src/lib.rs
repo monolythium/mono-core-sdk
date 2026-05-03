@@ -19,11 +19,17 @@
 //! # }
 //! ```
 
+pub mod address;
 pub mod client;
 pub mod consts;
 pub mod error;
+pub mod spending_policy;
 pub mod types;
 
+pub use address::{
+    address_to_bech32, address_to_hex, bech32_to_address, hex_to_address, parse_address,
+    AddressError, ADDRESS_HRP,
+};
 pub use client::RpcClient;
 pub use consts::{burn_addr_hex, BURN_ADDR};
 pub use error::SdkError;

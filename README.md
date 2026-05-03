@@ -10,7 +10,7 @@ Official Rust + TypeScript SDK for Monolythium v2 (LythiumDAG-BFT)
 
 `mono-core-sdk` is the official client library for talking to Monolythium v2 nodes. It provides typed wrappers around the chain's JSON-RPC surface (both `eth_*` Ethereum-compatible methods and chain-native `lyth_*` methods, per Law §13.2) so that applications never have to hand-craft RPC payloads. The repo ships two packages: a Rust crate (`monolythium-core-sdk`) and a TypeScript package (`@monolythium/core-sdk`) whose wire types are generated from the same Rust definitions via `ts-rs`.
 
-> **Status:** v0.1.0 — typed RPC client ships in both languages with `ts-rs`-generated TypeScript bindings. The TypeScript package additionally ships an ethers.js v6 compat shim (`MonolythiumProvider`, `MonolythiumSigner`); the Rust signer trait + keychain integration land in v0.2.
+> **Status:** v0.1.0 — typed RPC client ships in both languages with `ts-rs`-generated TypeScript bindings. The SDK also exports `mono1...` bech32m address helpers and spending-policy precompile calldata/message builders. The TypeScript package additionally ships an ethers.js v6 compat shim (`MonolythiumProvider`, `MonolythiumSigner`); the Rust signer trait + keychain integration land in v0.2.
 
 ## Who this is for
 
@@ -75,6 +75,39 @@ if (block) console.log(`latest hash: ${block.hash}`);
 
 const validators = await client.lythValidatorSet();
 console.log(`${validators.length} validators`);
+```
+
+### Address helpers
+
+Monolythium addresses are still 20-byte EVM-compatible values on the wire, but user-facing surfaces should display `mono1...` bech32m.
+
+```ts
+import { addressToBech32, bech32ToAddress } from "@monolythium/core-sdk";
+
+const display = addressToBech32("0x123456789abcdef0112233445566778899aabbcc");
+const wire = bech32ToAddress(display);
+```
+
+```rust
+use monolythium_core_sdk::{address_to_bech32, bech32_to_address};
+
+let display = address_to_bech32([0x42; 20]);
+let wire = bech32_to_address(&display).expect("valid mono1 address");
+```
+
+### Spending-policy helpers
+
+Fresh sub-account policy claims must use the signed `setPolicyClaim` path that landed in `mono-core`; legacy `setPolicy` is only for re-claims by an already recorded principal. The SDK exposes the canonical claim message builder and calldata encoders so wallets do not have to hand-roll ABI bytes.
+
+```ts
+import {
+  composeClaimBoundMessage,
+  encodeSetPolicyClaimCalldata,
+} from "@monolythium/core-sdk";
+
+const message = composeClaimBoundMessage(69420n, policyArgs);
+// Sign `message` with the sub-account ML-DSA-65 key, then:
+const calldata = encodeSetPolicyClaimCalldata(policyArgs, subAccountPubkey, subAccountSig);
 ```
 
 ### Notes

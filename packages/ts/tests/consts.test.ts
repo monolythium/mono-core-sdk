@@ -106,6 +106,9 @@ describe("PRECOMPILE_ADDRESSES", () => {
     expect(PRECOMPILE_ADDRESSES.NAME_REGISTRY).toBe(
       "0x0000000000000000000000000000000000001103",
     );
+    expect(PRECOMPILE_ADDRESSES.SPENDING_POLICY).toBe(
+      "0x000000000000000000000000000000000000110C",
+    );
   });
 
   it("does not wire the unwired slots (governance 0x1006, VRF 0x1101)", () => {

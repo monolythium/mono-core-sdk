@@ -19,6 +19,31 @@ export { SdkError } from "./error.js";
 export * from "./types.js";
 export { BURN_ADDR, PRECOMPILE_ADDRESSES } from "./consts.js";
 export type { PrecompileName, PrecompileAddress } from "./consts.js";
+export {
+  ADDRESS_HRP,
+  AddressError,
+  addressBytesToHex,
+  addressToBech32,
+  bech32ToAddress,
+  bech32ToAddressBytes,
+  hexToAddressBytes,
+  normalizeAddressHex,
+  parseAddress,
+} from "./address.js";
+export {
+  ML_DSA_65_PUBLIC_KEY_LEN,
+  ML_DSA_65_SIGNATURE_LEN,
+  SET_POLICY_CLAIM_DOMAIN_TAG,
+  SPENDING_POLICY_SELECTORS,
+  SpendingPolicyError,
+  composeClaimBoundMessage,
+  encodeDisableCalldata,
+  encodeEnableCalldata,
+  encodeSetPolicyCalldata,
+  encodeSetPolicyClaimCalldata,
+  spendingPolicyAddressHex,
+} from "./spending-policy.js";
+export type { SpendingPolicyArgs } from "./spending-policy.js";
 
 // ethers.js compat shim — ethers is a peerDependency. Importers that
 // don't use the shim never pay for the ethers types.
