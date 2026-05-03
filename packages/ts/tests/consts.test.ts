@@ -100,26 +100,55 @@ describe("PRECOMPILE_ADDRESSES", () => {
     expect(PRECOMPILE_ADDRESSES.EMERGENCY_KEY).toBe(
       "0x0000000000000000000000000000000000001100",
     );
+    expect(PRECOMPILE_ADDRESSES.VRF).toBe(
+      "0x0000000000000000000000000000000000001101",
+    );
     expect(PRECOMPILE_ADDRESSES.STREAMING_PAYMENTS).toBe(
       "0x0000000000000000000000000000000000001102",
     );
     expect(PRECOMPILE_ADDRESSES.NAME_REGISTRY).toBe(
       "0x0000000000000000000000000000000000001103",
     );
+    expect(PRECOMPILE_ADDRESSES.CLUSTER_NAME_REGISTRY).toBe(
+      "0x0000000000000000000000000000000000001104",
+    );
+    expect(PRECOMPILE_ADDRESSES.ATTESTATION).toBe(
+      "0x0000000000000000000000000000000000001105",
+    );
+    expect(PRECOMPILE_ADDRESSES.CONSENT).toBe(
+      "0x0000000000000000000000000000000000001106",
+    );
+    expect(PRECOMPILE_ADDRESSES.ISSUER_REGISTRY).toBe(
+      "0x0000000000000000000000000000000000001107",
+    );
+    expect(PRECOMPILE_ADDRESSES.DISCOVERY).toBe(
+      "0x0000000000000000000000000000000000001108",
+    );
+    expect(PRECOMPILE_ADDRESSES.AVAILABILITY).toBe(
+      "0x0000000000000000000000000000000000001109",
+    );
+    expect(PRECOMPILE_ADDRESSES.ESCROW).toBe(
+      "0x000000000000000000000000000000000000110A",
+    );
+    expect(PRECOMPILE_ADDRESSES.ARBITER_REGISTRY).toBe(
+      "0x000000000000000000000000000000000000110B",
+    );
     expect(PRECOMPILE_ADDRESSES.SPENDING_POLICY).toBe(
       "0x000000000000000000000000000000000000110C",
     );
+    expect(PRECOMPILE_ADDRESSES.PUBKEY_REGISTRY).toBe(
+      "0x000000000000000000000000000000000000110D",
+    );
   });
 
-  it("does not wire the unwired slots (governance 0x1006, VRF 0x1101)", () => {
+  it("does not expose the governance slot (0x1006)", () => {
     // 0x1006 — governance reserved by Law §5.4 but unwired after the
     // OI-0140 memo-signalling pivot. The runtime test
     // `governance_slot_0x1006_is_unwired_by_design` pins this absence;
-    // exposing the slot here would silently drift the SDK off-chain.
-    // 0x1101 — VRF slot mandated by Law §5.4 §5.6 but research-gated.
+    // exposing the slot here would suggest an SDK-supported governance
+    // precompile that does not exist.
     const values = Object.values(PRECOMPILE_ADDRESSES) as string[];
     expect(values).not.toContain("0x0000000000000000000000000000000000001006");
-    expect(values).not.toContain("0x0000000000000000000000000000000000001101");
   });
 
   it("typed name + address narrowing flows through the public API", () => {

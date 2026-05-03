@@ -60,6 +60,23 @@ const message = composeClaimBoundMessage(69420n, policyArgs);
 const calldata = encodeSetPolicyClaimCalldata(policyArgs, subAccountPubkey, subAccountSig);
 ```
 
+### Pubkey-registry helpers
+
+The pubkey-registry precompile at `0x110D` publishes an account's
+primary ML-DSA-65 pubkey once, so contracts can look it up by address.
+
+```ts
+import {
+  encodeRegisterPubkeyCalldata,
+  encodeLookupPubkeyCalldata,
+  decodeLookupPubkeyReturn,
+} from "@monolythium/core-sdk";
+
+const calldata = encodeRegisterPubkeyCalldata(mlDsa65Pubkey);
+const lookup = encodeLookupPubkeyCalldata("0x123456789abcdef0112233445566778899aabbcc");
+const decoded = decodeLookupPubkeyReturn(returnData);
+```
+
 ### ethers.js v6 compat
 
 The package also ships an ethers v6 compat shim — a `MonolythiumProvider`

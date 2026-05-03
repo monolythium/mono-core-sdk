@@ -21,35 +21,18 @@
 export const BURN_ADDR = "0x0000000000000000000000000000000000000000" as const;
 
 /**
- * Canonical precompile address map (Law §5.4).
+ * SDK-exposed precompile address map (Law §5.4).
  *
- * Sourced 1:1 from `mono-core/crates/runtime/src/precompiles.rs` and
- * pinned by `mono-core/crates/runtime/tests/precompile_wiring.rs`.
- * Every native precompile here is registered through
- * `build_native_precompile_registry` at the address listed below;
- * eight gateable surfaces (CLOB, MARGIN, AGENT, PRIVACY, IBC, BRIDGE,
- * STREAMING_PAYMENTS, NAME_REGISTRY) ship genesis-disabled per
- * ADR-0015 and reach the inner impl only after a milestone activates
- * the gate.
+ * Sourced from `mono-core` runtime/precompile constants and pinned here
+ * so surfaces can render precompile traffic by name without
+ * re-defining low-band address literals.
  *
- * Two slots in the Law §5.4 layout are intentionally absent:
+ * The governance slot is intentionally absent:
  *
  * - `0x1006` — governance / deliberation slot reserved by Law §5.4
- *   but explicitly unwired after the OI-0140 memo-signalling pivot
- *   (no on-chain governance crate exists; signalling rides the tx
- *   memo field, see `memory/protocore-v2-governance-signal-only.md`).
- * - `0x1101` — VRF slot mandated by Law §5.4 §5.6 but research-gated
- *   on threshold-BLS; the crate has not landed and the address falls
- *   through as a plain EOA today.
- *
- * Both omissions are pinned by the runtime test
- * `registry_wiring_with_empty_milestones`. Adding either slot here
- * without a parallel runtime registration would silently drift the
- * SDK away from chain truth.
- *
- * The map ranges over the entire wired set so surface workers (wallets,
- * monoscan, the website) can render precompile traffic by name without
- * each surface re-defining the table.
+ *   but wired to a rejecting runtime binding after the OI-0140
+ *   memo-signalling pivot. The SDK exposes no governance client
+ *   surface.
  */
 export const PRECOMPILE_ADDRESSES = {
   /** Native fungible-token factory — non-gateable (Law §5.4, foundational). */
@@ -74,12 +57,32 @@ export const PRECOMPILE_ADDRESSES = {
   DELEGATION: "0x000000000000000000000000000000000000100A",
   /** One-time emergency-key registry (Law §5.4 / §2.9) — non-gateable. */
   EMERGENCY_KEY: "0x0000000000000000000000000000000000001100",
+  /** VRF precompile (Law §5.4 / §5.6). */
+  VRF: "0x0000000000000000000000000000000000001101",
   /** Streaming-payments primitive (Law §5.4 / §5.7) — gateable. */
   STREAMING_PAYMENTS: "0x0000000000000000000000000000000000001102",
   /** Human-readable name registry (Law §5.4 / §5.8) — gateable. */
   NAME_REGISTRY: "0x0000000000000000000000000000000000001103",
+  /** Cluster-name registry. */
+  CLUSTER_NAME_REGISTRY: "0x0000000000000000000000000000000000001104",
+  /** Agent-commerce attestation precompile. */
+  ATTESTATION: "0x0000000000000000000000000000000000001105",
+  /** Agent-commerce consent precompile. */
+  CONSENT: "0x0000000000000000000000000000000000001106",
+  /** Agent-commerce issuer registry. */
+  ISSUER_REGISTRY: "0x0000000000000000000000000000000000001107",
+  /** Agent-commerce discovery precompile. */
+  DISCOVERY: "0x0000000000000000000000000000000000001108",
+  /** Agent-commerce availability precompile. */
+  AVAILABILITY: "0x0000000000000000000000000000000000001109",
+  /** Agent-commerce escrow precompile. */
+  ESCROW: "0x000000000000000000000000000000000000110A",
+  /** Agent-commerce arbiter registry. */
+  ARBITER_REGISTRY: "0x000000000000000000000000000000000000110B",
   /** Agent spending policy — gateable, activated by Stage 7 milestones. */
   SPENDING_POLICY: "0x000000000000000000000000000000000000110C",
+  /** Primary ML-DSA-65 pubkey registry — gateable, ADR-0034. */
+  PUBKEY_REGISTRY: "0x000000000000000000000000000000000000110D",
 } as const;
 
 /** Precompile address-key type — useful for typed maps over the surface. */

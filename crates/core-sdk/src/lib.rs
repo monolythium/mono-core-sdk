@@ -23,6 +23,7 @@ pub mod address;
 pub mod client;
 pub mod consts;
 pub mod error;
+pub mod pubkey_registry;
 pub mod spending_policy;
 pub mod types;
 
