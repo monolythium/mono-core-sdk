@@ -13,14 +13,14 @@ pnpm add @monolythium/core-sdk
 ```ts
 import { RpcClient } from "@monolythium/core-sdk";
 
-const client = new RpcClient("https://rpc.testnet.monolythium.com");
+const client = await RpcClient.forNetwork("testnet-69420", { probe: true });
 
 const chainId = await client.ethChainId();
 const head = await client.ethBlockNumber();
 console.log(`chain ${chainId} at height ${head}`);
 
-const validators = await client.lythValidatorSet();
-console.log(`${validators.length} validators`);
+const clusters = await client.lythValidatorSet();
+console.log(`${clusters.length} cluster descriptors`);
 ```
 
 The client wraps every JSON-RPC method served by a Monolythium node — the
@@ -30,6 +30,31 @@ SDK via `ts-rs`; see `src/bindings/`.
 
 Quantities surface as `bigint` to preserve full precision. Use
 `parseQuantity` only when you know the value fits in `Number.MAX_SAFE_INTEGER`.
+
+### Chain registry
+
+The SDK vendors the official testnet bootstrap IPs from
+`monolythium-vision/chain-registry` and can optionally fetch the latest raw
+registry TOML at runtime.
+
+```ts
+import {
+  RpcClient,
+  fetchChainInfoLatest,
+  getP2pSeeds,
+  getRpcEndpoints,
+} from "@monolythium/core-sdk";
+
+console.log(getRpcEndpoints("testnet-69420").map((r) => r.url));
+console.log(getP2pSeeds("testnet-69420").map((p) => p.multiaddr));
+
+const latest = await fetchChainInfoLatest("testnet-69420");
+const client = await RpcClient.fromFirstReachable(latest);
+```
+
+`RpcClient.forNetwork("testnet-69420")` picks the first official endpoint in
+the bundled snapshot. Pass `{ probe: true }` to walk the endpoints and choose
+the first one that answers with the expected chain id.
 
 ### Address helpers
 

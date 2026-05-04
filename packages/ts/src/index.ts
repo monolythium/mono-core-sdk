@@ -14,7 +14,26 @@
 export const version = "0.1.0";
 
 export { RpcClient, parseQuantity, parseQuantityBig } from "./client.js";
-export type { RpcClientOptions } from "./client.js";
+export type { NetworkClientOptions, RpcClientOptions } from "./client.js";
+export {
+  CHAIN_REGISTRY,
+  CHAIN_REGISTRY_RAW_BASE,
+  TESTNET_69420,
+  fetchChainInfoLatest,
+  fetchChainRegistryLatest,
+  getChainInfo,
+  getP2pSeeds,
+  getRpcEndpoints,
+  parseChainRegistryToml,
+} from "./registry.js";
+export type {
+  ChainInfo,
+  ChainRegistry,
+  ExplorerEndpoint,
+  NetworkSlug,
+  P2pSeed,
+  RpcEndpoint,
+} from "./registry.js";
 export { SdkError } from "./error.js";
 export * from "./types.js";
 export { BURN_ADDR, PRECOMPILE_ADDRESSES } from "./consts.js";

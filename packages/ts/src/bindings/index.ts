@@ -3,6 +3,8 @@
 
 export type { AccountPolicy } from "./AccountPolicy.js";
 export type { AccountProofResponse } from "./AccountProofResponse.js";
+export type { AddressActivityEntry } from "./AddressActivityEntry.js";
+export type { AddressLabelRecord } from "./AddressLabelRecord.js";
 export type { AssetPolicy } from "./AssetPolicy.js";
 export type { BlockHeader } from "./BlockHeader.js";
 export type { BlockTag } from "./BlockTag.js";
@@ -11,6 +13,7 @@ export type { ClusterDelegatorsResponse } from "./ClusterDelegatorsResponse.js";
 export type { ClusterEntityResponse } from "./ClusterEntityResponse.js";
 export type { DagSyncStatus } from "./DagSyncStatus.js";
 export type { DelegationCapResponse } from "./DelegationCapResponse.js";
+export type { DelegationHistoryRecord } from "./DelegationHistoryRecord.js";
 export type { DelegationRow } from "./DelegationRow.js";
 export type { DelegationsResponse } from "./DelegationsResponse.js";
 export type { EncryptionKeyResponse } from "./EncryptionKeyResponse.js";
@@ -28,4 +31,5 @@ export type { SyncStatus } from "./SyncStatus.js";
 export type { TpmAttestationResponse } from "./TpmAttestationResponse.js";
 export type { TransactionReceipt } from "./TransactionReceipt.js";
 export type { TransactionView } from "./TransactionView.js";
+export type { TokenBalanceRecord } from "./TokenBalanceRecord.js";
 export type { ValidatorDescriptor } from "./ValidatorDescriptor.js";

@@ -125,6 +125,36 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(calls[0].params).toEqual(["latest"]);
   });
 
+  it("lyth_getTokenBalances reads indexed asset rows", async () => {
+    const { fetch, calls } = mockFetch([]);
+    const client = new RpcClient("http://x", { fetch });
+    await client.lythGetTokenBalances("0x1111111111111111111111111111111111111111");
+    expect(calls[0].method).toBe("lyth_getTokenBalances");
+    expect(calls[0].params).toEqual(["0x1111111111111111111111111111111111111111"]);
+  });
+
+  it("lyth_getAddressLabel returns null for unlabeled addresses", async () => {
+    const { fetch } = mockFetch(null);
+    const client = new RpcClient("http://x", { fetch });
+    await expect(client.lythGetAddressLabel("0x1111111111111111111111111111111111111111")).resolves.toBeNull();
+  });
+
+  it("lyth_getDelegationHistory forwards limit and cursor", async () => {
+    const { fetch, calls } = mockFetch([]);
+    const client = new RpcClient("http://x", { fetch });
+    await client.lythGetDelegationHistory("0x1111111111111111111111111111111111111111", 25, "0x00");
+    expect(calls[0].method).toBe("lyth_getDelegationHistory");
+    expect(calls[0].params).toEqual(["0x1111111111111111111111111111111111111111", 25, "0x00"]);
+  });
+
+  it("lyth_getAddressActivity forwards limit and cursor", async () => {
+    const { fetch, calls } = mockFetch([]);
+    const client = new RpcClient("http://x", { fetch });
+    await client.lythGetAddressActivity("0x1111111111111111111111111111111111111111", 75, "0x01");
+    expect(calls[0].method).toBe("lyth_getAddressActivity");
+    expect(calls[0].params).toEqual(["0x1111111111111111111111111111111111111111", 75, "0x01"]);
+  });
+
   it("lyth_indexerStatus returns null when the wire returns null", async () => {
     const { fetch } = mockFetch(null);
     const client = new RpcClient("http://x", { fetch });
