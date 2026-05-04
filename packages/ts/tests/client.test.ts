@@ -34,6 +34,29 @@ function mockFetch(reply: unknown): {
   return { fetch: fetchImpl, calls };
 }
 
+function mockFetchSequence(replies: unknown[]): {
+  fetch: typeof fetch;
+  calls: CapturedCall[];
+} {
+  const calls: CapturedCall[] = [];
+  let i = 0;
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input.toString();
+    const body = init?.body;
+    if (typeof body !== "string") {
+      throw new Error("expected string body");
+    }
+    const parsed = JSON.parse(body) as { method: string; params: unknown };
+    calls.push({ method: parsed.method, params: parsed.params, url });
+    const result = replies[i++] ?? replies.at(-1);
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  return { fetch: fetchImpl, calls };
+}
+
 describe("RpcClient construction", () => {
   it("rejects an empty endpoint", () => {
     expect(() => new RpcClient("")).toThrow(SdkError);
@@ -94,7 +117,11 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
   });
 
   it("lyth_currentRound, lyth_mempoolStatus, lyth_indexerStatus all use lyth_ prefix", async () => {
-    const { fetch, calls } = mockFetch({});
+    const { fetch, calls } = mockFetchSequence([
+      { height: 1 },
+      { count_ready: 0, count_pending: 0, mailbox_depth: 0, bytes_by_class: [0, 0, 0, 0, 0, 0, 0] },
+      {},
+    ]);
     const client = new RpcClient("http://x", { fetch });
     await client.lythCurrentRound();
     await client.lythMempoolStatus();
