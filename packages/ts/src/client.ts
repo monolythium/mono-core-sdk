@@ -254,12 +254,12 @@ export class RpcClient {
   async ethGetBlockByNumber(
     block: BlockSelector = "latest",
   ): Promise<BlockHeader | null> {
-    return this.call("eth_getBlockByNumber", [encodeBlockSelector(block)]);
+    return normalizeBlockHeader(await this.call("eth_getBlockByNumber", [encodeBlockSelector(block)]));
   }
 
   /** `eth_getBlockByHash` — fetch a block header by hash. */
   async ethGetBlockByHash(hash: string): Promise<BlockHeader | null> {
-    return this.call("eth_getBlockByHash", [hash]);
+    return normalizeBlockHeader(await this.call("eth_getBlockByHash", [hash]));
   }
 
   /** `eth_getTransactionByHash` — fetch an included transaction by hash. */
@@ -397,7 +397,7 @@ export class RpcClient {
 
   /** `lyth_mempoolStatus` — aggregate mempool snapshot. */
   async lythMempoolStatus(): Promise<MempoolSnapshot> {
-    return this.call("lyth_mempoolStatus", []);
+    return normalizeMempoolSnapshot(await this.call("lyth_mempoolStatus", []));
   }
 
   /** `lyth_mempoolPending` — pending txs for a sender. */
@@ -407,7 +407,7 @@ export class RpcClient {
 
   /** `lyth_currentRound` — latest committed height. */
   async lythCurrentRound(): Promise<RoundInfo> {
-    return this.call("lyth_currentRound", []);
+    return normalizeRoundInfo(await this.call("lyth_currentRound", []));
   }
 
   /** `lyth_validatorSet` — configured validator set. */
@@ -575,7 +575,7 @@ export class RpcClient {
 
   /** `debug_mempoolDump` — full mempool snapshot. */
   async debugMempoolDump(): Promise<MempoolSnapshot> {
-    return this.call("debug_mempoolDump", []);
+    return normalizeMempoolSnapshot(await this.call("debug_mempoolDump", []));
   }
 
   /** `debug_p2pPeers` — connected libp2p peer list. */
@@ -616,4 +616,63 @@ export function parseQuantity(hex: string): number {
     throw SdkError.malformed(`hex quantity exceeds safe integer: ${hex}`);
   }
   return Number(big);
+}
+
+function parseRpcBigint(value: unknown, label: string): bigint {
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw SdkError.malformed(`${label} must be a non-negative safe integer`);
+    }
+    return BigInt(value);
+  }
+  if (typeof value === "string") {
+    if (value.startsWith("0x") || value.startsWith("0X")) return parseQuantityBig(value);
+    if (/^\d+$/.test(value)) return BigInt(value);
+  }
+  throw SdkError.malformed(`${label} must be a bigint-compatible quantity`);
+}
+
+function normalizeBlockHeader(value: unknown): BlockHeader | null {
+  if (value === null || value === undefined) return null;
+  if (!value || typeof value !== "object") {
+    throw SdkError.malformed("block header must be an object or null");
+  }
+  const h = value as Record<string, unknown>;
+  return {
+    number: parseRpcBigint(h["number"], "block header number"),
+    hash: String(h["hash"]),
+    parent_hash: String(h["parent_hash"]),
+    state_root: String(h["state_root"]),
+    timestamp: parseRpcBigint(h["timestamp"], "block header timestamp"),
+    gas_used: parseRpcBigint(h["gas_used"], "block header gas_used"),
+    gas_limit: parseRpcBigint(h["gas_limit"], "block header gas_limit"),
+  };
+}
+
+function normalizeRoundInfo(value: unknown): RoundInfo {
+  if (!value || typeof value !== "object") {
+    throw SdkError.malformed("round info must be an object");
+  }
+  const row = value as Record<string, unknown>;
+  return {
+    height: parseRpcBigint(row["height"], "round height"),
+  };
+}
+
+function normalizeMempoolSnapshot(value: unknown): MempoolSnapshot {
+  if (!value || typeof value !== "object") {
+    throw SdkError.malformed("mempool snapshot must be an object");
+  }
+  const row = value as Record<string, unknown>;
+  const bytesByClass = row["bytes_by_class"];
+  if (!Array.isArray(bytesByClass) || bytesByClass.length !== 7) {
+    throw SdkError.malformed("mempool bytes_by_class must contain 7 entries");
+  }
+  return {
+    count_ready: parseRpcBigint(row["count_ready"], "mempool count_ready"),
+    count_pending: parseRpcBigint(row["count_pending"], "mempool count_pending"),
+    mailbox_depth: parseRpcBigint(row["mailbox_depth"], "mempool mailbox_depth"),
+    bytes_by_class: bytesByClass.map((v, i) => parseRpcBigint(v, `mempool bytes_by_class[${i}]`)) as MempoolSnapshot["bytes_by_class"],
+  };
 }
