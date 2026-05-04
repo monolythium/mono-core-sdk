@@ -8,9 +8,12 @@
  */
 
 import { SdkError } from "./error.js";
+import { getChainInfo, type ChainInfo, type ChainRegistry, type NetworkSlug } from "./registry.js";
 import type {
   AccountPolicy,
   AccountProofResponse,
+  AddressActivityEntry,
+  AddressLabelRecord,
   AssetPolicy,
   BlockHeader,
   CallRequest,
@@ -18,6 +21,7 @@ import type {
   ClusterEntityResponse,
   DagSyncStatus,
   DelegationCapResponse,
+  DelegationHistoryRecord,
   DelegationsResponse,
   EncryptionKeyResponse,
   EntityRatchetResponse,
@@ -34,6 +38,7 @@ import type {
   TpmAttestationResponse,
   TransactionReceipt,
   TransactionView,
+  TokenBalanceRecord,
   ValidatorDescriptor,
 } from "./bindings/index.js";
 import type { BlockSelector } from "./types.js";
@@ -45,6 +50,13 @@ export interface RpcClientOptions {
   fetch?: typeof fetch;
   /** Extra headers to attach to every request. */
   headers?: Record<string, string>;
+}
+
+export interface NetworkClientOptions extends RpcClientOptions {
+  /** Registry snapshot to use instead of the SDK-bundled snapshot. */
+  registry?: ChainRegistry;
+  /** Probe all known endpoints and choose the first one that answers. */
+  probe?: boolean;
 }
 
 interface JsonRpcRequest {
@@ -62,6 +74,21 @@ interface JsonRpcResponse {
 }
 
 const SDK_VERSION = "0.1.0";
+
+function resolveChainInfo(network: NetworkSlug | string, registry?: ChainRegistry): ChainInfo {
+  if (registry) {
+    const info = registry[network];
+    if (!info) {
+      throw SdkError.endpoint(`unknown Monolythium network: ${network}`);
+    }
+    return info;
+  }
+  try {
+    return getChainInfo(network);
+  } catch (err) {
+    throw SdkError.endpoint((err as Error)?.message ?? String(err));
+  }
+}
 
 export class RpcClient {
   readonly endpoint: string;
@@ -81,6 +108,54 @@ export class RpcClient {
       ...(options.headers ?? {}),
     };
     this.#nextId = 1;
+  }
+
+  /**
+   * Construct a client from the chain-registry network slug.
+   *
+   * Defaults to the SDK-bundled registry snapshot from
+   * `monolythium-vision/chain-registry`. Set `probe: true` to walk the
+   * registry endpoints in order and return the first endpoint whose
+   * `eth_chainId` matches the registry chain id.
+   */
+  static async forNetwork(
+    network: NetworkSlug | string = "testnet-69420",
+    options: NetworkClientOptions = {},
+  ): Promise<RpcClient> {
+    const info = resolveChainInfo(network, options.registry);
+    if (info.rpc.length === 0) {
+      throw SdkError.endpoint(`network ${network} has no RPC endpoints`);
+    }
+    if (options.probe) {
+      return this.fromFirstReachable(info, options);
+    }
+    return new RpcClient(info.rpc[0].url, options);
+  }
+
+  /**
+   * Walk a chain-registry entry in order and return the first endpoint
+   * whose `eth_chainId` matches the registry `chain_id`.
+   */
+  static async fromFirstReachable(
+    chain: ChainInfo,
+    options: RpcClientOptions = {},
+  ): Promise<RpcClient> {
+    const errors: string[] = [];
+    for (const endpoint of chain.rpc) {
+      const client = new RpcClient(endpoint.url, options);
+      try {
+        const chainId = await client.ethChainId();
+        if (chainId === BigInt(chain.chain_id)) {
+          return client;
+        }
+        errors.push(`${endpoint.url}: chain id ${chainId} != ${chain.chain_id}`);
+      } catch (err) {
+        errors.push(`${endpoint.url}: ${(err as Error)?.message ?? err}`);
+      }
+    }
+    throw SdkError.endpoint(
+      `no reachable RPC endpoint for ${chain.network}; tried ${errors.join("; ")}`,
+    );
   }
 
   /**
@@ -298,6 +373,28 @@ export class RpcClient {
     return this.call("lyth_getAssetPolicy", [tokenId]);
   }
 
+  /** `lyth_getTokenBalances` — indexed per-asset balances for one address. */
+  async lythGetTokenBalances(address: string): Promise<TokenBalanceRecord[]> {
+    return this.call("lyth_getTokenBalances", [address]);
+  }
+
+  /** `lyth_getAddressLabel` — indexed display/category label for one address. */
+  async lythGetAddressLabel(address: string): Promise<AddressLabelRecord | null> {
+    const v = await this.call<unknown>("lyth_getAddressLabel", [address]);
+    if (v === null || v === undefined) return null;
+    return v as AddressLabelRecord;
+  }
+
+  /** `lyth_getAddressActivity` — indexed per-address activity timeline. */
+  async lythGetAddressActivity(
+    address: string,
+    limit = 50,
+    cursor?: string | null,
+  ): Promise<AddressActivityEntry[]> {
+    const params = cursor === undefined ? [address, limit] : [address, limit, cursor];
+    return this.call("lyth_getAddressActivity", params);
+  }
+
   /** `lyth_mempoolStatus` — aggregate mempool snapshot. */
   async lythMempoolStatus(): Promise<MempoolSnapshot> {
     return this.call("lyth_mempoolStatus", []);
@@ -361,6 +458,16 @@ export class RpcClient {
     const params =
       block === undefined ? [wallet] : [wallet, encodeBlockSelector(block)];
     return this.call("lyth_getDelegations", params);
+  }
+
+  /** `lyth_getDelegationHistory` — indexed per-wallet delegation event timeline. */
+  async lythGetDelegationHistory(
+    wallet: string,
+    limit = 50,
+    cursor?: string | null,
+  ): Promise<DelegationHistoryRecord[]> {
+    const params = cursor === undefined ? [wallet, limit] : [wallet, limit, cursor];
+    return this.call("lyth_getDelegationHistory", params);
   }
 
   /** `lyth_getClusterDelegators` — delegator addresses for a cluster. */

@@ -13,10 +13,10 @@ address: string,
  */
 name: string, 
 /**
+ * Whether milestone gates can toggle this precompile.
+ */
+gateable: boolean, 
+/**
  * Whether the precompile is currently dispatchable.
  */
-active: boolean, 
-/**
- * Human-readable status string from the milestone gate registry.
- */
-status: string, };
+enabled: boolean, };
