@@ -67,6 +67,14 @@ export interface NetworkClientOptions extends RpcClientOptions {
   probe?: boolean;
 }
 
+/** Live `lyth_listActivePrecompiles` response envelope. */
+export interface PrecompileCatalogueResponse {
+  /** Block height sampled by the node. */
+  blockNumber: bigint;
+  /** Precompile descriptors active or known at the sampled block. */
+  precompiles: PrecompileDescriptor[];
+}
+
 interface JsonRpcRequest {
   jsonrpc: "2.0";
   id: number;
@@ -439,7 +447,7 @@ export class RpcClient {
    */
   async lythListActivePrecompiles(
     block: BlockSelector = "latest",
-  ): Promise<PrecompileDescriptor[]> {
+  ): Promise<PrecompileCatalogueResponse> {
     return this.call("lyth_listActivePrecompiles", [encodeBlockSelector(block)]);
   }
 

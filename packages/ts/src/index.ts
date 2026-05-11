@@ -14,7 +14,7 @@
 export const version = "0.1.0";
 
 export { RpcClient, parseQuantity, parseQuantityBig } from "./client.js";
-export type { NetworkClientOptions, RpcClientOptions } from "./client.js";
+export type { NetworkClientOptions, PrecompileCatalogueResponse, RpcClientOptions } from "./client.js";
 export {
   CHAIN_REGISTRY,
   CHAIN_REGISTRY_RAW_BASE,
