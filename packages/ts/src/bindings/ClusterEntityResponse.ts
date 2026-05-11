@@ -3,19 +3,19 @@
 /**
  * `lyth_getClusterEntity` response.
  */
-export type ClusterEntityResponse = { 
+export type ClusterEntityResponse = {
 /**
  * Queried cluster id.
  */
-cluster: number, 
+cluster: number,
 /**
  * Entity label, e.g. `"independent"` or `"mono-labs"`.
  */
-entity: string, 
+entity: string,
 /**
  * Raw entity enum discriminant.
  */
-entityCode: number, 
+entityCode: number,
 /**
  * Block selector echoed by the node.
  */

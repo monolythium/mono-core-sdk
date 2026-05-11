@@ -3,27 +3,27 @@
 /**
  * `debug_p2pPeers` entry.
  */
-export type PeerSummary = { 
+export type PeerSummary = {
 /**
  * libp2p peer id (base58).
  */
-peerId: string, 
+peerId: string,
 /**
  * Declared role.
  */
-role: string, 
+role: string,
 /**
  * Listen addresses.
  */
-listenAddrs: Array<string>, 
+listenAddrs: Array<string>,
 /**
  * `agent_version` from libp2p identify.
  */
-agentVersion: string, 
+agentVersion: string,
 /**
  * Reputation score.
  */
-score: number, 
+score: number,
 /**
  * Whether the peer is in any gossip mesh.
  */

@@ -15,10 +15,14 @@ import type {
   AddressActivityEntry,
   AddressLabelRecord,
   AssetPolicy,
+  BlsCertificateResponse,
   BlockHeader,
   CallRequest,
+  CapabilitiesResponse,
+  CheckpointRecord,
   ClusterDelegatorsResponse,
   ClusterEntityResponse,
+  ClusterResignationsResponse,
   DagSyncStatus,
   DelegationCapResponse,
   DelegationHistoryRecord,
@@ -28,6 +32,10 @@ import type {
   FeeHistoryResponse,
   IndexerStatus,
   MempoolSnapshot,
+  MeshDecodedTx,
+  MeshSignedTxResponse,
+  MeshTxIntent,
+  MeshUnsignedTxResponse,
   PeerSummary,
   PendingTxSummary,
   PrecompileDescriptor,
@@ -435,6 +443,12 @@ export class RpcClient {
     return this.call("lyth_listActivePrecompiles", [encodeBlockSelector(block)]);
   }
 
+  /** `lyth_capabilities` — address-keyed precompile capability map. */
+  async lythCapabilities(block?: BlockSelector): Promise<CapabilitiesResponse> {
+    const params = block === undefined ? [] : [encodeBlockSelector(block)];
+    return this.call("lyth_capabilities", params);
+  }
+
   /** `lyth_indexerStatus` — indexer status; `null` when disabled. */
   async lythIndexerStatus(): Promise<IndexerStatus | null> {
     const v = await this.call<unknown>("lyth_indexerStatus", []);
@@ -541,6 +555,49 @@ export class RpcClient {
     return v as DagSyncStatus;
   }
 
+  /** `lyth_getLatestCheckpoint` — latest PQ-finality checkpoint rows. */
+  async lythGetLatestCheckpoint(belowHeight?: number | bigint | string | null): Promise<CheckpointRecord[]> {
+    const params = belowHeight === undefined ? [] : [encodeOptionalHeight(belowHeight)];
+    return this.call("lyth_getLatestCheckpoint", params);
+  }
+
+  /** `lyth_getClusterResignations` — in-flight + applied operator resignations. */
+  async lythGetClusterResignations(
+    operator?: string | null,
+    status?: "pending" | "applied" | "all" | string | null,
+  ): Promise<ClusterResignationsResponse> {
+    const params =
+      status === undefined
+        ? operator == null
+          ? []
+          : [operator]
+        : [operator ?? null, status];
+    return this.call("lyth_getClusterResignations", params);
+  }
+
+  /** `lyth_getBlsRoundCertificate` — round-advancement BLS aggregate. */
+  async lythGetBlsRoundCertificate(round: number | bigint | string): Promise<BlsCertificateResponse | null> {
+    return this.call("lyth_getBlsRoundCertificate", [encodeRpcInteger(round)]);
+  }
+
+  /** `lyth_getLeaderCertificate` — leader-vote BLS aggregate for a block ref. */
+  async lythGetLeaderCertificate(
+    round: number | bigint | string,
+    authority: number,
+    digest: string,
+  ): Promise<BlsCertificateResponse | null> {
+    return this.call("lyth_getLeaderCertificate", [encodeRpcInteger(round), authority, digest]);
+  }
+
+  /** `lyth_getDacCertificate` — data-availability certificate for a block ref. */
+  async lythGetDacCertificate(
+    round: number | bigint | string,
+    authority: number,
+    digest: string,
+  ): Promise<BlsCertificateResponse | null> {
+    return this.call("lyth_getDacCertificate", [encodeRpcInteger(round), authority, digest]);
+  }
+
   /** `lyth_subscribe` — WebSocket-only; returns an RPC error over HTTP. */
   async lythSubscribe(channel: string): Promise<unknown> {
     return this.call("lyth_subscribe", [channel]);
@@ -592,6 +649,39 @@ export class RpcClient {
   async debugChainReorg(params: unknown): Promise<unknown> {
     return this.call("debug_chainReorg", params);
   }
+
+  // ---- mesh_* -------------------------------------------------------
+
+  /** `mesh_buildUnsignedTx` — build an unsigned transaction envelope. */
+  async meshBuildUnsignedTx(intent: MeshTxIntent): Promise<MeshUnsignedTxResponse> {
+    return this.call("mesh_buildUnsignedTx", [intent]);
+  }
+
+  /** `mesh_combineTx` — combine an unsigned envelope with a wallet signature. */
+  async meshCombineTx(
+    unsignedTx: string,
+    signatureHex: string,
+    algo?: "secp256k1" | "ml_dsa_65" | string,
+    pubkeyHex?: string,
+  ): Promise<MeshSignedTxResponse> {
+    const params =
+      algo === undefined
+        ? [unsignedTx, signatureHex]
+        : pubkeyHex === undefined
+          ? [unsignedTx, signatureHex, algo]
+          : [unsignedTx, signatureHex, algo, pubkeyHex];
+    return this.call("mesh_combineTx", params);
+  }
+
+  /** `mesh_decodeTx` — decode a signed or unsigned mesh envelope. */
+  async meshDecodeTx(envelopeHex: string, signed = false): Promise<MeshDecodedTx> {
+    return this.call("mesh_decodeTx", [envelopeHex, signed]);
+  }
+
+  /** `mesh_submitTx` — submit a signed mesh envelope. */
+  async meshSubmitTx(signedTx: string): Promise<string> {
+    return this.call("mesh_submitTx", [signedTx]);
+  }
 }
 
 /** Decode a `0x`-prefixed hex quantity to a `bigint`. */
@@ -616,6 +706,16 @@ export function parseQuantity(hex: string): number {
     throw SdkError.malformed(`hex quantity exceeds safe integer: ${hex}`);
   }
   return Number(big);
+}
+
+function encodeRpcInteger(v: number | bigint | string): number | string {
+  if (typeof v === "bigint") return `0x${v.toString(16)}`;
+  return v;
+}
+
+function encodeOptionalHeight(v: number | bigint | string | null): number | string | null {
+  if (v === null) return null;
+  return encodeRpcInteger(v);
 }
 
 function parseRpcBigint(value: unknown, label: string): bigint {

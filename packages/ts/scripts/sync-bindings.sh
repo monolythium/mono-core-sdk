@@ -30,6 +30,7 @@ cp "$rust_bindings"/*.ts "$ts_bindings"/
 # output.
 for f in "$ts_bindings"/*.ts; do
   sed -i -E 's#from "(\./[^"]+)";#from "\1.js";#g' "$f"
+  sed -i -E 's/[[:space:]]+$//' "$f"
 done
 
 # Regenerate the index re-export.

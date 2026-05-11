@@ -9,20 +9,20 @@
  * against. `proof` is `null` when the chain provider could not produce
  * an inclusion proof for this slot at the requested block.
  */
-export type AccountProofResponse = { 
+export type AccountProofResponse = {
 /**
  * `0x`-hex value (balance, storage word, or peer id depending on
  * the calling method).
  */
-value: string, 
+value: string,
 /**
  * State-root hex the proof verifies against.
  */
-state_root: string, 
+state_root: string,
 /**
  * Block height the proof was generated against.
  */
-block_number: bigint, 
+block_number: bigint,
 /**
  * Inclusion proof envelope, omitted when the chain didn't produce
  * one. The shape is intentionally opaque at this layer — callers

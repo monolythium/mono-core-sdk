@@ -3,19 +3,19 @@
 /**
  * `lyth_getTpmAttestation` response.
  */
-export type TpmAttestationResponse = { 
+export type TpmAttestationResponse = {
 /**
  * 32-byte peer id.
  */
-peerId: string, 
+peerId: string,
 /**
  * 32-byte digest over the canonical TPM quote bytes.
  */
-quoteDigest: string, 
+quoteDigest: string,
 /**
  * 32-byte EK identifier.
  */
-ekId: string, 
+ekId: string,
 /**
  * Block selector echoed by the node.
  */

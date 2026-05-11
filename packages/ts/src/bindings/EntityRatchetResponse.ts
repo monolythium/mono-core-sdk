@@ -3,15 +3,15 @@
 /**
  * `lyth_getEntityRatchet` response.
  */
-export type EntityRatchetResponse = { 
+export type EntityRatchetResponse = {
 /**
  * Active foundation-entity cluster count.
  */
-active: number, 
+active: number,
 /**
  * Published ratchet threshold. `u32::MAX` means unset.
  */
-threshold: number, 
+threshold: number,
 /**
  * Block selector echoed by the node.
  */

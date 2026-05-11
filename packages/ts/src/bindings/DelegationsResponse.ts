@@ -4,19 +4,19 @@ import type { DelegationRow } from "./DelegationRow.js";
 /**
  * `lyth_getDelegations` response.
  */
-export type DelegationsResponse = { 
+export type DelegationsResponse = {
 /**
  * Queried wallet address.
  */
-wallet: string, 
+wallet: string,
 /**
  * Per-cluster delegation rows.
  */
-rows: Array<DelegationRow>, 
+rows: Array<DelegationRow>,
 /**
  * Sum of row weights.
  */
-totalBps: number, 
+totalBps: number,
 /**
  * Block selector echoed by the node.
  */

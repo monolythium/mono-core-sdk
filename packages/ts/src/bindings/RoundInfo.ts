@@ -3,7 +3,7 @@
 /**
  * `lyth_currentRound` round shape.
  */
-export type RoundInfo = { 
+export type RoundInfo = {
 /**
  * Latest committed height.
  */

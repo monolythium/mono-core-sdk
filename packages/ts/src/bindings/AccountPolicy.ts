@@ -3,36 +3,36 @@
 /**
  * `lyth_getAccountPolicy` response.
  */
-export type AccountPolicy = { 
+export type AccountPolicy = {
 /**
  * Policy mode label — `"public"`, `"stealth"`, `"confidential"`,
  * `"shielded"`.
  */
-mode: string, 
+mode: string,
 /**
  * Whether the account accepts shielded transfers.
  */
-allowShielded: boolean, 
+allowShielded: boolean,
 /**
  * Whether the account accepts confidential transfers.
  */
-allowConfidential: boolean, 
+allowConfidential: boolean,
 /**
  * Whether the account accepts stealth payments.
  */
-acceptStealth: boolean, 
+acceptStealth: boolean,
 /**
  * Whether the account requires originator proof.
  */
-requireOriginatorProof: boolean, 
+requireOriginatorProof: boolean,
 /**
  * Whether the account requires allowlist proof.
  */
-requireAllowlistProof: boolean, 
+requireAllowlistProof: boolean,
 /**
  * Raw flag word, `0x`-hex two-digit byte.
  */
-flags: string, 
+flags: string,
 /**
  * `true` when the account has explicitly set policy bits.
  */

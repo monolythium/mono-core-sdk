@@ -3,19 +3,19 @@
 /**
  * `lyth_syncStatus` DAG-sync driver snapshot.
  */
-export type DagSyncStatus = { 
+export type DagSyncStatus = {
 /**
  * Driver state: `idle`, `probing`, `catching`, or `synced`.
  */
-state: string, 
+state: string,
 /**
  * Local anchor frontier round.
  */
-localRound: bigint, 
+localRound: bigint,
 /**
  * Highest peer committed round observed.
  */
-peerMaxRound: bigint, 
+peerMaxRound: bigint,
 /**
  * `peerMaxRound - localRound`, saturating at zero.
  */

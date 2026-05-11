@@ -3,15 +3,15 @@
 /**
  * `lyth_getStorageProof` batch response.
  */
-export type StorageProofBatch = { 
+export type StorageProofBatch = {
 /**
  * State-root the proofs verify against.
  */
-stateRoot: string, 
+stateRoot: string,
 /**
  * Block height the proofs were generated against.
  */
-blockNumber: bigint, 
+blockNumber: bigint,
 /**
  * One opaque proof envelope per requested slot.
  */

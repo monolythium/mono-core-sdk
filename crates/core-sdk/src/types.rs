@@ -7,6 +7,8 @@
 //! mono-core crates; when those land the wrapper types here forward
 //! to them transparently.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "ts-bindings")]
@@ -346,6 +348,117 @@ pub struct ValidatorDescriptor {
     pub active: bool,
 }
 
+/// Per-asset balance row surfaced by `lyth_getTokenBalances`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "TokenBalanceRecord.ts")
+)]
+pub struct TokenBalanceRecord {
+    /// 32-byte token id, `0x`-hex.
+    #[serde(rename = "tokenId")]
+    pub token_id: Hash,
+    /// Balance as a decimal string.
+    pub balance: String,
+    /// Block height the balance was last observed at.
+    #[serde(rename = "updatedAtBlock")]
+    pub updated_at_block: u64,
+}
+
+/// Address-label row surfaced by `lyth_getAddressLabel`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "AddressLabelRecord.ts")
+)]
+pub struct AddressLabelRecord {
+    /// Labeled address.
+    pub address: Address,
+    /// Lowercase category name, e.g. `foundation`, `exchange`,
+    /// `bridge`, `treasury`, `contract`, or `operator`.
+    pub category: String,
+    /// Optional human-readable display name.
+    #[serde(rename = "displayName")]
+    pub display_name: Option<String>,
+    /// Block height the label was last asserted at.
+    #[serde(rename = "updatedAtBlock")]
+    pub updated_at_block: u64,
+}
+
+/// Per-wallet delegation event row surfaced by `lyth_getDelegationHistory`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "DelegationHistoryRecord.ts")
+)]
+pub struct DelegationHistoryRecord {
+    /// Block height the event landed in.
+    #[serde(rename = "blockHeight")]
+    pub block_height: u64,
+    /// Tx index within the block.
+    #[serde(rename = "txIndex")]
+    pub tx_index: u32,
+    /// Log index within the tx.
+    #[serde(rename = "logIndex")]
+    pub log_index: u32,
+    /// Wallet that performed the delegation move.
+    pub wallet: Address,
+    /// Source or only cluster id.
+    pub cluster: u32,
+    /// Destination cluster id for redelegations.
+    #[serde(rename = "toCluster")]
+    pub to_cluster: Option<u32>,
+    /// Event kind: `delegated`, `undelegated`, or `redelegated`.
+    pub kind: String,
+    /// Weight moved in basis points.
+    #[serde(rename = "weightBps")]
+    pub weight_bps: u16,
+    /// Wallet total committed weight after the event when known.
+    #[serde(rename = "walletTotalBps")]
+    pub wallet_total_bps: Option<u16>,
+}
+
+/// One row in `lyth_getAddressActivity`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "AddressActivityEntry.ts")
+)]
+pub struct AddressActivityEntry {
+    /// Block height the event landed in.
+    #[serde(rename = "blockHeight")]
+    pub block_height: u64,
+    /// Tx index within the block.
+    #[serde(rename = "txIndex")]
+    pub tx_index: u32,
+    /// Log index within the tx.
+    #[serde(rename = "logIndex")]
+    pub log_index: u32,
+    /// Source kind: transfer, swap, staking, or delegation.
+    pub kind: String,
+    /// Direction relative to the queried address, when directional.
+    pub direction: Option<String>,
+    /// Counterparty address for directional value movement.
+    pub counterparty: Option<Address>,
+    /// 32-byte token id when the event involves a token.
+    #[serde(rename = "tokenId")]
+    pub token_id: Option<Hash>,
+    /// Decimal-string amount when the event has an amount.
+    pub amount: Option<String>,
+    /// Cluster id when the event involves a cluster.
+    pub cluster: Option<u32>,
+    /// Delegation weight in basis points.
+    #[serde(rename = "weightBps")]
+    pub weight_bps: Option<u16>,
+    /// Kind-specific sub-label such as delegated, unstake, or stake.
+    #[serde(rename = "subKind")]
+    pub sub_kind: Option<String>,
+}
+
 /// `lyth_indexerStatus` envelope. `null` on the wire surfaces as
 /// `Option::None` here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -634,10 +747,228 @@ pub struct PrecompileDescriptor {
     pub address: Address,
     /// Stable identifier (e.g. `"agent"`, `"oracle"`, `"delegation"`).
     pub name: String,
+    /// Whether milestone gates can toggle this precompile.
+    pub gateable: bool,
     /// Whether the precompile is currently dispatchable.
+    pub enabled: bool,
+    /// Stable capability id from the milestone registry.
+    #[serde(rename = "capabilityId")]
+    pub capability_id: String,
+    /// Height of the milestone that activated this capability, when any.
+    #[serde(rename = "activationHeight")]
+    pub activation_height: Option<u64>,
+}
+
+/// One entry in the `lyth_capabilities` keyed capability map.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "CapabilityDescriptor.ts")
+)]
+pub struct CapabilityDescriptor {
+    /// 20-byte precompile address, `0x`-hex.
+    pub address: Address,
+    /// Stable capability id from the milestone registry.
+    #[serde(rename = "capabilityId")]
+    pub capability_id: String,
+    /// Human-readable capability/precompile name.
+    #[serde(rename = "capabilityName")]
+    pub capability_name: String,
+    /// Gate class: `gateable`, `non-gateable`, or `retired-rejecting`.
+    pub kind: String,
+    /// Whether the capability is currently dispatchable.
     pub active: bool,
-    /// Human-readable status string from the milestone gate registry.
+    /// Height of the milestone that activated this capability, when any.
+    #[serde(rename = "activationHeight")]
+    pub activation_height: Option<u64>,
+}
+
+/// `lyth_capabilities` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "CapabilitiesResponse.ts")
+)]
+pub struct CapabilitiesResponse {
+    /// Block height sampled by the node.
+    #[serde(rename = "blockNumber")]
+    pub block_number: u64,
+    /// Address-keyed capability map.
+    pub capabilities: BTreeMap<Address, CapabilityDescriptor>,
+}
+
+/// One signature row in `lyth_getLatestCheckpoint`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "CheckpointRecord.ts"))]
+pub struct CheckpointRecord {
+    /// Block height the checkpoint commits to.
+    #[serde(rename = "blockHeight")]
+    pub block_height: u64,
+    /// State-root commitment at the checkpointed block.
+    #[serde(rename = "stateRoot")]
+    pub state_root: Hash,
+    /// Hex-encoded ML-DSA-65 signer public key.
+    #[serde(rename = "signerPubkeyHex")]
+    pub signer_pubkey_hex: Hex,
+    /// Hex-encoded ML-DSA-65 signature.
+    #[serde(rename = "signatureHex")]
+    pub signature_hex: Hex,
+}
+
+/// One row from `lyth_getClusterResignations`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "ClusterResignationRow.ts")
+)]
+pub struct ClusterResignationRow {
+    /// `0x`-prefixed 48-byte BLS-G1 operator public key.
+    pub operator: Hex,
+    /// `wire_pending`, `pending`, or `applied`.
     pub status: String,
+    /// Submitted-at block height, absent for wire-pending rows.
+    #[serde(rename = "submitted_at_height", alias = "submittedAtHeight", default)]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub submitted_at_height: Option<u64>,
+    /// Effective-at block height, absent for wire-pending rows.
+    #[serde(rename = "effective_at_height", alias = "effectiveAtHeight", default)]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub effective_at_height: Option<u64>,
+    /// Operator-set resignation nonce.
+    pub nonce: u64,
+    /// Whether the expedited path was honored.
+    pub expedited: bool,
+}
+
+/// `lyth_getClusterResignations` response.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "ClusterResignationsResponse.ts")
+)]
+pub struct ClusterResignationsResponse {
+    /// Rows matching the requested filter.
+    pub rows: Vec<ClusterResignationRow>,
+}
+
+/// BLS aggregate certificate response used by the AUD-0074 certificate RPCs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "BlsCertificateResponse.ts")
+)]
+pub struct BlsCertificateResponse {
+    /// Round at which the certificate sealed.
+    pub round: u64,
+    /// `0x`-prefixed aggregate BLS signature.
+    pub signature: Hex,
+    /// Signer-set bitmap as `0x`-hex bytes.
+    #[serde(rename = "signers_bitmap", alias = "signersBitmap")]
+    pub signers_bitmap: Hex,
+    /// Operator indices decoded from the signer bitmap.
+    #[serde(rename = "signer_indices", alias = "signerIndices")]
+    pub signer_indices: Vec<u16>,
+    /// Number of signing operators.
+    #[serde(rename = "signer_count", alias = "signerCount")]
+    pub signer_count: u16,
+}
+
+/// Intent accepted by `mesh_buildUnsignedTx`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MeshTxIntent.ts"))]
+pub struct MeshTxIntent {
+    /// Sender nonce, hex or decimal string.
+    pub nonce: Quantity,
+    /// EIP-1559 max fee per gas, hex or decimal string.
+    pub max_fee_per_gas: Quantity,
+    /// EIP-1559 max priority fee per gas, hex or decimal string.
+    pub max_priority_fee_per_gas: Quantity,
+    /// Gas limit, hex or decimal string.
+    pub gas_limit: Quantity,
+    /// Recipient address. `None` means contract creation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub to: Option<Address>,
+    /// Value, hex or decimal string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub value: Option<Quantity>,
+    /// Input/calldata hex.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub input: Option<Hex>,
+    /// Optional chain id override, hex or decimal string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub chain_id: Option<Quantity>,
+}
+
+/// `mesh_buildUnsignedTx` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "MeshUnsignedTxResponse.ts")
+)]
+pub struct MeshUnsignedTxResponse {
+    /// `0x`-hex bincode unsigned transaction envelope.
+    pub unsigned_tx: Hex,
+    /// `0x`-hex signing hash for the wallet.
+    pub sighash: Hash,
+}
+
+/// `mesh_combineTx` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "MeshSignedTxResponse.ts")
+)]
+pub struct MeshSignedTxResponse {
+    /// `0x`-hex bincode signed transaction envelope.
+    pub signed_tx: Hex,
+}
+
+/// `mesh_decodeTx` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MeshDecodedTx.ts"))]
+pub struct MeshDecodedTx {
+    /// Chain id as a hex quantity.
+    pub chain_id: Quantity,
+    /// Nonce as a hex quantity.
+    pub nonce: Quantity,
+    /// Max priority fee per gas as a decimal string.
+    pub max_priority_fee_per_gas: String,
+    /// Max fee per gas as a decimal string.
+    pub max_fee_per_gas: String,
+    /// Gas limit as a JSON number.
+    pub gas_limit: u64,
+    /// Recipient address, or null for contract creation.
+    pub to: Option<Address>,
+    /// Value as a decimal string.
+    pub value: String,
+    /// Input/calldata hex.
+    pub input: Hex,
+    /// Present when decoding an unsigned transaction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub sighash: Option<Hash>,
+    /// Present when decoding a signed transaction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub from: Option<Address>,
+    /// Present when decoding a signed transaction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub tx_hash: Option<Hash>,
 }
 
 /// `debug_p2pPeers` entry.

@@ -3,19 +3,19 @@
 /**
  * `lyth_mempoolStatus` aggregate.
  */
-export type MempoolSnapshot = { 
+export type MempoolSnapshot = {
 /**
  * Tx count in the Ready bucket.
  */
-count_ready: bigint, 
+count_ready: bigint,
 /**
  * Tx count in the Pending bucket.
  */
-count_pending: bigint, 
+count_pending: bigint,
 /**
  * Mailbox depth gauge.
  */
-mailbox_depth: bigint, 
+mailbox_depth: bigint,
 /**
  * Bytes held per tx class.
  */

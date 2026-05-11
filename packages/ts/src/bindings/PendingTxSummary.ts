@@ -3,23 +3,23 @@
 /**
  * `lyth_mempoolPending` per-tx entry.
  */
-export type PendingTxSummary = { 
+export type PendingTxSummary = {
 /**
  * Tx hash.
  */
-txHash: string, 
+txHash: string,
 /**
  * Sender nonce of this transaction.
  */
-nonce: bigint, 
+nonce: bigint,
 /**
  * Class index (0..=6).
  */
-class: number, 
+class: number,
 /**
  * Wire size in bytes.
  */
-wireBytesLen: number, 
+wireBytesLen: number,
 /**
  * `true` if parked in the ready bucket.
  */

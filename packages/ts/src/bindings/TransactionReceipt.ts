@@ -3,27 +3,27 @@
 /**
  * Receipt for a confirmed transaction.
  */
-export type TransactionReceipt = { 
+export type TransactionReceipt = {
 /**
  * Transaction hash.
  */
-tx_hash: string, 
+tx_hash: string,
 /**
  * Block hash that contains the transaction.
  */
-block_hash: string, 
+block_hash: string,
 /**
  * Block height that contains the transaction.
  */
-block_number: bigint, 
+block_number: bigint,
 /**
  * Transaction index within the block.
  */
-tx_index: number, 
+tx_index: number,
 /**
  * `1` on success, `0` on revert.
  */
-status: number, 
+status: number,
 /**
  * Gas consumed by this transaction.
  */

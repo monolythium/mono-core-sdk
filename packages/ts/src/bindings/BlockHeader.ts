@@ -7,31 +7,31 @@
  * the v0.0.1 server. A future server version may upgrade to camelCase;
  * when that happens we add a serde alias.
  */
-export type BlockHeader = { 
+export type BlockHeader = {
 /**
  * Block number (height).
  */
-number: bigint, 
+number: bigint,
 /**
  * Block hash (32 bytes hex).
  */
-hash: string, 
+hash: string,
 /**
  * Parent block hash.
  */
-parent_hash: string, 
+parent_hash: string,
 /**
  * State-root commitment.
  */
-state_root: string, 
+state_root: string,
 /**
  * UNIX seconds.
  */
-timestamp: bigint, 
+timestamp: bigint,
 /**
  * Total gas consumed.
  */
-gas_used: bigint, 
+gas_used: bigint,
 /**
  * Block gas limit.
  */

@@ -3,35 +3,35 @@
 /**
  * `lyth_getAssetPolicy` response.
  */
-export type AssetPolicy = { 
+export type AssetPolicy = {
 /**
  * Policy mode label.
  */
-mode: string, 
+mode: string,
 /**
  * Whether the asset allows shielded transfers.
  */
-allowShielded: boolean, 
+allowShielded: boolean,
 /**
  * Whether the asset allows confidential transfers.
  */
-allowConfidential: boolean, 
+allowConfidential: boolean,
 /**
  * Whether the asset allows stealth transfers.
  */
-allowStealth: boolean, 
+allowStealth: boolean,
 /**
  * Whether the asset allows transparent transfers.
  */
-allowTransparent: boolean, 
+allowTransparent: boolean,
 /**
  * KYC requirement bit.
  */
-requireKyc: boolean, 
+requireKyc: boolean,
 /**
  * Raw levels byte, `0x`-hex two-digit.
  */
-levels: string, 
+levels: string,
 /**
  * `true` when the asset has explicitly set policy.
  */

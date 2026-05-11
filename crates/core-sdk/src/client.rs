@@ -13,11 +13,14 @@ use serde_json::{json, Value};
 
 use crate::error::SdkError;
 use crate::types::{
-    AccountPolicy, AccountProofResponse, AssetPolicy, BlockHeader, BlockSelector, CallRequest,
-    ClusterDelegatorsResponse, ClusterEntityResponse, DagSyncStatus, DelegationCapResponse,
+    AccountPolicy, AccountProofResponse, AddressActivityEntry, AddressLabelRecord, AssetPolicy,
+    BlockHeader, BlockSelector, BlsCertificateResponse, CallRequest, CapabilitiesResponse,
+    CheckpointRecord, ClusterDelegatorsResponse, ClusterEntityResponse,
+    ClusterResignationsResponse, DagSyncStatus, DelegationCapResponse, DelegationHistoryRecord,
     DelegationsResponse, EncryptionKeyResponse, EntityRatchetResponse, FeeHistoryResponse,
-    IndexerStatus, MempoolSnapshot, PeerSummary, PendingTxSummary, PrecompileDescriptor,
-    RegistryRecord, RoundInfo, StorageProofBatch, SyncStatus, TpmAttestationResponse,
+    IndexerStatus, MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent,
+    MeshUnsignedTxResponse, PeerSummary, PendingTxSummary, PrecompileDescriptor, RegistryRecord,
+    RoundInfo, StorageProofBatch, SyncStatus, TokenBalanceRecord, TpmAttestationResponse,
     TransactionReceipt, TransactionView, ValidatorDescriptor,
 };
 
@@ -423,6 +426,18 @@ impl RpcClient {
             .await
     }
 
+    /// `lyth_capabilities` — address-keyed precompile capability map.
+    pub async fn lyth_capabilities(
+        &self,
+        block: Option<BlockSelector>,
+    ) -> Result<CapabilitiesResponse, SdkError> {
+        let params = match block {
+            Some(block) => json!([block.to_param()]),
+            None => json!([]),
+        };
+        self.call("lyth_capabilities", params).await
+    }
+
     /// `lyth_indexerStatus` — indexer status, `None` if disabled.
     pub async fn lyth_indexer_status(&self) -> Result<Option<IndexerStatus>, SdkError> {
         let v: Value = self.call("lyth_indexerStatus", json!([])).await?;
@@ -430,6 +445,42 @@ impl RpcClient {
             return Ok(None);
         }
         Ok(Some(serde_json::from_value(v)?))
+    }
+
+    /// `lyth_getTokenBalances` — indexed per-asset balances for one address.
+    pub async fn lyth_get_token_balances(
+        &self,
+        address: &str,
+    ) -> Result<Vec<TokenBalanceRecord>, SdkError> {
+        self.call("lyth_getTokenBalances", json!([address])).await
+    }
+
+    /// `lyth_getAddressLabel` — indexed display/category label for one address.
+    pub async fn lyth_get_address_label(
+        &self,
+        address: &str,
+    ) -> Result<Option<AddressLabelRecord>, SdkError> {
+        let v: Value = self.call("lyth_getAddressLabel", json!([address])).await?;
+        if v.is_null() {
+            return Ok(None);
+        }
+        Ok(Some(serde_json::from_value(v)?))
+    }
+
+    /// `lyth_getAddressActivity` — indexed per-address activity timeline.
+    pub async fn lyth_get_address_activity(
+        &self,
+        address: &str,
+        limit: Option<u32>,
+        cursor: Option<&str>,
+    ) -> Result<Vec<AddressActivityEntry>, SdkError> {
+        let params = match (limit, cursor) {
+            (None, None) => json!([address]),
+            (Some(limit), None) => json!([address, limit]),
+            (None, Some(cursor)) => json!([address, 50, cursor]),
+            (Some(limit), Some(cursor)) => json!([address, limit, cursor]),
+        };
+        self.call("lyth_getAddressActivity", params).await
     }
 
     /// `lyth_getStorageProof` — batched Merkle proofs for one
@@ -454,6 +505,22 @@ impl RpcClient {
             None => json!([wallet]),
         };
         self.call("lyth_getDelegations", params).await
+    }
+
+    /// `lyth_getDelegationHistory` — indexed per-wallet delegation event timeline.
+    pub async fn lyth_get_delegation_history(
+        &self,
+        wallet: &str,
+        limit: Option<u32>,
+        cursor: Option<&str>,
+    ) -> Result<Vec<DelegationHistoryRecord>, SdkError> {
+        let params = match (limit, cursor) {
+            (None, None) => json!([wallet]),
+            (Some(limit), None) => json!([wallet, limit]),
+            (None, Some(cursor)) => json!([wallet, 50, cursor]),
+            (Some(limit), Some(cursor)) => json!([wallet, limit, cursor]),
+        };
+        self.call("lyth_getDelegationHistory", params).await
     }
 
     /// `lyth_getClusterDelegators` — delegator addresses for a cluster.
@@ -549,6 +616,67 @@ impl RpcClient {
         Ok(Some(serde_json::from_value(v)?))
     }
 
+    /// `lyth_getLatestCheckpoint` — latest PQ-finality checkpoint rows.
+    pub async fn lyth_get_latest_checkpoint(
+        &self,
+        below_height: Option<u64>,
+    ) -> Result<Vec<CheckpointRecord>, SdkError> {
+        let params = match below_height {
+            Some(height) => json!([height]),
+            None => json!([]),
+        };
+        self.call("lyth_getLatestCheckpoint", params).await
+    }
+
+    /// `lyth_getClusterResignations` — in-flight + applied operator resignations.
+    pub async fn lyth_get_cluster_resignations(
+        &self,
+        operator: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<ClusterResignationsResponse, SdkError> {
+        let params = match (operator, status) {
+            (None, None) => json!([]),
+            (Some(operator), None) => json!([operator]),
+            (None, Some(status)) => json!([null, status]),
+            (Some(operator), Some(status)) => json!([operator, status]),
+        };
+        self.call("lyth_getClusterResignations", params).await
+    }
+
+    /// `lyth_getBlsRoundCertificate` — round-advancement BLS aggregate.
+    pub async fn lyth_get_bls_round_certificate(
+        &self,
+        round: u64,
+    ) -> Result<Option<BlsCertificateResponse>, SdkError> {
+        self.call("lyth_getBlsRoundCertificate", json!([round]))
+            .await
+    }
+
+    /// `lyth_getLeaderCertificate` — leader-vote BLS aggregate for a block ref.
+    pub async fn lyth_get_leader_certificate(
+        &self,
+        round: u64,
+        authority: u16,
+        digest: &str,
+    ) -> Result<Option<BlsCertificateResponse>, SdkError> {
+        self.call(
+            "lyth_getLeaderCertificate",
+            json!([round, authority, digest]),
+        )
+        .await
+    }
+
+    /// `lyth_getDacCertificate` — data-availability certificate for a block ref.
+    pub async fn lyth_get_dac_certificate(
+        &self,
+        round: u64,
+        authority: u16,
+        digest: &str,
+    ) -> Result<Option<BlsCertificateResponse>, SdkError> {
+        self.call("lyth_getDacCertificate", json!([round, authority, digest]))
+            .await
+    }
+
     /// `lyth_subscribe` — note: this is a WebSocket-only method.
     /// HTTP callers receive [`SdkError::Rpc`] with a "not implemented"
     /// message. Wired here for completeness; full WS support is on
@@ -618,6 +746,52 @@ impl RpcClient {
     /// gated; not yet wired in v0.0.x).
     pub async fn debug_chain_reorg(&self, params: Value) -> Result<Value, SdkError> {
         self.call("debug_chainReorg", params).await
+    }
+
+    // ---- mesh_* -------------------------------------------------------
+
+    /// `mesh_buildUnsignedTx` — build an unsigned transaction envelope.
+    pub async fn mesh_build_unsigned_tx(
+        &self,
+        intent: &MeshTxIntent,
+    ) -> Result<MeshUnsignedTxResponse, SdkError> {
+        self.call("mesh_buildUnsignedTx", json!([intent])).await
+    }
+
+    /// `mesh_combineTx` — combine an unsigned envelope with a wallet signature.
+    pub async fn mesh_combine_tx(
+        &self,
+        unsigned_tx: &str,
+        signature_hex: &str,
+        algo: Option<&str>,
+        pubkey_hex: Option<&str>,
+    ) -> Result<MeshSignedTxResponse, SdkError> {
+        let params = match (algo, pubkey_hex) {
+            (None, None) => json!([unsigned_tx, signature_hex]),
+            (Some(algo), None) => json!([unsigned_tx, signature_hex, algo]),
+            (None, Some(pubkey_hex)) => {
+                json!([unsigned_tx, signature_hex, "ml_dsa_65", pubkey_hex])
+            }
+            (Some(algo), Some(pubkey_hex)) => {
+                json!([unsigned_tx, signature_hex, algo, pubkey_hex])
+            }
+        };
+        self.call("mesh_combineTx", params).await
+    }
+
+    /// `mesh_decodeTx` — decode a signed or unsigned mesh envelope.
+    pub async fn mesh_decode_tx(
+        &self,
+        envelope_hex: &str,
+        signed: bool,
+    ) -> Result<MeshDecodedTx, SdkError> {
+        self.call("mesh_decodeTx", json!([envelope_hex, signed]))
+            .await
+    }
+
+    /// `mesh_submitTx` — submit a signed mesh envelope.
+    pub async fn mesh_submit_tx(&self, signed_tx: &str) -> Result<String, SdkError> {
+        self.call("mesh_submitTx", json!([signed_tx])).await
     }
 }
 

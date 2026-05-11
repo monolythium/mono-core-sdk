@@ -188,6 +188,97 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     const v = await client.lythIndexerStatus();
     expect(v).toBeNull();
   });
+
+  it("lyth_capabilities forwards an optional block selector", async () => {
+    const { fetch, calls } = mockFetch({ blockNumber: 256, capabilities: {} });
+    const client = new RpcClient("http://x", { fetch });
+    await client.lythCapabilities(256);
+    expect(calls[0].method).toBe("lyth_capabilities");
+    expect(calls[0].params).toEqual(["0x100"]);
+  });
+
+  it("lyth_getLatestCheckpoint accepts bigint heights", async () => {
+    const { fetch, calls } = mockFetch([]);
+    const client = new RpcClient("http://x", { fetch });
+    await client.lythGetLatestCheckpoint(150n);
+    expect(calls[0].method).toBe("lyth_getLatestCheckpoint");
+    expect(calls[0].params).toEqual(["0x96"]);
+  });
+
+  it("lyth_getClusterResignations preserves status-only filters", async () => {
+    const { fetch, calls } = mockFetch({ rows: [] });
+    const client = new RpcClient("http://x", { fetch });
+    await client.lythGetClusterResignations(null, "pending");
+    expect(calls[0].method).toBe("lyth_getClusterResignations");
+    expect(calls[0].params).toEqual([null, "pending"]);
+  });
+
+  it("certificate helpers encode rounds and block refs", async () => {
+    const digest = `0x${"11".repeat(32)}`;
+    const { fetch, calls } = mockFetchSequence([null, null, null]);
+    const client = new RpcClient("http://x", { fetch });
+    await client.lythGetBlsRoundCertificate(42n);
+    await client.lythGetLeaderCertificate(43n, 2, digest);
+    await client.lythGetDacCertificate(44n, 3, digest);
+    expect(calls.map((c) => c.method)).toEqual([
+      "lyth_getBlsRoundCertificate",
+      "lyth_getLeaderCertificate",
+      "lyth_getDacCertificate",
+    ]);
+    expect(calls.map((c) => c.params)).toEqual([
+      ["0x2a"],
+      ["0x2b", 2, digest],
+      ["0x2c", 3, digest],
+    ]);
+  });
+});
+
+describe("mesh_* methods", () => {
+  it("mesh_buildUnsignedTx wraps the intent object", async () => {
+    const { fetch, calls } = mockFetch({
+      unsigned_tx: "0x01",
+      sighash: `0x${"00".repeat(32)}`,
+    });
+    const client = new RpcClient("http://x", { fetch });
+    await client.meshBuildUnsignedTx({
+      nonce: "0x0",
+      max_fee_per_gas: "0x2540be400",
+      max_priority_fee_per_gas: "0x2540be400",
+      gas_limit: "0x5208",
+      to: "0x1111111111111111111111111111111111111111",
+      value: "0x0",
+    });
+    expect(calls[0].method).toBe("mesh_buildUnsignedTx");
+    expect(calls[0].params).toEqual([
+      expect.objectContaining({
+        nonce: "0x0",
+        max_fee_per_gas: "0x2540be400",
+        max_priority_fee_per_gas: "0x2540be400",
+      }),
+    ]);
+  });
+
+  it("mesh_combineTx, mesh_decodeTx, and mesh_submitTx call canonical methods", async () => {
+    const { fetch, calls } = mockFetchSequence([
+      { signed_tx: "0x02" },
+      { chain_id: "0x10f2c", nonce: "0x0", max_priority_fee_per_gas: "1", max_fee_per_gas: "1", gas_limit: 21000, to: null, value: "0", input: "0x" },
+      `0x${"22".repeat(32)}`,
+    ]);
+    const client = new RpcClient("http://x", { fetch });
+    await client.meshCombineTx("0x01", "0x02", "ml_dsa_65", "0x03");
+    await client.meshDecodeTx("0x02", true);
+    await client.meshSubmitTx("0x02");
+    expect(calls.map((c) => c.method)).toEqual([
+      "mesh_combineTx",
+      "mesh_decodeTx",
+      "mesh_submitTx",
+    ]);
+    expect(calls.map((c) => c.params)).toEqual([
+      ["0x01", "0x02", "ml_dsa_65", "0x03"],
+      ["0x02", true],
+      ["0x02"],
+    ]);
+  });
 });
 
 describe("error handling", () => {

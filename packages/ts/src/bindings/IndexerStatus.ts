@@ -4,15 +4,15 @@
  * `lyth_indexerStatus` envelope. `null` on the wire surfaces as
  * `Option::None` here.
  */
-export type IndexerStatus = { 
+export type IndexerStatus = {
 /**
  * Highest block fully ingested.
  */
-currentHeight: bigint, 
+currentHeight: bigint,
 /**
  * Highest block observed.
  */
-latestHeight?: bigint, 
+latestHeight?: bigint,
 /**
  * Active schema version.
  */

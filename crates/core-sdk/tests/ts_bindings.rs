@@ -11,12 +11,16 @@
 #![cfg(feature = "ts-bindings")]
 
 use monolythium_core_sdk::types::{
-    AccountPolicy, AccountProofResponse, AssetPolicy, BlockHeader, BlockTag, CallRequest,
-    ClusterDelegatorsResponse, ClusterEntityResponse, DagSyncStatus, DelegationCapResponse,
-    DelegationRow, DelegationsResponse, EncryptionKeyResponse, EntityRatchetResponse,
-    FeeHistoryResponse, IndexerStatus, MempoolSnapshot, PeerSummary, PendingTxSummary,
+    AccountPolicy, AccountProofResponse, AddressActivityEntry, AddressLabelRecord, AssetPolicy,
+    BlockHeader, BlockTag, BlsCertificateResponse, CallRequest, CapabilitiesResponse,
+    CapabilityDescriptor, CheckpointRecord, ClusterDelegatorsResponse, ClusterEntityResponse,
+    ClusterResignationRow, ClusterResignationsResponse, DagSyncStatus, DelegationCapResponse,
+    DelegationHistoryRecord, DelegationRow, DelegationsResponse, EncryptionKeyResponse,
+    EntityRatchetResponse, FeeHistoryResponse, IndexerStatus, MempoolSnapshot, MeshDecodedTx,
+    MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse, PeerSummary, PendingTxSummary,
     PrecompileDescriptor, RegistryRecord, RoundInfo, StorageProofBatch, SyncStatus,
-    TpmAttestationResponse, TransactionReceipt, TransactionView, ValidatorDescriptor,
+    TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt, TransactionView,
+    ValidatorDescriptor,
 };
 use ts_rs::TS;
 
@@ -30,14 +34,23 @@ fn export_bindings() {
 
     AccountPolicy::export_all_to(&out).expect("AccountPolicy");
     AccountProofResponse::export_all_to(&out).expect("AccountProofResponse");
+    AddressActivityEntry::export_all_to(&out).expect("AddressActivityEntry");
+    AddressLabelRecord::export_all_to(&out).expect("AddressLabelRecord");
     AssetPolicy::export_all_to(&out).expect("AssetPolicy");
+    BlsCertificateResponse::export_all_to(&out).expect("BlsCertificateResponse");
     BlockHeader::export_all_to(&out).expect("BlockHeader");
     BlockTag::export_all_to(&out).expect("BlockTag");
     CallRequest::export_all_to(&out).expect("CallRequest");
+    CapabilitiesResponse::export_all_to(&out).expect("CapabilitiesResponse");
+    CapabilityDescriptor::export_all_to(&out).expect("CapabilityDescriptor");
+    CheckpointRecord::export_all_to(&out).expect("CheckpointRecord");
     ClusterDelegatorsResponse::export_all_to(&out).expect("ClusterDelegatorsResponse");
     ClusterEntityResponse::export_all_to(&out).expect("ClusterEntityResponse");
+    ClusterResignationRow::export_all_to(&out).expect("ClusterResignationRow");
+    ClusterResignationsResponse::export_all_to(&out).expect("ClusterResignationsResponse");
     DagSyncStatus::export_all_to(&out).expect("DagSyncStatus");
     DelegationCapResponse::export_all_to(&out).expect("DelegationCapResponse");
+    DelegationHistoryRecord::export_all_to(&out).expect("DelegationHistoryRecord");
     DelegationRow::export_all_to(&out).expect("DelegationRow");
     DelegationsResponse::export_all_to(&out).expect("DelegationsResponse");
     EncryptionKeyResponse::export_all_to(&out).expect("EncryptionKeyResponse");
@@ -45,6 +58,10 @@ fn export_bindings() {
     FeeHistoryResponse::export_all_to(&out).expect("FeeHistoryResponse");
     IndexerStatus::export_all_to(&out).expect("IndexerStatus");
     MempoolSnapshot::export_all_to(&out).expect("MempoolSnapshot");
+    MeshDecodedTx::export_all_to(&out).expect("MeshDecodedTx");
+    MeshSignedTxResponse::export_all_to(&out).expect("MeshSignedTxResponse");
+    MeshTxIntent::export_all_to(&out).expect("MeshTxIntent");
+    MeshUnsignedTxResponse::export_all_to(&out).expect("MeshUnsignedTxResponse");
     PeerSummary::export_all_to(&out).expect("PeerSummary");
     PendingTxSummary::export_all_to(&out).expect("PendingTxSummary");
     PrecompileDescriptor::export_all_to(&out).expect("PrecompileDescriptor");
@@ -52,6 +69,7 @@ fn export_bindings() {
     RoundInfo::export_all_to(&out).expect("RoundInfo");
     StorageProofBatch::export_all_to(&out).expect("StorageProofBatch");
     SyncStatus::export_all_to(&out).expect("SyncStatus");
+    TokenBalanceRecord::export_all_to(&out).expect("TokenBalanceRecord");
     TpmAttestationResponse::export_all_to(&out).expect("TpmAttestationResponse");
     TransactionReceipt::export_all_to(&out).expect("TransactionReceipt");
     TransactionView::export_all_to(&out).expect("TransactionView");
@@ -63,5 +81,5 @@ fn export_bindings() {
         .filter_map(Result::ok)
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "ts"))
         .count();
-    assert!(count >= 28, "expected 28+ bindings files, got {count}");
+    assert!(count >= 40, "expected 40+ bindings files, got {count}");
 }

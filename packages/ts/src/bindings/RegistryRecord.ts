@@ -3,23 +3,23 @@
 /**
  * `lyth_listProviders` / `lyth_getRegistration` record.
  */
-export type RegistryRecord = { 
+export type RegistryRecord = {
 /**
  * libp2p peer id, `0x`-hex 32-byte.
  */
-peerId: string, 
+peerId: string,
 /**
  * Capability bitmask.
  */
-capabilities: number, 
+capabilities: number,
 /**
  * Primary external endpoint URL.
  */
-endpoint: string, 
+endpoint: string,
 /**
  * Current bond, hex quantity.
  */
-bond: string, 
+bond: string,
 /**
  * Uptime in basis points (0..=10_000).
  */

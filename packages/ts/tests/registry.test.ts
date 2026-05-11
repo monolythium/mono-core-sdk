@@ -13,8 +13,8 @@ const TESTNET_TOML = `
 chain_id     = 69420
 network      = "testnet-69420"
 display_name = "Monolythium Testnet"
-genesis_hash = "0xc4b64e37fc81d5ffe60a63d34f99713e2b09cc3074b386bf512e9bd8f6863071"
-binary_sha   = "a5c717e"
+genesis_hash = "0x9e5c92dc48207755617a8067e57537717bed7d43a387a539b993505cb13626c2"
+binary_sha   = "b652fd7"
 
 [[rpc]]
 url      = "http://178.105.12.9:8545"
@@ -31,6 +31,10 @@ region    = "fsn1"
 describe("chain registry snapshot", () => {
   it("vendors the live testnet RPC IP list", () => {
     expect(TESTNET_69420.chain_id).toBe(69420);
+    expect(TESTNET_69420.genesis_hash).toBe(
+      "0x9e5c92dc48207755617a8067e57537717bed7d43a387a539b993505cb13626c2",
+    );
+    expect(TESTNET_69420.binary_sha).toBe("b652fd7");
     expect(getRpcEndpoints("testnet-69420").map((r) => r.url)).toEqual([
       "http://178.105.12.9:8545",
       "http://178.105.15.216:8545",

@@ -3,19 +3,19 @@
 /**
  * `eth_feeHistory` response.
  */
-export type FeeHistoryResponse = { 
+export type FeeHistoryResponse = {
 /**
  * Hex height of the first block in the window.
  */
-oldestBlock: string, 
+oldestBlock: string,
 /**
  * `N+1` base-fee values (one per block, plus the next-block prediction).
  */
-baseFeePerGas: Array<string>, 
+baseFeePerGas: Array<string>,
 /**
  * `N` `gas_used / gas_limit` ratios.
  */
-gasUsedRatio: Array<number>, 
+gasUsedRatio: Array<number>,
 /**
  * `N × len(percentiles)` 2D priority-fee approximations. Empty when
  * caller did not request percentiles.
