@@ -145,11 +145,26 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
   });
 
   it("lyth_listActivePrecompiles defaults to latest", async () => {
-    const { fetch, calls } = mockFetch([]);
+    const reply = {
+      blockNumber: 256,
+      precompiles: [
+        {
+          activationHeight: null,
+          address: "0x0000000000000000000000000000000000001000",
+          capabilityId: "factory",
+          enabled: true,
+          gateable: false,
+          name: "factory",
+        },
+      ],
+    };
+    const { fetch, calls } = mockFetch(reply);
     const client = new RpcClient("http://x", { fetch });
-    await client.lythListActivePrecompiles();
+    const catalogue = await client.lythListActivePrecompiles();
     expect(calls[0].method).toBe("lyth_listActivePrecompiles");
     expect(calls[0].params).toEqual(["latest"]);
+    expect(catalogue.precompiles).toHaveLength(1);
+    expect(catalogue.blockNumber).toBe(256);
   });
 
   it("lyth_getTokenBalances reads indexed asset rows", async () => {
