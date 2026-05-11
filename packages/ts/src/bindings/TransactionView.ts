@@ -3,59 +3,59 @@
 /**
  * Ethereum-shaped transaction view returned by `eth_getTransactionByHash`.
  */
-export type TransactionView = { 
+export type TransactionView = {
 /**
  * Transaction hash.
  */
-hash: string, 
+hash: string,
 /**
  * Block hash that contains the transaction.
  */
-blockHash: string, 
+blockHash: string,
 /**
  * Block height as a hex quantity.
  */
-blockNumber: string, 
+blockNumber: string,
 /**
  * Transaction index as a hex quantity.
  */
-transactionIndex: string, 
+transactionIndex: string,
 /**
  * Sender address.
  */
-from: string, 
+from: string,
 /**
  * Recipient address, or `null` for contract creation.
  */
-to: string | null, 
+to: string | null,
 /**
  * Sender nonce as a hex quantity.
  */
-nonce: string, 
+nonce: string,
 /**
  * Transferred value as a hex quantity.
  */
-value: string, 
+value: string,
 /**
  * Gas limit as a hex quantity.
  */
-gas: string, 
+gas: string,
 /**
  * EIP-1559 max fee per gas as a hex quantity.
  */
-maxFeePerGas: string, 
+maxFeePerGas: string,
 /**
  * EIP-1559 max priority fee per gas as a hex quantity.
  */
-maxPriorityFeePerGas: string, 
+maxPriorityFeePerGas: string,
 /**
  * Calldata or deployment bytecode.
  */
-input: string, 
+input: string,
 /**
  * EIP-2718 transaction type. `mono-core` currently renders `"0x2"`.
  */
-type: string, 
+type: string,
 /**
  * Chain id as a hex quantity.
  */

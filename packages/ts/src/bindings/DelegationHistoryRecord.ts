@@ -39,5 +39,4 @@ weightBps: number,
 /**
  * Wallet total committed weight after the event when known.
  */
-walletTotalBps: number | null,
-};
+walletTotalBps: number | null, };

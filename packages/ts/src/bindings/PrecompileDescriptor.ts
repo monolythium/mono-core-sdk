@@ -3,20 +3,28 @@
 /**
  * `lyth_listActivePrecompiles` entry — OI-0170 / ADR-0015 §5.
  */
-export type PrecompileDescriptor = { 
+export type PrecompileDescriptor = {
 /**
  * 20-byte precompile address, `0x`-hex.
  */
-address: string, 
+address: string,
 /**
  * Stable identifier (e.g. `"agent"`, `"oracle"`, `"delegation"`).
  */
-name: string, 
+name: string,
 /**
  * Whether milestone gates can toggle this precompile.
  */
-gateable: boolean, 
+gateable: boolean,
 /**
  * Whether the precompile is currently dispatchable.
  */
-enabled: boolean, };
+enabled: boolean,
+/**
+ * Stable capability id from the milestone registry.
+ */
+capabilityId: string,
+/**
+ * Height of the milestone that activated this capability, when any.
+ */
+activationHeight: bigint | null, };

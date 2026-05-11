@@ -3,15 +3,15 @@
 /**
  * `lyth_getEncryptionKey` response.
  */
-export type EncryptionKeyResponse = { 
+export type EncryptionKeyResponse = {
 /**
  * KEM algorithm tag.
  */
-algo: string, 
+algo: string,
 /**
  * Cluster encryption epoch.
  */
-epoch: bigint, 
+epoch: bigint,
 /**
  * ML-KEM-768 encapsulation key.
  */

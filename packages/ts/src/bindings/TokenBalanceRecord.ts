@@ -15,5 +15,4 @@ balance: string,
 /**
  * Block height the balance was last observed at.
  */
-updatedAtBlock: bigint,
-};
+updatedAtBlock: bigint, };

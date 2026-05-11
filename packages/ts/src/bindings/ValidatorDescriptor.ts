@@ -3,19 +3,19 @@
 /**
  * `lyth_validatorSet` entry.
  */
-export type ValidatorDescriptor = { 
+export type ValidatorDescriptor = {
 /**
  * Stable slot id.
  */
-id: number, 
+id: number,
 /**
  * Quantum-safe ML-DSA-65 public key, `0x` hex.
  */
-pubkey: string, 
+pubkey: string,
 /**
  * Stake as a decimal string.
  */
-stake: string, 
+stake: string,
 /**
  * Whether the validator can currently propose / vote.
  */

@@ -6,28 +6,28 @@
  * Every field is optional — the chain rejects payloads that omit
  * required fields with an `InvalidParams` error.
  */
-export type CallRequest = { 
+export type CallRequest = {
 /**
  * Source address.
  */
-from?: string, 
+from?: string,
 /**
  * Destination address. `None` is interpreted as contract
  * creation by the chain.
  */
-to?: string, 
+to?: string,
 /**
  * Gas limit.
  */
-gas?: string, 
+gas?: string,
 /**
  * Gas price (legacy / non-EIP-1559).
  */
-gasPrice?: string, 
+gasPrice?: string,
 /**
  * Wei to transfer.
  */
-value?: string, 
+value?: string,
 /**
  * Calldata (`data` is canonical; chains accept `input` as alias).
  */

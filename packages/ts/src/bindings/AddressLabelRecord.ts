@@ -9,7 +9,8 @@ export type AddressLabelRecord = {
  */
 address: string,
 /**
- * Lowercase category name, e.g. `foundation`, `exchange`, `bridge`, `treasury`, `contract`, `operator`.
+ * Lowercase category name, e.g. `foundation`, `exchange`,
+ * `bridge`, `treasury`, `contract`, or `operator`.
  */
 category: string,
 /**
@@ -19,5 +20,4 @@ displayName: string | null,
 /**
  * Block height the label was last asserted at.
  */
-updatedAtBlock: bigint,
-};
+updatedAtBlock: bigint, };

@@ -5,15 +5,15 @@
  * when the node is caught up — the SDK surfaces that as
  * `Option::None`.
  */
-export type SyncStatus = { 
+export type SyncStatus = {
 /**
  * First block of the current sync batch.
  */
-startingBlock: string, 
+startingBlock: string,
 /**
  * Last block applied locally.
  */
-currentBlock: string, 
+currentBlock: string,
 /**
  * Highest block advertised by peers.
  */

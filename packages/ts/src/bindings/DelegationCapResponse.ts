@@ -3,15 +3,15 @@
 /**
  * `lyth_getDelegationCap` response.
  */
-export type DelegationCapResponse = { 
+export type DelegationCapResponse = {
 /**
  * Per-cluster cap in basis points. `u32::MAX` means disabled.
  */
-capBps: number, 
+capBps: number,
 /**
  * Height of the most recent milestone that changed the cap.
  */
-lastChangedAtHeight: bigint, 
+lastChangedAtHeight: bigint,
 /**
  * Block height sampled by the node.
  */

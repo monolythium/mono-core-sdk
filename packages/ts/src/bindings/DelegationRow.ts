@@ -3,11 +3,11 @@
 /**
  * One delegation row in `lyth_getDelegations`.
  */
-export type DelegationRow = { 
+export type DelegationRow = {
 /**
  * Cluster id receiving the delegated weight.
  */
-cluster: number, 
+cluster: number,
 /**
  * Delegated weight in basis points.
  */

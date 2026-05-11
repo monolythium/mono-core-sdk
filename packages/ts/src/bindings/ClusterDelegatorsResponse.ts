@@ -3,19 +3,19 @@
 /**
  * `lyth_getClusterDelegators` response.
  */
-export type ClusterDelegatorsResponse = { 
+export type ClusterDelegatorsResponse = {
 /**
  * Queried cluster id.
  */
-cluster: number, 
+cluster: number,
 /**
  * Delegator wallet addresses.
  */
-delegators: Array<string>, 
+delegators: Array<string>,
 /**
  * Number of delegator slots scanned by the node.
  */
-count: number, 
+count: number,
 /**
  * Block selector echoed by the node.
  */

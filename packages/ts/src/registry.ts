@@ -53,8 +53,8 @@ export const TESTNET_69420: ChainInfo = {
   description:
     "Live development testnet for Monolythium v2 / LythiumDAG-BFT. Foundation-operated. Wipe + regenesis is allowed without notice — do NOT store value on this network.",
   genesis_hash:
-    "0xc4b64e37fc81d5ffe60a63d34f99713e2b09cc3074b386bf512e9bd8f6863071",
-  binary_sha: "a5c717e",
+    "0x9e5c92dc48207755617a8067e57537717bed7d43a387a539b993505cb13626c2",
+  binary_sha: "b652fd7",
   rpc: [
     {
       url: "http://178.105.12.9:8545",
