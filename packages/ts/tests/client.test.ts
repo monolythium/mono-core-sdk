@@ -246,6 +246,114 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
       ["0x2c", 3, digest],
     ]);
   });
+
+  it("operator monitoring helpers normalize typed live windows", async () => {
+    const operatorId = `0x${"aa".repeat(32)}`;
+    const blsPubkey = `0x${"bb".repeat(48)}`;
+    const { fetch, calls } = mockFetchSequence([
+      {
+        schemaVersion: 1,
+        operatorId,
+        authorityIndex: 2,
+        blsPubkey,
+        active: true,
+      },
+      {
+        schemaVersion: 1,
+        authorityIndex: 2,
+        currentRound: "1042",
+        limit: 3,
+        entries: [
+          { round: 1042, status: "signed" },
+          { round: "1041", status: "missed" },
+          { round: "0x410", status: "delayed" },
+        ],
+      },
+      {
+        schemaVersion: 1,
+        authorityIndex: 2,
+        currentRound: 100,
+        horizonRounds: 10,
+        duties: {
+          attestation: {
+            startRound: 101,
+            endRound: "110",
+            kind: "attestation_every_round",
+          },
+          blockProduction: { reason: "not_predictable_in_advance" },
+          sync: { reason: "not_implemented" },
+          keyRotation: {
+            nextRound: "0x80",
+            epochLengthRounds: 64,
+          },
+        },
+      },
+      {
+        schemaVersion: 1,
+        authorityIndex: 2,
+        dataHeight: "120",
+        windowRounds: 100,
+        missedRounds: 4,
+        observedRounds: 80,
+        missRateBps: 500,
+        thresholdBps: 5000,
+        remainingHeadroomBps: 4500,
+        jailStatus: {
+          jailed: false,
+          tombstoned: false,
+          jailedUntilHeight: "0",
+          unjailCount: "1",
+        },
+        reasons: ["near_threshold"],
+      },
+    ]);
+    const client = new RpcClient("http://x", { fetch });
+
+    const authority = await client.lythResolveOperatorAuthority(operatorId);
+    const activity = await client.lythSigningActivity(2, 3);
+    const duties = await client.lythUpcomingDuties(2, 10);
+    const risk = await client.lythOperatorRisk(2, 100);
+
+    expect(authority).toEqual({
+      schemaVersion: 1,
+      operatorId,
+      authorityIndex: 2,
+      blsPubkey,
+      active: true,
+    });
+    expect(activity.currentRound).toBe(1042n);
+    expect(activity.entries.map((row) => [row.round, row.status])).toEqual([
+      [1042n, "signed"],
+      [1041n, "missed"],
+      [1040n, "delayed"],
+    ]);
+    expect(duties.duties.attestation.startRound).toBe(101n);
+    expect(duties.duties.attestation.endRound).toBe(110n);
+    expect(duties.duties.keyRotation).toEqual({
+      nextRound: 128n,
+      epochLengthRounds: 64n,
+    });
+    expect(risk.dataHeight).toBe(120n);
+    expect(risk.jailStatus).toEqual({
+      jailed: false,
+      tombstoned: false,
+      jailedUntilHeight: 0n,
+      unjailCount: 1n,
+    });
+
+    expect(calls.map((c) => c.method)).toEqual([
+      "lyth_resolveOperatorAuthority",
+      "lyth_signingActivity",
+      "lyth_upcomingDuties",
+      "lyth_operatorRisk",
+    ]);
+    expect(calls.map((c) => c.params)).toEqual([
+      [operatorId],
+      [2, 3],
+      [2, 10],
+      [2, 100],
+    ]);
+  });
 });
 
 describe("mesh_* methods", () => {

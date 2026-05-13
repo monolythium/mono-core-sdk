@@ -75,6 +75,81 @@ export interface PrecompileCatalogueResponse {
   precompiles: PrecompileDescriptor[];
 }
 
+export interface OperatorAuthorityResponse {
+  schemaVersion: number;
+  operatorId: string;
+  authorityIndex: number;
+  blsPubkey: string;
+  active: boolean;
+}
+
+export type SigningEntryStatus = "signed" | "missed" | "no_cert" | string;
+
+export interface OperatorSigningEntry {
+  round: bigint;
+  status: SigningEntryStatus;
+}
+
+export interface OperatorSigningActivityResponse {
+  schemaVersion: number;
+  authorityIndex: number;
+  currentRound: bigint;
+  limit: number;
+  entries: OperatorSigningEntry[];
+}
+
+export interface AttestationWindow {
+  startRound: bigint;
+  endRound: bigint;
+  kind: string;
+}
+
+export interface DutyAbsence {
+  reason: string;
+}
+
+export type KeyRotationWindow =
+  | { nextRound: bigint; epochLengthRounds: bigint }
+  | DutyAbsence;
+
+export interface UpcomingDutyMap {
+  attestation: AttestationWindow;
+  blockProduction: DutyAbsence;
+  sync: DutyAbsence;
+  keyRotation: KeyRotationWindow;
+}
+
+export interface UpcomingDutiesResponse {
+  schemaVersion: number;
+  authorityIndex: number;
+  currentRound: bigint;
+  horizonRounds: number;
+  duties: UpcomingDutyMap;
+}
+
+export type JailStatusWindow =
+  | {
+      jailed: boolean;
+      tombstoned: boolean;
+      jailedUntilHeight: bigint;
+      unjailCount: bigint;
+    }
+  | DutyAbsence;
+
+export interface OperatorRiskResponse {
+  schemaVersion: number;
+  authorityIndex: number;
+  dataHeight: bigint;
+  windowRounds: number;
+  missedRounds: number;
+  observedRounds: number;
+  missRateBps: number;
+  thresholdBps: number;
+  remainingHeadroomBps: number;
+  jailStatus: JailStatusWindow;
+  reasons: string[];
+}
+
 interface JsonRpcRequest {
   jsonrpc: "2.0";
   id: number;
@@ -563,6 +638,42 @@ export class RpcClient {
     return v as DagSyncStatus;
   }
 
+  /** `lyth_resolveOperatorAuthority` — operator id to authority index. */
+  async lythResolveOperatorAuthority(operatorId: string): Promise<OperatorAuthorityResponse> {
+    return normalizeOperatorAuthority(
+      await this.call("lyth_resolveOperatorAuthority", [operatorId]),
+    );
+  }
+
+  /** `lyth_signingActivity` — recent per-round signing participation. */
+  async lythSigningActivity(
+    authorityIndex: number,
+    limit?: number | null,
+  ): Promise<OperatorSigningActivityResponse> {
+    const params = limit == null ? [authorityIndex] : [authorityIndex, limit];
+    return normalizeSigningActivity(await this.call("lyth_signingActivity", params));
+  }
+
+  /** `lyth_upcomingDuties` — deterministic upcoming duty windows. */
+  async lythUpcomingDuties(
+    authorityIndex: number,
+    horizonRounds?: number | null,
+  ): Promise<UpcomingDutiesResponse> {
+    const params =
+      horizonRounds == null ? [authorityIndex] : [authorityIndex, horizonRounds];
+    return normalizeUpcomingDuties(await this.call("lyth_upcomingDuties", params));
+  }
+
+  /** `lyth_operatorRisk` — miss-rate and jail-status window. */
+  async lythOperatorRisk(
+    authorityIndex: number,
+    windowRounds?: number | null,
+  ): Promise<OperatorRiskResponse> {
+    const params =
+      windowRounds == null ? [authorityIndex] : [authorityIndex, windowRounds];
+    return normalizeOperatorRisk(await this.call("lyth_operatorRisk", params));
+  }
+
   /** `lyth_getLatestCheckpoint` — latest PQ-finality checkpoint rows. */
   async lythGetLatestCheckpoint(belowHeight?: number | bigint | string | null): Promise<CheckpointRecord[]> {
     const params = belowHeight === undefined ? [] : [encodeOptionalHeight(belowHeight)];
@@ -739,6 +850,137 @@ function parseRpcBigint(value: unknown, label: string): bigint {
     if (/^\d+$/.test(value)) return BigInt(value);
   }
   throw SdkError.malformed(`${label} must be a bigint-compatible quantity`);
+}
+
+function parseRpcNumber(value: unknown, label: string): number {
+  const big = parseRpcBigint(value, label);
+  if (big > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw SdkError.malformed(`${label} exceeds safe integer range`);
+  }
+  return Number(big);
+}
+
+function expectObject(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw SdkError.malformed(`${label} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function normalizeOperatorAuthority(value: unknown): OperatorAuthorityResponse {
+  const row = expectObject(value, "operator authority response");
+  return {
+    schemaVersion: parseRpcNumber(row["schemaVersion"], "operator authority schemaVersion"),
+    operatorId: String(row["operatorId"]),
+    authorityIndex: parseRpcNumber(row["authorityIndex"], "operator authority authorityIndex"),
+    blsPubkey: String(row["blsPubkey"]),
+    active: Boolean(row["active"]),
+  };
+}
+
+function normalizeSigningActivity(value: unknown): OperatorSigningActivityResponse {
+  const row = expectObject(value, "signing activity response");
+  const entries = row["entries"];
+  if (!Array.isArray(entries)) {
+    throw SdkError.malformed("signing activity entries must be an array");
+  }
+  return {
+    schemaVersion: parseRpcNumber(row["schemaVersion"], "signing activity schemaVersion"),
+    authorityIndex: parseRpcNumber(row["authorityIndex"], "signing activity authorityIndex"),
+    currentRound: parseRpcBigint(row["currentRound"], "signing activity currentRound"),
+    limit: parseRpcNumber(row["limit"], "signing activity limit"),
+    entries: entries.map((entry, i) => {
+      const e = expectObject(entry, `signing activity entries[${i}]`);
+      return {
+        round: parseRpcBigint(e["round"], `signing activity entries[${i}].round`),
+        status: String(e["status"]),
+      };
+    }),
+  };
+}
+
+function normalizeDutyAbsence(value: unknown, label: string): DutyAbsence {
+  const row = expectObject(value, label);
+  return { reason: String(row["reason"]) };
+}
+
+function normalizeKeyRotationWindow(value: unknown): KeyRotationWindow {
+  const row = expectObject(value, "upcoming duties keyRotation");
+  if ("nextRound" in row) {
+    return {
+      nextRound: parseRpcBigint(row["nextRound"], "upcoming duties keyRotation.nextRound"),
+      epochLengthRounds: parseRpcBigint(
+        row["epochLengthRounds"],
+        "upcoming duties keyRotation.epochLengthRounds",
+      ),
+    };
+  }
+  return { reason: String(row["reason"]) };
+}
+
+function normalizeUpcomingDuties(value: unknown): UpcomingDutiesResponse {
+  const row = expectObject(value, "upcoming duties response");
+  const duties = expectObject(row["duties"], "upcoming duties duties");
+  const attestation = expectObject(duties["attestation"], "upcoming duties attestation");
+  return {
+    schemaVersion: parseRpcNumber(row["schemaVersion"], "upcoming duties schemaVersion"),
+    authorityIndex: parseRpcNumber(row["authorityIndex"], "upcoming duties authorityIndex"),
+    currentRound: parseRpcBigint(row["currentRound"], "upcoming duties currentRound"),
+    horizonRounds: parseRpcNumber(row["horizonRounds"], "upcoming duties horizonRounds"),
+    duties: {
+      attestation: {
+        startRound: parseRpcBigint(attestation["startRound"], "upcoming duties attestation.startRound"),
+        endRound: parseRpcBigint(attestation["endRound"], "upcoming duties attestation.endRound"),
+        kind: String(attestation["kind"]),
+      },
+      blockProduction: normalizeDutyAbsence(
+        duties["blockProduction"],
+        "upcoming duties blockProduction",
+      ),
+      sync: normalizeDutyAbsence(duties["sync"], "upcoming duties sync"),
+      keyRotation: normalizeKeyRotationWindow(duties["keyRotation"]),
+    },
+  };
+}
+
+function normalizeJailStatus(value: unknown): JailStatusWindow {
+  const row = expectObject(value, "operator risk jailStatus");
+  if ("jailed" in row || "tombstoned" in row) {
+    return {
+      jailed: Boolean(row["jailed"]),
+      tombstoned: Boolean(row["tombstoned"]),
+      jailedUntilHeight: parseRpcBigint(
+        row["jailedUntilHeight"],
+        "operator risk jailStatus.jailedUntilHeight",
+      ),
+      unjailCount: parseRpcBigint(row["unjailCount"], "operator risk jailStatus.unjailCount"),
+    };
+  }
+  return { reason: String(row["reason"]) };
+}
+
+function normalizeOperatorRisk(value: unknown): OperatorRiskResponse {
+  const row = expectObject(value, "operator risk response");
+  const reasons = row["reasons"];
+  if (!Array.isArray(reasons)) {
+    throw SdkError.malformed("operator risk reasons must be an array");
+  }
+  return {
+    schemaVersion: parseRpcNumber(row["schemaVersion"], "operator risk schemaVersion"),
+    authorityIndex: parseRpcNumber(row["authorityIndex"], "operator risk authorityIndex"),
+    dataHeight: parseRpcBigint(row["dataHeight"], "operator risk dataHeight"),
+    windowRounds: parseRpcNumber(row["windowRounds"], "operator risk windowRounds"),
+    missedRounds: parseRpcNumber(row["missedRounds"], "operator risk missedRounds"),
+    observedRounds: parseRpcNumber(row["observedRounds"], "operator risk observedRounds"),
+    missRateBps: parseRpcNumber(row["missRateBps"], "operator risk missRateBps"),
+    thresholdBps: parseRpcNumber(row["thresholdBps"], "operator risk thresholdBps"),
+    remainingHeadroomBps: parseRpcNumber(
+      row["remainingHeadroomBps"],
+      "operator risk remainingHeadroomBps",
+    ),
+    jailStatus: normalizeJailStatus(row["jailStatus"]),
+    reasons: reasons.map(String),
+  };
 }
 
 function normalizeBlockHeader(value: unknown): BlockHeader | null {
