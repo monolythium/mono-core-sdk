@@ -21,7 +21,7 @@ use crate::types::{
     IndexerStatus, MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent,
     MeshUnsignedTxResponse, PeerSummary, PendingTxSummary, PrecompileDescriptor, RegistryRecord,
     RoundInfo, StorageProofBatch, SyncStatus, TokenBalanceRecord, TpmAttestationResponse,
-    TransactionReceipt, TransactionView, ValidatorDescriptor,
+    TransactionReceipt, TransactionView,
 };
 
 /// Typed JSON-RPC client for a `mono-core` node.
@@ -397,22 +397,6 @@ impl RpcClient {
     /// `lyth_currentRound` — latest committed height.
     pub async fn lyth_current_round(&self) -> Result<RoundInfo, SdkError> {
         self.call("lyth_currentRound", json!([])).await
-    }
-
-    /// `lyth_validatorSet` — configured validator set.
-    pub async fn lyth_validator_set(&self) -> Result<Vec<ValidatorDescriptor>, SdkError> {
-        self.call("lyth_validatorSet", json!([])).await
-    }
-
-    /// `lyth_listActiveValidators` — validators currently eligible to
-    /// propose / vote.
-    pub async fn lyth_list_active_validators(&self) -> Result<Vec<ValidatorDescriptor>, SdkError> {
-        self.call("lyth_listActiveValidators", json!([])).await
-    }
-
-    /// `lyth_listHealthyValidators` — healthy validator subset.
-    pub async fn lyth_list_healthy_validators(&self) -> Result<Vec<ValidatorDescriptor>, SdkError> {
-        self.call("lyth_listHealthyValidators", json!([])).await
     }
 
     /// `lyth_listActivePrecompiles` — milestone-gated precompile catalogue

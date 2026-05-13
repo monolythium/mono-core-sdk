@@ -315,7 +315,7 @@ describe("ethers compat — reference kit", () => {
     const provider = new MonolythiumProvider(client);
     const network = await provider.getNetwork();
     expect(network.chainId).toBe(MONOLYTHIUM_TESTNET_CHAIN_ID);
-    expect(network.name).toBe("monolythium-v2-testnet");
+    expect(network.name).toBe("monolythium-testnet");
   });
 
   it("MonolythiumProvider exposes block number through ethers' interface", async () => {

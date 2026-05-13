@@ -1,16 +1,16 @@
 /**
  * Network identity for the ethers.js compat shim.
  *
- * Per Law §13.1, Monolythium v2 testnet `chain_id` is **`69420`**.
+ * Per whitepaper v4.0, Monolythium testnet `chain_id` is **`69420`**.
  * Mainnet chain id is reserved for the genesis ceremony and not yet
  * exported.
  */
 
-/** Monolythium v2 testnet chain id (Law §13.1). */
+/** Monolythium v4.0 testnet chain id. */
 export const MONOLYTHIUM_TESTNET_CHAIN_ID = 69420n;
 
 /** Network name surfaced to ethers `Network` instances. */
-export const MONOLYTHIUM_TESTNET_NETWORK_NAME = "monolythium-v2-testnet";
+export const MONOLYTHIUM_TESTNET_NETWORK_NAME = "monolythium-testnet";
 
 /**
  * Built-in network presets for the ethers shim. Callers that point at a

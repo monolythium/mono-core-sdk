@@ -330,24 +330,6 @@ pub struct RoundInfo {
     pub height: u64,
 }
 
-/// `lyth_validatorSet` entry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-bindings", derive(TS))]
-#[cfg_attr(
-    feature = "ts-bindings",
-    ts(export, export_to = "ValidatorDescriptor.ts")
-)]
-pub struct ValidatorDescriptor {
-    /// Stable slot id.
-    pub id: u16,
-    /// Quantum-safe ML-DSA-65 public key, `0x` hex.
-    pub pubkey: Hex,
-    /// Stake as a decimal string.
-    pub stake: String,
-    /// Whether the validator can currently propose / vote.
-    pub active: bool,
-}
-
 /// Per-asset balance row surfaced by `lyth_getTokenBalances`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]

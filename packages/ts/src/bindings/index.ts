@@ -42,4 +42,3 @@ export type { TokenBalanceRecord } from "./TokenBalanceRecord.js";
 export type { TpmAttestationResponse } from "./TpmAttestationResponse.js";
 export type { TransactionReceipt } from "./TransactionReceipt.js";
 export type { TransactionView } from "./TransactionView.js";
-export type { ValidatorDescriptor } from "./ValidatorDescriptor.js";

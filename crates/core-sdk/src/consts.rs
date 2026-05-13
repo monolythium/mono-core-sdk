@@ -36,30 +36,24 @@ pub fn burn_addr_hex() -> String {
     out
 }
 
-/// SDK-exposed precompile address map (Law §5.4).
+/// SDK-exposed precompile address map (whitepaper v4.0).
 ///
 /// These values are sourced from `mono-core` runtime/precompile
 /// constants and pinned here so wallets, explorers, and apps do not
 /// hand-roll address literals.
 ///
-/// The governance slot is intentionally absent:
-///
-/// - `0x1006` — governance / deliberation reserved by Law §5.4 but
-///   wired to a rejecting runtime binding after the OI-0140
-///   memo-signalling pivot. The SDK exposes no governance client
-///   surface.
+/// `0x1002` and `0x1006` are intentionally absent from the SDK surface
+/// because whitepaper v4.0 does not define those application surfaces.
 pub mod precompile_addresses {
-    /// Native fungible-token factory — non-gateable (Law §5.4, foundational).
+    /// Native fungible-token factory — non-gateable, foundational.
     pub const TOKEN_FACTORY: [u8; 20] = address([0x10, 0x00]);
     /// Native central-limit order book — gateable.
     pub const CLOB: [u8; 20] = address([0x10, 0x01]);
-    /// Cross-margin perp engine — gateable.
-    pub const MARGIN: [u8; 20] = address([0x10, 0x02]);
     /// Agent execution surface (zkML-gated, ADR-0011/ADR-0020) — gateable.
     pub const AGENT: [u8; 20] = address([0x10, 0x03]);
     /// Account privacy policy + stealth/confidential ops — gateable.
     pub const PRIVACY: [u8; 20] = address([0x10, 0x04]);
-    /// Validator + RPC node registry — non-gateable (consensus invariant).
+    /// Operator + RPC node registry — non-gateable consensus invariant.
     pub const NODE_REGISTRY: [u8; 20] = address([0x10, 0x05]);
     /// IBC light-client + packet routing — gateable.
     pub const IBC: [u8; 20] = address([0x10, 0x07]);
@@ -113,7 +107,6 @@ pub mod precompile_addresses {
     pub const ALL: &[(&str, [u8; 20])] = &[
         ("TOKEN_FACTORY", TOKEN_FACTORY),
         ("CLOB", CLOB),
-        ("MARGIN", MARGIN),
         ("AGENT", AGENT),
         ("PRIVACY", PRIVACY),
         ("NODE_REGISTRY", NODE_REGISTRY),
@@ -171,7 +164,6 @@ mod tests {
         let expected: &[(&str, [u8; 20])] = &[
             ("TOKEN_FACTORY", expected_addr(0x1000)),
             ("CLOB", expected_addr(0x1001)),
-            ("MARGIN", expected_addr(0x1002)),
             ("AGENT", expected_addr(0x1003)),
             ("PRIVACY", expected_addr(0x1004)),
             ("NODE_REGISTRY", expected_addr(0x1005)),
@@ -211,15 +203,17 @@ mod tests {
     fn precompile_address_map_size_tracks_sdk_exposed_surface() {
         // Adding a new SDK-exposed precompile address should update
         // the explicit assertions above and the TypeScript constants.
-        assert_eq!(precompile_addresses::ALL.len(), 24);
+        assert_eq!(precompile_addresses::ALL.len(), 23);
     }
 
     #[test]
     fn unwired_slots_are_not_exposed() {
-        // 0x1006 (governance, OI-0140 pivot) must NOT appear in the
-        // address map.
+        // Whitepaper v4.0 does not define application surfaces at 0x1002
+        // or 0x1006, so the SDK must not advertise them.
+        let unwired_1002 = expected_addr(0x1002);
         let unwired_1006 = expected_addr(0x1006);
         for &(_, addr) in precompile_addresses::ALL {
+            assert_ne!(addr, unwired_1002, "0x1002 must stay unwired");
             assert_ne!(addr, unwired_1006, "0x1006 must stay unwired");
         }
     }

@@ -1,6 +1,6 @@
 # @monolythium/core-sdk
 
-Official TypeScript SDK for [Monolythium v2](https://monolythium.com) (LythiumDAG-BFT).
+Official TypeScript SDK for [Monolythium v4.0](https://monolythium.com) (LythiumDAG-BFT).
 
 ## Install
 
@@ -19,8 +19,8 @@ const chainId = await client.ethChainId();
 const head = await client.ethBlockNumber();
 console.log(`chain ${chainId} at height ${head}`);
 
-const clusters = await client.lythValidatorSet();
-console.log(`${clusters.length} cluster descriptors`);
+const clusters = await client.lythClusterDirectory(0, 100);
+console.log(`${clusters.totalClusters} cluster descriptors`);
 ```
 
 The client wraps every JSON-RPC method served by a Monolythium node — the

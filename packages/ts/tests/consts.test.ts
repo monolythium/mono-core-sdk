@@ -73,9 +73,6 @@ describe("PRECOMPILE_ADDRESSES", () => {
     expect(PRECOMPILE_ADDRESSES.CLOB).toBe(
       "0x0000000000000000000000000000000000001001",
     );
-    expect(PRECOMPILE_ADDRESSES.MARGIN).toBe(
-      "0x0000000000000000000000000000000000001002",
-    );
     expect(PRECOMPILE_ADDRESSES.AGENT).toBe(
       "0x0000000000000000000000000000000000001003",
     );
@@ -141,13 +138,9 @@ describe("PRECOMPILE_ADDRESSES", () => {
     );
   });
 
-  it("does not expose the governance slot (0x1006)", () => {
-    // 0x1006 — governance reserved by Law §5.4 but unwired after the
-    // OI-0140 memo-signalling pivot. The runtime test
-    // `governance_slot_0x1006_is_unwired_by_design` pins this absence;
-    // exposing the slot here would suggest an SDK-supported governance
-    // precompile that does not exist.
+  it("does not expose application surfaces outside whitepaper v4.0", () => {
     const values = Object.values(PRECOMPILE_ADDRESSES) as string[];
+    expect(values).not.toContain("0x0000000000000000000000000000000000001002");
     expect(values).not.toContain("0x0000000000000000000000000000000000001006");
   });
 

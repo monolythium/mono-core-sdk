@@ -20,7 +20,6 @@ use monolythium_core_sdk::types::{
     MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse, PeerSummary, PendingTxSummary,
     PrecompileDescriptor, RegistryRecord, RoundInfo, StorageProofBatch, SyncStatus,
     TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt, TransactionView,
-    ValidatorDescriptor,
 };
 use ts_rs::TS;
 
@@ -73,7 +72,6 @@ fn export_bindings() {
     TpmAttestationResponse::export_all_to(&out).expect("TpmAttestationResponse");
     TransactionReceipt::export_all_to(&out).expect("TransactionReceipt");
     TransactionView::export_all_to(&out).expect("TransactionView");
-    ValidatorDescriptor::export_all_to(&out).expect("ValidatorDescriptor");
 
     // Sanity check — at least one file should exist.
     let count = std::fs::read_dir(&out)

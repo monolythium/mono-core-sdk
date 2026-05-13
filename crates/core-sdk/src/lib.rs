@@ -1,4 +1,4 @@
-//! Official Rust SDK for Monolythium v2 / LythiumDAG-BFT.
+//! Official Rust SDK for Monolythium v4.0 / LythiumDAG-BFT.
 //!
 //! This crate provides a typed [`RpcClient`] that wraps the JSON-RPC
 //! surface served by a `mono-core` node — both the EVM-compatible
