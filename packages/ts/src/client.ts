@@ -75,6 +75,61 @@ export interface PrecompileCatalogueResponse {
   precompiles: PrecompileDescriptor[];
 }
 
+export interface OperatorInfoResponse {
+  operatorId: string;
+  moniker: string | null;
+  alias: string | null;
+  chainAddress: string;
+  bonded: boolean;
+  commissionBps: number | null;
+  delegationCount: number | null;
+  bondedAmount: string;
+  activeClusterIds: number[];
+  operatorKeyFingerprint: string | null;
+  blsKeyFingerprint: string | null;
+  lifecycleState: string;
+  capability: Record<string, unknown>;
+}
+
+export interface ClusterMemberResponse {
+  operatorId: string;
+  blsPubkey: string;
+  state: string;
+}
+
+export interface ClusterStatusResponse {
+  clusterId: number;
+  threshold: number;
+  size: number;
+  live: number;
+  lagging: number;
+  offline: number;
+  maintenance: number;
+  members: ClusterMemberResponse[];
+  epoch: bigint | null;
+  round: bigint | null;
+  quorum: string;
+  reputationScore: number | null;
+  livenessScore: number | null;
+  lastUpdateHeight: bigint;
+}
+
+export interface ClusterDirectoryEntryResponse {
+  clusterId: number;
+  size: number;
+  threshold: number;
+  aggregateHealth: string;
+  regionDiversity: string[] | null;
+  active: boolean;
+}
+
+export interface ClusterDirectoryPageResponse {
+  page: number;
+  limit: number;
+  totalClusters: number;
+  clusters: ClusterDirectoryEntryResponse[];
+}
+
 export interface OperatorAuthorityResponse {
   schemaVersion: number;
   operatorId: string;
@@ -613,6 +668,28 @@ export class RpcClient {
     return this.call("lyth_getEntityRatchet", params);
   }
 
+  /** `lyth_operatorInfo` — canonical operator identity envelope. */
+  async lythOperatorInfo(operatorId: string): Promise<OperatorInfoResponse> {
+    return normalizeOperatorInfo(await this.call("lyth_operatorInfo", [operatorId]));
+  }
+
+  /** `lyth_clusterStatus` — canonical cluster status envelope. */
+  async lythClusterStatus(clusterId: number): Promise<ClusterStatusResponse> {
+    return normalizeClusterStatus(await this.call("lyth_clusterStatus", [clusterId]));
+  }
+
+  /** `lyth_clusterDirectory` — paged public cluster directory. */
+  async lythClusterDirectory(page = 0, limit = 25): Promise<ClusterDirectoryPageResponse> {
+    return normalizeClusterDirectoryPage(
+      await this.call("lyth_clusterDirectory", [page, limit]),
+    );
+  }
+
+  /** `lyth_clusters` — alias for `lyth_clusterDirectory`. */
+  async lythClusters(page = 0, limit = 25): Promise<ClusterDirectoryPageResponse> {
+    return normalizeClusterDirectoryPage(await this.call("lyth_clusters", [page, limit]));
+  }
+
   /**
    * `lyth_submitPendingChange` — operator-onboarding transport for the
    * pending-change ledger. Server validates the envelope shape.
@@ -860,11 +937,123 @@ function parseRpcNumber(value: unknown, label: string): number {
   return Number(big);
 }
 
+function parseRpcNumberNullable(value: unknown, label: string): number | null {
+  return value === null || value === undefined ? null : parseRpcNumber(value, label);
+}
+
+function parseRpcBigintNullable(value: unknown, label: string): bigint | null {
+  return value === null || value === undefined ? null : parseRpcBigint(value, label);
+}
+
+function parseStringNullable(value: unknown): string | null {
+  return value === null || value === undefined ? null : String(value);
+}
+
 function expectObject(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw SdkError.malformed(`${label} must be an object`);
   }
   return value as Record<string, unknown>;
+}
+
+function normalizeOperatorInfo(value: unknown): OperatorInfoResponse {
+  const row = expectObject(value, "operator info response");
+  const activeClusterIds = row["activeClusterIds"];
+  if (!Array.isArray(activeClusterIds)) {
+    throw SdkError.malformed("operator info activeClusterIds must be an array");
+  }
+  const capability = row["capability"];
+  return {
+    operatorId: String(row["operatorId"]),
+    moniker: parseStringNullable(row["moniker"]),
+    alias: parseStringNullable(row["alias"]),
+    chainAddress: String(row["chainAddress"]),
+    bonded: Boolean(row["bonded"]),
+    commissionBps: parseRpcNumberNullable(row["commissionBps"], "operator info commissionBps"),
+    delegationCount: parseRpcNumberNullable(
+      row["delegationCount"],
+      "operator info delegationCount",
+    ),
+    bondedAmount: String(row["bondedAmount"]),
+    activeClusterIds: activeClusterIds.map((v, i) =>
+      parseRpcNumber(v, `operator info activeClusterIds[${i}]`),
+    ),
+    operatorKeyFingerprint: parseStringNullable(row["operatorKeyFingerprint"]),
+    blsKeyFingerprint: parseStringNullable(row["blsKeyFingerprint"]),
+    lifecycleState: String(row["lifecycleState"]),
+    capability:
+      capability && typeof capability === "object" && !Array.isArray(capability)
+        ? (capability as Record<string, unknown>)
+        : {},
+  };
+}
+
+function normalizeClusterMember(value: unknown, label: string): ClusterMemberResponse {
+  const row = expectObject(value, label);
+  return {
+    operatorId: String(row["operatorId"]),
+    blsPubkey: String(row["blsPubkey"]),
+    state: String(row["state"]),
+  };
+}
+
+function normalizeClusterStatus(value: unknown): ClusterStatusResponse {
+  const row = expectObject(value, "cluster status response");
+  const members = row["members"];
+  if (!Array.isArray(members)) {
+    throw SdkError.malformed("cluster status members must be an array");
+  }
+  return {
+    clusterId: parseRpcNumber(row["clusterId"], "cluster status clusterId"),
+    threshold: parseRpcNumber(row["threshold"], "cluster status threshold"),
+    size: parseRpcNumber(row["size"], "cluster status size"),
+    live: parseRpcNumber(row["live"], "cluster status live"),
+    lagging: parseRpcNumber(row["lagging"], "cluster status lagging"),
+    offline: parseRpcNumber(row["offline"], "cluster status offline"),
+    maintenance: parseRpcNumber(row["maintenance"], "cluster status maintenance"),
+    members: members.map((member, i) => normalizeClusterMember(member, `cluster status members[${i}]`)),
+    epoch: parseRpcBigintNullable(row["epoch"], "cluster status epoch"),
+    round: parseRpcBigintNullable(row["round"], "cluster status round"),
+    quorum: String(row["quorum"]),
+    reputationScore: parseRpcNumberNullable(
+      row["reputationScore"],
+      "cluster status reputationScore",
+    ),
+    livenessScore: parseRpcNumberNullable(row["livenessScore"], "cluster status livenessScore"),
+    lastUpdateHeight: parseRpcBigint(row["lastUpdateHeight"], "cluster status lastUpdateHeight"),
+  };
+}
+
+function normalizeClusterDirectoryEntry(value: unknown, label: string): ClusterDirectoryEntryResponse {
+  const row = expectObject(value, label);
+  const regionDiversity = row["regionDiversity"];
+  if (regionDiversity !== null && regionDiversity !== undefined && !Array.isArray(regionDiversity)) {
+    throw SdkError.malformed(`${label}.regionDiversity must be an array or null`);
+  }
+  return {
+    clusterId: parseRpcNumber(row["clusterId"], `${label}.clusterId`),
+    size: parseRpcNumber(row["size"], `${label}.size`),
+    threshold: parseRpcNumber(row["threshold"], `${label}.threshold`),
+    aggregateHealth: String(row["aggregateHealth"]),
+    regionDiversity: Array.isArray(regionDiversity) ? regionDiversity.map(String) : null,
+    active: Boolean(row["active"]),
+  };
+}
+
+function normalizeClusterDirectoryPage(value: unknown): ClusterDirectoryPageResponse {
+  const row = expectObject(value, "cluster directory response");
+  const clusters = row["clusters"];
+  if (!Array.isArray(clusters)) {
+    throw SdkError.malformed("cluster directory clusters must be an array");
+  }
+  return {
+    page: parseRpcNumber(row["page"], "cluster directory page"),
+    limit: parseRpcNumber(row["limit"], "cluster directory limit"),
+    totalClusters: parseRpcNumber(row["totalClusters"], "cluster directory totalClusters"),
+    clusters: clusters.map((cluster, i) =>
+      normalizeClusterDirectoryEntry(cluster, `cluster directory clusters[${i}]`),
+    ),
+  };
 }
 
 function normalizeOperatorAuthority(value: unknown): OperatorAuthorityResponse {
