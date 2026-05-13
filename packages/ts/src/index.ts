@@ -14,7 +14,22 @@
 export const version = "0.1.0";
 
 export { RpcClient, parseQuantity, parseQuantityBig } from "./client.js";
-export type { NetworkClientOptions, PrecompileCatalogueResponse, RpcClientOptions } from "./client.js";
+export type {
+  AttestationWindow,
+  DutyAbsence,
+  JailStatusWindow,
+  KeyRotationWindow,
+  NetworkClientOptions,
+  OperatorAuthorityResponse,
+  OperatorRiskResponse,
+  OperatorSigningActivityResponse,
+  OperatorSigningEntry,
+  PrecompileCatalogueResponse,
+  RpcClientOptions,
+  SigningEntryStatus,
+  UpcomingDutiesResponse,
+  UpcomingDutyMap,
+} from "./client.js";
 export {
   CHAIN_REGISTRY,
   CHAIN_REGISTRY_RAW_BASE,
