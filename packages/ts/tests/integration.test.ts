@@ -57,14 +57,14 @@ describeIfLive("round-trip against a live mono-core node", () => {
     expect(v.length).toBeGreaterThan(0);
   });
 
-  it("lyth_validatorSet returns the validator descriptor list", async () => {
-    const set = await client.lythValidatorSet();
-    expect(Array.isArray(set)).toBe(true);
-    if (set.length > 0) {
-      const v = set[0];
-      expect(typeof v.id).toBe("number");
-      expect(typeof v.pubkey).toBe("string");
-      expect(typeof v.active).toBe("boolean");
+  it("lyth_clusterDirectory returns the cluster descriptor page", async () => {
+    const page = await client.lythClusterDirectory(0, 100);
+    expect(Array.isArray(page.clusters)).toBe(true);
+    if (page.clusters.length > 0) {
+      const cluster = page.clusters[0];
+      expect(typeof cluster.clusterId).toBe("number");
+      expect(typeof cluster.threshold).toBe("number");
+      expect(typeof cluster.active).toBe("boolean");
     }
   });
 

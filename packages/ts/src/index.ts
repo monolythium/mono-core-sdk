@@ -1,5 +1,5 @@
 /**
- * Official TypeScript SDK for Monolythium v2 / LythiumDAG-BFT.
+ * Official TypeScript SDK for Monolythium v4.0 / LythiumDAG-BFT.
  *
  * The wire types in `./bindings/` are generated from Rust by
  * `cargo test --features ts-bindings`; never edit them by hand. The

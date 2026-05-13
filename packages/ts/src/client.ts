@@ -47,7 +47,6 @@ import type {
   TransactionReceipt,
   TransactionView,
   TokenBalanceRecord,
-  ValidatorDescriptor,
 } from "./bindings/index.js";
 import type { BlockSelector } from "./types.js";
 import { encodeBlockSelector } from "./types.js";
@@ -554,21 +553,6 @@ export class RpcClient {
   /** `lyth_currentRound` — latest committed height. */
   async lythCurrentRound(): Promise<RoundInfo> {
     return normalizeRoundInfo(await this.call("lyth_currentRound", []));
-  }
-
-  /** `lyth_validatorSet` — configured validator set. */
-  async lythValidatorSet(): Promise<ValidatorDescriptor[]> {
-    return this.call("lyth_validatorSet", []);
-  }
-
-  /** `lyth_listActiveValidators` — validators currently eligible to propose / vote. */
-  async lythListActiveValidators(): Promise<ValidatorDescriptor[]> {
-    return this.call("lyth_listActiveValidators", []);
-  }
-
-  /** `lyth_listHealthyValidators` — healthy validator subset. */
-  async lythListHealthyValidators(): Promise<ValidatorDescriptor[]> {
-    return this.call("lyth_listHealthyValidators", []);
   }
 
   /**

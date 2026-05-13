@@ -1,6 +1,6 @@
 # mono-core-sdk
 
-Official Rust and TypeScript SDK for Monolythium v2 / LythiumDAG-BFT.
+Official Rust and TypeScript SDK for Monolythium v4.0 / LythiumDAG-BFT.
 
 This repository is the application boundary for code that should not have to
 know `mono-core` internals. It provides typed JSON-RPC clients, canonical chain
@@ -83,9 +83,9 @@ const client = new RpcClient("https://rpc.testnet.monolythium.com");
 
 const chainId = await client.ethChainId();
 const height = await client.ethBlockNumber();
-const validators = await client.lythValidatorSet();
+const clusters = await client.lythClusterDirectory(0, 100);
 
-console.log({ chainId, height, validatorCount: validators.length });
+console.log({ chainId, height, clusterCount: clusters.totalClusters });
 ```
 
 ## Address Display

@@ -39,8 +39,8 @@ import {
 export interface MonolythiumProviderOptions extends RpcClientOptions {
   /**
    * Override the chain id / network name surfaced to ethers. Defaults
-   * to the Monolythium v2 testnet preset (`chain_id` `69420`, name
-   * `monolythium-v2-testnet`) per Law §13.1.
+   * to the Monolythium v4.0 testnet preset (`chain_id` `69420`, name
+   * `monolythium-testnet`).
    */
   network?: MonolythiumNetworkConfig;
 }

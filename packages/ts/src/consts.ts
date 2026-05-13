@@ -21,31 +21,25 @@
 export const BURN_ADDR = "0x0000000000000000000000000000000000000000" as const;
 
 /**
- * SDK-exposed precompile address map (Law §5.4).
+ * SDK-exposed precompile address map (whitepaper v4.0).
  *
  * Sourced from `mono-core` runtime/precompile constants and pinned here
  * so surfaces can render precompile traffic by name without
  * re-defining low-band address literals.
  *
- * The governance slot is intentionally absent:
- *
- * - `0x1006` — governance / deliberation slot reserved by Law §5.4
- *   but wired to a rejecting runtime binding after the OI-0140
- *   memo-signalling pivot. The SDK exposes no governance client
- *   surface.
+ * `0x1002` and `0x1006` are intentionally absent from the SDK surface
+ * because whitepaper v4.0 does not define those application surfaces.
  */
 export const PRECOMPILE_ADDRESSES = {
-  /** Native fungible-token factory — non-gateable (Law §5.4, foundational). */
+  /** Native fungible-token factory — non-gateable, foundational. */
   TOKEN_FACTORY: "0x0000000000000000000000000000000000001000",
   /** Native central-limit order book — gateable. */
   CLOB: "0x0000000000000000000000000000000000001001",
-  /** Cross-margin perp engine — gateable. */
-  MARGIN: "0x0000000000000000000000000000000000001002",
   /** Agent execution surface (zkML-gated, ADR-0011/ADR-0020) — gateable. */
   AGENT: "0x0000000000000000000000000000000000001003",
   /** Account privacy policy + stealth/confidential ops — gateable. */
   PRIVACY: "0x0000000000000000000000000000000000001004",
-  /** Validator + RPC node registry — non-gateable (consensus invariant). */
+  /** Operator + RPC node registry — non-gateable consensus invariant. */
   NODE_REGISTRY: "0x0000000000000000000000000000000000001005",
   /** IBC light-client + packet routing — gateable. */
   IBC: "0x0000000000000000000000000000000000001007",

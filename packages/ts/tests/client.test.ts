@@ -106,12 +106,17 @@ describe("eth_* methods", () => {
 });
 
 describe("lyth_* methods (Law §13.2 native namespace)", () => {
-  it("lyth_validatorSet sends the canonical method string", async () => {
-    const { fetch, calls } = mockFetch([]);
+  it("lyth_clusterDirectory sends the canonical method string", async () => {
+    const { fetch, calls } = mockFetch({
+      page: 0,
+      limit: 25,
+      totalClusters: 0,
+      clusters: [],
+    });
     const client = new RpcClient("http://x", { fetch });
-    const set = await client.lythValidatorSet();
-    expect(set).toEqual([]);
-    expect(calls[0].method).toBe("lyth_validatorSet");
+    const set = await client.lythClusterDirectory();
+    expect(set.clusters).toEqual([]);
+    expect(calls[0].method).toBe("lyth_clusterDirectory");
     expect(calls[0].method.startsWith("lyth_")).toBe(true);
     expect(calls[0].method).not.toMatch(/^protocore_/);
   });
