@@ -354,6 +354,80 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
       [2, 100],
     ]);
   });
+
+  it("operator and cluster directory helpers use forward RPC surfaces", async () => {
+    const operatorId = `0x${"12".repeat(32)}`;
+    const blsPubkey = `0x${"34".repeat(48)}`;
+    const { fetch, calls } = mockFetchSequence([
+      {
+        operatorId,
+        moniker: null,
+        alias: "volans",
+        chainAddress: "0x1111111111111111111111111111111111111111",
+        bonded: true,
+        commissionBps: null,
+        delegationCount: 7,
+        bondedAmount: "50000000000000000000",
+        activeClusterIds: [0, "0x2"],
+        operatorKeyFingerprint: null,
+        blsKeyFingerprint: `bls12-381:${blsPubkey}`,
+        lifecycleState: "active",
+        capability: { bondedAmount: "stable", moniker: "planned" },
+      },
+      {
+        clusterId: 0,
+        threshold: 5,
+        size: 7,
+        live: 7,
+        lagging: 0,
+        offline: 0,
+        maintenance: 0,
+        members: [{ operatorId, blsPubkey, state: "active" }],
+        epoch: "0x10",
+        round: "42",
+        quorum: "ok",
+        reputationScore: null,
+        livenessScore: 99,
+        lastUpdateHeight: "0x100",
+      },
+      {
+        page: 0,
+        limit: 25,
+        totalClusters: 100,
+        clusters: [
+          {
+            clusterId: 0,
+            size: 7,
+            threshold: 5,
+            aggregateHealth: "ok",
+            regionDiversity: null,
+            active: true,
+          },
+        ],
+      },
+    ]);
+    const client = new RpcClient("http://x", { fetch });
+
+    const operator = await client.lythOperatorInfo(operatorId);
+    const cluster = await client.lythClusterStatus(0);
+    const directory = await client.lythClusterDirectory(0, 25);
+
+    expect(operator.activeClusterIds).toEqual([0, 2]);
+    expect(operator.alias).toBe("volans");
+    expect(cluster.epoch).toBe(16n);
+    expect(cluster.round).toBe(42n);
+    expect(cluster.lastUpdateHeight).toBe(256n);
+    expect(cluster.members[0]).toEqual({ operatorId, blsPubkey, state: "active" });
+    expect(directory.totalClusters).toBe(100);
+    expect(directory.clusters[0].aggregateHealth).toBe("ok");
+
+    expect(calls.map((c) => c.method)).toEqual([
+      "lyth_operatorInfo",
+      "lyth_clusterStatus",
+      "lyth_clusterDirectory",
+    ]);
+    expect(calls.map((c) => c.params)).toEqual([[operatorId], [0], [0, 25]]);
+  });
 });
 
 describe("mesh_* methods", () => {

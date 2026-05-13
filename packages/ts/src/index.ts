@@ -16,11 +16,16 @@ export const version = "0.1.0";
 export { RpcClient, parseQuantity, parseQuantityBig } from "./client.js";
 export type {
   AttestationWindow,
+  ClusterDirectoryEntryResponse,
+  ClusterDirectoryPageResponse,
+  ClusterMemberResponse,
+  ClusterStatusResponse,
   DutyAbsence,
   JailStatusWindow,
   KeyRotationWindow,
   NetworkClientOptions,
   OperatorAuthorityResponse,
+  OperatorInfoResponse,
   OperatorRiskResponse,
   OperatorSigningActivityResponse,
   OperatorSigningEntry,
