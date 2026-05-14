@@ -72,6 +72,201 @@ export interface NetworkClientOptions extends RpcClientOptions {
   probe?: boolean;
 }
 
+export interface TxFeedReceipt {
+  status: number;
+  gasUsed: number;
+  logsCount: number;
+}
+
+export interface TxFeedTransaction {
+  txHash: string;
+  blockHash: string;
+  blockNumber: number;
+  blockTimestamp: number | null;
+  txIndex: number;
+  from: string;
+  to: string | null;
+  nonce: number;
+  value: string;
+  gasLimit: number;
+  maxFeePerGas: string;
+  maxPriorityFeePerGas: string;
+  input: string;
+  receipt: TxFeedReceipt | null;
+}
+
+export interface TxFeedResponse {
+  schemaVersion: number;
+  latestHeight: number;
+  limit: number;
+  nextCursor: string | null;
+  transactions: TxFeedTransaction[];
+}
+
+export interface AddressProfileResponse {
+  schemaVersion: number;
+  address: string;
+  account: {
+    nativeBalance: string;
+    nonce: number;
+    codeHash: string;
+    isContract: boolean;
+  };
+  label: {
+    category: string;
+    displayName: string | null;
+    updatedAtBlock: number;
+  } | null;
+  activity: {
+    kind: string;
+    retention: unknown | null;
+    latest: unknown | null;
+  };
+  tokenBalances: Array<{
+    tokenId: string;
+    balance: string;
+    updatedAtBlock: number;
+  }>;
+}
+
+export interface AddressFlowResponse {
+  schemaVersion: number;
+  address: string;
+  sampleSize: number;
+  limit: number;
+  totals: {
+    inbound: string;
+    outbound: string;
+    swapVolume: string;
+    stake: string;
+    unstake: string;
+  };
+  topCounterparties: Array<{
+    address: string;
+    eventCount: number;
+    inbound: string;
+    outbound: string;
+  }>;
+}
+
+export interface SearchHit {
+  type: string;
+  id: string;
+  route: string;
+  label: string;
+  score: number;
+  meta?: unknown;
+}
+
+export interface SearchResponse {
+  schemaVersion: number;
+  query: string;
+  hits: SearchHit[];
+  nextCursor: string | null;
+}
+
+export interface ChainStatsResponse {
+  schemaVersion: number;
+  chainId: number;
+  genesisHash: string | null;
+  latestHeight: number;
+  latestBlockHash: string | null;
+  latestTimestamp: number | null;
+  peerCount: number;
+  mempool: {
+    ready: number;
+    pending: number;
+    mailboxDepth: number;
+  };
+  indexer: unknown | null;
+  clusters: {
+    total: number;
+    pageSize: number;
+  };
+}
+
+export interface ClobMarketSummary {
+  marketId: string;
+  tradeCount: number;
+  totalVolumeBase: string;
+  lastPrice: string;
+  lastBlockHeight: number;
+}
+
+export interface ClobMarketsResponse {
+  schemaVersion: number;
+  limit: number;
+  markets: ClobMarketSummary[];
+  source: string;
+}
+
+export interface ClobTrade {
+  blockHeight: number;
+  txIndex: number;
+  logIndex: number;
+  marketId: string;
+  takerOrder: string;
+  makerOrder: string;
+  price: string;
+  amount: string;
+  taker: string;
+  maker: string;
+}
+
+export interface ClobTradesResponse {
+  schemaVersion: number;
+  marketId: string;
+  limit: number;
+  nextCursor: string | null;
+  trades: ClobTrade[];
+}
+
+export interface ClobOhlcResponse {
+  schemaVersion: number;
+  marketId: string;
+  fromBlock: number;
+  toBlock: number;
+  bucketBlocks: number;
+  candles: Array<{
+    startBlock: number;
+    endBlock: number;
+    open: string;
+    high: string;
+    low: string;
+    close: string;
+    volumeBase: string;
+    tradeCount: number;
+  }>;
+}
+
+export interface ClobOrderBookResponse {
+  schemaVersion: number;
+  marketId: string;
+  levels?: number;
+  bids: Array<{ price: string; size: string }>;
+  asks: Array<{ price: string; size: string }>;
+}
+
+/** Public-safe aggregate returned by `lyth_peerSummary`. */
+export interface PeerSummaryAggregate {
+  peerCount: number;
+  inboundCount: number | null;
+  outboundCount: number | null;
+  latencyBands: {
+    lt_50ms: number;
+    lt_200ms: number;
+    lt_1s: number;
+    ge_1s: number;
+  } | null;
+  versionDistribution: Record<string, number>;
+  healthSummary: {
+    synced: number;
+    lagging: number;
+    stale: number;
+  };
+  asOfBlock: number;
+}
+
 /** Live `lyth_listActivePrecompiles` response envelope. */
 export interface PrecompileCatalogueResponse {
   /** Block height sampled by the node. */
@@ -133,6 +328,24 @@ export interface ClusterDirectoryPageResponse {
   limit: number;
   totalClusters: number;
   clusters: ClusterDirectoryEntryResponse[];
+}
+
+export type OperatorSurfaceStatus =
+  | "available"
+  | "disabled"
+  | "not_implemented"
+  | "not_retained"
+  | "ws_only"
+  | string;
+
+export interface OperatorSurfaceCapability {
+  status: OperatorSurfaceStatus;
+  tracking?: string;
+}
+
+export interface OperatorCapabilitiesResponse {
+  schemaVersion: number;
+  surfaces: Record<string, OperatorSurfaceCapability>;
 }
 
 export interface OperatorAuthorityResponse {
@@ -208,6 +421,82 @@ export interface OperatorRiskResponse {
   remainingHeadroomBps: number;
   jailStatus: JailStatusWindow;
   reasons: string[];
+}
+
+export interface LythUpgradePlanStatus {
+  upgradeId: string;
+  activationHeight: number;
+  activationRound: number | null;
+  requiredBinaryVersion: string;
+  expectedBinaryDigest: string;
+  p2pProtocolVersion: number;
+  requiredFeatures: string[];
+  milestoneFileDigest: string | null;
+  stateMigrationId: string | null;
+  stateMigrationHash: string | null;
+  expectedPreStateRoot: string | null;
+  expectedPostStateRoot: string | null;
+}
+
+export interface LythUpgradeStatusResponse {
+  chainId: number;
+  blockNumber: number;
+  configured: boolean;
+  planCount: number;
+  state: "active" | "none" | "pending" | string;
+  active: LythUpgradePlanStatus | null;
+  pendingCount: number;
+  pending: LythUpgradePlanStatus[];
+}
+
+export type TxStatusResponse = TxStatusFoundResponse | TxStatusNotFoundResponse;
+
+export interface TxStatusFoundResponse {
+  status: "found";
+  txHash: string;
+  blockHash: string;
+  blockNumber: number;
+  txIndex: number;
+}
+
+export interface TxStatusNotFoundResponse {
+  status: "not_found";
+  txHash: string;
+  latestHeight: number;
+  indexerEnabled: boolean;
+  providerKind: string;
+}
+
+export interface VertexAtRound {
+  vertexHash: string;
+  author: number;
+}
+
+export interface VerticesAtRoundResponse {
+  schemaVersion: number;
+  round: number;
+  vertices: VertexAtRound[] | null;
+}
+
+export type MetricsRangeStatus = "available" | "not_retained" | "unknown" | string;
+
+export interface MetricsRangeSample {
+  blockNumber: number;
+  value: number;
+}
+
+export interface MetricsRangeSeries {
+  selector: string;
+  status: MetricsRangeStatus;
+  unit: string | null;
+  samples: MetricsRangeSample[] | null;
+}
+
+export interface MetricsRangeResponse {
+  schemaVersion: number;
+  range: [number, number] | null;
+  tracking: string;
+  series: MetricsRangeSeries[];
 }
 
 export type AddressActivityKind =
@@ -591,6 +880,76 @@ export class RpcClient {
     return this.call("lyth_clobMarket", [marketId]);
   }
 
+  /** `lyth_clobMarkets` — CLOB markets observed through indexed trades. */
+  async lythClobMarkets(limit?: number | null): Promise<ClobMarketsResponse> {
+    const params = limit == null ? [] : [limit];
+    return this.call("lyth_clobMarkets", params);
+  }
+
+  /** `lyth_clobTrades` — CLOB fills for one market. */
+  async lythClobTrades(
+    marketId: string,
+    limit = 50,
+    cursor?: string | null,
+  ): Promise<ClobTradesResponse> {
+    const params = cursor === undefined ? [marketId, limit] : [marketId, limit, cursor];
+    return this.call("lyth_clobTrades", params);
+  }
+
+  /** `lyth_clobOhlc` — CLOB OHLC candles for a market over a block range. */
+  async lythClobOhlc(
+    marketId: string,
+    fromBlock?: number | bigint | string | null,
+    toBlock?: number | bigint | string | null,
+    bucketBlocks?: number | bigint | string | null,
+  ): Promise<ClobOhlcResponse> {
+    const params =
+      fromBlock == null && toBlock == null && bucketBlocks == null
+        ? [marketId]
+        : [
+            marketId,
+            fromBlock == null ? null : encodeRpcU64Number(fromBlock, "fromBlock"),
+            toBlock == null ? null : encodeRpcU64Number(toBlock, "toBlock"),
+            bucketBlocks == null ? null : encodeRpcU64Number(bucketBlocks, "bucketBlocks"),
+          ];
+    return this.call("lyth_clobOhlc", params);
+  }
+
+  /** `lyth_clobOrderBook` — live CLOB depth from canonical state. */
+  async lythClobOrderBook(
+    marketId: string,
+    levels?: number | null,
+  ): Promise<ClobOrderBookResponse> {
+    const params = levels == null ? [marketId] : [marketId, levels];
+    return this.call("lyth_clobOrderBook", params);
+  }
+
+  /** `lyth_txFeed` — paged global transaction feed. */
+  async lythTxFeed(limit = 50, cursor?: string | null): Promise<TxFeedResponse> {
+    const params = cursor === undefined ? [limit] : [limit, cursor];
+    return this.call("lyth_txFeed", params);
+  }
+
+  /** `lyth_addressProfile` — live account + label + activity aggregate. */
+  async lythAddressProfile(address: string): Promise<AddressProfileResponse> {
+    return this.call("lyth_addressProfile", [address]);
+  }
+
+  /** `lyth_addressFlow` — recent indexed address-flow aggregate. */
+  async lythAddressFlow(address: string, limit = 250): Promise<AddressFlowResponse> {
+    return this.call("lyth_addressFlow", [address, limit]);
+  }
+
+  /** `lyth_search` — exact live resolver for hashes, addresses, blocks, and clusters. */
+  async lythSearch(query: string, limit = 10): Promise<SearchResponse> {
+    return this.call("lyth_search", [query, limit]);
+  }
+
+  /** `lyth_chainStats` — compact live chain/indexer/mempool summary. */
+  async lythChainStats(): Promise<ChainStatsResponse> {
+    return this.call("lyth_chainStats", []);
+  }
+
   /** `lyth_mempoolStatus` — aggregate mempool snapshot. */
   async lythMempoolStatus(): Promise<MempoolSnapshot> {
     return normalizeMempoolSnapshot(await this.call("lyth_mempoolStatus", []));
@@ -604,6 +963,11 @@ export class RpcClient {
   /** `lyth_currentRound` — latest committed height. */
   async lythCurrentRound(): Promise<RoundInfo> {
     return normalizeRoundInfo(await this.call("lyth_currentRound", []));
+  }
+
+  /** `lyth_peerSummary` — public-safe aggregate peer-network diagnostics. */
+  async lythPeerSummary(): Promise<PeerSummaryAggregate> {
+    return this.call("lyth_peerSummary", []);
   }
 
   /**
@@ -620,6 +984,14 @@ export class RpcClient {
   async lythCapabilities(block?: BlockSelector): Promise<CapabilitiesResponse> {
     const params = block === undefined ? [] : [encodeBlockSelector(block)];
     return this.call("lyth_capabilities", params);
+  }
+
+  /**
+   * `lyth_operatorCapabilities` — node-level availability for operator UI
+   * and explorer surfaces.
+   */
+  async lythOperatorCapabilities(): Promise<OperatorCapabilitiesResponse> {
+    return this.call("lyth_operatorCapabilities", []);
   }
 
   /** `lyth_indexerStatus` — indexer status; `null` when disabled. */
@@ -784,6 +1156,46 @@ export class RpcClient {
     const params =
       windowRounds == null ? [authorityIndex] : [authorityIndex, windowRounds];
     return normalizeOperatorRisk(await this.call("lyth_operatorRisk", params));
+  }
+
+  /** `lyth_upgradeStatus` — signed network-upgrade readiness at a height. */
+  async lythUpgradeStatus(block?: BlockSelector): Promise<LythUpgradeStatusResponse> {
+    const params = block === undefined ? [] : [encodeBlockSelector(block)];
+    return this.call("lyth_upgradeStatus", params);
+  }
+
+  /** `lyth_txStatus` — discriminated transaction lookup outcome. */
+  async lythTxStatus(txHash: string): Promise<TxStatusResponse> {
+    return this.call("lyth_txStatus", [txHash]);
+  }
+
+  /** `lyth_verticesAtRound` — per-vertex authorship observed at a DAG round. */
+  async lythVerticesAtRound(
+    round: number | bigint | string,
+  ): Promise<VerticesAtRoundResponse> {
+    return this.call("lyth_verticesAtRound", [
+      encodeRpcU64Number(round, "round"),
+    ]);
+  }
+
+  /** `lyth_metricsRange` — retained telemetry series when the node has them. */
+  async lythMetricsRange(
+    selectors: string[],
+    range?: readonly [number | bigint | string, number | bigint | string] | null,
+  ): Promise<MetricsRangeResponse> {
+    const params =
+      range === undefined
+        ? [selectors]
+        : [
+            selectors,
+            range === null
+              ? null
+              : [
+                  encodeRpcU64Number(range[0], "fromBlock"),
+                  encodeRpcU64Number(range[1], "toBlock"),
+                ],
+          ];
+    return this.call("lyth_metricsRange", params);
   }
 
   /** `lyth_getLatestCheckpoint` — latest PQ-finality checkpoint rows. */

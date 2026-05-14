@@ -1102,6 +1102,232 @@ pub struct DagParentsResponse {
     pub parents: Option<Vec<DagParent>>,
 }
 
+/// Public-safe aggregate returned by `lyth_peerSummary`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "PeerSummaryAggregate.ts")
+)]
+pub struct PeerSummaryAggregate {
+    #[serde(rename = "peerCount")]
+    pub peer_count: u64,
+    #[serde(rename = "inboundCount")]
+    pub inbound_count: Option<u64>,
+    #[serde(rename = "outboundCount")]
+    pub outbound_count: Option<u64>,
+    #[serde(rename = "latencyBands")]
+    pub latency_bands: Option<LatencyBands>,
+    #[serde(rename = "versionDistribution")]
+    pub version_distribution: std::collections::BTreeMap<String, u64>,
+    #[serde(rename = "healthSummary")]
+    pub health_summary: HealthSummary,
+    #[serde(rename = "asOfBlock")]
+    pub as_of_block: u64,
+}
+
+/// Ping-RTT histogram bands in `lyth_peerSummary`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "LatencyBands.ts"))]
+pub struct LatencyBands {
+    #[serde(rename = "lt_50ms")]
+    pub lt_50ms: u64,
+    #[serde(rename = "lt_200ms")]
+    pub lt_200ms: u64,
+    #[serde(rename = "lt_1s")]
+    pub lt_1s: u64,
+    #[serde(rename = "ge_1s")]
+    pub ge_1s: u64,
+}
+
+/// Aggregate gossip-mesh health bands in `lyth_peerSummary`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "HealthSummary.ts"))]
+pub struct HealthSummary {
+    pub synced: u64,
+    pub lagging: u64,
+    pub stale: u64,
+}
+
+/// One vertex authorship row in `lyth_verticesAtRound`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "VertexAtRound.ts"))]
+pub struct VertexAtRound {
+    #[serde(rename = "vertexHash")]
+    pub vertex_hash: Hash,
+    pub author: u64,
+}
+
+/// `lyth_verticesAtRound` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "VerticesAtRoundResponse.ts")
+)]
+pub struct VerticesAtRoundResponse {
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    pub round: u64,
+    pub vertices: Option<Vec<VertexAtRound>>,
+}
+
+/// Per-surface status row in `lyth_operatorCapabilities`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "OperatorSurfaceCapability.ts")
+)]
+pub struct OperatorSurfaceCapability {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub tracking: Option<String>,
+}
+
+/// `lyth_operatorCapabilities` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "OperatorCapabilitiesResponse.ts")
+)]
+pub struct OperatorCapabilitiesResponse {
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    pub surfaces: std::collections::BTreeMap<String, OperatorSurfaceCapability>,
+}
+
+/// One signed upgrade plan in `lyth_upgradeStatus`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "LythUpgradePlanStatus.ts")
+)]
+pub struct LythUpgradePlanStatus {
+    #[serde(rename = "upgradeId")]
+    pub upgrade_id: String,
+    #[serde(rename = "activationHeight")]
+    pub activation_height: u64,
+    #[serde(rename = "activationRound")]
+    pub activation_round: Option<u64>,
+    #[serde(rename = "requiredBinaryVersion")]
+    pub required_binary_version: String,
+    #[serde(rename = "expectedBinaryDigest")]
+    pub expected_binary_digest: String,
+    #[serde(rename = "p2pProtocolVersion")]
+    pub p2p_protocol_version: u32,
+    #[serde(rename = "requiredFeatures")]
+    pub required_features: Vec<String>,
+    #[serde(rename = "milestoneFileDigest")]
+    pub milestone_file_digest: Option<String>,
+    #[serde(rename = "stateMigrationId")]
+    pub state_migration_id: Option<String>,
+    #[serde(rename = "stateMigrationHash")]
+    pub state_migration_hash: Option<String>,
+    #[serde(rename = "expectedPreStateRoot")]
+    pub expected_pre_state_root: Option<Hash>,
+    #[serde(rename = "expectedPostStateRoot")]
+    pub expected_post_state_root: Option<Hash>,
+}
+
+/// `lyth_upgradeStatus` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "LythUpgradeStatusResponse.ts")
+)]
+pub struct LythUpgradeStatusResponse {
+    #[serde(rename = "chainId")]
+    pub chain_id: u64,
+    #[serde(rename = "blockNumber")]
+    pub block_number: u64,
+    pub configured: bool,
+    #[serde(rename = "planCount")]
+    pub plan_count: usize,
+    pub state: String,
+    pub active: Option<LythUpgradePlanStatus>,
+    #[serde(rename = "pendingCount")]
+    pub pending_count: usize,
+    pub pending: Vec<LythUpgradePlanStatus>,
+}
+
+/// Discriminated `lyth_txStatus` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "TxStatusResponse.ts"))]
+pub enum TxStatusResponse {
+    Found {
+        #[serde(rename = "txHash")]
+        tx_hash: Hash,
+        #[serde(rename = "blockHash")]
+        block_hash: Hash,
+        #[serde(rename = "blockNumber")]
+        block_number: u64,
+        #[serde(rename = "txIndex")]
+        tx_index: u32,
+    },
+    NotFound {
+        #[serde(rename = "txHash")]
+        tx_hash: Hash,
+        #[serde(rename = "latestHeight")]
+        latest_height: u64,
+        #[serde(rename = "indexerEnabled")]
+        indexer_enabled: bool,
+        #[serde(rename = "providerKind")]
+        provider_kind: String,
+    },
+}
+
+/// One retained metrics sample.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "MetricsRangeSample.ts")
+)]
+pub struct MetricsRangeSample {
+    #[serde(rename = "blockNumber")]
+    pub block_number: u64,
+    pub value: u64,
+}
+
+/// One selector row in `lyth_metricsRange`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "MetricsRangeSeries.ts")
+)]
+pub struct MetricsRangeSeries {
+    pub selector: String,
+    pub status: String,
+    pub unit: Option<String>,
+    pub samples: Option<Vec<MetricsRangeSample>>,
+}
+
+/// `lyth_metricsRange` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "MetricsRangeResponse.ts")
+)]
+pub struct MetricsRangeResponse {
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    pub range: Option<[u64; 2]>,
+    pub tracking: String,
+    pub series: Vec<MetricsRangeSeries>,
+}
+
 /// One holder row in `lyth_richList`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
@@ -1194,6 +1420,278 @@ pub struct ClobMarketResponse {
     pub market_id: Hash,
     /// Market metadata, or `null` when the market is not found.
     pub market: Option<ClobMarketRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TxFeedReceipt {
+    pub status: u8,
+    #[serde(rename = "gasUsed")]
+    pub gas_used: u64,
+    #[serde(rename = "logsCount")]
+    pub logs_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TxFeedTransaction {
+    #[serde(rename = "txHash")]
+    pub tx_hash: Hash,
+    #[serde(rename = "blockHash")]
+    pub block_hash: Hash,
+    #[serde(rename = "blockNumber")]
+    pub block_number: u64,
+    #[serde(rename = "blockTimestamp")]
+    pub block_timestamp: Option<u64>,
+    #[serde(rename = "txIndex")]
+    pub tx_index: u32,
+    pub from: Address,
+    pub to: Option<Address>,
+    pub nonce: u64,
+    pub value: String,
+    #[serde(rename = "gasLimit")]
+    pub gas_limit: u64,
+    #[serde(rename = "maxFeePerGas")]
+    pub max_fee_per_gas: String,
+    #[serde(rename = "maxPriorityFeePerGas")]
+    pub max_priority_fee_per_gas: String,
+    pub input: Hex,
+    pub receipt: Option<TxFeedReceipt>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TxFeedResponse {
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    #[serde(rename = "latestHeight")]
+    pub latest_height: u64,
+    pub limit: u32,
+    #[serde(rename = "nextCursor")]
+    pub next_cursor: Option<String>,
+    pub transactions: Vec<TxFeedTransaction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddressProfileAccount {
+    #[serde(rename = "nativeBalance")]
+    pub native_balance: String,
+    pub nonce: u64,
+    #[serde(rename = "codeHash")]
+    pub code_hash: Hash,
+    #[serde(rename = "isContract")]
+    pub is_contract: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddressProfileLabel {
+    pub category: String,
+    #[serde(rename = "displayName")]
+    pub display_name: Option<String>,
+    #[serde(rename = "updatedAtBlock")]
+    pub updated_at_block: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddressProfileActivity {
+    pub kind: String,
+    pub retention: Option<serde_json::Value>,
+    pub latest: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddressProfileTokenBalance {
+    #[serde(rename = "tokenId")]
+    pub token_id: Hash,
+    pub balance: String,
+    #[serde(rename = "updatedAtBlock")]
+    pub updated_at_block: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddressProfileResponse {
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    pub address: Address,
+    pub account: AddressProfileAccount,
+    pub label: Option<AddressProfileLabel>,
+    pub activity: AddressProfileActivity,
+    #[serde(rename = "tokenBalances")]
+    pub token_balances: Vec<AddressProfileTokenBalance>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddressFlowTotals {
+    pub inbound: String,
+    pub outbound: String,
+    #[serde(rename = "swapVolume")]
+    pub swap_volume: String,
+    pub stake: String,
+    pub unstake: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddressFlowCounterparty {
+    pub address: Address,
+    #[serde(rename = "eventCount")]
+    pub event_count: u64,
+    pub inbound: String,
+    pub outbound: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddressFlowResponse {
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    pub address: Address,
+    #[serde(rename = "sampleSize")]
+    pub sample_size: usize,
+    pub limit: u32,
+    pub totals: AddressFlowTotals,
+    #[serde(rename = "topCounterparties")]
+    pub top_counterparties: Vec<AddressFlowCounterparty>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchHit {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub id: String,
+    pub route: String,
+    pub label: String,
+    pub score: u32,
+    pub meta: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchResponse {
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    pub query: String,
+    pub hits: Vec<SearchHit>,
+    #[serde(rename = "nextCursor")]
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChainStatsResponse {
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    #[serde(rename = "chainId")]
+    pub chain_id: u64,
+    #[serde(rename = "genesisHash")]
+    pub genesis_hash: Option<Hash>,
+    #[serde(rename = "latestHeight")]
+    pub latest_height: u64,
+    #[serde(rename = "latestBlockHash")]
+    pub latest_block_hash: Option<Hash>,
+    #[serde(rename = "latestTimestamp")]
+    pub latest_timestamp: Option<u64>,
+    #[serde(rename = "peerCount")]
+    pub peer_count: u64,
+    pub mempool: serde_json::Value,
+    pub indexer: Option<serde_json::Value>,
+    pub clusters: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClobMarketSummary {
+    #[serde(rename = "marketId")]
+    pub market_id: Hash,
+    #[serde(rename = "tradeCount")]
+    pub trade_count: u64,
+    #[serde(rename = "totalVolumeBase")]
+    pub total_volume_base: String,
+    #[serde(rename = "lastPrice")]
+    pub last_price: String,
+    #[serde(rename = "lastBlockHeight")]
+    pub last_block_height: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClobMarketsResponse {
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    pub limit: u32,
+    pub markets: Vec<ClobMarketSummary>,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClobTrade {
+    #[serde(rename = "blockHeight")]
+    pub block_height: u64,
+    #[serde(rename = "txIndex")]
+    pub tx_index: u32,
+    #[serde(rename = "logIndex")]
+    pub log_index: u32,
+    #[serde(rename = "marketId")]
+    pub market_id: Hash,
+    #[serde(rename = "takerOrder")]
+    pub taker_order: Hash,
+    #[serde(rename = "makerOrder")]
+    pub maker_order: Hash,
+    pub price: String,
+    pub amount: String,
+    pub taker: Address,
+    pub maker: Address,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClobTradesResponse {
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    #[serde(rename = "marketId")]
+    pub market_id: Hash,
+    pub limit: u32,
+    #[serde(rename = "nextCursor")]
+    pub next_cursor: Option<String>,
+    pub trades: Vec<ClobTrade>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClobOhlcCandle {
+    #[serde(rename = "startBlock")]
+    pub start_block: u64,
+    #[serde(rename = "endBlock")]
+    pub end_block: u64,
+    pub open: String,
+    pub high: String,
+    pub low: String,
+    pub close: String,
+    #[serde(rename = "volumeBase")]
+    pub volume_base: String,
+    #[serde(rename = "tradeCount")]
+    pub trade_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClobOhlcResponse {
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    #[serde(rename = "marketId")]
+    pub market_id: Hash,
+    #[serde(rename = "fromBlock")]
+    pub from_block: u64,
+    #[serde(rename = "toBlock")]
+    pub to_block: u64,
+    #[serde(rename = "bucketBlocks")]
+    pub bucket_blocks: u64,
+    pub candles: Vec<ClobOhlcCandle>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClobOrderBookLevel {
+    pub price: String,
+    pub size: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClobOrderBookResponse {
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    #[serde(rename = "marketId")]
+    pub market_id: Hash,
+    pub levels: Option<u32>,
+    pub bids: Vec<ClobOrderBookLevel>,
+    pub asks: Vec<ClobOrderBookLevel>,
 }
 
 /// Intent accepted by `mesh_buildUnsignedTx`.

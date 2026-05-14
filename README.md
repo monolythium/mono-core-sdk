@@ -21,8 +21,9 @@ The SDK tracks the live `mono-core` RPC and precompile surface. Wire types under
 
 - Typed `RpcClient` wrappers for `eth_*`, `net_*`, `web3_*`, `lyth_*`, and
   gated `debug_*` methods.
-- Live explorer RPC helpers for decoded transactions, address activity
-  coverage, gap records, DAG parents, rich lists, and CLOB market metadata.
+- Live explorer RPC helpers for decoded transactions, global transaction feeds,
+  address profiles/flows, exact search, chain stats, gap records, DAG parents,
+  rich lists, and CLOB markets/trades/OHLC/order books.
 - Typed `ApiClient` wrappers for the explorer-facing `/api/v1` HTTP surface:
   health, capabilities, blocks, block transactions, transactions, receipts,
   address activity, clusters, operators, and upgrade status.
@@ -34,6 +35,8 @@ The SDK tracks the live `mono-core` RPC and precompile surface. Wire types under
 - Pubkey-registry calldata helpers for `registerPubkey`, `lookupPubkey`, and
   `hasPubkey`, plus return decoders for the view calls.
 - TypeScript ethers v6 provider/signer adapters.
+- TypeScript PQM-1 + ML-DSA-65 helpers for mnemonic payloads, deterministic
+  seed derivation, address derivation, and signing backends.
 
 ## Install
 
@@ -89,8 +92,28 @@ const client = new RpcClient("https://rpc.testnet.monolythium.com");
 const chainId = await client.ethChainId();
 const height = await client.ethBlockNumber();
 const clusters = await client.lythClusterDirectory(0, 100);
+const txs = await client.lythTxFeed(25);
+const stats = await client.lythChainStats();
 
-console.log({ chainId, height, clusterCount: clusters.totalClusters });
+console.log({ chainId, height, clusterCount: clusters.totalClusters, txs: txs.transactions.length, peers: stats.peerCount });
+```
+
+Explorer and wallet surfaces can use the same client for the live aggregate
+views exposed by the node:
+
+```ts
+const profile = await client.lythAddressProfile("0x123456789abcdef0112233445566778899aabbcc");
+const flow = await client.lythAddressFlow(profile.address, 100);
+const search = await client.lythSearch(profile.address);
+const markets = await client.lythClobMarkets(25);
+
+if (markets.markets[0]) {
+  const marketId = markets.markets[0].marketId;
+  const trades = await client.lythClobTrades(marketId, 50);
+  const candles = await client.lythClobOhlc(marketId, 0, undefined, 100);
+  const book = await client.lythClobOrderBook(marketId, 20);
+  console.log({ flow: flow.totals, search: search.hits.length, trades: trades.trades.length, candles: candles.candles.length, book });
+}
 ```
 
 ## Node API Client
@@ -177,6 +200,26 @@ const decoded = decodeLookupPubkeyReturn(returnData);
 
 The precompile is milestone-gated in `mono-core` and returns a typed revert
 before activation.
+
+## PQM-1 And ML-DSA-65
+
+The TypeScript package exposes deterministic PQM-1 helpers for wallets and
+faucets that need to import or derive testnet accounts without calling into
+Rust.
+
+```ts
+import {
+  MlDsa65Backend,
+  generatePqm1Mnemonic,
+  pqm1MnemonicToAddress,
+  pqm1MnemonicToMlDsa65Backend,
+} from "@monolythium/core-sdk/crypto";
+
+const mnemonic = generatePqm1Mnemonic();
+const address = pqm1MnemonicToAddress(mnemonic);
+const backend: MlDsa65Backend = pqm1MnemonicToMlDsa65Backend(mnemonic);
+const signature = backend.sign(new Uint8Array([1, 2, 3]));
+```
 
 ## Spending Policy
 
@@ -267,9 +310,6 @@ MONO_CORE_RPC_URL=http://localhost:8545 corepack pnpm --dir packages/ts test
 
 - `lyth_subscribe` / `lyth_unsubscribe` are WebSocket-only on the node side;
   the HTTP clients surface the node's not-implemented error for those calls.
-- TypeScript PQM-1 wallet derivation is intentionally not implemented here yet.
-  The SDK exposes deterministic ABI and address helpers; wallet key generation
-  should use a vetted ML-DSA-65 implementation or a future WASM/native binding.
 - Precompile helpers build calldata and decode return values. They do not decide
   milestone activation; callers should handle typed reverts from inactive
   precompiles.

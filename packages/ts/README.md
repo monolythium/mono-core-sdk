@@ -24,15 +24,20 @@ console.log(`${clusters.totalClusters} cluster descriptors`);
 
 const decoded = await client.lythDecodeTx("0x...");
 const holders = await client.lythRichList("0x...", 25);
-console.log(decoded.status, holders.holders.length);
+const txs = await client.lythTxFeed(25);
+const markets = await client.lythClobMarkets(25);
+console.log(decoded.status, holders.holders.length, txs.transactions.length, markets.markets.length);
 ```
 
 The client wraps every JSON-RPC method served by a Monolythium node — the
 EVM-compatible `eth_*` / `net_*` / `web3_*` surface and the chain-native
 `lyth_*` and `debug_*` namespaces, including live explorer helpers such as
 `lyth_decodeTx`, `lyth_gapRecords`, `lyth_dagParents`, `lyth_richList`,
-`lyth_clobMarket`, and `lyth_addressActivityKind`. Wire types are generated
-from the Rust SDK via `ts-rs`; see `src/bindings/`.
+`lyth_txFeed`, `lyth_addressProfile`, `lyth_addressFlow`, `lyth_search`,
+`lyth_chainStats`, `lyth_clobMarkets`, `lyth_clobTrades`, `lyth_clobOhlc`,
+`lyth_clobOrderBook`, and `lyth_addressActivityKind`. Wire types are generated
+from the Rust SDK via `ts-rs` where possible, with SDK-local convenience types
+for newer explorer envelopes.
 
 Quantities surface as `bigint` to preserve full precision. Use
 `parseQuantity` only when you know the value fits in `Number.MAX_SAFE_INTEGER`.
@@ -125,6 +130,24 @@ import {
 const calldata = encodeRegisterPubkeyCalldata(mlDsa65Pubkey);
 const lookup = encodeLookupPubkeyCalldata("0x123456789abcdef0112233445566778899aabbcc");
 const decoded = decodeLookupPubkeyReturn(returnData);
+```
+
+### PQM-1 + ML-DSA-65 helpers
+
+Wallets and faucets can derive deterministic ML-DSA-65 backends directly in
+TypeScript from PQM-1 mnemonics.
+
+```ts
+import {
+  generatePqm1Mnemonic,
+  pqm1MnemonicToAddress,
+  pqm1MnemonicToMlDsa65Backend,
+} from "@monolythium/core-sdk/crypto";
+
+const mnemonic = generatePqm1Mnemonic();
+const address = pqm1MnemonicToAddress(mnemonic);
+const backend = pqm1MnemonicToMlDsa65Backend(mnemonic);
+const signature = backend.sign(new Uint8Array([1, 2, 3]));
 ```
 
 ### ethers.js v6 compat

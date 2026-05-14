@@ -14,15 +14,19 @@ use serde_json::{json, Value};
 use crate::error::SdkError;
 use crate::types::{
     AccountPolicy, AccountProofResponse, AddressActivityEntry, AddressActivityKindResponse,
-    AddressLabelRecord, AssetPolicy, BlockHeader, BlockSelector, BlsCertificateResponse,
-    CallRequest, CapabilitiesResponse, CheckpointRecord, ClobMarketResponse,
-    ClusterDelegatorsResponse, ClusterEntityResponse, ClusterResignationsResponse,
-    DagParentsResponse, DagSyncStatus, DecodeTxResponse, DelegationCapResponse,
-    DelegationHistoryRecord, DelegationsResponse, EncryptionKeyResponse, EntityRatchetResponse,
-    FeeHistoryResponse, GapRecordsResponse, IndexerStatus, MempoolSnapshot, MeshDecodedTx,
-    MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse, PeerSummary, PendingTxSummary,
-    PrecompileDescriptor, RegistryRecord, RichListResponse, RoundInfo, StorageProofBatch,
-    SyncStatus, TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt, TransactionView,
+    AddressFlowResponse, AddressLabelRecord, AddressProfileResponse, AssetPolicy, BlockHeader,
+    BlockSelector, BlsCertificateResponse, CallRequest, CapabilitiesResponse, ChainStatsResponse,
+    CheckpointRecord, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse,
+    ClobOrderBookResponse, ClobTradesResponse, ClusterDelegatorsResponse, ClusterEntityResponse,
+    ClusterResignationsResponse, DagParentsResponse, DagSyncStatus, DecodeTxResponse,
+    DelegationCapResponse, DelegationHistoryRecord, DelegationsResponse, EncryptionKeyResponse,
+    EntityRatchetResponse, FeeHistoryResponse, GapRecordsResponse, IndexerStatus,
+    LythUpgradeStatusResponse, MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent,
+    MeshUnsignedTxResponse, MetricsRangeResponse, OperatorCapabilitiesResponse, PeerSummary,
+    PeerSummaryAggregate, PendingTxSummary, PrecompileDescriptor, RegistryRecord, RichListResponse,
+    RoundInfo, SearchResponse, StorageProofBatch, SyncStatus, TokenBalanceRecord,
+    TpmAttestationResponse, TransactionReceipt, TransactionView, TxFeedResponse, TxStatusResponse,
+    VerticesAtRoundResponse,
 };
 
 /// Typed JSON-RPC client for a `mono-core` node.
@@ -400,6 +404,11 @@ impl RpcClient {
         self.call("lyth_currentRound", json!([])).await
     }
 
+    /// `lyth_peerSummary` — public-safe aggregate peer-network diagnostics.
+    pub async fn lyth_peer_summary(&self) -> Result<PeerSummaryAggregate, SdkError> {
+        self.call("lyth_peerSummary", json!([])).await
+    }
+
     /// `lyth_listActivePrecompiles` — milestone-gated precompile catalogue
     /// (OI-0170 / ADR-0015 §5). `block` selects the height the gate snapshot
     /// is read from; pass [`BlockSelector::LATEST`] for the live view.
@@ -421,6 +430,14 @@ impl RpcClient {
             None => json!([]),
         };
         self.call("lyth_capabilities", params).await
+    }
+
+    /// `lyth_operatorCapabilities` — node-level availability for
+    /// operator UI and explorer surfaces.
+    pub async fn lyth_operator_capabilities(
+        &self,
+    ) -> Result<OperatorCapabilitiesResponse, SdkError> {
+        self.call("lyth_operatorCapabilities", json!([])).await
     }
 
     /// `lyth_indexerStatus` — indexer status, `None` if disabled.
@@ -513,6 +530,116 @@ impl RpcClient {
     /// `lyth_clobMarket` — live CLOB market metadata for a market id.
     pub async fn lyth_clob_market(&self, market_id: &str) -> Result<ClobMarketResponse, SdkError> {
         self.call("lyth_clobMarket", json!([market_id])).await
+    }
+
+    /// `lyth_clobMarkets` — CLOB markets observed through indexed trades.
+    pub async fn lyth_clob_markets(
+        &self,
+        limit: Option<u32>,
+    ) -> Result<ClobMarketsResponse, SdkError> {
+        let params = match limit {
+            Some(limit) => json!([limit]),
+            None => json!([]),
+        };
+        self.call("lyth_clobMarkets", params).await
+    }
+
+    /// `lyth_clobTrades` — CLOB fills for one market.
+    pub async fn lyth_clob_trades(
+        &self,
+        market_id: &str,
+        limit: Option<u32>,
+        cursor: Option<&str>,
+    ) -> Result<ClobTradesResponse, SdkError> {
+        let params = match (limit, cursor) {
+            (None, None) => json!([market_id]),
+            (Some(limit), None) => json!([market_id, limit]),
+            (None, Some(cursor)) => json!([market_id, 50, cursor]),
+            (Some(limit), Some(cursor)) => json!([market_id, limit, cursor]),
+        };
+        self.call("lyth_clobTrades", params).await
+    }
+
+    /// `lyth_clobOhlc` — CLOB OHLC candles for a market over a block range.
+    pub async fn lyth_clob_ohlc(
+        &self,
+        market_id: &str,
+        from_block: Option<u64>,
+        to_block: Option<u64>,
+        bucket_blocks: Option<u64>,
+    ) -> Result<ClobOhlcResponse, SdkError> {
+        let params = match (from_block, to_block, bucket_blocks) {
+            (None, None, None) => json!([market_id]),
+            _ => json!([market_id, from_block, to_block, bucket_blocks]),
+        };
+        self.call("lyth_clobOhlc", params).await
+    }
+
+    /// `lyth_clobOrderBook` — live CLOB depth from canonical state.
+    pub async fn lyth_clob_order_book(
+        &self,
+        market_id: &str,
+        levels: Option<u32>,
+    ) -> Result<ClobOrderBookResponse, SdkError> {
+        let params = match levels {
+            Some(levels) => json!([market_id, levels]),
+            None => json!([market_id]),
+        };
+        self.call("lyth_clobOrderBook", params).await
+    }
+
+    /// `lyth_txFeed` — paged global transaction feed.
+    pub async fn lyth_tx_feed(
+        &self,
+        limit: Option<u32>,
+        cursor: Option<&str>,
+    ) -> Result<TxFeedResponse, SdkError> {
+        let params = match (limit, cursor) {
+            (None, None) => json!([]),
+            (Some(limit), None) => json!([limit]),
+            (None, Some(cursor)) => json!([50, cursor]),
+            (Some(limit), Some(cursor)) => json!([limit, cursor]),
+        };
+        self.call("lyth_txFeed", params).await
+    }
+
+    /// `lyth_addressProfile` — live account + label + activity aggregate.
+    pub async fn lyth_address_profile(
+        &self,
+        address: &str,
+    ) -> Result<AddressProfileResponse, SdkError> {
+        self.call("lyth_addressProfile", json!([address])).await
+    }
+
+    /// `lyth_addressFlow` — recent indexed address-flow aggregate.
+    pub async fn lyth_address_flow(
+        &self,
+        address: &str,
+        limit: Option<u32>,
+    ) -> Result<AddressFlowResponse, SdkError> {
+        let params = match limit {
+            Some(limit) => json!([address, limit]),
+            None => json!([address]),
+        };
+        self.call("lyth_addressFlow", params).await
+    }
+
+    /// `lyth_search` — exact live resolver for hashes, addresses, blocks, and clusters.
+    pub async fn lyth_search(
+        &self,
+        query: &str,
+        limit: Option<u32>,
+    ) -> Result<SearchResponse, SdkError> {
+        let params = match limit {
+            Some(limit) => json!([query, limit]),
+            None => json!([query]),
+        };
+        self.call("lyth_search", params).await
+    }
+
+    /// `lyth_chainStats` — compact live chain/indexer/mempool summary.
+    pub async fn lyth_chain_stats(&self) -> Result<ChainStatsResponse, SdkError> {
+        self.call("lyth_chainStats", json!([])).await
     }
 
     /// `lyth_getStorageProof` — batched Merkle proofs for one
@@ -646,6 +773,44 @@ impl RpcClient {
             return Ok(None);
         }
         Ok(Some(serde_json::from_value(v)?))
+    }
+
+    /// `lyth_upgradeStatus` — signed network-upgrade readiness at a height.
+    pub async fn lyth_upgrade_status(
+        &self,
+        block: Option<BlockSelector>,
+    ) -> Result<LythUpgradeStatusResponse, SdkError> {
+        let params = match block {
+            Some(block) => json!([block.to_param()]),
+            None => json!([]),
+        };
+        self.call("lyth_upgradeStatus", params).await
+    }
+
+    /// `lyth_txStatus` — discriminated transaction lookup outcome.
+    pub async fn lyth_tx_status(&self, tx_hash: &str) -> Result<TxStatusResponse, SdkError> {
+        self.call("lyth_txStatus", json!([tx_hash])).await
+    }
+
+    /// `lyth_verticesAtRound` — per-vertex authorship observed at a DAG round.
+    pub async fn lyth_vertices_at_round(
+        &self,
+        round: u64,
+    ) -> Result<VerticesAtRoundResponse, SdkError> {
+        self.call("lyth_verticesAtRound", json!([round])).await
+    }
+
+    /// `lyth_metricsRange` — retained telemetry series when the node has them.
+    pub async fn lyth_metrics_range(
+        &self,
+        selectors: &[String],
+        range: Option<(u64, u64)>,
+    ) -> Result<MetricsRangeResponse, SdkError> {
+        let params = match range {
+            Some((from_block, to_block)) => json!([selectors, [from_block, to_block]]),
+            None => json!([selectors]),
+        };
+        self.call("lyth_metricsRange", params).await
     }
 
     /// `lyth_getLatestCheckpoint` — latest PQ-finality checkpoint rows.

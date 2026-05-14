@@ -303,6 +303,307 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     ]);
   });
 
+  it("wraps live explorer aggregate, search, tx feed, and CLOB surfaces", async () => {
+    const address = "0x1111111111111111111111111111111111111111";
+    const txHash = `0x${"22".repeat(32)}`;
+    const marketId = `0x${"44".repeat(32)}`;
+    const cursor = `0x${"00".repeat(16)}`;
+    const feedCursor = `0x${"11".repeat(12)}`;
+    const { fetch, calls } = mockFetchSequence([
+      {
+        schemaVersion: 1,
+        limit: 2,
+        markets: [
+          {
+            marketId,
+            tradeCount: 3,
+            totalVolumeBase: "900",
+            lastPrice: "101",
+            lastBlockHeight: 12,
+          },
+        ],
+        source: "indexed_trades",
+      },
+      {
+        schemaVersion: 1,
+        marketId,
+        limit: 2,
+        nextCursor: cursor,
+        trades: [
+          {
+            blockHeight: 12,
+            txIndex: 0,
+            logIndex: 1,
+            marketId,
+            takerOrder: `0x${"55".repeat(32)}`,
+            makerOrder: `0x${"66".repeat(32)}`,
+            price: "101",
+            amount: "300",
+            taker: address,
+            maker: "0x2222222222222222222222222222222222222222",
+          },
+        ],
+      },
+      {
+        schemaVersion: 1,
+        marketId,
+        fromBlock: 10,
+        toBlock: 20,
+        bucketBlocks: 5,
+        candles: [
+          {
+            startBlock: 10,
+            endBlock: 14,
+            open: "100",
+            high: "102",
+            low: "99",
+            close: "101",
+            volumeBase: "900",
+            tradeCount: 3,
+          },
+        ],
+      },
+      {
+        schemaVersion: 1,
+        marketId,
+        levels: 3,
+        bids: [{ price: "100", size: "50" }],
+        asks: [{ price: "101", size: "60" }],
+      },
+      {
+        schemaVersion: 1,
+        latestHeight: 12,
+        limit: 5,
+        nextCursor: feedCursor,
+        transactions: [
+          {
+            txHash,
+            blockHash: `0x${"33".repeat(32)}`,
+            blockNumber: 12,
+            blockTimestamp: 1700000000,
+            txIndex: 0,
+            from: address,
+            to: null,
+            nonce: 1,
+            value: "0",
+            gasLimit: 21000,
+            maxFeePerGas: "1",
+            maxPriorityFeePerGas: "1",
+            input: "0x",
+            receipt: { status: 1, gasUsed: 21000, logsCount: 0 },
+          },
+        ],
+      },
+      {
+        schemaVersion: 1,
+        address,
+        account: {
+          nativeBalance: "1000000000000000000",
+          nonce: 1,
+          codeHash: `0x${"00".repeat(32)}`,
+          isContract: false,
+        },
+        label: null,
+        activity: { kind: "found", retention: null, latest: null },
+        tokenBalances: [],
+      },
+      {
+        schemaVersion: 1,
+        address,
+        sampleSize: 1,
+        limit: 25,
+        totals: {
+          inbound: "10",
+          outbound: "0",
+          swapVolume: "0",
+          stake: "0",
+          unstake: "0",
+        },
+        topCounterparties: [],
+      },
+      {
+        schemaVersion: 1,
+        query: address,
+        hits: [{ type: "address", id: address, route: `/wallet/${address}`, label: "address", score: 100 }],
+        nextCursor: null,
+      },
+      {
+        schemaVersion: 1,
+        chainId: 69420,
+        genesisHash: `0x${"77".repeat(32)}`,
+        latestHeight: 12,
+        latestBlockHash: `0x${"88".repeat(32)}`,
+        latestTimestamp: 1700000000,
+        peerCount: 7,
+        mempool: { ready: 0, pending: 0, mailboxDepth: 0 },
+        indexer: null,
+        clusters: { total: 100, pageSize: 100 },
+      },
+    ]);
+    const client = new RpcClient("http://x", { fetch });
+
+    await expect(client.lythClobMarkets(2)).resolves.toMatchObject({ source: "indexed_trades" });
+    await expect(client.lythClobTrades(marketId, 2, cursor)).resolves.toMatchObject({
+      trades: [{ price: "101" }],
+    });
+    await expect(client.lythClobOhlc(marketId, 10n, "20", 5)).resolves.toMatchObject({
+      candles: [{ close: "101" }],
+    });
+    await expect(client.lythClobOrderBook(marketId, 3)).resolves.toMatchObject({
+      bids: [{ price: "100" }],
+    });
+    await expect(client.lythTxFeed(5, feedCursor)).resolves.toMatchObject({
+      transactions: [{ txHash }],
+    });
+    await expect(client.lythAddressProfile(address)).resolves.toMatchObject({
+      account: { nativeBalance: "1000000000000000000" },
+    });
+    await expect(client.lythAddressFlow(address, 25)).resolves.toMatchObject({
+      totals: { inbound: "10" },
+    });
+    await expect(client.lythSearch(address, 5)).resolves.toMatchObject({
+      hits: [{ type: "address" }],
+    });
+    await expect(client.lythChainStats()).resolves.toMatchObject({ chainId: 69420 });
+
+    expect(calls.map((c) => c.method)).toEqual([
+      "lyth_clobMarkets",
+      "lyth_clobTrades",
+      "lyth_clobOhlc",
+      "lyth_clobOrderBook",
+      "lyth_txFeed",
+      "lyth_addressProfile",
+      "lyth_addressFlow",
+      "lyth_search",
+      "lyth_chainStats",
+    ]);
+    expect(calls.map((c) => c.params)).toEqual([
+      [2],
+      [marketId, 2, cursor],
+      [marketId, 10, 20, 5],
+      [marketId, 3],
+      [5, feedCursor],
+      [address],
+      [address, 25],
+      [address, 5],
+      [],
+    ]);
+  });
+
+  it("wraps node capability, status, vertex, and metrics RPC surfaces", async () => {
+    const txHash = `0x${"22".repeat(32)}`;
+    const blockHash = `0x${"33".repeat(32)}`;
+    const vertexHash = `0x${"44".repeat(32)}`;
+    const { fetch, calls } = mockFetchSequence([
+      {
+        peerCount: 3,
+        inboundCount: null,
+        outboundCount: null,
+        latencyBands: null,
+        versionDistribution: { "mono-core/0.1.0": 3 },
+        healthSummary: { synced: 2, lagging: 1, stale: 0 },
+        asOfBlock: 120,
+      },
+      {
+        schemaVersion: 1,
+        surfaces: {
+          operator_info: { status: "available" },
+          metrics_range: { status: "not_retained", tracking: "MD-CORE-0007" },
+        },
+      },
+      {
+        chainId: 69420,
+        blockNumber: 256,
+        configured: true,
+        planCount: 1,
+        state: "pending",
+        active: null,
+        pendingCount: 1,
+        pending: [
+          {
+            upgradeId: "monolythium.v2.0.2",
+            activationHeight: 300,
+            activationRound: null,
+            requiredBinaryVersion: "2.0.2",
+            expectedBinaryDigest: "sha256:abc",
+            p2pProtocolVersion: 2,
+            requiredFeatures: ["foo"],
+            milestoneFileDigest: null,
+            stateMigrationId: null,
+            stateMigrationHash: null,
+            expectedPreStateRoot: null,
+            expectedPostStateRoot: null,
+          },
+        ],
+      },
+      {
+        status: "found",
+        txHash,
+        blockHash,
+        blockNumber: 120,
+        txIndex: 1,
+      },
+      {
+        schemaVersion: 1,
+        round: 7,
+        vertices: [{ vertexHash, author: 3 }],
+      },
+      {
+        schemaVersion: 1,
+        range: [10, 12],
+        tracking: "MD-CORE-0007",
+        series: [
+          {
+            selector: "committed_round",
+            status: "available",
+            unit: "round",
+            samples: [{ blockNumber: 12, value: 7 }],
+          },
+        ],
+      },
+    ]);
+    const client = new RpcClient("http://x", { fetch });
+
+    await expect(client.lythPeerSummary()).resolves.toMatchObject({ peerCount: 3 });
+    await expect(client.lythOperatorCapabilities()).resolves.toMatchObject({
+      surfaces: { operator_info: { status: "available" } },
+    });
+    await expect(client.lythUpgradeStatus(256)).resolves.toMatchObject({
+      state: "pending",
+      pendingCount: 1,
+    });
+    await expect(client.lythTxStatus(txHash)).resolves.toMatchObject({
+      status: "found",
+      blockNumber: 120,
+    });
+    await expect(client.lythVerticesAtRound("0x7")).resolves.toMatchObject({
+      vertices: [{ author: 3 }],
+    });
+    await expect(
+      client.lythMetricsRange(["committed_round", "mempool_depth"], [10n, "12"]),
+    ).resolves.toMatchObject({
+      range: [10, 12],
+      series: [{ selector: "committed_round" }],
+    });
+
+    expect(calls.map((c) => c.method)).toEqual([
+      "lyth_peerSummary",
+      "lyth_operatorCapabilities",
+      "lyth_upgradeStatus",
+      "lyth_txStatus",
+      "lyth_verticesAtRound",
+      "lyth_metricsRange",
+    ]);
+    expect(calls.map((c) => c.params)).toEqual([
+      [],
+      [],
+      ["0x100"],
+      [txHash],
+      [7],
+      [["committed_round", "mempool_depth"], [10, 12]],
+    ]);
+  });
+
   it("lyth_indexerStatus returns null when the wire returns null", async () => {
     const { fetch } = mockFetch(null);
     const client = new RpcClient("http://x", { fetch });
