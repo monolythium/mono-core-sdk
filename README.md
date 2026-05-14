@@ -21,6 +21,9 @@ The SDK tracks the live `mono-core` RPC and precompile surface. Wire types under
 
 - Typed `RpcClient` wrappers for `eth_*`, `net_*`, `web3_*`, `lyth_*`, and
   gated `debug_*` methods.
+- Typed `ApiClient` wrappers for the explorer-facing `/api/v1` HTTP surface:
+  health, capabilities, blocks, block transactions, transactions, receipts,
+  address activity, clusters, operators, and upgrade status.
 - Canonical precompile address constants, including recent Stage 7 additions:
   `SPENDING_POLICY` at `0x110C` and `PUBKEY_REGISTRY` at `0x110D`.
 - `mono1...` bech32m display helpers for 20-byte wire addresses.
@@ -86,6 +89,39 @@ const height = await client.ethBlockNumber();
 const clusters = await client.lythClusterDirectory(0, 100);
 
 console.log({ chainId, height, clusterCount: clusters.totalClusters });
+```
+
+## Node API Client
+
+`ApiClient` targets the REST-shaped `/api/v1` routes served by `mono-core`.
+Pass the same node URL used for JSON-RPC; the SDK derives `/api/v1`
+automatically.
+
+TypeScript:
+
+```ts
+import { ApiClient } from "@monolythium/core-sdk";
+
+const api = new ApiClient("https://rpc.testnet.monolythium.com");
+
+const health = await api.health();
+const latest = await api.block("latest");
+const activity = await api.addressActivity("0x123456789abcdef0112233445566778899aabbcc");
+
+console.log({ status: health.status, txs: latest.data.transactionCount, rows: activity.data.entries.length });
+```
+
+Rust:
+
+```rust
+use monolythium_core_sdk::{types::BlockSelector, ApiClient};
+
+# async fn run() -> Result<(), monolythium_core_sdk::SdkError> {
+let api = ApiClient::new("https://rpc.testnet.monolythium.com")?;
+let latest = api.block(BlockSelector::LATEST).await?;
+println!("latest block {}", latest.data.block.height);
+# Ok(())
+# }
 ```
 
 ## Address Display

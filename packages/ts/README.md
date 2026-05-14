@@ -31,6 +31,23 @@ SDK via `ts-rs`; see `src/bindings/`.
 Quantities surface as `bigint` to preserve full precision. Use
 `parseQuantity` only when you know the value fits in `Number.MAX_SAFE_INTEGER`.
 
+### Node API client
+
+The SDK also exports `ApiClient` for the node's REST-shaped `/api/v1` surface.
+Pass the JSON-RPC endpoint; the client derives `/api/v1` automatically.
+
+```ts
+import { ApiClient } from "@monolythium/core-sdk";
+
+const api = new ApiClient("https://rpc.testnet.monolythium.com");
+
+const latest = await api.block("latest");
+const txs = await api.blockTransactions("latest", 0, 25);
+const activity = await api.addressActivity("0x123456789abcdef0112233445566778899aabbcc");
+
+console.log(latest.data.block.blockHash, txs.data.totalTransactions, activity.data.entries.length);
+```
+
 ### Chain registry
 
 The SDK vendors the official testnet bootstrap IPs from

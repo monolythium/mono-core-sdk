@@ -20,6 +20,7 @@
 //! ```
 
 pub mod address;
+pub mod api;
 pub mod client;
 pub mod consts;
 pub mod error;
@@ -31,6 +32,7 @@ pub use address::{
     address_to_bech32, address_to_hex, bech32_to_address, hex_to_address, parse_address,
     AddressError, ADDRESS_HRP,
 };
+pub use api::ApiClient;
 pub use client::RpcClient;
 pub use consts::{burn_addr_hex, BURN_ADDR};
 pub use error::SdkError;
