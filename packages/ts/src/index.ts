@@ -13,6 +13,41 @@
 
 export const version = "0.1.0";
 
+export { ApiClient, apiEndpointFromRpcEndpoint } from "./api.js";
+export type {
+  ApiAddressActivityData,
+  ApiAddressActivityEntry,
+  ApiAddressActivityKind,
+  ApiAddressActivityKindData,
+  ApiAddressActivityKindSummary,
+  ApiBlockData,
+  ApiBlockHeader,
+  ApiBlockTransactionsData,
+  ApiCapabilitiesResponse,
+  ApiClientOptions,
+  ApiClusterData,
+  ApiClusterDirectoryEntry,
+  ApiClusterDirectoryPage,
+  ApiClusterMember,
+  ApiClustersData,
+  ApiClusterStatus,
+  ApiEnvelope,
+  ApiErrorEnvelope,
+  ApiHealthResponse,
+  ApiIndexerStatus,
+  ApiLatestAnchor,
+  ApiLogEntry,
+  ApiOperatorData,
+  ApiOperatorInfo,
+  ApiQueryValue,
+  ApiTransactionData,
+  ApiTransactionReceipt,
+  ApiTransactionReceiptData,
+  ApiTransactionView,
+  ApiUpgradePlanStatus,
+  ApiUpgradeStatus,
+  ApiUpgradeStatusData,
+} from "./api.js";
 export { RpcClient, parseQuantity, parseQuantityBig } from "./client.js";
 export type {
   AttestationWindow,
