@@ -13,15 +13,16 @@ use serde_json::{json, Value};
 
 use crate::error::SdkError;
 use crate::types::{
-    AccountPolicy, AccountProofResponse, AddressActivityEntry, AddressLabelRecord, AssetPolicy,
-    BlockHeader, BlockSelector, BlsCertificateResponse, CallRequest, CapabilitiesResponse,
-    CheckpointRecord, ClusterDelegatorsResponse, ClusterEntityResponse,
-    ClusterResignationsResponse, DagSyncStatus, DelegationCapResponse, DelegationHistoryRecord,
-    DelegationsResponse, EncryptionKeyResponse, EntityRatchetResponse, FeeHistoryResponse,
-    IndexerStatus, MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent,
-    MeshUnsignedTxResponse, PeerSummary, PendingTxSummary, PrecompileDescriptor, RegistryRecord,
-    RoundInfo, StorageProofBatch, SyncStatus, TokenBalanceRecord, TpmAttestationResponse,
-    TransactionReceipt, TransactionView,
+    AccountPolicy, AccountProofResponse, AddressActivityEntry, AddressActivityKindResponse,
+    AddressLabelRecord, AssetPolicy, BlockHeader, BlockSelector, BlsCertificateResponse,
+    CallRequest, CapabilitiesResponse, CheckpointRecord, ClobMarketResponse,
+    ClusterDelegatorsResponse, ClusterEntityResponse, ClusterResignationsResponse,
+    DagParentsResponse, DagSyncStatus, DecodeTxResponse, DelegationCapResponse,
+    DelegationHistoryRecord, DelegationsResponse, EncryptionKeyResponse, EntityRatchetResponse,
+    FeeHistoryResponse, GapRecordsResponse, IndexerStatus, MempoolSnapshot, MeshDecodedTx,
+    MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse, PeerSummary, PendingTxSummary,
+    PrecompileDescriptor, RegistryRecord, RichListResponse, RoundInfo, StorageProofBatch,
+    SyncStatus, TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt, TransactionView,
 };
 
 /// Typed JSON-RPC client for a `mono-core` node.
@@ -465,6 +466,53 @@ impl RpcClient {
             (Some(limit), Some(cursor)) => json!([address, limit, cursor]),
         };
         self.call("lyth_getAddressActivity", params).await
+    }
+
+    /// `lyth_addressActivityKind` — activity index coverage for one address.
+    pub async fn lyth_address_activity_kind(
+        &self,
+        address: &str,
+    ) -> Result<AddressActivityKindResponse, SdkError> {
+        self.call("lyth_addressActivityKind", json!([address]))
+            .await
+    }
+
+    /// `lyth_decodeTx` — explorer-grade decoded transaction envelope.
+    pub async fn lyth_decode_tx(&self, tx_hash: &str) -> Result<DecodeTxResponse, SdkError> {
+        self.call("lyth_decodeTx", json!([tx_hash])).await
+    }
+
+    /// `lyth_gapRecords` — retained ingestion/indexing gaps for a block range.
+    pub async fn lyth_gap_records(
+        &self,
+        from_block: u64,
+        to_block: u64,
+    ) -> Result<GapRecordsResponse, SdkError> {
+        self.call("lyth_gapRecords", json!([from_block, to_block]))
+            .await
+    }
+
+    /// `lyth_dagParents` — parent vertices for a DAG round.
+    pub async fn lyth_dag_parents(&self, round: u64) -> Result<DagParentsResponse, SdkError> {
+        self.call("lyth_dagParents", json!([round])).await
+    }
+
+    /// `lyth_richList` — top holders for a token id.
+    pub async fn lyth_rich_list(
+        &self,
+        token_id: &str,
+        limit: Option<u32>,
+    ) -> Result<RichListResponse, SdkError> {
+        let params = match limit {
+            Some(limit) => json!([token_id, limit]),
+            None => json!([token_id]),
+        };
+        self.call("lyth_richList", params).await
+    }
+
+    /// `lyth_clobMarket` — live CLOB market metadata for a market id.
+    pub async fn lyth_clob_market(&self, market_id: &str) -> Result<ClobMarketResponse, SdkError> {
+        self.call("lyth_clobMarket", json!([market_id])).await
     }
 
     /// `lyth_getStorageProof` — batched Merkle proofs for one

@@ -13,6 +13,7 @@ import type {
   AccountPolicy,
   AccountProofResponse,
   AddressActivityEntry,
+  AddressActivityKindResponse,
   AddressLabelRecord,
   AssetPolicy,
   BlsCertificateResponse,
@@ -20,16 +21,20 @@ import type {
   CallRequest,
   CapabilitiesResponse,
   CheckpointRecord,
+  ClobMarketResponse,
   ClusterDelegatorsResponse,
   ClusterEntityResponse,
   ClusterResignationsResponse,
+  DagParentsResponse,
   DagSyncStatus,
+  DecodeTxResponse,
   DelegationCapResponse,
   DelegationHistoryRecord,
   DelegationsResponse,
   EncryptionKeyResponse,
   EntityRatchetResponse,
   FeeHistoryResponse,
+  GapRecordsResponse,
   IndexerStatus,
   MempoolSnapshot,
   MeshDecodedTx,
@@ -40,6 +45,7 @@ import type {
   PendingTxSummary,
   PrecompileDescriptor,
   RegistryRecord,
+  RichListResponse,
   RoundInfo,
   StorageProofBatch,
   SyncStatus,
@@ -203,6 +209,14 @@ export interface OperatorRiskResponse {
   jailStatus: JailStatusWindow;
   reasons: string[];
 }
+
+export type AddressActivityKind =
+  | "found"
+  | "not_found"
+  | "indexer_disabled"
+  | "pruned"
+  | "private"
+  | string;
 
 interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -538,6 +552,43 @@ export class RpcClient {
   ): Promise<AddressActivityEntry[]> {
     const params = cursor === undefined ? [address, limit] : [address, limit, cursor];
     return this.call("lyth_getAddressActivity", params);
+  }
+
+  /** `lyth_addressActivityKind` — activity index coverage for one address. */
+  async lythAddressActivityKind(address: string): Promise<AddressActivityKindResponse> {
+    return this.call("lyth_addressActivityKind", [address]);
+  }
+
+  /** `lyth_decodeTx` — explorer-grade decoded transaction envelope. */
+  async lythDecodeTx(txHash: string): Promise<DecodeTxResponse> {
+    return this.call("lyth_decodeTx", [txHash]);
+  }
+
+  /** `lyth_gapRecords` — retained ingestion/indexing gaps for a block range. */
+  async lythGapRecords(
+    fromBlock: number | bigint | string,
+    toBlock: number | bigint | string,
+  ): Promise<GapRecordsResponse> {
+    return this.call("lyth_gapRecords", [
+      encodeRpcU64Number(fromBlock, "fromBlock"),
+      encodeRpcU64Number(toBlock, "toBlock"),
+    ]);
+  }
+
+  /** `lyth_dagParents` — parent vertices for a DAG round. */
+  async lythDagParents(round: number | bigint | string): Promise<DagParentsResponse> {
+    return this.call("lyth_dagParents", [encodeRpcU64Number(round, "round")]);
+  }
+
+  /** `lyth_richList` — top holders for a token id. */
+  async lythRichList(tokenId: string, limit?: number | null): Promise<RichListResponse> {
+    const params = limit == null ? [tokenId] : [tokenId, limit];
+    return this.call("lyth_richList", params);
+  }
+
+  /** `lyth_clobMarket` — live CLOB market metadata for a market id. */
+  async lythClobMarket(marketId: string): Promise<ClobMarketResponse> {
+    return this.call("lyth_clobMarket", [marketId]);
   }
 
   /** `lyth_mempoolStatus` — aggregate mempool snapshot. */
@@ -898,8 +949,17 @@ function encodeOptionalHeight(v: number | bigint | string | null): number | stri
   return encodeRpcInteger(v);
 }
 
+function encodeRpcU64Number(v: number | bigint | string, label: string): number {
+  return parseRpcNumber(v, label);
+}
+
 function parseRpcBigint(value: unknown, label: string): bigint {
-  if (typeof value === "bigint") return value;
+  if (typeof value === "bigint") {
+    if (value < 0n) {
+      throw SdkError.malformed(`${label} must be a non-negative quantity`);
+    }
+    return value;
+  }
   if (typeof value === "number") {
     if (!Number.isSafeInteger(value) || value < 0) {
       throw SdkError.malformed(`${label} must be a non-negative safe integer`);

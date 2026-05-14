@@ -50,6 +50,7 @@ export type {
 } from "./api.js";
 export { RpcClient, parseQuantity, parseQuantityBig } from "./client.js";
 export type {
+  AddressActivityKind,
   AttestationWindow,
   ClusterDirectoryEntryResponse,
   ClusterDirectoryPageResponse,

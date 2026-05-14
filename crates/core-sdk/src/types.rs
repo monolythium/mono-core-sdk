@@ -441,6 +441,58 @@ pub struct AddressActivityEntry {
     pub sub_kind: Option<String>,
 }
 
+/// Retention metadata returned by `lyth_addressActivityKind` for
+/// pruned address activity windows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "AddressActivityArchiveRedirect.ts")
+)]
+pub struct AddressActivityArchiveRedirect {
+    /// Human-readable archival hint supplied by the node.
+    pub hint: String,
+}
+
+/// Retention bounds returned by `lyth_addressActivityKind`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "AddressActivityKindRetention.ts")
+)]
+pub struct AddressActivityKindRetention {
+    /// Earliest retained block for indexed activity.
+    #[serde(rename = "earliestRetained")]
+    pub earliest_retained: u64,
+    /// Optional archive redirect hint.
+    #[serde(rename = "archiveRedirect", default)]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub archive_redirect: Option<AddressActivityArchiveRedirect>,
+}
+
+/// `lyth_addressActivityKind` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "AddressActivityKindResponse.ts")
+)]
+pub struct AddressActivityKindResponse {
+    /// Response schema version.
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    /// Queried address.
+    pub address: Address,
+    /// `found`, `not_found`, `indexer_disabled`, `pruned`, `private`,
+    /// or a forward-compatible node-supplied string.
+    pub kind: String,
+    /// Retention metadata when the activity window was pruned.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub retention: Option<AddressActivityKindRetention>,
+}
+
 /// `lyth_indexerStatus` envelope. `null` on the wire surfaces as
 /// `Option::None` here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -859,6 +911,289 @@ pub struct BlsCertificateResponse {
     /// Number of signing operators.
     #[serde(rename = "signer_count", alias = "signerCount")]
     pub signer_count: u16,
+}
+
+/// Log row included in `lyth_decodeTx`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "DecodeTxLog.ts"))]
+pub struct DecodeTxLog {
+    /// Contract address that emitted the log.
+    pub address: Address,
+    /// Indexed topics.
+    pub topics: Vec<Hash>,
+    /// ABI-encoded log data.
+    pub data: Hex,
+}
+
+/// PQ-finality attestation included in `lyth_decodeTx` when available.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "DecodeTxPqAttestation.ts")
+)]
+pub struct DecodeTxPqAttestation {
+    /// Checkpoint height that attests the transaction.
+    #[serde(rename = "checkpointHeight")]
+    pub checkpoint_height: u64,
+    /// Checkpointed state root.
+    #[serde(rename = "stateRoot")]
+    pub state_root: Hash,
+    /// Signer id that produced the attestation.
+    #[serde(rename = "signerId")]
+    pub signer_id: String,
+    /// Scheme-prefixed signer signature.
+    pub signature: String,
+}
+
+/// `lyth_decodeTx` response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "DecodeTxResponse.ts"))]
+pub struct DecodeTxResponse {
+    /// Transaction hash.
+    #[serde(rename = "txHash")]
+    pub tx_hash: Hash,
+    /// Containing block hash.
+    #[serde(rename = "blockHash")]
+    pub block_hash: Hash,
+    /// Containing block number.
+    #[serde(rename = "blockNumber")]
+    pub block_number: u64,
+    /// Transaction index within the block.
+    #[serde(rename = "txIndex")]
+    pub tx_index: u32,
+    /// Sender address.
+    pub from: Address,
+    /// Recipient address, or `null` for contract creation.
+    pub to: Option<Address>,
+    /// Transferred value as a hex quantity.
+    pub value: Quantity,
+    /// Sender nonce.
+    pub nonce: u64,
+    /// Gas limit.
+    #[serde(rename = "gasLimit")]
+    pub gas_limit: u64,
+    /// Max fee per gas as a hex quantity.
+    #[serde(rename = "maxFeePerGas")]
+    pub max_fee_per_gas: Quantity,
+    /// Max priority fee per gas as a hex quantity.
+    #[serde(rename = "maxPriorityFeePerGas")]
+    pub max_priority_fee_per_gas: Quantity,
+    /// Gas used when the transaction is confirmed.
+    #[serde(rename = "gasUsed")]
+    pub gas_used: Option<u64>,
+    /// Opaque decoded calldata descriptor.
+    #[serde(rename = "decodedCalldata")]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "unknown | null"))]
+    pub decoded_calldata: Option<serde_json::Value>,
+    /// Optional memo extracted from the transaction.
+    pub memo: Option<String>,
+    /// DAG round associated with finality, when available.
+    pub round: Option<u64>,
+    /// Cluster id associated with finality, when available.
+    #[serde(rename = "clusterId")]
+    pub cluster_id: Option<u32>,
+    /// Opaque BLS attestation payload.
+    #[serde(rename = "blsAttestation")]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "unknown | null"))]
+    pub bls_attestation: Option<serde_json::Value>,
+    /// PQ-finality attestation payload.
+    #[serde(rename = "pqAttestation")]
+    pub pq_attestation: Option<DecodeTxPqAttestation>,
+    /// Opaque finality proof payload.
+    #[serde(rename = "finalityProof")]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "unknown | null"))]
+    pub finality_proof: Option<serde_json::Value>,
+    /// Logs emitted by the transaction.
+    pub logs: Vec<DecodeTxLog>,
+    /// `success`, `reverted`, `unknown`, or a forward-compatible string.
+    pub status: String,
+    /// Node-supplied execution error code when available.
+    #[serde(rename = "errorCode")]
+    pub error_code: Option<String>,
+}
+
+/// Requested block range in `lyth_gapRecords`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "GapRange.ts"))]
+pub struct GapRange {
+    /// First block in the requested range.
+    #[serde(rename = "fromBlock")]
+    pub from_block: u64,
+    /// Last block in the requested range.
+    #[serde(rename = "toBlock")]
+    pub to_block: u64,
+}
+
+/// One retained ingestion/indexing gap.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "GapRecord.ts"))]
+pub struct GapRecord {
+    /// First block in the gap.
+    #[serde(rename = "startBlock")]
+    pub start_block: u64,
+    /// Last block in the gap.
+    #[serde(rename = "endBlock")]
+    pub end_block: u64,
+    /// Number of blocks in the gap.
+    #[serde(rename = "blockCount")]
+    pub block_count: u64,
+    /// Start timestamp in UNIX seconds.
+    #[serde(rename = "startTimestamp")]
+    pub start_timestamp: u64,
+    /// End timestamp in UNIX seconds.
+    #[serde(rename = "endTimestamp")]
+    pub end_timestamp: u64,
+    /// Duration in seconds.
+    #[serde(rename = "durationSeconds")]
+    pub duration_seconds: u64,
+    /// Node-supplied reason label.
+    pub reason: String,
+}
+
+/// `lyth_gapRecords` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "GapRecordsResponse.ts")
+)]
+pub struct GapRecordsResponse {
+    /// Response schema version.
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    /// Requested range.
+    pub range: GapRange,
+    /// Gap rows in the requested range.
+    #[serde(rename = "gapRecords")]
+    pub gap_records: Vec<GapRecord>,
+}
+
+/// Parent vertex row returned by `lyth_dagParents`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "DagParent.ts"))]
+pub struct DagParent {
+    /// Parent vertex hash.
+    #[serde(rename = "vertexHash")]
+    pub vertex_hash: Hash,
+    /// Parent round.
+    pub round: u64,
+}
+
+/// `lyth_dagParents` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "DagParentsResponse.ts")
+)]
+pub struct DagParentsResponse {
+    /// Response schema version.
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    /// Queried round.
+    pub round: u64,
+    /// Parent rows, or `null` when the round has no retained DAG data.
+    pub parents: Option<Vec<DagParent>>,
+}
+
+/// One holder row in `lyth_richList`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "RichListHolder.ts"))]
+pub struct RichListHolder {
+    /// One-based holder rank.
+    pub rank: u32,
+    /// Holder address.
+    pub address: Address,
+    /// Balance as a decimal string.
+    pub balance: String,
+    /// Block height the balance was last observed at.
+    #[serde(rename = "updatedAtBlock")]
+    pub updated_at_block: u64,
+}
+
+/// `lyth_richList` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "RichListResponse.ts"))]
+pub struct RichListResponse {
+    /// Response schema version.
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    /// Queried token id.
+    #[serde(rename = "tokenId")]
+    pub token_id: Hash,
+    /// Result limit applied by the node.
+    pub limit: u32,
+    /// Holder rows.
+    pub holders: Vec<RichListHolder>,
+}
+
+/// Market metadata returned inside `lyth_clobMarket`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "ClobMarketRecord.ts"))]
+pub struct ClobMarketRecord {
+    /// Base token id.
+    #[serde(rename = "baseToken")]
+    pub base_token: Hash,
+    /// Quote token id.
+    #[serde(rename = "quoteToken")]
+    pub quote_token: Hash,
+    /// Best bid price as a decimal string.
+    #[serde(rename = "bestBidPrice")]
+    pub best_bid_price: String,
+    /// Best ask price as a decimal string.
+    #[serde(rename = "bestAskPrice")]
+    pub best_ask_price: String,
+    /// Last trade price as a decimal string.
+    #[serde(rename = "lastTradePrice")]
+    pub last_trade_price: String,
+    /// Total traded base volume as a decimal string.
+    #[serde(rename = "totalVolumeBase")]
+    pub total_volume_base: String,
+    /// Taker fee in basis points.
+    #[serde(rename = "takerFeeBps")]
+    pub taker_fee_bps: u32,
+    /// Tick size as a decimal string.
+    #[serde(rename = "tickSize")]
+    pub tick_size: String,
+    /// Lot size as a decimal string.
+    #[serde(rename = "lotSize")]
+    pub lot_size: String,
+    /// Minimum notional as a decimal string.
+    #[serde(rename = "minNotional")]
+    pub min_notional: String,
+    /// Whether the market is registered on-chain.
+    #[serde(rename = "isRegistered")]
+    pub is_registered: bool,
+    /// Registration block.
+    #[serde(rename = "registeredAtBlock")]
+    pub registered_at_block: u64,
+}
+
+/// `lyth_clobMarket` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "ClobMarketResponse.ts")
+)]
+pub struct ClobMarketResponse {
+    /// Response schema version.
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    /// Queried market id.
+    #[serde(rename = "marketId")]
+    pub market_id: Hash,
+    /// Market metadata, or `null` when the market is not found.
+    pub market: Option<ClobMarketRecord>,
 }
 
 /// Intent accepted by `mesh_buildUnsignedTx`.
