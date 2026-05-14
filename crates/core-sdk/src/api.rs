@@ -12,7 +12,11 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::SdkError;
-use crate::types::BlockSelector;
+use crate::types::{
+    AddressFlowResponse, AddressProfileResponse, BlockSelector, ChainStatsResponse,
+    ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse,
+    ClobTradesResponse, SearchResponse, TxFeedResponse,
+};
 
 /// Typed HTTP API client for `/api/v1`.
 #[derive(Debug, Clone)]
@@ -88,6 +92,24 @@ impl ApiClient {
         self.get("capabilities", &[]).await
     }
 
+    /// `/api/v1/search`.
+    pub async fn search(
+        &self,
+        query: &str,
+        limit: u32,
+    ) -> Result<ApiEnvelope<SearchResponse>, SdkError> {
+        self.get(
+            "search",
+            &[("q", query.to_owned()), ("limit", limit.to_string())],
+        )
+        .await
+    }
+
+    /// `/api/v1/stats`.
+    pub async fn stats(&self) -> Result<ApiEnvelope<ChainStatsResponse>, SdkError> {
+        self.get("stats", &[]).await
+    }
+
     /// `/api/v1/blocks/{block}`.
     pub async fn block(&self, block: BlockSelector) -> Result<ApiEnvelope<ApiBlockData>, SdkError> {
         self.get(&format!("blocks/{}", block_path(block)), &[])
@@ -108,6 +130,19 @@ impl ApiClient {
         .await
     }
 
+    /// `/api/v1/transactions`.
+    pub async fn transactions(
+        &self,
+        limit: u32,
+        cursor: Option<&str>,
+    ) -> Result<ApiEnvelope<TxFeedResponse>, SdkError> {
+        let mut query = vec![("limit", limit.to_string())];
+        if let Some(cursor) = cursor {
+            query.push(("cursor", cursor.to_owned()));
+        }
+        self.get("transactions", &query).await
+    }
+
     /// `/api/v1/transactions/{hash}`.
     pub async fn transaction(
         &self,
@@ -122,6 +157,27 @@ impl ApiClient {
         hash: &str,
     ) -> Result<ApiEnvelope<ApiTransactionReceiptData>, SdkError> {
         self.get(&format!("transactions/{hash}/receipt"), &[]).await
+    }
+
+    /// `/api/v1/addresses/{address}/profile`.
+    pub async fn address_profile(
+        &self,
+        address: &str,
+    ) -> Result<ApiEnvelope<AddressProfileResponse>, SdkError> {
+        self.get(&format!("addresses/{address}/profile"), &[]).await
+    }
+
+    /// `/api/v1/addresses/{address}/flow`.
+    pub async fn address_flow(
+        &self,
+        address: &str,
+        limit: u32,
+    ) -> Result<ApiEnvelope<AddressFlowResponse>, SdkError> {
+        self.get(
+            &format!("addresses/{address}/flow"),
+            &[("limit", limit.to_string())],
+        )
+        .await
     }
 
     /// `/api/v1/addresses/{address}/activity`.
@@ -172,6 +228,68 @@ impl ApiClient {
         operator_id: &str,
     ) -> Result<ApiEnvelope<ApiOperatorData>, SdkError> {
         self.get(&format!("operators/{operator_id}"), &[]).await
+    }
+
+    /// `/api/v1/markets`.
+    pub async fn markets(&self, limit: u32) -> Result<ApiEnvelope<ClobMarketsResponse>, SdkError> {
+        self.get("markets", &[("limit", limit.to_string())]).await
+    }
+
+    /// `/api/v1/markets/{market_id}`.
+    pub async fn market(
+        &self,
+        market_id: &str,
+    ) -> Result<ApiEnvelope<ClobMarketResponse>, SdkError> {
+        self.get(&format!("markets/{market_id}"), &[]).await
+    }
+
+    /// `/api/v1/markets/{market_id}/trades`.
+    pub async fn market_trades(
+        &self,
+        market_id: &str,
+        limit: u32,
+        cursor: Option<&str>,
+    ) -> Result<ApiEnvelope<ClobTradesResponse>, SdkError> {
+        let mut query = vec![("limit", limit.to_string())];
+        if let Some(cursor) = cursor {
+            query.push(("cursor", cursor.to_owned()));
+        }
+        self.get(&format!("markets/{market_id}/trades"), &query)
+            .await
+    }
+
+    /// `/api/v1/markets/{market_id}/ohlc`.
+    pub async fn market_ohlc(
+        &self,
+        market_id: &str,
+        from_block: Option<u64>,
+        to_block: Option<u64>,
+        bucket_blocks: Option<u64>,
+    ) -> Result<ApiEnvelope<ClobOhlcResponse>, SdkError> {
+        let mut query = Vec::new();
+        if let Some(from_block) = from_block {
+            query.push(("fromBlock", from_block.to_string()));
+        }
+        if let Some(to_block) = to_block {
+            query.push(("toBlock", to_block.to_string()));
+        }
+        if let Some(bucket_blocks) = bucket_blocks {
+            query.push(("bucketBlocks", bucket_blocks.to_string()));
+        }
+        self.get(&format!("markets/{market_id}/ohlc"), &query).await
+    }
+
+    /// `/api/v1/markets/{market_id}/orderbook`.
+    pub async fn market_order_book(
+        &self,
+        market_id: &str,
+        levels: u32,
+    ) -> Result<ApiEnvelope<ClobOrderBookResponse>, SdkError> {
+        self.get(
+            &format!("markets/{market_id}/orderbook"),
+            &[("levels", levels.to_string())],
+        )
+        .await
     }
 
     /// `/api/v1/upgrades/status`.
@@ -614,7 +732,7 @@ pub struct ApiUpgradeStatusData {
 
 #[cfg(test)]
 mod tests {
-    use super::api_endpoint_from_rpc_endpoint;
+    use super::{api_endpoint_from_rpc_endpoint, build_url};
 
     #[test]
     fn derives_api_endpoint_from_rpc_endpoint() {
@@ -629,6 +747,24 @@ mod tests {
         assert_eq!(
             api_endpoint_from_rpc_endpoint("https://x.example/api/v1/").unwrap(),
             "https://x.example/api/v1"
+        );
+    }
+
+    #[test]
+    fn build_url_preserves_new_resource_queries() {
+        let url = build_url(
+            "https://rpc.example/api/v1",
+            "markets/0xabc/ohlc",
+            &[
+                ("fromBlock", "90".to_owned()),
+                ("toBlock", "100".to_owned()),
+                ("bucketBlocks", "10".to_owned()),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://rpc.example/api/v1/markets/0xabc/ohlc?fromBlock=90&toBlock=100&bucketBlocks=10"
         );
     }
 }

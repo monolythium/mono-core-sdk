@@ -100,6 +100,8 @@ export type {
   VertexAtRound,
   VerticesAtRoundResponse,
 } from "./client.js";
+export type { ClobMarketRecord } from "./bindings/ClobMarketRecord.js";
+export type { ClobMarketResponse } from "./bindings/ClobMarketResponse.js";
 export {
   CHAIN_REGISTRY,
   CHAIN_REGISTRY_RAW_BASE,
