@@ -202,6 +202,107 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(calls[0].params).toEqual(["0x1111111111111111111111111111111111111111", 75, "0x01"]);
   });
 
+  it("live explorer helpers call the new chain RPC surfaces", async () => {
+    const address = "0x1111111111111111111111111111111111111111";
+    const txHash = `0x${"22".repeat(32)}`;
+    const tokenId = `0x${"33".repeat(32)}`;
+    const marketId = `0x${"44".repeat(32)}`;
+    const { fetch, calls } = mockFetchSequence([
+      {
+        schemaVersion: 1,
+        address,
+        kind: "found",
+      },
+      {
+        txHash,
+        blockHash: `0x${"55".repeat(32)}`,
+        blockNumber: 12,
+        txIndex: 0,
+        from: address,
+        to: null,
+        value: "0",
+        nonce: 1,
+        gasLimit: 21000,
+        maxFeePerGas: "1",
+        maxPriorityFeePerGas: "1",
+        gasUsed: 21000,
+        decodedCalldata: null,
+        memo: null,
+        round: 12,
+        clusterId: null,
+        blsAttestation: null,
+        pqAttestation: null,
+        finalityProof: null,
+        logs: [],
+        status: "success",
+        errorCode: null,
+      },
+      {
+        schemaVersion: 1,
+        range: { fromBlock: 10, toBlock: 12 },
+        gapRecords: [],
+      },
+      {
+        schemaVersion: 1,
+        round: 7,
+        parents: [{ vertexHash: `0x${"66".repeat(32)}`, round: 6 }],
+      },
+      {
+        schemaVersion: 1,
+        tokenId,
+        limit: 5,
+        holders: [{ rank: 1, address, balance: "1000", updatedAtBlock: 12 }],
+      },
+      {
+        schemaVersion: 1,
+        marketId,
+        market: {
+          baseToken: tokenId,
+          quoteToken: `0x${"77".repeat(32)}`,
+          bestBidPrice: "10",
+          bestAskPrice: "11",
+          lastTradePrice: "0",
+          totalVolumeBase: "100",
+          takerFeeBps: 15,
+          tickSize: "1",
+          lotSize: "1",
+          minNotional: "10",
+          isRegistered: true,
+          registeredAtBlock: 9,
+        },
+      },
+    ]);
+    const client = new RpcClient("http://x", { fetch });
+
+    await expect(client.lythAddressActivityKind(address)).resolves.toMatchObject({ kind: "found" });
+    await expect(client.lythDecodeTx(txHash)).resolves.toMatchObject({ status: "success" });
+    await expect(client.lythGapRecords(10n, "12")).resolves.toMatchObject({
+      range: { fromBlock: 10, toBlock: 12 },
+    });
+    await expect(client.lythDagParents("0x7")).resolves.toMatchObject({ round: 7 });
+    await expect(client.lythRichList(tokenId, 5)).resolves.toMatchObject({ limit: 5 });
+    await expect(client.lythClobMarket(marketId)).resolves.toMatchObject({
+      market: { isRegistered: true },
+    });
+
+    expect(calls.map((c) => c.method)).toEqual([
+      "lyth_addressActivityKind",
+      "lyth_decodeTx",
+      "lyth_gapRecords",
+      "lyth_dagParents",
+      "lyth_richList",
+      "lyth_clobMarket",
+    ]);
+    expect(calls.map((c) => c.params)).toEqual([
+      [address],
+      [txHash],
+      [10, 12],
+      [7],
+      [tokenId, 5],
+      [marketId],
+    ]);
+  });
+
   it("lyth_indexerStatus returns null when the wire returns null", async () => {
     const { fetch } = mockFetch(null);
     const client = new RpcClient("http://x", { fetch });

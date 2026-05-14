@@ -11,15 +11,19 @@
 #![cfg(feature = "ts-bindings")]
 
 use monolythium_core_sdk::types::{
-    AccountPolicy, AccountProofResponse, AddressActivityEntry, AddressLabelRecord, AssetPolicy,
+    AccountPolicy, AccountProofResponse, AddressActivityArchiveRedirect, AddressActivityEntry,
+    AddressActivityKindResponse, AddressActivityKindRetention, AddressLabelRecord, AssetPolicy,
     BlockHeader, BlockTag, BlsCertificateResponse, CallRequest, CapabilitiesResponse,
-    CapabilityDescriptor, CheckpointRecord, ClusterDelegatorsResponse, ClusterEntityResponse,
-    ClusterResignationRow, ClusterResignationsResponse, DagSyncStatus, DelegationCapResponse,
-    DelegationHistoryRecord, DelegationRow, DelegationsResponse, EncryptionKeyResponse,
-    EntityRatchetResponse, FeeHistoryResponse, IndexerStatus, MempoolSnapshot, MeshDecodedTx,
-    MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse, PeerSummary, PendingTxSummary,
-    PrecompileDescriptor, RegistryRecord, RoundInfo, StorageProofBatch, SyncStatus,
-    TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt, TransactionView,
+    CapabilityDescriptor, CheckpointRecord, ClobMarketRecord, ClobMarketResponse,
+    ClusterDelegatorsResponse, ClusterEntityResponse, ClusterResignationRow,
+    ClusterResignationsResponse, DagParent, DagParentsResponse, DagSyncStatus, DecodeTxLog,
+    DecodeTxPqAttestation, DecodeTxResponse, DelegationCapResponse, DelegationHistoryRecord,
+    DelegationRow, DelegationsResponse, EncryptionKeyResponse, EntityRatchetResponse,
+    FeeHistoryResponse, GapRange, GapRecord, GapRecordsResponse, IndexerStatus, MempoolSnapshot,
+    MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse, PeerSummary,
+    PendingTxSummary, PrecompileDescriptor, RegistryRecord, RichListHolder, RichListResponse,
+    RoundInfo, StorageProofBatch, SyncStatus, TokenBalanceRecord, TpmAttestationResponse,
+    TransactionReceipt, TransactionView,
 };
 use ts_rs::TS;
 
@@ -33,7 +37,10 @@ fn export_bindings() {
 
     AccountPolicy::export_all_to(&out).expect("AccountPolicy");
     AccountProofResponse::export_all_to(&out).expect("AccountProofResponse");
+    AddressActivityArchiveRedirect::export_all_to(&out).expect("AddressActivityArchiveRedirect");
     AddressActivityEntry::export_all_to(&out).expect("AddressActivityEntry");
+    AddressActivityKindResponse::export_all_to(&out).expect("AddressActivityKindResponse");
+    AddressActivityKindRetention::export_all_to(&out).expect("AddressActivityKindRetention");
     AddressLabelRecord::export_all_to(&out).expect("AddressLabelRecord");
     AssetPolicy::export_all_to(&out).expect("AssetPolicy");
     BlsCertificateResponse::export_all_to(&out).expect("BlsCertificateResponse");
@@ -43,11 +50,18 @@ fn export_bindings() {
     CapabilitiesResponse::export_all_to(&out).expect("CapabilitiesResponse");
     CapabilityDescriptor::export_all_to(&out).expect("CapabilityDescriptor");
     CheckpointRecord::export_all_to(&out).expect("CheckpointRecord");
+    ClobMarketRecord::export_all_to(&out).expect("ClobMarketRecord");
+    ClobMarketResponse::export_all_to(&out).expect("ClobMarketResponse");
     ClusterDelegatorsResponse::export_all_to(&out).expect("ClusterDelegatorsResponse");
     ClusterEntityResponse::export_all_to(&out).expect("ClusterEntityResponse");
     ClusterResignationRow::export_all_to(&out).expect("ClusterResignationRow");
     ClusterResignationsResponse::export_all_to(&out).expect("ClusterResignationsResponse");
+    DagParent::export_all_to(&out).expect("DagParent");
+    DagParentsResponse::export_all_to(&out).expect("DagParentsResponse");
     DagSyncStatus::export_all_to(&out).expect("DagSyncStatus");
+    DecodeTxLog::export_all_to(&out).expect("DecodeTxLog");
+    DecodeTxPqAttestation::export_all_to(&out).expect("DecodeTxPqAttestation");
+    DecodeTxResponse::export_all_to(&out).expect("DecodeTxResponse");
     DelegationCapResponse::export_all_to(&out).expect("DelegationCapResponse");
     DelegationHistoryRecord::export_all_to(&out).expect("DelegationHistoryRecord");
     DelegationRow::export_all_to(&out).expect("DelegationRow");
@@ -55,6 +69,9 @@ fn export_bindings() {
     EncryptionKeyResponse::export_all_to(&out).expect("EncryptionKeyResponse");
     EntityRatchetResponse::export_all_to(&out).expect("EntityRatchetResponse");
     FeeHistoryResponse::export_all_to(&out).expect("FeeHistoryResponse");
+    GapRange::export_all_to(&out).expect("GapRange");
+    GapRecord::export_all_to(&out).expect("GapRecord");
+    GapRecordsResponse::export_all_to(&out).expect("GapRecordsResponse");
     IndexerStatus::export_all_to(&out).expect("IndexerStatus");
     MempoolSnapshot::export_all_to(&out).expect("MempoolSnapshot");
     MeshDecodedTx::export_all_to(&out).expect("MeshDecodedTx");
@@ -65,6 +82,8 @@ fn export_bindings() {
     PendingTxSummary::export_all_to(&out).expect("PendingTxSummary");
     PrecompileDescriptor::export_all_to(&out).expect("PrecompileDescriptor");
     RegistryRecord::export_all_to(&out).expect("RegistryRecord");
+    RichListHolder::export_all_to(&out).expect("RichListHolder");
+    RichListResponse::export_all_to(&out).expect("RichListResponse");
     RoundInfo::export_all_to(&out).expect("RoundInfo");
     StorageProofBatch::export_all_to(&out).expect("StorageProofBatch");
     SyncStatus::export_all_to(&out).expect("SyncStatus");

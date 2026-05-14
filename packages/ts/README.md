@@ -21,12 +21,18 @@ console.log(`chain ${chainId} at height ${head}`);
 
 const clusters = await client.lythClusterDirectory(0, 100);
 console.log(`${clusters.totalClusters} cluster descriptors`);
+
+const decoded = await client.lythDecodeTx("0x...");
+const holders = await client.lythRichList("0x...", 25);
+console.log(decoded.status, holders.holders.length);
 ```
 
 The client wraps every JSON-RPC method served by a Monolythium node — the
 EVM-compatible `eth_*` / `net_*` / `web3_*` surface and the chain-native
-`lyth_*` and `debug_*` namespaces. Wire types are generated from the Rust
-SDK via `ts-rs`; see `src/bindings/`.
+`lyth_*` and `debug_*` namespaces, including live explorer helpers such as
+`lyth_decodeTx`, `lyth_gapRecords`, `lyth_dagParents`, `lyth_richList`,
+`lyth_clobMarket`, and `lyth_addressActivityKind`. Wire types are generated
+from the Rust SDK via `ts-rs`; see `src/bindings/`.
 
 Quantities surface as `bigint` to preserve full precision. Use
 `parseQuantity` only when you know the value fits in `Number.MAX_SAFE_INTEGER`.
