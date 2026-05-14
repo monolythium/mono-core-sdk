@@ -53,65 +53,53 @@ export const TESTNET_69420: ChainInfo = {
   description:
     "Live development testnet for Monolythium v4.0 / LythiumDAG-BFT. Foundation-operated. Wipe + regenesis is allowed without notice — do NOT store value on this network.",
   genesis_hash:
-    "0x9e5c92dc48207755617a8067e57537717bed7d43a387a539b993505cb13626c2",
-  binary_sha: "b652fd7",
+    "0x325057e476b7be3730a22c92b9289f4a14a3414a2a081bd279b43eeba36b0075",
+  binary_sha: "44a9ec4",
   rpc: [
-    {
-      url: "http://178.105.12.9:8545",
-      provider: "monolythium-foundation",
-      region: "fsn1",
-      tier: "official",
-      notes: "val-1; primary foundation seed",
-    },
     {
       url: "http://178.105.15.216:8545",
       provider: "monolythium-foundation",
       region: "fsn1",
       tier: "official",
-      notes: "val-2",
+      notes: "operator-2; primary foundation seed (operator-1 offline pending BLS key reissue)",
     },
     {
       url: "http://178.104.233.182:8545",
       provider: "monolythium-foundation",
       region: "nbg1",
       tier: "official",
-      notes: "val-3",
+      notes: "operator-3",
     },
     {
       url: "http://65.108.94.1:8545",
       provider: "monolythium-foundation",
       region: "hel1",
       tier: "official",
-      notes: "val-4",
+      notes: "operator-4",
     },
     {
       url: "http://95.216.154.155:8545",
       provider: "monolythium-foundation",
       region: "hel1",
       tier: "official",
-      notes: "val-5",
+      notes: "operator-5",
     },
     {
       url: "http://87.99.145.48:8545",
       provider: "monolythium-foundation",
       region: "ash",
       tier: "official",
-      notes: "val-6; US east",
+      notes: "operator-6; US east",
     },
     {
       url: "http://5.223.85.76:8545",
       provider: "monolythium-foundation",
       region: "sin",
       tier: "official",
-      notes: "val-7; APAC",
+      notes: "operator-7; APAC",
     },
   ],
   p2p: [
-    {
-      multiaddr:
-        "/ip4/178.105.12.9/tcp/29898/p2p/12D3KooWL5wVP4WaZ4DFqsW5x5bpEvvuba85wnixHjVvAauzM1tA",
-      region: "fsn1",
-    },
     {
       multiaddr:
         "/ip4/178.105.15.216/tcp/29898/p2p/12D3KooWDKk9ALxqchazXGcRGbqyopWtAGRbf4WQFS2dABV7gQGb",
@@ -150,7 +138,7 @@ export const CHAIN_REGISTRY: ChainRegistry = {
 };
 
 export const CHAIN_REGISTRY_RAW_BASE =
-  "https://raw.githubusercontent.com/monolythium-vision/chain-registry/main/chains" as const;
+  "https://raw.githubusercontent.com/monolythium-vision/chain-registry/master/chains" as const;
 
 export function getChainInfo(network: NetworkSlug | string): ChainInfo {
   const info = CHAIN_REGISTRY[network];
