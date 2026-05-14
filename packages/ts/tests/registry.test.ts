@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CHAIN_REGISTRY,
+  CHAIN_REGISTRY_RAW_BASE,
   RpcClient,
   TESTNET_69420,
   fetchChainInfoLatest,
@@ -13,18 +14,18 @@ const TESTNET_TOML = `
 chain_id     = 69420
 network      = "testnet-69420"
 display_name = "Monolythium Testnet"
-genesis_hash = "0x9e5c92dc48207755617a8067e57537717bed7d43a387a539b993505cb13626c2"
-binary_sha   = "b652fd7"
+genesis_hash = "0x325057e476b7be3730a22c92b9289f4a14a3414a2a081bd279b43eeba36b0075"
+binary_sha   = "44a9ec4"
 
 [[rpc]]
-url      = "http://178.105.12.9:8545"
+url      = "http://178.105.15.216:8545"
 provider = "monolythium-foundation"
 region   = "fsn1"
 tier     = "official"
-notes    = "primary"
+notes    = "operator-2; primary foundation seed (operator-1 offline pending BLS key reissue)"
 
 [[p2p]]
-multiaddr = "/ip4/178.105.12.9/tcp/29898/p2p/12D3KooWL5wVP4WaZ4DFqsW5x5bpEvvuba85wnixHjVvAauzM1tA"
+multiaddr = "/ip4/178.105.15.216/tcp/29898/p2p/12D3KooWDKk9ALxqchazXGcRGbqyopWtAGRbf4WQFS2dABV7gQGb"
 region    = "fsn1"
 `;
 
@@ -32,11 +33,10 @@ describe("chain registry snapshot", () => {
   it("vendors the live testnet RPC IP list", () => {
     expect(TESTNET_69420.chain_id).toBe(69420);
     expect(TESTNET_69420.genesis_hash).toBe(
-      "0x9e5c92dc48207755617a8067e57537717bed7d43a387a539b993505cb13626c2",
+      "0x325057e476b7be3730a22c92b9289f4a14a3414a2a081bd279b43eeba36b0075",
     );
-    expect(TESTNET_69420.binary_sha).toBe("b652fd7");
+    expect(TESTNET_69420.binary_sha).toBe("44a9ec4");
     expect(getRpcEndpoints("testnet-69420").map((r) => r.url)).toEqual([
-      "http://178.105.12.9:8545",
       "http://178.105.15.216:8545",
       "http://178.104.233.182:8545",
       "http://65.108.94.1:8545",
@@ -44,12 +44,12 @@ describe("chain registry snapshot", () => {
       "http://87.99.145.48:8545",
       "http://5.223.85.76:8545",
     ]);
-    expect(getP2pSeeds("testnet-69420")).toHaveLength(7);
+    expect(getP2pSeeds("testnet-69420")).toHaveLength(6);
   });
 
   it("constructs a client from the first registry endpoint without probing", async () => {
     const client = await RpcClient.forNetwork("testnet-69420");
-    expect(client.endpoint).toBe("http://178.105.12.9:8545");
+    expect(client.endpoint).toBe("http://178.105.15.216:8545");
   });
 
   it("probes endpoints until one answers with the expected chain id", async () => {
@@ -83,12 +83,18 @@ describe("chain registry snapshot", () => {
     const parsed = parseChainRegistryToml(TESTNET_TOML);
     expect(parsed.network).toBe("testnet-69420");
     expect(parsed.rpc[0]).toMatchObject({
-      url: "http://178.105.12.9:8545",
+      url: "http://178.105.15.216:8545",
       provider: "monolythium-foundation",
       region: "fsn1",
       tier: "official",
     });
-    expect(parsed.p2p[0].multiaddr).toContain("/ip4/178.105.12.9/");
+    expect(parsed.p2p[0].multiaddr).toContain("/ip4/178.105.15.216/");
+  });
+
+  it("fetches latest registry files from the chain-registry master branch", () => {
+    expect(CHAIN_REGISTRY_RAW_BASE).toBe(
+      "https://raw.githubusercontent.com/monolythium-vision/chain-registry/master/chains",
+    );
   });
 
   it("can fetch the latest raw registry TOML when explicitly requested", async () => {
