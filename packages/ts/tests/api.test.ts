@@ -110,6 +110,37 @@ describe("ApiClient", () => {
     });
   });
 
+  it("wraps search, transaction-feed, address aggregate, stats, and market routes", async () => {
+    const { fetch, calls } = mockGet(apiEnvelope({ schemaVersion: 1 }));
+    const client = new ApiClient("https://rpc.example", { fetch });
+    const marketId = `0x${"55".repeat(32)}`;
+
+    await client.search("0xabc", 5);
+    await client.stats();
+    await client.transactions(25, "0x1234");
+    await client.addressProfile("0x1111111111111111111111111111111111111111");
+    await client.addressFlow("0x1111111111111111111111111111111111111111", 75);
+    await client.markets(10);
+    await client.market(marketId);
+    await client.marketTrades(marketId, 15, "0xabcd");
+    await client.marketOhlc(marketId, 90n, 100n, 10n);
+    await client.marketOrderBook(marketId, 12);
+
+    expect(calls.map((c) => c.url)).toEqual([
+      "https://rpc.example/api/v1/search?q=0xabc&limit=5",
+      "https://rpc.example/api/v1/stats",
+      "https://rpc.example/api/v1/transactions?limit=25&cursor=0x1234",
+      "https://rpc.example/api/v1/addresses/0x1111111111111111111111111111111111111111/profile",
+      "https://rpc.example/api/v1/addresses/0x1111111111111111111111111111111111111111/flow?limit=75",
+      "https://rpc.example/api/v1/markets?limit=10",
+      `https://rpc.example/api/v1/markets/${marketId}`,
+      `https://rpc.example/api/v1/markets/${marketId}/trades?limit=15&cursor=0xabcd`,
+      `https://rpc.example/api/v1/markets/${marketId}/ohlc?fromBlock=90&toBlock=100&bucketBlocks=10`,
+      `https://rpc.example/api/v1/markets/${marketId}/orderbook?levels=12`,
+    ]);
+    expect(calls.every((c) => c.method === "GET")).toBe(true);
+  });
+
   it("maps API error envelopes to SdkError.rpc", async () => {
     const { fetch } = mockGet(
       {

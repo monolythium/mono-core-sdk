@@ -7,8 +7,20 @@
  */
 
 import { SdkError } from "./error.js";
+import type { ClobMarketResponse } from "./bindings/ClobMarketResponse.js";
 import type { BlockSelector } from "./types.js";
 import { encodeBlockSelector } from "./types.js";
+import type {
+  AddressFlowResponse,
+  AddressProfileResponse,
+  ChainStatsResponse,
+  ClobMarketsResponse,
+  ClobOhlcResponse,
+  ClobOrderBookResponse,
+  ClobTradesResponse,
+  SearchResponse,
+  TxFeedResponse,
+} from "./client.js";
 
 const SDK_VERSION = "0.1.0";
 
@@ -364,6 +376,14 @@ export class ApiClient {
     return this.get("/capabilities");
   }
 
+  async search(query: string, limit = 10): Promise<ApiEnvelope<SearchResponse>> {
+    return this.get("/search", { q: query, limit });
+  }
+
+  async stats(): Promise<ApiEnvelope<ChainStatsResponse>> {
+    return this.get("/stats");
+  }
+
   async block(block: BlockSelector = "latest"): Promise<ApiEnvelope<ApiBlockData>> {
     return this.get(`/blocks/${encodePathBlock(block)}`);
   }
@@ -376,12 +396,24 @@ export class ApiClient {
     return this.get(`/blocks/${encodePathBlock(block)}/transactions`, { page, limit });
   }
 
+  async transactions(limit = 50, cursor?: string | null): Promise<ApiEnvelope<TxFeedResponse>> {
+    return this.get("/transactions", { limit, cursor });
+  }
+
   async transaction(hash: string): Promise<ApiEnvelope<ApiTransactionData>> {
     return this.get(`/transactions/${encodePathSegment(hash)}`);
   }
 
   async transactionReceipt(hash: string): Promise<ApiEnvelope<ApiTransactionReceiptData>> {
     return this.get(`/transactions/${encodePathSegment(hash)}/receipt`);
+  }
+
+  async addressProfile(address: string): Promise<ApiEnvelope<AddressProfileResponse>> {
+    return this.get(`/addresses/${encodePathSegment(address)}/profile`);
+  }
+
+  async addressFlow(address: string, limit = 250): Promise<ApiEnvelope<AddressFlowResponse>> {
+    return this.get(`/addresses/${encodePathSegment(address)}/flow`, { limit });
   }
 
   async addressActivity(
@@ -409,6 +441,42 @@ export class ApiClient {
 
   async operator(operatorId: string): Promise<ApiEnvelope<ApiOperatorData>> {
     return this.get(`/operators/${encodePathSegment(operatorId)}`);
+  }
+
+  async markets(limit = 50): Promise<ApiEnvelope<ClobMarketsResponse>> {
+    return this.get("/markets", { limit });
+  }
+
+  async market(marketId: string): Promise<ApiEnvelope<ClobMarketResponse>> {
+    return this.get(`/markets/${encodePathSegment(marketId)}`);
+  }
+
+  async marketTrades(
+    marketId: string,
+    limit = 50,
+    cursor?: string | null,
+  ): Promise<ApiEnvelope<ClobTradesResponse>> {
+    return this.get(`/markets/${encodePathSegment(marketId)}/trades`, { limit, cursor });
+  }
+
+  async marketOhlc(
+    marketId: string,
+    fromBlock?: number | bigint | null,
+    toBlock?: number | bigint | null,
+    bucketBlocks?: number | bigint | null,
+  ): Promise<ApiEnvelope<ClobOhlcResponse>> {
+    return this.get(`/markets/${encodePathSegment(marketId)}/ohlc`, {
+      fromBlock,
+      toBlock,
+      bucketBlocks,
+    });
+  }
+
+  async marketOrderBook(
+    marketId: string,
+    levels = 20,
+  ): Promise<ApiEnvelope<ClobOrderBookResponse>> {
+    return this.get(`/markets/${encodePathSegment(marketId)}/orderbook`, { levels });
   }
 
   async upgradeStatus(height?: BlockSelector | null): Promise<ApiEnvelope<ApiUpgradeStatusData>> {
