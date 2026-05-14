@@ -21,6 +21,8 @@ The SDK tracks the live `mono-core` RPC and precompile surface. Wire types under
 
 - Typed `RpcClient` wrappers for `eth_*`, `net_*`, `web3_*`, `lyth_*`, and
   gated `debug_*` methods.
+- Live explorer RPC helpers for decoded transactions, address activity
+  coverage, gap records, DAG parents, rich lists, and CLOB market metadata.
 - Typed `ApiClient` wrappers for the explorer-facing `/api/v1` HTTP surface:
   health, capabilities, blocks, block transactions, transactions, receipts,
   address activity, clusters, operators, and upgrade status.
