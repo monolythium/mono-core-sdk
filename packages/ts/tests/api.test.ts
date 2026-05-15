@@ -125,6 +125,7 @@ describe("ApiClient", () => {
     await client.marketTrades(marketId, 15, "0xabcd");
     await client.marketOhlc(marketId, 90n, 100n, 10n);
     await client.marketOrderBook(marketId, 12);
+    await client.serviceProbe(`0x${"12".repeat(32)}`, "0x100");
 
     expect(calls.map((c) => c.url)).toEqual([
       "https://rpc.example/api/v1/search?q=0xabc&limit=5",
@@ -137,6 +138,7 @@ describe("ApiClient", () => {
       `https://rpc.example/api/v1/markets/${marketId}/trades?limit=15&cursor=0xabcd`,
       `https://rpc.example/api/v1/markets/${marketId}/ohlc?fromBlock=90&toBlock=100&bucketBlocks=10`,
       `https://rpc.example/api/v1/markets/${marketId}/orderbook?levels=12`,
+      `https://rpc.example/api/v1/service-probes/0x${"12".repeat(32)}/0x100`,
     ]);
     expect(calls.every((c) => c.method === "GET")).toBe(true);
   });

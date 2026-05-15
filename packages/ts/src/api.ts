@@ -22,6 +22,7 @@ import type {
   RuntimeBuildProvenance,
   RuntimeUpgradeStatus,
   SearchResponse,
+  ServiceProbeResponse,
   TxFeedResponse,
 } from "./client.js";
 
@@ -330,6 +331,13 @@ export interface ApiOperatorData {
   source: { registryProvider: string };
 }
 
+export interface ApiServiceProbeData {
+  peerId: string;
+  serviceMask: number;
+  probe: ServiceProbeResponse | null;
+  source: { registryProvider: string };
+}
+
 export interface ApiUpgradePlanStatus {
   upgradeId: string;
   activationHeight: number;
@@ -488,6 +496,15 @@ export class ApiClient {
 
   async operator(operatorId: string): Promise<ApiEnvelope<ApiOperatorData>> {
     return this.get(`/operators/${encodePathSegment(operatorId)}`);
+  }
+
+  async serviceProbe(
+    peerId: string,
+    serviceMask: number | string,
+  ): Promise<ApiEnvelope<ApiServiceProbeData>> {
+    return this.get(
+      `/service-probes/${encodePathSegment(peerId)}/${encodePathSegment(serviceMask)}`,
+    );
   }
 
   async markets(limit = 50): Promise<ApiEnvelope<ClobMarketsResponse>> {
