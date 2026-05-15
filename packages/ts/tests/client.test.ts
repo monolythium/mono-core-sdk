@@ -5,7 +5,14 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { RpcClient, SdkError, parseQuantity, parseQuantityBig } from "../src/index.js";
+import {
+  NODE_REGISTRY_CAPABILITIES,
+  SERVICE_PROBE_STATUS,
+  RpcClient,
+  SdkError,
+  parseQuantity,
+  parseQuantityBig,
+} from "../src/index.js";
 
 interface CapturedCall {
   method: string;
@@ -48,7 +55,7 @@ function mockFetchSequence(replies: unknown[]): {
     }
     const parsed = JSON.parse(body) as { method: string; params: unknown };
     calls.push({ method: parsed.method, params: parsed.params, url });
-    const result = replies[i++] ?? replies.at(-1);
+    const result = i < replies.length ? replies[i++] : replies.at(-1);
     return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }), {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -883,6 +890,76 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
       "lyth_clusterDirectory",
     ]);
     expect(calls.map((c) => c.params)).toEqual([[operatorId], [0], [0, 25]]);
+  });
+
+  it("wraps public-service probe read and signed report transport", async () => {
+    const peerId = `0x${"12".repeat(32)}`;
+    const digest = `0x${"34".repeat(32)}`;
+    const reporter = `0x${"56".repeat(20)}`;
+    const { fetch, calls } = mockFetchSequence([
+      {
+        serviceMask: NODE_REGISTRY_CAPABILITIES.SERVES_PUBLIC_API,
+        status: "reachable",
+        statusCode: SERVICE_PROBE_STATUS.REACHABLE,
+        lastProbeBlock: 123,
+        latencyMs: 42,
+        probeDigest: digest,
+        reporter,
+      },
+      null,
+      {
+        txHash: `0x${"78".repeat(32)}`,
+        peerId,
+        serviceMask: NODE_REGISTRY_CAPABILITIES.SERVES_PUBLIC_API,
+        statusCode: SERVICE_PROBE_STATUS.REACHABLE,
+      },
+    ]);
+    const client = new RpcClient("http://x", { fetch });
+
+    await expect(
+      client.lythGetServiceProbe(peerId, NODE_REGISTRY_CAPABILITIES.SERVES_PUBLIC_API),
+    ).resolves.toMatchObject({
+      status: "reachable",
+      lastProbeBlock: 123,
+      latencyMs: 42,
+    });
+    await expect(
+      client.lythGetServiceProbe(peerId, NODE_REGISTRY_CAPABILITIES.SERVES_RPC),
+    ).resolves.toBeNull();
+    await expect(
+      client.lythReportServiceProbe({
+        peerId,
+        serviceMask: NODE_REGISTRY_CAPABILITIES.SERVES_PUBLIC_API,
+        status: SERVICE_PROBE_STATUS.REACHABLE,
+        latencyMs: 42,
+        probeDigest: digest,
+        signedRawTx: "0x0102",
+      }),
+    ).resolves.toMatchObject({
+      peerId,
+      serviceMask: NODE_REGISTRY_CAPABILITIES.SERVES_PUBLIC_API,
+      statusCode: SERVICE_PROBE_STATUS.REACHABLE,
+    });
+
+    expect(calls.map((c) => c.method)).toEqual([
+      "lyth_getServiceProbe",
+      "lyth_getServiceProbe",
+      "lyth_reportServiceProbe",
+    ]);
+    expect(calls.map((c) => c.params)).toEqual([
+      [peerId, NODE_REGISTRY_CAPABILITIES.SERVES_PUBLIC_API],
+      [peerId, NODE_REGISTRY_CAPABILITIES.SERVES_RPC],
+      [
+        {
+          peerId,
+          serviceMask: NODE_REGISTRY_CAPABILITIES.SERVES_PUBLIC_API,
+          status: SERVICE_PROBE_STATUS.REACHABLE,
+          latencyMs: 42,
+          probeDigest: digest,
+          signedRawTx: "0x0102",
+        },
+      ],
+    ]);
   });
 });
 
