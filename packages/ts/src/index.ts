@@ -41,6 +41,7 @@ export type {
   ApiOperatorInfo,
   ApiQueryValue,
   ApiRuntimeProvenanceData,
+  ApiServiceProbeData,
   ApiTransactionData,
   ApiTransactionReceipt,
   ApiTransactionReceiptData,
