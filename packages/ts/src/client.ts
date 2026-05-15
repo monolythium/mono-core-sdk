@@ -449,6 +449,39 @@ export interface LythUpgradeStatusResponse {
   pending: LythUpgradePlanStatus[];
 }
 
+export interface RuntimeBuildProvenance {
+  clientName: string;
+  version: string;
+  gitCommit: string;
+  gitDirty: boolean;
+  buildTimestampUtc: number;
+  rustc: string;
+  target: string;
+  profile: string;
+  features: string;
+  p2pProtocolVersion: number;
+  binarySha256: string | null;
+  stateMigrations: string[];
+}
+
+export interface RuntimeUpgradeStatus {
+  blockNumber: number;
+  configured: boolean;
+  planCount: number;
+  state: "active" | "none" | "pending" | string;
+  active: LythUpgradePlanStatus | null;
+  pending: LythUpgradePlanStatus[];
+}
+
+export interface RuntimeProvenanceResponse {
+  schemaVersion: number;
+  chainId: number;
+  genesisHash: string | null;
+  latestHeight: number;
+  runtime: RuntimeBuildProvenance;
+  upgrade: RuntimeUpgradeStatus | null;
+}
+
 export type TxStatusResponse = TxStatusFoundResponse | TxStatusNotFoundResponse;
 
 export interface TxStatusFoundResponse {
@@ -1162,6 +1195,11 @@ export class RpcClient {
   async lythUpgradeStatus(block?: BlockSelector): Promise<LythUpgradeStatusResponse> {
     const params = block === undefined ? [] : [encodeBlockSelector(block)];
     return this.call("lyth_upgradeStatus", params);
+  }
+
+  /** `lyth_runtimeProvenance` — public-safe build/runtime provenance. */
+  async lythRuntimeProvenance(): Promise<RuntimeProvenanceResponse> {
+    return this.call("lyth_runtimeProvenance", []);
   }
 
   /** `lyth_txStatus` — discriminated transaction lookup outcome. */
