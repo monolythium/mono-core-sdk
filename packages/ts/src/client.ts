@@ -8,6 +8,11 @@
  */
 
 import { SdkError } from "./error.js";
+import {
+  isConcreteServiceProbeStatus,
+  isSinglePublicServiceProbeMask,
+  isValidPublicServiceProbeMask,
+} from "./node-registry.js";
 import { getChainInfo, type ChainInfo, type ChainRegistry, type NetworkSlug } from "./registry.js";
 import type {
   AccountPolicy,
@@ -480,6 +485,39 @@ export interface RuntimeProvenanceResponse {
   latestHeight: number;
   runtime: RuntimeBuildProvenance;
   upgrade: RuntimeUpgradeStatus | null;
+}
+
+export type ServiceProbeStatusLabel =
+  | "unknown"
+  | "reachable"
+  | "degraded"
+  | "unreachable"
+  | string;
+
+export interface ServiceProbeResponse {
+  serviceMask: number;
+  status: ServiceProbeStatusLabel;
+  statusCode: number;
+  lastProbeBlock: number;
+  latencyMs: number;
+  probeDigest: string;
+  reporter: string;
+}
+
+export interface ReportServiceProbeRequest {
+  peerId: string;
+  serviceMask: number;
+  status: number;
+  latencyMs: number;
+  probeDigest: string;
+  signedRawTx: string;
+}
+
+export interface ReportServiceProbeResponse {
+  txHash: string;
+  peerId: string;
+  serviceMask: number;
+  statusCode: number;
 }
 
 export type TxStatusResponse = TxStatusFoundResponse | TxStatusNotFoundResponse;
@@ -1113,6 +1151,37 @@ export class RpcClient {
     return normalizeOperatorInfo(await this.call("lyth_operatorInfo", [operatorId]));
   }
 
+  /** `lyth_getServiceProbe` — latest external reachability report for one public service. */
+  async lythGetServiceProbe(
+    peerId: string,
+    serviceMask: number,
+  ): Promise<ServiceProbeResponse | null> {
+    assertHexBytes(peerId, 32, "peerId");
+    if (!isSinglePublicServiceProbeMask(serviceMask)) {
+      throw SdkError.malformed("serviceMask must contain exactly one public-service bit");
+    }
+    const value = await this.call<unknown>("lyth_getServiceProbe", [peerId, serviceMask]);
+    if (value === null || value === undefined) return null;
+    return normalizeServiceProbe(value);
+  }
+
+  /** `lyth_reportServiceProbe` — submit a pre-signed public-service probe report. */
+  async lythReportServiceProbe(
+    req: ReportServiceProbeRequest,
+  ): Promise<ReportServiceProbeResponse> {
+    assertHexBytes(req.peerId, 32, "peerId");
+    if (!isValidPublicServiceProbeMask(req.serviceMask)) {
+      throw SdkError.malformed("serviceMask must name one or more public-service bits");
+    }
+    if (!isConcreteServiceProbeStatus(req.status)) {
+      throw SdkError.malformed("status must be reachable, degraded, or unreachable");
+    }
+    assertSafeUint32(req.latencyMs, "latencyMs");
+    assertHexBytes(req.probeDigest, 32, "probeDigest");
+    assertNonEmptyHex(req.signedRawTx, "signedRawTx");
+    return this.call("lyth_reportServiceProbe", [req]);
+  }
+
   /** `lyth_clusterStatus` — canonical cluster status envelope. */
   async lythClusterStatus(clusterId: number): Promise<ClusterStatusResponse> {
     return normalizeClusterStatus(await this.call("lyth_clusterStatus", [clusterId]));
@@ -1448,6 +1517,47 @@ function expectObject(value: unknown, label: string): Record<string, unknown> {
     throw SdkError.malformed(`${label} must be an object`);
   }
   return value as Record<string, unknown>;
+}
+
+function normalizeServiceProbe(value: unknown): ServiceProbeResponse {
+  const row = expectObject(value, "service probe response");
+  return {
+    serviceMask: parseRpcNumber(row["serviceMask"], "service probe serviceMask"),
+    status: String(row["status"]),
+    statusCode: parseRpcNumber(row["statusCode"], "service probe statusCode"),
+    lastProbeBlock: parseRpcNumber(row["lastProbeBlock"], "service probe lastProbeBlock"),
+    latencyMs: parseRpcNumber(row["latencyMs"], "service probe latencyMs"),
+    probeDigest: String(row["probeDigest"]),
+    reporter: String(row["reporter"]),
+  };
+}
+
+function assertSafeUint32(value: number, label: string): void {
+  if (!Number.isInteger(value) || value < 0 || value > 0xffff_ffff) {
+    throw SdkError.malformed(`${label} must be a uint32`);
+  }
+}
+
+function assertHexBytes(value: string, expectedLen: number, label: string): void {
+  const body = hexBody(value, label);
+  if (body.length !== expectedLen * 2) {
+    throw SdkError.malformed(`${label} must be ${expectedLen} bytes`);
+  }
+}
+
+function assertNonEmptyHex(value: string, label: string): void {
+  const body = hexBody(value, label);
+  if (body.length === 0) {
+    throw SdkError.malformed(`${label} must be non-empty`);
+  }
+}
+
+function hexBody(value: string, label: string): string {
+  const body = value.startsWith("0x") || value.startsWith("0X") ? value.slice(2) : value;
+  if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
+    throw SdkError.malformed(`${label} must be hex bytes`);
+  }
+  return body;
 }
 
 function normalizeOperatorInfo(value: unknown): OperatorInfoResponse {

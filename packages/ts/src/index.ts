@@ -89,6 +89,10 @@ export type {
   RuntimeBuildProvenance,
   RuntimeProvenanceResponse,
   RuntimeUpgradeStatus,
+  ReportServiceProbeRequest,
+  ReportServiceProbeResponse,
+  ServiceProbeResponse,
+  ServiceProbeStatusLabel,
   SigningEntryStatus,
   SearchHit,
   SearchResponse,
@@ -128,6 +132,22 @@ export { SdkError } from "./error.js";
 export * from "./types.js";
 export { BURN_ADDR, PRECOMPILE_ADDRESSES } from "./consts.js";
 export type { PrecompileName, PrecompileAddress } from "./consts.js";
+export {
+  NODE_REGISTRY_CAPABILITIES,
+  NODE_REGISTRY_CAPABILITY_MASK,
+  NODE_REGISTRY_PUBLIC_SERVICE_MASK,
+  NODE_REGISTRY_SELECTORS,
+  NodeRegistryError,
+  SERVICE_PROBE_STATUS,
+  encodeReportServiceProbeCalldata,
+  isConcreteServiceProbeStatus,
+  isSinglePublicServiceProbeMask,
+  isValidNodeRegistryCapabilities,
+  isValidPublicServiceProbeMask,
+  nodeRegistryAddressHex,
+  serviceProbeStatusLabel,
+} from "./node-registry.js";
+export type { ReportServiceProbeCalldataArgs } from "./node-registry.js";
 export {
   ADDRESS_HRP,
   AddressError,
