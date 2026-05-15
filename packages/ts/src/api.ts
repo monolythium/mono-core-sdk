@@ -18,6 +18,9 @@ import type {
   ClobOhlcResponse,
   ClobOrderBookResponse,
   ClobTradesResponse,
+  OperatorCapabilitiesResponse,
+  RuntimeBuildProvenance,
+  RuntimeUpgradeStatus,
   SearchResponse,
   TxFeedResponse,
 } from "./client.js";
@@ -103,6 +106,12 @@ export interface ApiCapabilitiesResponse {
     protocolVersion: string;
     debugEnabled: boolean;
   };
+  streams: {
+    transport: "sse" | string;
+    index: string;
+    topicEndpoint: string;
+    keepAliveSeconds: number;
+  };
   indexer: ApiIndexerStatus;
   rateLimit: {
     perIp: {
@@ -110,6 +119,34 @@ export interface ApiCapabilitiesResponse {
       burst: number;
     };
     apiKeysConfigured: boolean;
+    apiKeyOverrideCount: number;
+    budgetIdentity: "api_key_or_resolved_client_ip" | string;
+    defaultCostBudgetPerMin: number;
+    retryAfterHeader: boolean;
+    costWeights: {
+      api: Record<string, number>;
+      jsonRpc: Record<string, number>;
+    };
+  };
+  operatorCapabilities: {
+    jsonRpcMethod: "lyth_operatorCapabilities" | string;
+    schemaVersion: number | null;
+    surfaces: OperatorCapabilitiesResponse["surfaces"];
+  };
+  accessPolicy: {
+    trustedProxy: {
+      configured: boolean;
+      cidrCount: number;
+    };
+    clientCidr: {
+      unrestricted: boolean;
+      allowCidrCount: number;
+      denyCidrCount: number;
+    };
+    paidServiceEligibility: {
+      source: "external_probe" | string;
+      selfDeclaration: boolean;
+    };
   };
 }
 
@@ -319,6 +356,12 @@ export interface ApiUpgradeStatusData {
   source: { chainProvider: string };
 }
 
+export interface ApiRuntimeProvenanceData {
+  runtime: RuntimeBuildProvenance;
+  upgrade: RuntimeUpgradeStatus | null;
+  source: { chainProvider: string };
+}
+
 export type ApiQueryValue = string | number | bigint | boolean | null | undefined;
 
 export function apiEndpointFromRpcEndpoint(endpoint: string): string {
@@ -374,6 +417,10 @@ export class ApiClient {
 
   async capabilities(): Promise<ApiCapabilitiesResponse> {
     return this.get("/capabilities");
+  }
+
+  async provenance(): Promise<ApiEnvelope<ApiRuntimeProvenanceData>> {
+    return this.get("/provenance");
   }
 
   async search(query: string, limit = 10): Promise<ApiEnvelope<SearchResponse>> {

@@ -40,6 +40,7 @@ export type {
   ApiOperatorData,
   ApiOperatorInfo,
   ApiQueryValue,
+  ApiRuntimeProvenanceData,
   ApiTransactionData,
   ApiTransactionReceipt,
   ApiTransactionReceiptData,
