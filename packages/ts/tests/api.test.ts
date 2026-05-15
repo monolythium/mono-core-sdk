@@ -141,6 +141,96 @@ describe("ApiClient", () => {
     expect(calls.every((c) => c.method === "GET")).toBe(true);
   });
 
+  it("reads runtime provenance from /api/v1/provenance", async () => {
+    const { fetch, calls } = mockGet(
+      apiEnvelope({
+        runtime: {
+          clientName: "protocore",
+          version: "0.99.0",
+          gitCommit: "feedface",
+          gitDirty: false,
+          buildTimestampUtc: 1_747_300_000,
+          rustc: "rustc 1.85.0",
+          target: "x86_64-unknown-linux-gnu",
+          profile: "release",
+          features: "mdbx",
+          p2pProtocolVersion: 5,
+          binarySha256: "b".repeat(64),
+          stateMigrations: [],
+        },
+        upgrade: null,
+        source: { chainProvider: "LiveChainProvider" },
+      }),
+    );
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    const provenance = await client.provenance();
+
+    expect(provenance.data.runtime.clientName).toBe("protocore");
+    expect(provenance.data.runtime.p2pProtocolVersion).toBe(5);
+    expect(provenance.data.source.chainProvider).toBe("LiveChainProvider");
+    expect(calls[0]).toEqual({
+      url: "https://rpc.example/api/v1/provenance",
+      method: "GET",
+    });
+  });
+
+  it("types the expanded capabilities envelope", async () => {
+    const { fetch } = mockGet({
+      schemaVersion: 1,
+      chainId: 69420,
+      genesisHash: `0x${"00".repeat(32)}`,
+      clientVersion: "0.1.0",
+      latest: { available: true, height: 100 },
+      api: { enabled: true, version: "v1", docs: "/api/v1/docs", openapi: "/api/v1/openapi.json" },
+      jsonRpc: { endpoint: "/", webSocket: "/ws", protocolVersion: "2.0", debugEnabled: false },
+      streams: {
+        transport: "sse",
+        index: "/api/v1/streams",
+        topicEndpoint: "/api/v1/streams/{topic}",
+        keepAliveSeconds: 15,
+      },
+      indexer: { enabled: true, currentHeight: 100 },
+      rateLimit: {
+        perIp: { ratePerSec: 20, burst: 40 },
+        apiKeysConfigured: true,
+        apiKeyOverrideCount: 2,
+        budgetIdentity: "api_key_or_resolved_client_ip",
+        defaultCostBudgetPerMin: 1000,
+        retryAfterHeader: true,
+        costWeights: {
+          api: { capabilities: 5, streamConnect: 100 },
+          jsonRpc: { default: 1, lyth_reportServiceProbe: 10 },
+        },
+      },
+      operatorCapabilities: {
+        jsonRpcMethod: "lyth_operatorCapabilities",
+        schemaVersion: 2,
+        surfaces: {
+          public_service_probe_report: {
+            status: "available",
+            methods: ["lyth_reportServiceProbe", "lyth_getServiceProbe"],
+          },
+        },
+      },
+      accessPolicy: {
+        trustedProxy: { configured: true, cidrCount: 1 },
+        clientCidr: { unrestricted: false, allowCidrCount: 1, denyCidrCount: 2 },
+        paidServiceEligibility: { source: "external_probe", selfDeclaration: false },
+      },
+    });
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    const caps = await client.capabilities();
+
+    expect(caps.streams.topicEndpoint).toBe("/api/v1/streams/{topic}");
+    expect(caps.rateLimit.costWeights.jsonRpc.lyth_reportServiceProbe).toBe(10);
+    expect(caps.operatorCapabilities.surfaces.public_service_probe_report.status).toBe(
+      "available",
+    );
+    expect(caps.accessPolicy.paidServiceEligibility.selfDeclaration).toBe(false);
+  });
+
   it("maps API error envelopes to SdkError.rpc", async () => {
     const { fetch } = mockGet(
       {
