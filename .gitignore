@@ -55,6 +55,8 @@ rustc-ice-*.txt
 # --- Node / TS / Vite additions (append to gitignore.base) ---
 node_modules/
 dist/
+!packages/ts/dist/
+!packages/ts/dist/**
 dist-ssr/
 build/
 .vite/
