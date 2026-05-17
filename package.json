@@ -1,0 +1,55 @@
+{
+  "name": "@monolythium/core-sdk",
+  "version": "0.1.0",
+  "description": "Official TypeScript SDK for Monolythium v4.0 / LythiumDAG-BFT",
+  "license": "Apache-2.0",
+  "private": false,
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/monolythium-vision/mono-core-sdk.git"
+  },
+  "main": "./packages/ts/dist/index.cjs",
+  "module": "./packages/ts/dist/index.js",
+  "types": "./packages/ts/dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./packages/ts/dist/index.d.ts",
+      "import": "./packages/ts/dist/index.js",
+      "require": "./packages/ts/dist/index.cjs"
+    },
+    "./crypto": {
+      "types": "./packages/ts/dist/crypto/index.d.ts",
+      "import": "./packages/ts/dist/crypto/index.js",
+      "require": "./packages/ts/dist/crypto/index.cjs"
+    }
+  },
+  "files": [
+    "packages/ts/dist",
+    "packages/ts/README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "prepare": "npm --prefix packages/ts install --include=dev --package-lock=false && npm --prefix packages/ts run build",
+    "build": "npm --prefix packages/ts run build",
+    "typecheck": "npm --prefix packages/ts run typecheck",
+    "test": "npm --prefix packages/ts run test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "peerDependencies": {
+    "ethers": "^6.16.0"
+  },
+  "peerDependenciesMeta": {
+    "ethers": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@noble/ciphers": "^2.2.0",
+    "@noble/hashes": "^2.2.0",
+    "@noble/post-quantum": "^0.6.1",
+    "@scure/bip39": "^2.2.0"
+  }
+}
