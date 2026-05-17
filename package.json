@@ -30,7 +30,6 @@
     "LICENSE"
   ],
   "scripts": {
-    "prepare": "npm --prefix packages/ts install --include=dev --package-lock=false && npm --prefix packages/ts run build",
     "build": "npm --prefix packages/ts run build",
     "typecheck": "npm --prefix packages/ts run typecheck",
     "test": "npm --prefix packages/ts run test"
