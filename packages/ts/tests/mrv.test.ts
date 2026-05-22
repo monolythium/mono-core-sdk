@@ -4,6 +4,7 @@ import {
   MRV_PROFILE_MONO_RV32IM_V1,
   MRV_TX_EXTENSION_KIND,
   addressToTypedBech32,
+  deriveMrvContractAddress,
   mrvAddressToBech32,
   mrvBech32ToAddress,
   mrvCodeHashHex,
@@ -96,6 +97,24 @@ describe("MRV/RISC-V SDK helpers", () => {
 
     const ext = mrvV1TransactionExtension();
     expect(ext).toEqual({ kind: MRV_TX_EXTENSION_KIND, bodyHex: "0x01" });
+  });
+
+  it("derives deterministic MRV deploy contract addresses", () => {
+    const deployer = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
+    const smartAccount = addressToTypedBech32("smartAccount", "0x1111111111111111111111111111111111111111");
+    const artifactHash = "0x598501b99b388ca564905b49040c6d315a55fb13bf34a6f002aa04960a27895d";
+
+    const contract = deriveMrvContractAddress(deployer, 7n, artifactHash);
+    const decoded = mrvBech32ToAddress(contract, "contract");
+
+    expect(contract.startsWith("monoc1")).toBe(true);
+    expect(decoded.kind).toBe("contract");
+    expect(deriveMrvContractAddress(deployer, 7n, artifactHash)).toBe(contract);
+    expect(deriveMrvContractAddress(deployer, 8n, artifactHash)).not.toBe(contract);
+    expect(deriveMrvContractAddress(smartAccount, 7n, artifactHash)).not.toBe(contract);
+    expect(() => deriveMrvContractAddress(deployer, 7n, "0x1234")).toThrow(/artifactHash/);
+    expect(() => deriveMrvContractAddress(deployer, -1n, artifactHash)).toThrow(/deployerNonce/);
+    expect(() => deriveMrvContractAddress(deployer, 1.5, artifactHash)).toThrow(/deployerNonce/);
   });
 
   it("validates deploy and call request wire models without gas names", () => {

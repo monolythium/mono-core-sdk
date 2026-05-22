@@ -193,6 +193,7 @@ TypeScript:
 import {
   MRV_FORMAT_VERSION,
   MRV_PROFILE_MONO_RV32IM_V1,
+  deriveMrvContractAddress,
   mrvAddressToBech32,
   mrvCodeHashHex,
   mrvV1TransactionExtension,
@@ -216,14 +217,21 @@ const metadata = {
 const validated = validateMrvArtifactMetadata(metadata, code);
 const extension = mrvV1TransactionExtension();
 const contract = mrvAddressToBech32("contract", new Uint8Array(20));
-console.log(validated.codeHash, extension.kind, contract);
+const deployer = mrvAddressToBech32("user", new Uint8Array(20).fill(0x11));
+const deployAddress = deriveMrvContractAddress(
+  deployer,
+  7n,
+  validated.codeHash,
+);
+console.log(validated.codeHash, extension.kind, contract, deployAddress);
 ```
 
 Rust:
 
 ```rust
 use monolythium_core_sdk::mrv::{
-    mrv_code_hash_hex, mrv_v1_transaction_extension, validate_mrv_artifact_metadata,
+    derive_mrv_contract_address, mrv_address_to_bech32, mrv_code_hash_hex,
+    mrv_v1_transaction_extension, validate_mrv_artifact_metadata, MrvAddressKind,
     MrvArtifactMetadata, MRV_FORMAT_VERSION,
 };
 
@@ -232,7 +240,9 @@ assert_eq!(metadata.format_version, MRV_FORMAT_VERSION);
 let hash = mrv_code_hash_hex(code);
 let validated = validate_mrv_artifact_metadata(&metadata, code)?;
 let extension = mrv_v1_transaction_extension();
-println!("{} {} {}", hash, validated.code_hash, extension.kind);
+let deployer = mrv_address_to_bech32(MrvAddressKind::User, [0x11; 20]);
+let deploy_address = derive_mrv_contract_address(&deployer, 7, &validated.code_hash)?;
+println!("{} {} {} {}", hash, validated.code_hash, extension.kind, deploy_address);
 # Ok(())
 # }
 ```

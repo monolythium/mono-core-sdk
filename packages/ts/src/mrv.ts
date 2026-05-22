@@ -1,5 +1,5 @@
 import { blake3 } from "@noble/hashes/blake3.js";
-import { addressToTypedBech32, typedBech32ToAddress } from "./address.js";
+import { ADDRESS_KIND_HRPS, addressToTypedBech32, typedBech32ToAddress } from "./address.js";
 
 export type { MrvAbiManifest } from "./bindings/MrvAbiManifest.js";
 export type { MrvAbiParam } from "./bindings/MrvAbiParam.js";
@@ -55,6 +55,7 @@ export const MRV_TX_EXTENSION_KIND = 0x30 as const;
 export const MRV_TX_EXTENSION_V1 = 0x01 as const;
 
 const MRV_CODE_HASH_DOMAIN = new TextEncoder().encode("MONO_MRV_CODE_V1");
+const MRV_CONTRACT_ADDRESS_DOMAIN = new TextEncoder().encode("mono:riscv:contract-address:v1");
 const MONO_SYSCALL_MODULE = "mono";
 
 const SYSCALLS = [
@@ -100,6 +101,30 @@ export function mrvAddressToBech32(kind: MrvAddressKind, bytes: MrvBytesLike): s
 
 export function mrvBech32ToAddress(address: string, expectedKind?: MrvAddressKind) {
   return typedBech32ToAddress(address, expectedKind as AddressKind | undefined);
+}
+
+export function deriveMrvContractAddress(
+  deployerAddress: string,
+  deployerNonce: number | bigint,
+  artifactHashHex: string,
+): string {
+  const deployer = typedBech32ToAddress(deployerAddress);
+  const artifactHash = hexToBytes(artifactHashHex, "artifactHash");
+  if (artifactHash.length !== 32) throw new MrvValidationError("artifactHash must be 32 bytes");
+  const nonceValue = normalizeU64(deployerNonce, "deployerNonce");
+  const nonce = new Uint8Array(8);
+  new DataView(nonce.buffer).setBigUint64(0, nonceValue, false);
+  const digest = blake3(
+    concatBytes(
+      MRV_CONTRACT_ADDRESS_DOMAIN,
+      new TextEncoder().encode(ADDRESS_KIND_HRPS[deployer.kind]),
+      Uint8Array.of(0),
+      hexToBytes(deployer.hex, "deployerAddress"),
+      nonce,
+      artifactHash,
+    ),
+  );
+  return addressToTypedBech32("contract", digest.slice(0, 20));
 }
 
 export function validateMrvArtifactMetadata(
@@ -249,6 +274,17 @@ function validateExecutionUnitLimit(field: string, value: number | bigint | unde
   if (value !== undefined && BigInt(value) === 0n) {
     throw new MrvValidationError(`${field} must be greater than zero`);
   }
+}
+
+function normalizeU64(value: number | bigint, field: string): bigint {
+  if (typeof value === "number" && !Number.isSafeInteger(value)) {
+    throw new MrvValidationError(`${field} must be a safe unsigned integer`);
+  }
+  const out = BigInt(value);
+  if (out < 0n || out > 0xffff_ffff_ffff_ffffn) {
+    throw new MrvValidationError(`${field} must fit in u64`);
+  }
+  return out;
 }
 
 function validateHexLength(field: string, value: string, expected: number): void {
