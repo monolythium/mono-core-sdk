@@ -7,6 +7,7 @@
  * (Law §13.2).
  */
 
+import { addressToBech32, parseAddress } from "./address.js";
 import { SdkError } from "./error.js";
 import {
   isConcreteServiceProbeStatus,
@@ -77,6 +78,9 @@ export interface NetworkClientOptions extends RpcClientOptions {
   probe?: boolean;
 }
 
+/** User address accepted by helpers that canonicalize to `mono1...`. */
+export type UserAddressInput = string | Uint8Array | readonly number[];
+
 export interface TxFeedReceipt {
   status: number;
   gasUsed: number;
@@ -145,6 +149,31 @@ export interface NativeReceiptResponse {
   eventCount: number;
   events: NativeReceiptEvent[];
   source: NativeReceiptSource;
+}
+
+export type AgentReputationCategoryScope = "global" | "category";
+
+export interface AgentReputationRecord {
+  provider: string;
+  categoryId: number;
+  blockHeight: number;
+  speedSumX10: number;
+  qualitySumX10: number;
+  communicationSumX10: number;
+  accuracySumX10: number;
+  sampleCount: number;
+  avgSpeedX10: number;
+  avgQualityX10: number;
+  avgCommunicationX10: number;
+  avgAccuracyX10: number;
+}
+
+export interface AgentReputationResponse {
+  schemaVersion: 1;
+  provider: string;
+  categoryId: number;
+  categoryScope: AgentReputationCategoryScope;
+  record: AgentReputationRecord | null;
 }
 
 export interface AddressProfileResponse {
@@ -956,6 +985,14 @@ export class RpcClient {
   /** `lyth_addressActivityKind` — activity index coverage for one address. */
   async lythAddressActivityKind(address: string): Promise<AddressActivityKindResponse> {
     return this.call("lyth_addressActivityKind", [address]);
+  }
+
+  /** `lyth_agentReputation` — reputation accumulators for an agent provider. */
+  async lythAgentReputation(
+    provider: UserAddressInput,
+    categoryId = 0,
+  ): Promise<AgentReputationResponse> {
+    return this.call("lyth_agentReputation", [normalizeUserBech32Address(provider), categoryId]);
   }
 
   /** `lyth_decodeTx` — explorer-grade decoded transaction envelope. */
@@ -1835,6 +1872,15 @@ function normalizeBlockHeader(value: unknown): BlockHeader | null {
     gas_used: parseRpcBigint(h["gas_used"], "block header gas_used"),
     gas_limit: parseRpcBigint(h["gas_limit"], "block header gas_limit"),
   };
+}
+
+function normalizeUserBech32Address(address: UserAddressInput): string {
+  try {
+    return addressToBech32(typeof address === "string" ? parseAddress(address) : address);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw SdkError.malformed(`invalid provider address: ${message}`);
+  }
 }
 
 function normalizeRoundInfo(value: unknown): RoundInfo {

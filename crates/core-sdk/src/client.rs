@@ -11,22 +11,24 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use crate::address::{address_to_bech32, parse_address};
 use crate::error::SdkError;
 use crate::types::{
     AccountPolicy, AccountProofResponse, AddressActivityEntry, AddressActivityKindResponse,
-    AddressFlowResponse, AddressLabelRecord, AddressProfileResponse, AssetPolicy, BlockHeader,
-    BlockSelector, BlsCertificateResponse, CallRequest, CapabilitiesResponse, ChainStatsResponse,
-    CheckpointRecord, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse,
-    ClobOrderBookResponse, ClobTradesResponse, ClusterDelegatorsResponse, ClusterEntityResponse,
-    ClusterResignationsResponse, DagParentsResponse, DagSyncStatus, DecodeTxResponse,
-    DelegationCapResponse, DelegationHistoryRecord, DelegationsResponse, EncryptionKeyResponse,
-    EntityRatchetResponse, FeeHistoryResponse, GapRecordsResponse, IndexerStatus,
-    LythUpgradeStatusResponse, MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent,
-    MeshUnsignedTxResponse, MetricsRangeResponse, NativeReceiptResponse,
-    OperatorCapabilitiesResponse, PeerSummary, PeerSummaryAggregate, PendingTxSummary,
-    PrecompileDescriptor, RegistryRecord, RichListResponse, RoundInfo, SearchResponse,
-    StorageProofBatch, SyncStatus, TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt,
-    TransactionView, TxFeedResponse, TxStatusResponse, VerticesAtRoundResponse,
+    AddressFlowResponse, AddressLabelRecord, AddressProfileResponse, AgentReputationResponse,
+    AssetPolicy, BlockHeader, BlockSelector, BlsCertificateResponse, CallRequest,
+    CapabilitiesResponse, ChainStatsResponse, CheckpointRecord, ClobMarketResponse,
+    ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse, ClobTradesResponse,
+    ClusterDelegatorsResponse, ClusterEntityResponse, ClusterResignationsResponse,
+    DagParentsResponse, DagSyncStatus, DecodeTxResponse, DelegationCapResponse,
+    DelegationHistoryRecord, DelegationsResponse, EncryptionKeyResponse, EntityRatchetResponse,
+    FeeHistoryResponse, GapRecordsResponse, IndexerStatus, LythUpgradeStatusResponse,
+    MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse,
+    MetricsRangeResponse, NativeReceiptResponse, OperatorCapabilitiesResponse, PeerSummary,
+    PeerSummaryAggregate, PendingTxSummary, PrecompileDescriptor, RegistryRecord, RichListResponse,
+    RoundInfo, SearchResponse, StorageProofBatch, SyncStatus, TokenBalanceRecord,
+    TpmAttestationResponse, TransactionReceipt, TransactionView, TxFeedResponse, TxStatusResponse,
+    VerticesAtRoundResponse,
 };
 
 /// Typed JSON-RPC client for a `mono-core` node.
@@ -492,6 +494,23 @@ impl RpcClient {
     ) -> Result<AddressActivityKindResponse, SdkError> {
         self.call("lyth_addressActivityKind", json!([address]))
             .await
+    }
+
+    /// `lyth_agentReputation` — reputation accumulators for an agent provider.
+    ///
+    /// `provider` may be a `0x`-hex address or a user `mono1...` bech32m
+    /// address; the wire request always sends the canonical user bech32m form.
+    /// `category_id` defaults to `0`.
+    pub async fn lyth_agent_reputation(
+        &self,
+        provider: &str,
+        category_id: Option<u32>,
+    ) -> Result<AgentReputationResponse, SdkError> {
+        self.call(
+            "lyth_agentReputation",
+            agent_reputation_params(provider, category_id)?,
+        )
+        .await
     }
 
     /// `lyth_decodeTx` — explorer-grade decoded transaction envelope.
@@ -1011,6 +1030,14 @@ fn parse_quantity_u64(s: &str) -> Result<u64, SdkError> {
         .map_err(|e| SdkError::Malformed(format!("invalid quantity {s:?}: {e}")))
 }
 
+fn agent_reputation_params(provider: &str, category_id: Option<u32>) -> Result<Value, SdkError> {
+    let provider = address_to_bech32(
+        parse_address(provider)
+            .map_err(|err| SdkError::Malformed(format!("invalid provider address: {err}")))?,
+    );
+    Ok(json!([provider, category_id.unwrap_or(0)]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1047,6 +1074,34 @@ mod tests {
             BlockSelector::Hash("0xabcd".into()).to_param(),
             serde_json::json!("0xabcd")
         );
+    }
+
+    #[test]
+    fn agent_reputation_params_normalize_provider_and_default_category() {
+        let params =
+            agent_reputation_params("0x123456789abcdef0112233445566778899aabbcc", None).unwrap();
+        assert_eq!(
+            params,
+            serde_json::json!(["mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4", 0])
+        );
+
+        let params =
+            agent_reputation_params("mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4", Some(7))
+                .unwrap();
+        assert_eq!(
+            params,
+            serde_json::json!(["mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4", 7])
+        );
+    }
+
+    #[test]
+    fn agent_reputation_params_reject_non_user_provider_hrp() {
+        let provider = crate::address::address_to_typed_bech32(
+            crate::address::AddressKind::Contract,
+            [0x12; 20],
+        );
+        let err = agent_reputation_params(&provider, None).unwrap_err();
+        assert!(matches!(err, SdkError::Malformed(_)));
     }
 
     #[test]

@@ -56,6 +56,9 @@ export type {
   AddressActivityKind,
   AddressFlowResponse,
   AddressProfileResponse,
+  AgentReputationCategoryScope,
+  AgentReputationRecord,
+  AgentReputationResponse,
   AttestationWindow,
   ChainStatsResponse,
   ClobMarketsResponse,
@@ -111,6 +114,7 @@ export type {
   TxStatusResponse,
   UpcomingDutiesResponse,
   UpcomingDutyMap,
+  UserAddressInput,
   VertexAtRound,
   VerticesAtRoundResponse,
 } from "./client.js";
