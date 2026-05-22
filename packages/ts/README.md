@@ -110,17 +110,18 @@ const decoded = typedBech32ToAddress(contract, "contract");
 
 The package includes the first v4.1 MRV SDK slice: artifact metadata
 validation, MRV v1 transaction extension descriptors, typed contract address
-helpers, and native deploy/call request models with lythoshi and
+helpers, and native deploy/call request builders with lythoshi and
 execution-unit fields.
 
 ```ts
 import {
   MRV_FORMAT_VERSION,
   MRV_PROFILE_MONO_RV32IM_V1,
+  buildMrvCallPlan,
+  buildMrvDeployPlan,
   deriveMrvContractAddress,
   mrvAddressToBech32,
   mrvCodeHashHex,
-  mrvV1TransactionExtension,
   validateMrvArtifactMetadata,
 } from "@monolythium/core-sdk";
 
@@ -139,10 +140,16 @@ const metadata = {
 };
 
 const validated = validateMrvArtifactMetadata(metadata, code);
-const extension = mrvV1TransactionExtension();
 const deployer = mrvAddressToBech32("user", new Uint8Array(20).fill(0x11));
 const deployAddress = deriveMrvContractAddress(deployer, 7n, validated.codeHash);
-console.log(validated.syscalls, extension, deployAddress);
+const deploy = buildMrvDeployPlan("0x13000000", {
+  from: deployer,
+  nonce: 7n,
+  artifactHash: validated.codeHash,
+  executionUnitLimit: 1_000_000n,
+});
+const call = buildMrvCallPlan(deployAddress, [0x01, 0x02]);
+console.log(validated.syscalls, deploy.extension, deploy.expectedContractAddress, call.request);
 ```
 
 ### Spending-policy helpers

@@ -40,6 +40,31 @@ import type { MrvTransactionExtension } from "./bindings/MrvTransactionExtension
 import type { MrvValidatedArtifactMetadata } from "./bindings/MrvValidatedArtifactMetadata.js";
 
 export type MrvBytesLike = string | Uint8Array | readonly number[];
+export type MrvDecimalLike = string | number | bigint;
+
+export interface MrvRequestBuildOptions {
+  from?: string;
+  valueLythoshi?: MrvDecimalLike;
+  executionUnitLimit?: number | bigint;
+  maxExecutionFeeLythoshi?: MrvDecimalLike;
+  priorityTipLythoshi?: MrvDecimalLike;
+  nonce?: number | bigint;
+}
+
+export interface MrvDeployPlanOptions extends MrvRequestBuildOptions {
+  artifactHash?: string;
+}
+
+export interface MrvDeployPlan {
+  request: MrvDeployRequest;
+  extension: MrvTransactionExtension;
+  expectedContractAddress?: string;
+}
+
+export interface MrvCallPlan {
+  request: MrvCallRequest;
+  extension: MrvTransactionExtension;
+}
 
 export const MRV_FORMAT_VERSION = 1 as const;
 export const MRV_PROFILE_MONO_RV32IM_V1 = "mono_rv32im_v1" as const;
@@ -194,6 +219,62 @@ export function validateMrvCallRequest(request: MrvCallRequest): void {
   validateExecutionUnitLimit("executionUnitLimit", request.executionUnitLimit);
 }
 
+export function buildMrvDeployRequest(
+  artifactBytes: MrvBytesLike,
+  options: MrvRequestBuildOptions = {},
+): MrvDeployRequest {
+  const request: MrvDeployRequest = {
+    artifactBytes: normalizeBytesHex(artifactBytes, "artifactBytes"),
+    valueLythoshi: normalizeDecimalLike("valueLythoshi", options.valueLythoshi, "0"),
+  };
+  applyRequestOptions(request, options);
+  validateMrvDeployRequest(request);
+  return request;
+}
+
+export function buildMrvCallRequest(
+  contractAddress: string,
+  input: MrvBytesLike = "0x",
+  options: MrvRequestBuildOptions = {},
+): MrvCallRequest {
+  const request: MrvCallRequest = {
+    contractAddress,
+    input: normalizeBytesHex(input, "input"),
+    valueLythoshi: normalizeDecimalLike("valueLythoshi", options.valueLythoshi, "0"),
+  };
+  applyRequestOptions(request, options);
+  validateMrvCallRequest(request);
+  return request;
+}
+
+export function buildMrvDeployPlan(
+  artifactBytes: MrvBytesLike,
+  options: MrvDeployPlanOptions = {},
+): MrvDeployPlan {
+  const request = buildMrvDeployRequest(artifactBytes, options);
+  const plan: MrvDeployPlan = {
+    request,
+    extension: mrvV1TransactionExtension(),
+  };
+  if (options.artifactHash !== undefined && request.from !== undefined && request.nonce !== undefined) {
+    plan.expectedContractAddress = deriveMrvContractAddress(request.from, request.nonce, options.artifactHash);
+  } else if (options.artifactHash !== undefined) {
+    validateHexLength("artifactHash", options.artifactHash, 32);
+  }
+  return plan;
+}
+
+export function buildMrvCallPlan(
+  contractAddress: string,
+  input: MrvBytesLike = "0x",
+  options: MrvRequestBuildOptions = {},
+): MrvCallPlan {
+  return {
+    request: buildMrvCallRequest(contractAddress, input, options),
+    extension: mrvV1TransactionExtension(),
+  };
+}
+
 function validateMemory(initialPages: number, maxPages: number, stackBytes: number): void {
   if (initialPages === 0) throw new MrvValidationError("initialPages is zero");
   if (maxPages === 0) throw new MrvValidationError("maxPages is zero");
@@ -257,6 +338,50 @@ function validateImports(imports: MrvArtifactMetadata["imports"]): MrvResolvedSy
 
 function validateOptionalDecimal(field: string, value: string | undefined): void {
   if (value !== undefined) validateDecimal(field, value);
+}
+
+function applyRequestOptions(request: MrvDeployRequest | MrvCallRequest, options: MrvRequestBuildOptions): void {
+  if (options.from !== undefined) request.from = options.from;
+  const executionUnitLimit = normalizeOptionalU64("executionUnitLimit", options.executionUnitLimit);
+  if (executionUnitLimit !== undefined) request.executionUnitLimit = executionUnitLimit;
+  const maxExecutionFee = normalizeOptionalDecimalLike(
+    "maxExecutionFeeLythoshi",
+    options.maxExecutionFeeLythoshi,
+  );
+  if (maxExecutionFee !== undefined) request.maxExecutionFeeLythoshi = maxExecutionFee;
+  const priorityTip = normalizeOptionalDecimalLike("priorityTipLythoshi", options.priorityTipLythoshi);
+  if (priorityTip !== undefined) request.priorityTipLythoshi = priorityTip;
+  const nonce = normalizeOptionalU64("nonce", options.nonce);
+  if (nonce !== undefined) request.nonce = nonce;
+}
+
+function normalizeBytesHex(value: MrvBytesLike, field: string): string {
+  return bytesToHex(bytesFrom(value, field));
+}
+
+function normalizeOptionalDecimalLike(field: string, value: MrvDecimalLike | undefined): string | undefined {
+  return value === undefined ? undefined : normalizeDecimalLike(field, value);
+}
+
+function normalizeDecimalLike(field: string, value: MrvDecimalLike | undefined, defaultValue?: string): string {
+  if (value === undefined) {
+    if (defaultValue === undefined) throw new MrvValidationError(`${field} is required`);
+    return defaultValue;
+  }
+  if (typeof value === "string") {
+    validateDecimal(field, value);
+    return value;
+  }
+  if (typeof value === "number" && !Number.isSafeInteger(value)) {
+    throw new MrvValidationError(`${field} must be a safe unsigned integer`);
+  }
+  const out = BigInt(value);
+  if (out < 0n) throw new MrvValidationError(`${field} must be a canonical unsigned decimal string`);
+  return out.toString();
+}
+
+function normalizeOptionalU64(field: string, value: number | bigint | undefined): bigint | undefined {
+  return value === undefined ? undefined : normalizeU64(value, field);
 }
 
 function validateDecimal(field: string, value: string): void {

@@ -184,8 +184,9 @@ clusters, `monom` multisigs, and `monox` system modules.
 
 The first v4.1 SDK slice exposes MRV artifact metadata validation, the MRV v1
 transaction extension descriptor, typed contract addresses, and native
-deploy/call models. It does not encode mono-core's bincode artifact body yet;
-pass artifact bytes as `0x` hex and validate metadata against the code bytes.
+deploy/call request builders. It does not encode mono-core's bincode artifact
+body yet; pass artifact bytes as raw bytes or `0x` hex and validate metadata
+against the code bytes.
 
 TypeScript:
 
@@ -193,10 +194,11 @@ TypeScript:
 import {
   MRV_FORMAT_VERSION,
   MRV_PROFILE_MONO_RV32IM_V1,
+  buildMrvCallPlan,
+  buildMrvDeployPlan,
   deriveMrvContractAddress,
   mrvAddressToBech32,
   mrvCodeHashHex,
-  mrvV1TransactionExtension,
   validateMrvArtifactMetadata,
 } from "@monolythium/core-sdk";
 
@@ -215,7 +217,6 @@ const metadata = {
 };
 
 const validated = validateMrvArtifactMetadata(metadata, code);
-const extension = mrvV1TransactionExtension();
 const contract = mrvAddressToBech32("contract", new Uint8Array(20));
 const deployer = mrvAddressToBech32("user", new Uint8Array(20).fill(0x11));
 const deployAddress = deriveMrvContractAddress(
@@ -223,26 +224,39 @@ const deployAddress = deriveMrvContractAddress(
   7n,
   validated.codeHash,
 );
-console.log(validated.codeHash, extension.kind, contract, deployAddress);
+const deploy = buildMrvDeployPlan("0x13000000", {
+  from: deployer,
+  nonce: 7n,
+  artifactHash: validated.codeHash,
+  executionUnitLimit: 1_000_000n,
+});
+const call = buildMrvCallPlan(contract, [0x01, 0x02]);
+console.log(validated.codeHash, deploy.extension.kind, deploy.expectedContractAddress, deployAddress, call.request);
 ```
 
 Rust:
 
 ```rust
 use monolythium_core_sdk::mrv::{
-    derive_mrv_contract_address, mrv_address_to_bech32, mrv_code_hash_hex,
-    mrv_v1_transaction_extension, validate_mrv_artifact_metadata, MrvAddressKind,
-    MrvArtifactMetadata, MRV_FORMAT_VERSION,
+    build_mrv_call_plan, build_mrv_deploy_plan, derive_mrv_contract_address,
+    mrv_address_to_bech32, mrv_code_hash_hex, validate_mrv_artifact_metadata,
+    MrvAddressKind, MrvArtifactMetadata, MrvRequestBuildOptions, MRV_FORMAT_VERSION,
 };
 
 # fn run(metadata: MrvArtifactMetadata, code: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 assert_eq!(metadata.format_version, MRV_FORMAT_VERSION);
 let hash = mrv_code_hash_hex(code);
 let validated = validate_mrv_artifact_metadata(&metadata, code)?;
-let extension = mrv_v1_transaction_extension();
 let deployer = mrv_address_to_bech32(MrvAddressKind::User, [0x11; 20]);
 let deploy_address = derive_mrv_contract_address(&deployer, 7, &validated.code_hash)?;
-println!("{} {} {} {}", hash, validated.code_hash, extension.kind, deploy_address);
+let artifact_bytes = code;
+let deploy = build_mrv_deploy_plan(
+    artifact_bytes,
+    Some(&validated.code_hash),
+    MrvRequestBuildOptions::new().from(deployer).nonce(7).execution_unit_limit(1_000_000),
+)?;
+let call = build_mrv_call_plan(&deploy_address, &[0x01, 0x02], MrvRequestBuildOptions::new())?;
+println!("{} {} {} {}", hash, validated.code_hash, deploy.extension.kind, call.request.input);
 # Ok(())
 # }
 ```

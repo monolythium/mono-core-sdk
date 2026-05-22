@@ -4,6 +4,10 @@ import {
   MRV_PROFILE_MONO_RV32IM_V1,
   MRV_TX_EXTENSION_KIND,
   addressToTypedBech32,
+  buildMrvCallPlan,
+  buildMrvCallRequest,
+  buildMrvDeployPlan,
+  buildMrvDeployRequest,
   deriveMrvContractAddress,
   mrvAddressToBech32,
   mrvBech32ToAddress,
@@ -143,5 +147,63 @@ describe("MRV/RISC-V SDK helpers", () => {
     expect(wire).toContain("valueLythoshi");
     expect(wire).toContain("executionUnitLimit");
     expect(wire).not.toMatch(/\b(gas|gwei|wei)\b/i);
+  });
+
+  it("builds deploy and call request plans without handwritten RPC JSON", () => {
+    const user = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
+    const contract = addressToTypedBech32("contract", "0x2222222222222222222222222222222222222222");
+    const artifactHash = "0x598501b99b388ca564905b49040c6d315a55fb13bf34a6f002aa04960a27895d";
+
+    const deploy = buildMrvDeployRequest(Uint8Array.from([0x13, 0x00, 0x00, 0x00]), {
+      from: user,
+      valueLythoshi: 100_000_000n,
+      executionUnitLimit: 1_000_000,
+      maxExecutionFeeLythoshi: 25n,
+      priorityTipLythoshi: "1",
+      nonce: 7n,
+    });
+    expect(deploy).toEqual({
+      from: user,
+      artifactBytes: "0x13000000",
+      valueLythoshi: "100000000",
+      executionUnitLimit: 1_000_000n,
+      maxExecutionFeeLythoshi: "25",
+      priorityTipLythoshi: "1",
+      nonce: 7n,
+    });
+
+    const deployPlan = buildMrvDeployPlan("0x13000000", {
+      from: user,
+      nonce: 7n,
+      artifactHash,
+    });
+    expect(deployPlan.extension).toEqual({ kind: MRV_TX_EXTENSION_KIND, bodyHex: "0x01" });
+    expect(deployPlan.expectedContractAddress).toBe(deriveMrvContractAddress(user, 7n, artifactHash));
+    expect(deployPlan.request.valueLythoshi).toBe("0");
+
+    const call = buildMrvCallRequest(contract, [0x01, 0x02], { from: user, valueLythoshi: "0" });
+    expect(call).toEqual({
+      from: user,
+      contractAddress: contract,
+      input: "0x0102",
+      valueLythoshi: "0",
+    });
+
+    const callPlan = buildMrvCallPlan(contract, "0x0102");
+    expect(callPlan.request).toEqual({ contractAddress: contract, input: "0x0102", valueLythoshi: "0" });
+    expect(callPlan.extension.kind).toBe(MRV_TX_EXTENSION_KIND);
+
+    const wire = JSON.stringify(deployPlan, (_key, value) => (typeof value === "bigint" ? value.toString() : value));
+    expect(wire).toContain("artifactBytes");
+    expect(wire).toContain("valueLythoshi");
+    expect(wire).toContain("expectedContractAddress");
+    expect(wire).not.toMatch(/\b(gas|gwei|wei)\b/i);
+  });
+
+  it("rejects invalid builder options before apps send a request", () => {
+    const contract = addressToTypedBech32("contract", "0x2222222222222222222222222222222222222222");
+    expect(() => buildMrvDeployRequest([0x13], { valueLythoshi: "01" })).toThrow(/valueLythoshi/);
+    expect(() => buildMrvCallRequest(contract, [0x01], { executionUnitLimit: 0n })).toThrow(/executionUnitLimit/);
+    expect(() => buildMrvDeployPlan([0x13], { artifactHash: "0x1234" })).toThrow(/artifactHash/);
   });
 });
