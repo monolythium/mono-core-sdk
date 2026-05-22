@@ -638,6 +638,99 @@ pub struct MrvExecutionReceipt {
     pub reverted: Option<MrvRevertPayload>,
 }
 
+/// Input options shared by MRV deploy and call request builders.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MrvRequestBuildOptions {
+    /// Optional typed user address that signs the request.
+    pub from: Option<String>,
+    /// Native value in lythoshi. Defaults to zero when omitted.
+    pub value_lythoshi: Option<u128>,
+    /// Optional execution-unit ceiling for transaction admission.
+    pub execution_unit_limit: Option<u64>,
+    /// Optional max execution fee in lythoshi.
+    pub max_execution_fee_lythoshi: Option<u128>,
+    /// Optional priority tip in lythoshi.
+    pub priority_tip_lythoshi: Option<u128>,
+    /// Optional signer nonce.
+    pub nonce: Option<u64>,
+}
+
+impl MrvRequestBuildOptions {
+    /// Empty options; builders default native value to zero lythoshi.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the typed user address that signs the request.
+    #[must_use]
+    pub fn from(mut self, from: impl Into<String>) -> Self {
+        self.from = Some(from.into());
+        self
+    }
+
+    /// Set native value in lythoshi.
+    #[must_use]
+    pub fn value_lythoshi(mut self, value: u128) -> Self {
+        self.value_lythoshi = Some(value);
+        self
+    }
+
+    /// Set the execution-unit ceiling.
+    #[must_use]
+    pub fn execution_unit_limit(mut self, limit: u64) -> Self {
+        self.execution_unit_limit = Some(limit);
+        self
+    }
+
+    /// Set max execution fee in lythoshi.
+    #[must_use]
+    pub fn max_execution_fee_lythoshi(mut self, value: u128) -> Self {
+        self.max_execution_fee_lythoshi = Some(value);
+        self
+    }
+
+    /// Set priority tip in lythoshi.
+    #[must_use]
+    pub fn priority_tip_lythoshi(mut self, value: u128) -> Self {
+        self.priority_tip_lythoshi = Some(value);
+        self
+    }
+
+    /// Set signer nonce.
+    #[must_use]
+    pub fn nonce(mut self, nonce: u64) -> Self {
+        self.nonce = Some(nonce);
+        self
+    }
+}
+
+/// Fully-built MRV deploy request plus SDK-local execution metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvDeployPlan {
+    /// Validated native deploy request.
+    pub request: MrvDeployRequest,
+    /// MRV v1 transaction extension descriptor.
+    pub extension: MrvTransactionExtension,
+    /// Deterministic contract address when artifact hash, signer, and nonce are known.
+    #[serde(
+        rename = "expectedContractAddress",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub expected_contract_address: Option<String>,
+}
+
+/// Fully-built MRV call request plus SDK-local execution metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvCallPlan {
+    /// Validated native call request.
+    pub request: MrvCallRequest,
+    /// MRV v1 transaction extension descriptor.
+    pub extension: MrvTransactionExtension,
+}
+
 /// Errors returned by MRV SDK validation helpers.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum MrvValidationError {
@@ -998,6 +1091,107 @@ pub fn validate_mrv_call_request(request: &MrvCallRequest) -> Result<(), MrvVali
     )?;
     validate_execution_unit_limit("executionUnitLimit", request.execution_unit_limit)?;
     Ok(())
+}
+
+/// Build and validate an MRV deploy request from raw artifact bytes.
+///
+/// This helper owns the SDK wire naming (`artifactBytes`, `valueLythoshi`,
+/// `executionUnitLimit`) so applications do not have to hand-assemble JSON.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when options contain malformed typed
+/// addresses or invalid execution-unit fields.
+pub fn build_mrv_deploy_request(
+    artifact_bytes: &[u8],
+    options: MrvRequestBuildOptions,
+) -> Result<MrvDeployRequest, MrvValidationError> {
+    let request = MrvDeployRequest {
+        from: options.from,
+        artifact_bytes: hex_encode(artifact_bytes),
+        value_lythoshi: options.value_lythoshi.unwrap_or_default().to_string(),
+        execution_unit_limit: options.execution_unit_limit,
+        max_execution_fee_lythoshi: options
+            .max_execution_fee_lythoshi
+            .map(|value| value.to_string()),
+        priority_tip_lythoshi: options.priority_tip_lythoshi.map(|value| value.to_string()),
+        nonce: options.nonce,
+    };
+    validate_mrv_deploy_request(&request)?;
+    Ok(request)
+}
+
+/// Build and validate an MRV call request from raw input bytes.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the contract address or options are
+/// malformed.
+pub fn build_mrv_call_request(
+    contract_address: &str,
+    input: &[u8],
+    options: MrvRequestBuildOptions,
+) -> Result<MrvCallRequest, MrvValidationError> {
+    let request = MrvCallRequest {
+        from: options.from,
+        contract_address: contract_address.to_owned(),
+        input: hex_encode(input),
+        value_lythoshi: options.value_lythoshi.unwrap_or_default().to_string(),
+        execution_unit_limit: options.execution_unit_limit,
+        max_execution_fee_lythoshi: options
+            .max_execution_fee_lythoshi
+            .map(|value| value.to_string()),
+        priority_tip_lythoshi: options.priority_tip_lythoshi.map(|value| value.to_string()),
+        nonce: options.nonce,
+    };
+    validate_mrv_call_request(&request)?;
+    Ok(request)
+}
+
+/// Build an MRV deploy plan with the v1 extension descriptor attached.
+///
+/// When `artifact_hash_hex`, `from`, and `nonce` are all present, the helper
+/// also precomputes the deterministic contract address.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when request validation fails or when a
+/// supplied artifact hash is not a 32-byte `0x` hash.
+pub fn build_mrv_deploy_plan(
+    artifact_bytes: &[u8],
+    artifact_hash_hex: Option<&str>,
+    options: MrvRequestBuildOptions,
+) -> Result<MrvDeployPlan, MrvValidationError> {
+    let from = options.from.clone();
+    let nonce = options.nonce;
+    let request = build_mrv_deploy_request(artifact_bytes, options)?;
+    let expected_contract_address = match (artifact_hash_hex, from.as_deref(), nonce) {
+        (Some(artifact_hash), Some(from), Some(nonce)) => {
+            Some(derive_mrv_contract_address(from, nonce, artifact_hash)?)
+        }
+        (Some(artifact_hash), _, _) => {
+            validate_hex_length("artifactHash", artifact_hash, 32)?;
+            None
+        }
+        (None, _, _) => None,
+    };
+    Ok(MrvDeployPlan {
+        request,
+        extension: mrv_v1_transaction_extension(),
+        expected_contract_address,
+    })
+}
+
+/// Build an MRV call plan with the v1 extension descriptor attached.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when request validation fails.
+pub fn build_mrv_call_plan(
+    contract_address: &str,
+    input: &[u8],
+    options: MrvRequestBuildOptions,
+) -> Result<MrvCallPlan, MrvValidationError> {
+    Ok(MrvCallPlan {
+        request: build_mrv_call_request(contract_address, input, options)?,
+        extension: mrv_v1_transaction_extension(),
+    })
 }
 
 fn compute_mrv_code_hash(code: &[u8]) -> [u8; 32] {
@@ -1471,5 +1665,69 @@ mod tests {
             .unwrap()
             .contains("valueLythoshi"));
         assert!(!serde_json::to_string(&call).unwrap().contains("gas"));
+    }
+
+    #[test]
+    fn builders_create_valid_mrv_plans_without_handwritten_wire_fields() {
+        let user = mrv_address_to_bech32(MrvAddressKind::User, [0x11; 20]);
+        let contract = mrv_address_to_bech32(MrvAddressKind::Contract, [0x22; 20]);
+        let artifact_hash = "0x598501b99b388ca564905b49040c6d315a55fb13bf34a6f002aa04960a27895d";
+
+        let deploy = build_mrv_deploy_request(
+            &[0x13, 0x00, 0x00, 0x00],
+            MrvRequestBuildOptions::new()
+                .from(user.clone())
+                .value_lythoshi(100_000_000)
+                .execution_unit_limit(1_000_000)
+                .max_execution_fee_lythoshi(25)
+                .priority_tip_lythoshi(1)
+                .nonce(7),
+        )
+        .unwrap();
+        assert_eq!(deploy.artifact_bytes, "0x13000000");
+        assert_eq!(deploy.value_lythoshi, "100000000");
+        assert_eq!(deploy.execution_unit_limit, Some(1_000_000));
+        assert_eq!(deploy.max_execution_fee_lythoshi.as_deref(), Some("25"));
+        assert_eq!(deploy.priority_tip_lythoshi.as_deref(), Some("1"));
+
+        let deploy_plan = build_mrv_deploy_plan(
+            &[0x13, 0x00, 0x00, 0x00],
+            Some(artifact_hash),
+            MrvRequestBuildOptions::new().from(user.clone()).nonce(7),
+        )
+        .unwrap();
+        assert_eq!(deploy_plan.request.value_lythoshi, "0");
+        assert_eq!(deploy_plan.extension.kind, MRV_TX_EXTENSION_KIND);
+        assert_eq!(deploy_plan.extension.body_hex, "0x01");
+        let expected_address = derive_mrv_contract_address(&user, 7, artifact_hash).unwrap();
+        assert_eq!(
+            deploy_plan.expected_contract_address.as_deref(),
+            Some(expected_address.as_str())
+        );
+
+        let call_plan = build_mrv_call_plan(
+            &contract,
+            &[0x01, 0x02],
+            MrvRequestBuildOptions::new().from(user),
+        )
+        .unwrap();
+        assert_eq!(call_plan.request.contract_address, contract);
+        assert_eq!(call_plan.request.input, "0x0102");
+        assert_eq!(call_plan.request.value_lythoshi, "0");
+
+        let wire = serde_json::to_string(&deploy_plan).unwrap();
+        assert!(wire.contains("artifactBytes"));
+        assert!(wire.contains("valueLythoshi"));
+        assert!(wire.contains("expectedContractAddress"));
+        assert!(!wire.contains("gas"));
+        assert!(
+            build_mrv_deploy_plan(&[0x13], Some("0x1234"), MrvRequestBuildOptions::new()).is_err()
+        );
+        assert!(build_mrv_call_request(
+            &contract,
+            &[0x01],
+            MrvRequestBuildOptions::new().execution_unit_limit(0)
+        )
+        .is_err());
     }
 }

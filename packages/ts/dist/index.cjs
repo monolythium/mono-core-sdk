@@ -1865,6 +1865,44 @@ function validateMrvCallRequest(request) {
   validateOptionalDecimal("priorityTipLythoshi", request.priorityTipLythoshi);
   validateExecutionUnitLimit("executionUnitLimit", request.executionUnitLimit);
 }
+function buildMrvDeployRequest(artifactBytes, options = {}) {
+  const request = {
+    artifactBytes: normalizeBytesHex(artifactBytes, "artifactBytes"),
+    valueLythoshi: normalizeDecimalLike("valueLythoshi", options.valueLythoshi, "0")
+  };
+  applyRequestOptions(request, options);
+  validateMrvDeployRequest(request);
+  return request;
+}
+function buildMrvCallRequest(contractAddress, input = "0x", options = {}) {
+  const request = {
+    contractAddress,
+    input: normalizeBytesHex(input, "input"),
+    valueLythoshi: normalizeDecimalLike("valueLythoshi", options.valueLythoshi, "0")
+  };
+  applyRequestOptions(request, options);
+  validateMrvCallRequest(request);
+  return request;
+}
+function buildMrvDeployPlan(artifactBytes, options = {}) {
+  const request = buildMrvDeployRequest(artifactBytes, options);
+  const plan = {
+    request,
+    extension: mrvV1TransactionExtension()
+  };
+  if (options.artifactHash !== void 0 && request.from !== void 0 && request.nonce !== void 0) {
+    plan.expectedContractAddress = deriveMrvContractAddress(request.from, request.nonce, options.artifactHash);
+  } else if (options.artifactHash !== void 0) {
+    validateHexLength("artifactHash", options.artifactHash, 32);
+  }
+  return plan;
+}
+function buildMrvCallPlan(contractAddress, input = "0x", options = {}) {
+  return {
+    request: buildMrvCallRequest(contractAddress, input, options),
+    extension: mrvV1TransactionExtension()
+  };
+}
 function validateMemory(initialPages, maxPages, stackBytes) {
   if (initialPages === 0) throw new MrvValidationError("initialPages is zero");
   if (maxPages === 0) throw new MrvValidationError("maxPages is zero");
@@ -1923,6 +1961,45 @@ function validateImports(imports) {
 }
 function validateOptionalDecimal(field, value) {
   if (value !== void 0) validateDecimal(field, value);
+}
+function applyRequestOptions(request, options) {
+  if (options.from !== void 0) request.from = options.from;
+  const executionUnitLimit = normalizeOptionalU64("executionUnitLimit", options.executionUnitLimit);
+  if (executionUnitLimit !== void 0) request.executionUnitLimit = executionUnitLimit;
+  const maxExecutionFee = normalizeOptionalDecimalLike(
+    "maxExecutionFeeLythoshi",
+    options.maxExecutionFeeLythoshi
+  );
+  if (maxExecutionFee !== void 0) request.maxExecutionFeeLythoshi = maxExecutionFee;
+  const priorityTip = normalizeOptionalDecimalLike("priorityTipLythoshi", options.priorityTipLythoshi);
+  if (priorityTip !== void 0) request.priorityTipLythoshi = priorityTip;
+  const nonce = normalizeOptionalU64("nonce", options.nonce);
+  if (nonce !== void 0) request.nonce = nonce;
+}
+function normalizeBytesHex(value, field) {
+  return bytesToHex2(bytesFrom(value, field));
+}
+function normalizeOptionalDecimalLike(field, value) {
+  return value === void 0 ? void 0 : normalizeDecimalLike(field, value);
+}
+function normalizeDecimalLike(field, value, defaultValue) {
+  if (value === void 0) {
+    if (defaultValue === void 0) throw new MrvValidationError(`${field} is required`);
+    return defaultValue;
+  }
+  if (typeof value === "string") {
+    validateDecimal(field, value);
+    return value;
+  }
+  if (typeof value === "number" && !Number.isSafeInteger(value)) {
+    throw new MrvValidationError(`${field} must be a safe unsigned integer`);
+  }
+  const out = BigInt(value);
+  if (out < 0n) throw new MrvValidationError(`${field} must be a canonical unsigned decimal string`);
+  return out.toString();
+}
+function normalizeOptionalU64(field, value) {
+  return value === void 0 ? void 0 : normalizeU64(value, field);
 }
 function validateDecimal(field, value) {
   if (!/^(0|[1-9][0-9]*)$/.test(value)) {
@@ -2547,6 +2624,10 @@ exports.addressToTypedBech32 = addressToTypedBech32;
 exports.apiEndpointFromRpcEndpoint = apiEndpointFromRpcEndpoint;
 exports.bech32ToAddress = bech32ToAddress;
 exports.bech32ToAddressBytes = bech32ToAddressBytes;
+exports.buildMrvCallPlan = buildMrvCallPlan;
+exports.buildMrvCallRequest = buildMrvCallRequest;
+exports.buildMrvDeployPlan = buildMrvDeployPlan;
+exports.buildMrvDeployRequest = buildMrvDeployRequest;
 exports.composeClaimBoundMessage = composeClaimBoundMessage;
 exports.decodeHasPubkeyReturn = decodeHasPubkeyReturn;
 exports.decodeLookupPubkeyReturn = decodeLookupPubkeyReturn;
