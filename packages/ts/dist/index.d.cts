@@ -3,6 +3,518 @@ export { m as AccountPolicy, n as AccountProofResponse, o as Address, p as Addre
 import { JsonRpcApiProvider, JsonRpcPayload, JsonRpcResult, JsonRpcError, AbstractSigner, Provider, TransactionRequest, TypedDataDomain, TypedDataField, BaseWallet, Signer } from 'ethers';
 
 /**
+ * Aggregate gossip-mesh health bands in `lyth_peerSummary`.
+ */
+type HealthSummary = {
+    synced: bigint;
+    lagging: bigint;
+    stale: bigint;
+};
+
+/**
+ * Ping-RTT histogram bands in `lyth_peerSummary`.
+ */
+type LatencyBands = {
+    lt_50ms: bigint;
+    lt_200ms: bigint;
+    lt_1s: bigint;
+    ge_1s: bigint;
+};
+
+/**
+ * ABI value type.
+ */
+type MrvAbiType = {
+    "kind": "unit";
+} | {
+    "kind": "bool";
+} | {
+    "kind": "u8";
+} | {
+    "kind": "u32";
+} | {
+    "kind": "u64";
+} | {
+    "kind": "u128";
+} | {
+    "kind": "bytes";
+} | {
+    "kind": "fixedBytes";
+    /**
+     * Fixed byte length.
+     */
+    len: number;
+} | {
+    "kind": "string";
+} | {
+    "kind": "address";
+} | {
+    "kind": "hash";
+};
+
+/**
+ * ABI parameter.
+ */
+type MrvAbiParam = {
+    /**
+     * Stable parameter name.
+     */
+    name: string;
+    /**
+     * Parameter type.
+     */
+    ty: MrvAbiType;
+};
+
+/**
+ * ABI symbol kind.
+ */
+type MrvAbiSymbolKind = "constructor" | "function" | "event";
+
+/**
+ * ABI symbol exposed by a contract.
+ */
+type MrvAbiSymbol = {
+    /**
+     * Stable symbol name.
+     */
+    name: string;
+    /**
+     * Symbol kind.
+     */
+    kind: MrvAbiSymbolKind;
+    /**
+     * Typed input parameters.
+     */
+    inputs: Array<MrvAbiParam>;
+    /**
+     * Typed output parameters.
+     */
+    outputs: Array<MrvAbiParam>;
+};
+
+/**
+ * Contract ABI manifest.
+ */
+type MrvAbiManifest = {
+    /**
+     * ABI symbols exposed by this artifact.
+     */
+    symbols: Array<MrvAbiSymbol>;
+};
+
+/**
+ * Typed address discriminator from ADR-0038.
+ */
+type MrvAddressKind = "user" | "smartAccount" | "contract" | "cluster" | "multisig" | "systemModule";
+
+/**
+ * Build metadata recorded in an MRV artifact.
+ */
+type MrvBuildMetadata = {
+    /**
+     * Toolchain identifier.
+     */
+    toolchain: string;
+    /**
+     * `0x`-prefixed source or build-input digest.
+     */
+    sourceDigest: string;
+    /**
+     * Reproducible build profile label.
+     */
+    profile: string;
+};
+
+/**
+ * Bounded memory declaration for an MRV artifact.
+ */
+type MrvMemoryLimits = {
+    /**
+     * Initial memory pages available at contract start.
+     */
+    initialPages: number;
+    /**
+     * Maximum memory pages the contract may grow to.
+     */
+    maxPages: number;
+    /**
+     * Stack reservation in bytes.
+     */
+    stackBytes: number;
+};
+
+/**
+ * Approved MRV RISC-V profile.
+ */
+type MrvRiscvProfile = "mono_rv32im_v1";
+
+/**
+ * Stable storage namespace declaration.
+ */
+type MrvStorageNamespace = {
+    /**
+     * Lowercase namespace name.
+     */
+    name: string;
+    /**
+     * Namespace schema version.
+     */
+    version: number;
+};
+
+/**
+ * Host syscall import declared by an artifact.
+ */
+type MrvSyscallImport = {
+    /**
+     * Host module name. Must be `mono`.
+     */
+    module: string;
+    /**
+     * Stable syscall import name.
+     */
+    name: string;
+    /**
+     * Stable numeric syscall identifier.
+     */
+    id: number;
+};
+
+/**
+ * SDK JSON metadata for an MRV artifact.
+ */
+type MrvArtifactMetadata = {
+    /**
+     * MRV format version.
+     */
+    formatVersion: number;
+    /**
+     * Approved RISC-V profile.
+     */
+    profile: MrvRiscvProfile;
+    /**
+     * BLAKE3 hash of the code section.
+     */
+    codeHash: string;
+    /**
+     * Code byte count expected by this metadata.
+     */
+    codeBytes: bigint;
+    /**
+     * Optional debug byte count. Debug bytes are excluded from consensus hash.
+     */
+    debugBytes: bigint;
+    /**
+     * Contract ABI manifest.
+     */
+    abi: MrvAbiManifest;
+    /**
+     * Host syscall imports declared by the artifact.
+     */
+    imports: Array<MrvSyscallImport>;
+    /**
+     * Bounded memory declaration.
+     */
+    memory: MrvMemoryLimits;
+    /**
+     * Contract storage namespace.
+     */
+    storageNamespace: MrvStorageNamespace;
+    /**
+     * Build metadata.
+     */
+    build: MrvBuildMetadata;
+};
+
+/**
+ * Native MRV contract call request model.
+ */
+type MrvCallRequest = {
+    /**
+     * Optional typed user address that signs the call.
+     */
+    from?: string;
+    /**
+     * Destination typed contract address (`monoc1...`).
+     */
+    contractAddress: string;
+    /**
+     * Call input bytes as `0x`-hex.
+     */
+    input: string;
+    /**
+     * Native value sent with the call, in lythoshi.
+     */
+    valueLythoshi: string;
+    /**
+     * Optional execution-unit ceiling for transaction admission.
+     */
+    executionUnitLimit?: bigint;
+    /**
+     * Optional max execution fee in lythoshi.
+     */
+    maxExecutionFeeLythoshi?: string;
+    /**
+     * Optional priority tip in lythoshi.
+     */
+    priorityTipLythoshi?: string;
+    /**
+     * Optional signer nonce.
+     */
+    nonce?: bigint;
+};
+
+/**
+ * Native MRV call status.
+ */
+type MrvCallStatus = "success" | "reverted" | "halted";
+
+/**
+ * Typed event payload emitted by a contract or native module.
+ */
+type MrvEventRecord = {
+    /**
+     * Domain-separated event topic as `0x`-hex.
+     */
+    topic: string;
+    /**
+     * Event payload bytes as `0x`-hex.
+     */
+    data: string;
+};
+
+/**
+ * Independent counters reported by MRV execution.
+ */
+type MrvMeterCounters = {
+    /**
+     * Deterministic instruction-cycle count.
+     */
+    cycles: bigint;
+    /**
+     * Units consumed by host syscalls.
+     */
+    syscallUnits: bigint;
+    /**
+     * Units consumed by authenticated state reads and writes.
+     */
+    stateIoUnits: bigint;
+};
+
+/**
+ * Typed native-module state delta for receipts and indexers.
+ */
+type MrvNativeStateDelta = {
+    /**
+     * Native module namespace that changed.
+     */
+    namespace: MrvStorageNamespace;
+    /**
+     * State key inside the namespace as `0x`-hex.
+     */
+    key: string;
+    /**
+     * Hash of the new value, or absent when the key was deleted.
+     */
+    valueHash?: string;
+};
+
+/**
+ * Typed revert payload.
+ */
+type MrvRevertPayload = {
+    /**
+     * Stable contract-defined revert code.
+     */
+    code: number;
+    /**
+     * Opaque revert data as `0x`-hex.
+     */
+    data: string;
+};
+
+/**
+ * Typed RISC-V execution receipt.
+ */
+type MrvExecutionReceipt = {
+    /**
+     * Consensus hash of the validated MRV artifact as `0x`-hex.
+     */
+    artifactHash: string;
+    /**
+     * Execution counters.
+     */
+    counters: MrvMeterCounters;
+    /**
+     * Typed events emitted by the call.
+     */
+    events: Array<MrvEventRecord>;
+    /**
+     * Native module deltas produced by the call.
+     */
+    nativeDeltas: Array<MrvNativeStateDelta>;
+    /**
+     * Revert payload when execution failed through the typed revert path.
+     */
+    reverted?: MrvRevertPayload;
+};
+
+/**
+ * Native MRV call response model.
+ */
+type MrvCallResponse = {
+    /**
+     * Transaction hash.
+     */
+    txHash: string;
+    /**
+     * Execution status.
+     */
+    status: MrvCallStatus;
+    /**
+     * Returned bytes as `0x`-hex when available.
+     */
+    returnData: string;
+    /**
+     * Typed RISC-V receipt when available.
+     */
+    receipt?: MrvExecutionReceipt;
+};
+
+/**
+ * Native MRV deploy request model.
+ */
+type MrvDeployRequest = {
+    /**
+     * Optional typed user address that signs the deploy.
+     */
+    from?: string;
+    /**
+     * Raw bincode MRV artifact bytes as `0x`-hex.
+     */
+    artifactBytes: string;
+    /**
+     * Native value to endow the contract with, in lythoshi.
+     */
+    valueLythoshi: string;
+    /**
+     * Optional execution-unit ceiling for transaction admission.
+     */
+    executionUnitLimit?: bigint;
+    /**
+     * Optional max execution fee in lythoshi.
+     */
+    maxExecutionFeeLythoshi?: string;
+    /**
+     * Optional priority tip in lythoshi.
+     */
+    priorityTipLythoshi?: string;
+    /**
+     * Optional signer nonce.
+     */
+    nonce?: bigint;
+};
+
+/**
+ * Native MRV deploy response model.
+ */
+type MrvDeployResponse = {
+    /**
+     * Transaction hash.
+     */
+    txHash: string;
+    /**
+     * Deployed typed contract address (`monoc1...`).
+     */
+    contractAddress: string;
+    /**
+     * Artifact hash when supplied by the node/indexer.
+     */
+    artifactHash?: string;
+    /**
+     * Receipt when the caller requested a confirmed response.
+     */
+    receipt?: MrvExecutionReceipt;
+};
+
+/**
+ * Resolved syscall import.
+ */
+type MrvResolvedSyscall = {
+    /**
+     * Stable numeric syscall identifier.
+     */
+    id: number;
+    /**
+     * Stable syscall import name.
+     */
+    name: string;
+};
+
+/**
+ * Typed MRV transaction extension descriptor.
+ */
+type MrvTransactionExtension = {
+    /**
+     * Extension kind byte.
+     */
+    kind: number;
+    /**
+     * Extension body bytes as `0x`-hex.
+     */
+    bodyHex: string;
+};
+
+/**
+ * Decoded typed bech32m address.
+ */
+type MrvTypedAddress = {
+    /**
+     * ADR-0038 address kind.
+     */
+    kind: MrvAddressKind;
+    /**
+     * Typed bech32m address string.
+     */
+    address: string;
+};
+
+/**
+ * Validated artifact metadata summary.
+ */
+type MrvValidatedArtifactMetadata = {
+    /**
+     * Verified code hash.
+     */
+    codeHash: string;
+    /**
+     * Approved profile.
+     */
+    profile: MrvRiscvProfile;
+    /**
+     * Bounded memory declaration.
+     */
+    memory: MrvMemoryLimits;
+    /**
+     * Contract storage namespace.
+     */
+    storageNamespace: MrvStorageNamespace;
+    /**
+     * Resolved syscall imports in declared order.
+     */
+    syscalls: Array<MrvResolvedSyscall>;
+    /**
+     * Number of ABI symbols.
+     */
+    abiSymbolCount: bigint;
+    /**
+     * Verified code byte count.
+     */
+    codeBytes: bigint;
+};
+
+/**
  * Typed HTTP client for the explorer-facing `/api/v1` surface served by
  * `mono-core`.
  *
@@ -367,6 +879,66 @@ declare class ApiClient {
 }
 
 /**
+ * Address display helpers.
+ *
+ * Monolythium keeps 20-byte EVM-compatible addresses on the wire, but
+ * user-facing surfaces display them as `mono1...` bech32m strings.
+ */
+declare const ADDRESS_HRP: "mono";
+declare const ADDRESS_KIND_HRPS: {
+    readonly user: "mono";
+    readonly smartAccount: "monos";
+    readonly contract: "monoc";
+    readonly cluster: "monok";
+    readonly multisig: "monom";
+    readonly systemModule: "monox";
+};
+declare const RESERVED_ADDRESS_HRPS: readonly ["monor", "monop", "monoi", "monoa"];
+type AddressKind = keyof typeof ADDRESS_KIND_HRPS;
+interface TypedAddress {
+    kind: AddressKind;
+    address: string;
+    bytes: Uint8Array;
+    hex: string;
+}
+declare class AddressError extends Error {
+    constructor(message: string);
+}
+declare function hexToAddressBytes(address: string): Uint8Array;
+declare function addressBytesToHex(address: Uint8Array | readonly number[]): string;
+declare function addressToBech32(address: string | Uint8Array | readonly number[]): string;
+declare function addressToTypedBech32(kind: AddressKind, address: string | Uint8Array | readonly number[]): string;
+declare function bech32ToAddressBytes(address: string): Uint8Array;
+declare function bech32ToAddress(address: string): string;
+declare function typedBech32ToAddress(address: string, expectedKind?: AddressKind): TypedAddress;
+declare function parseAddress(address: string): Uint8Array;
+declare function normalizeAddressHex(address: string): string;
+
+type MrvBytesLike = string | Uint8Array | readonly number[];
+declare const MRV_FORMAT_VERSION: 1;
+declare const MRV_PROFILE_MONO_RV32IM_V1: "mono_rv32im_v1";
+declare const MRV_MEMORY_PAGE_BYTES: 65536;
+declare const MRV_MAX_CODE_BYTES: number;
+declare const MRV_MAX_DEBUG_BYTES: number;
+declare const MRV_MAX_MEMORY_PAGES: 1024;
+declare const MRV_MAX_ABI_SYMBOLS: 1024;
+declare const MRV_MAX_STORAGE_NAMESPACE_BYTES: 64;
+declare const LYTH_DECIMALS: 8;
+declare const LYTHOSHI_PER_LYTH = 100000000n;
+declare const MRV_TX_EXTENSION_KIND: 48;
+declare const MRV_TX_EXTENSION_V1: 1;
+declare class MrvValidationError extends Error {
+    constructor(message: string);
+}
+declare function mrvCodeHashHex(code: MrvBytesLike): string;
+declare function mrvV1TransactionExtension(): MrvTransactionExtension;
+declare function mrvAddressToBech32(kind: MrvAddressKind, bytes: MrvBytesLike): string;
+declare function mrvBech32ToAddress(address: string, expectedKind?: MrvAddressKind): TypedAddress;
+declare function validateMrvArtifactMetadata(metadata: MrvArtifactMetadata, code: MrvBytesLike): MrvValidatedArtifactMetadata;
+declare function validateMrvDeployRequest(request: MrvDeployRequest): void;
+declare function validateMrvCallRequest(request: MrvCallRequest): void;
+
+/**
  * Error surfaced by `RpcClient`. Distinguishes transport failures
  * (HTTP errors, network), protocol errors (JSON-RPC `error` envelopes),
  * and shape mismatches.
@@ -517,24 +1089,6 @@ declare function isSinglePublicServiceProbeMask(mask: number): boolean;
 declare function isConcreteServiceProbeStatus(status: number): boolean;
 declare function serviceProbeStatusLabel(status: number): string;
 declare function encodeReportServiceProbeCalldata(args: ReportServiceProbeCalldataArgs): string;
-
-/**
- * Address display helpers.
- *
- * Monolythium keeps 20-byte EVM-compatible addresses on the wire, but
- * user-facing surfaces display them as `mono1...` bech32m strings.
- */
-declare const ADDRESS_HRP: "mono";
-declare class AddressError extends Error {
-    constructor(message: string);
-}
-declare function hexToAddressBytes(address: string): Uint8Array;
-declare function addressBytesToHex(address: Uint8Array | readonly number[]): string;
-declare function addressToBech32(address: string | Uint8Array | readonly number[]): string;
-declare function bech32ToAddressBytes(address: string): Uint8Array;
-declare function bech32ToAddress(address: string): string;
-declare function parseAddress(address: string): Uint8Array;
-declare function normalizeAddressHex(address: string): string;
 
 /**
  * Spending-policy precompile ABI helpers.
@@ -946,4 +1500,4 @@ declare function translateBlockOut(header: {
  */
 declare const version = "0.1.0";
 
-export { ADDRESS_HRP, AddressError, AddressFlowResponse, AddressProfileResponse, type ApiAddressActivityData, type ApiAddressActivityEntry, type ApiAddressActivityKind, type ApiAddressActivityKindData, type ApiAddressActivityKindSummary, type ApiBlockData, type ApiBlockHeader, type ApiBlockTransactionsData, type ApiCapabilitiesResponse, ApiClient, type ApiClientOptions, type ApiClusterData, type ApiClusterDirectoryEntry, type ApiClusterDirectoryPage, type ApiClusterMember, type ApiClusterStatus, type ApiClustersData, type ApiEnvelope, type ApiErrorEnvelope, type ApiHealthResponse, type ApiIndexerStatus, type ApiLatestAnchor, type ApiLogEntry, type ApiOperatorData, type ApiOperatorInfo, type ApiQueryValue, type ApiRuntimeProvenanceData, type ApiServiceProbeData, type ApiTransactionData, type ApiTransactionReceipt, type ApiTransactionReceiptData, type ApiTransactionView, type ApiUpgradePlanStatus, type ApiUpgradeStatus, type ApiUpgradeStatusData, BURN_ADDR, BlockSelector, CallRequest, ChainStatsResponse, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse, ClobTradesResponse, type EthersBlockShape, type EthersReceiptShape, type EthersTxRequestSubset, ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, type MonolythiumNetworkConfig, MonolythiumProvider, type MonolythiumProviderOptions, MonolythiumSigner, type MonolythiumSignerBackend, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NodeRegistryError, OperatorCapabilitiesResponse, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, type PrecompileAddress, type PrecompileName, type PubkeyLookup, PubkeyRegistryError, type ReportServiceProbeCalldataArgs, RpcClient, RpcClientOptions, RuntimeBuildProvenance, RuntimeUpgradeStatus, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SearchResponse, ServiceProbeResponse, type SpendingPolicyArgs, SpendingPolicyError, TransactionReceipt, TxFeedResponse, addressBytesToHex, addressToBech32, apiEndpointFromRpcEndpoint, bech32ToAddress, bech32ToAddressBytes, composeClaimBoundMessage, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, encodeClaimPolicyByAddressCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLookupPubkeyCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, hexToAddressBytes, isConcreteServiceProbeStatus, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, nodeRegistryAddressHex, normalizeAddressHex, parseAddress, pubkeyRegistryAddressHex, serviceProbeStatusLabel, spendingPolicyAddressHex, translateBlockOut, translateReceiptOut, translateTxIn, version };
+export { ADDRESS_HRP, ADDRESS_KIND_HRPS, AddressError, AddressFlowResponse, type AddressKind, AddressProfileResponse, type ApiAddressActivityData, type ApiAddressActivityEntry, type ApiAddressActivityKind, type ApiAddressActivityKindData, type ApiAddressActivityKindSummary, type ApiBlockData, type ApiBlockHeader, type ApiBlockTransactionsData, type ApiCapabilitiesResponse, ApiClient, type ApiClientOptions, type ApiClusterData, type ApiClusterDirectoryEntry, type ApiClusterDirectoryPage, type ApiClusterMember, type ApiClusterStatus, type ApiClustersData, type ApiEnvelope, type ApiErrorEnvelope, type ApiHealthResponse, type ApiIndexerStatus, type ApiLatestAnchor, type ApiLogEntry, type ApiOperatorData, type ApiOperatorInfo, type ApiQueryValue, type ApiRuntimeProvenanceData, type ApiServiceProbeData, type ApiTransactionData, type ApiTransactionReceipt, type ApiTransactionReceiptData, type ApiTransactionView, type ApiUpgradePlanStatus, type ApiUpgradeStatus, type ApiUpgradeStatusData, BURN_ADDR, BlockSelector, CallRequest, ChainStatsResponse, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse, ClobTradesResponse, type EthersBlockShape, type EthersReceiptShape, type EthersTxRequestSubset, type HealthSummary, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, type LatencyBands, ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, type MonolythiumNetworkConfig, MonolythiumProvider, type MonolythiumProviderOptions, MonolythiumSigner, type MonolythiumSignerBackend, type MrvAbiManifest, type MrvAbiParam, type MrvAbiSymbol, type MrvAbiSymbolKind, type MrvAbiType, type MrvAddressKind, type MrvArtifactMetadata, type MrvBuildMetadata, type MrvBytesLike, type MrvCallRequest, type MrvCallResponse, type MrvCallStatus, type MrvDeployRequest, type MrvDeployResponse, type MrvEventRecord, type MrvExecutionReceipt, type MrvMemoryLimits, type MrvMeterCounters, type MrvNativeStateDelta, type MrvResolvedSyscall, type MrvRevertPayload, type MrvRiscvProfile, type MrvStorageNamespace, type MrvSyscallImport, type MrvTransactionExtension, type MrvTypedAddress, type MrvValidatedArtifactMetadata, MrvValidationError, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NodeRegistryError, OperatorCapabilitiesResponse, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, type PrecompileAddress, type PrecompileName, type PubkeyLookup, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, type ReportServiceProbeCalldataArgs, RpcClient, RpcClientOptions, RuntimeBuildProvenance, RuntimeUpgradeStatus, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SearchResponse, ServiceProbeResponse, type SpendingPolicyArgs, SpendingPolicyError, TransactionReceipt, TxFeedResponse, type TypedAddress, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, bech32ToAddress, bech32ToAddressBytes, composeClaimBoundMessage, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, encodeClaimPolicyByAddressCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLookupPubkeyCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, hexToAddressBytes, isConcreteServiceProbeStatus, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nodeRegistryAddressHex, normalizeAddressHex, parseAddress, pubkeyRegistryAddressHex, serviceProbeStatusLabel, spendingPolicyAddressHex, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, version };

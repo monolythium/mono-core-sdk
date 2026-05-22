@@ -111,6 +111,7 @@ export type {
 } from "./client.js";
 export type { ClobMarketRecord } from "./bindings/ClobMarketRecord.js";
 export type { ClobMarketResponse } from "./bindings/ClobMarketResponse.js";
+export * from "./mrv.js";
 export {
   CHAIN_REGISTRY,
   CHAIN_REGISTRY_RAW_BASE,
@@ -151,16 +152,21 @@ export {
 } from "./node-registry.js";
 export type { ReportServiceProbeCalldataArgs } from "./node-registry.js";
 export {
+  ADDRESS_KIND_HRPS,
   ADDRESS_HRP,
+  RESERVED_ADDRESS_HRPS,
   AddressError,
   addressBytesToHex,
   addressToBech32,
+  addressToTypedBech32,
   bech32ToAddress,
   bech32ToAddressBytes,
   hexToAddressBytes,
   normalizeAddressHex,
   parseAddress,
+  typedBech32ToAddress,
 } from "./address.js";
+export type { AddressKind, TypedAddress } from "./address.js";
 export {
   ML_DSA_65_PUBLIC_KEY_LEN,
   ML_DSA_65_SIGNATURE_LEN,

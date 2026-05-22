@@ -30,6 +30,9 @@ The SDK tracks the live `mono-core` RPC and precompile surface. Wire types under
 - Canonical precompile address constants, including recent Stage 7 additions:
   `SPENDING_POLICY` at `0x110C` and `PUBKEY_REGISTRY` at `0x110D`.
 - `mono1...` bech32m display helpers for 20-byte wire addresses.
+- Additive v4.1 MRV/RISC-V helpers for typed bech32m HRPs, artifact metadata
+  validation, MRV v1 transaction extension descriptors, and native deploy/call
+  request and receipt models using lythoshi and execution-unit terminology.
 - Spending-policy calldata helpers for `claimPolicyByAddress`,
   `setPolicyClaim`, `setPolicy`, `enable`, and `disable`.
 - Pubkey-registry calldata helpers for `registerPubkey`, `lookupPubkey`, and
@@ -171,6 +174,67 @@ use monolythium_core_sdk::{address_to_bech32, bech32_to_address};
 
 let display = address_to_bech32([0x42; 20]);
 let wire = bech32_to_address(&display).expect("valid mono1 address");
+```
+
+Typed v4.1 surfaces use distinct bech32m HRPs for each address role:
+`mono` user accounts, `monos` smart accounts, `monoc` contracts, `monok`
+clusters, `monom` multisigs, and `monox` system modules.
+
+## MRV / RISC-V Helpers
+
+The first v4.1 SDK slice exposes MRV artifact metadata validation, the MRV v1
+transaction extension descriptor, typed contract addresses, and native
+deploy/call models. It does not encode mono-core's bincode artifact body yet;
+pass artifact bytes as `0x` hex and validate metadata against the code bytes.
+
+TypeScript:
+
+```ts
+import {
+  MRV_FORMAT_VERSION,
+  MRV_PROFILE_MONO_RV32IM_V1,
+  mrvAddressToBech32,
+  mrvCodeHashHex,
+  mrvV1TransactionExtension,
+  validateMrvArtifactMetadata,
+} from "@monolythium/core-sdk";
+
+const code = new Uint8Array([0x13, 0x00, 0x00, 0x00]);
+const metadata = {
+  formatVersion: MRV_FORMAT_VERSION,
+  profile: MRV_PROFILE_MONO_RV32IM_V1,
+  codeHash: mrvCodeHashHex(code),
+  codeBytes: 4n,
+  debugBytes: 0n,
+  abi: { symbols: [{ name: "transfer", kind: "function", inputs: [], outputs: [] }] },
+  imports: [{ module: "mono", name: "emit_event", id: 0x0302 }],
+  memory: { initialPages: 1, maxPages: 4, stackBytes: 16384 },
+  storageNamespace: { name: "contract_state", version: 1 },
+  build: { toolchain: "mono-riscv", sourceDigest: `0x${"00".repeat(32)}`, profile: "release" },
+};
+
+const validated = validateMrvArtifactMetadata(metadata, code);
+const extension = mrvV1TransactionExtension();
+const contract = mrvAddressToBech32("contract", new Uint8Array(20));
+console.log(validated.codeHash, extension.kind, contract);
+```
+
+Rust:
+
+```rust
+use monolythium_core_sdk::mrv::{
+    mrv_code_hash_hex, mrv_v1_transaction_extension, validate_mrv_artifact_metadata,
+    MrvArtifactMetadata, MRV_FORMAT_VERSION,
+};
+
+# fn run(metadata: MrvArtifactMetadata, code: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+assert_eq!(metadata.format_version, MRV_FORMAT_VERSION);
+let hash = mrv_code_hash_hex(code);
+let validated = validate_mrv_artifact_metadata(&metadata, code)?;
+let extension = mrv_v1_transaction_extension();
+println!("{} {} {}", hash, validated.code_hash, extension.kind);
+# Ok(())
+# }
 ```
 
 ## Pubkey Registry

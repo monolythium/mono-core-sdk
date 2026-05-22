@@ -6,6 +6,24 @@
  */
 
 export const ADDRESS_HRP = "mono" as const;
+export const ADDRESS_KIND_HRPS = {
+  user: "mono",
+  smartAccount: "monos",
+  contract: "monoc",
+  cluster: "monok",
+  multisig: "monom",
+  systemModule: "monox",
+} as const;
+export const RESERVED_ADDRESS_HRPS = ["monor", "monop", "monoi", "monoa"] as const;
+
+export type AddressKind = keyof typeof ADDRESS_KIND_HRPS;
+
+export interface TypedAddress {
+  kind: AddressKind;
+  address: string;
+  bytes: Uint8Array;
+  hex: string;
+}
 
 const CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 const CHARSET_MAP = new Map([...CHARSET].map((c, i) => [c, i]));
@@ -37,26 +55,49 @@ export function addressBytesToHex(address: Uint8Array | readonly number[]): stri
 }
 
 export function addressToBech32(address: string | Uint8Array | readonly number[]): string {
+  return addressToTypedBech32("user", address);
+}
+
+export function addressToTypedBech32(
+  kind: AddressKind,
+  address: string | Uint8Array | readonly number[],
+): string {
   const bytes = typeof address === "string" ? hexToAddressBytes(address) : expectLength(address, 20, "address");
+  return encodeBech32m(ADDRESS_KIND_HRPS[kind], bytes);
+}
+
+function encodeBech32m(hrp: string, bytes: Uint8Array): string {
   const words = convertBits([...bytes], 8, 5, true);
-  const checksum = createChecksum(ADDRESS_HRP, words);
-  return `${ADDRESS_HRP}1${[...words, ...checksum].map((v) => CHARSET[v]).join("")}`;
+  const checksum = createChecksum(hrp, words);
+  return `${hrp}1${[...words, ...checksum].map((v) => CHARSET[v]).join("")}`;
 }
 
 export function bech32ToAddressBytes(address: string): Uint8Array {
+  return typedBech32ToAddress(address, "user").bytes;
+}
+
+export function bech32ToAddress(address: string): string {
+  return addressBytesToHex(bech32ToAddressBytes(address));
+}
+
+export function typedBech32ToAddress(address: string, expectedKind?: AddressKind): TypedAddress {
   const parsed = decodeBech32m(address);
-  if (parsed.hrp !== ADDRESS_HRP) {
-    throw new AddressError(`unexpected hrp '${parsed.hrp}', expected '${ADDRESS_HRP}'`);
+  if ((RESERVED_ADDRESS_HRPS as readonly string[]).includes(parsed.hrp)) {
+    throw new AddressError(`reserved address hrp '${parsed.hrp}'`);
+  }
+  const kind = addressKindFromHrp(parsed.hrp);
+  if (kind === undefined) {
+    throw new AddressError(`unknown address hrp '${parsed.hrp}'`);
+  }
+  if (expectedKind !== undefined && kind !== expectedKind) {
+    throw new AddressError(`unexpected hrp '${parsed.hrp}', expected '${ADDRESS_KIND_HRPS[expectedKind]}'`);
   }
   const bytes = convertBits(parsed.data, 5, 8, false);
   if (bytes.length !== 20) {
     throw new AddressError(`expected 20-byte payload, got ${bytes.length} bytes`);
   }
-  return Uint8Array.from(bytes);
-}
-
-export function bech32ToAddress(address: string): string {
-  return addressBytesToHex(bech32ToAddressBytes(address));
+  const out = Uint8Array.from(bytes);
+  return { kind, address: address.toLowerCase(), bytes: out, hex: addressBytesToHex(out) };
 }
 
 export function parseAddress(address: string): Uint8Array {
@@ -97,6 +138,13 @@ function decodeBech32m(input: string): { hrp: string; data: number[] } {
     throw new AddressError("bech32m checksum mismatch");
   }
   return { hrp, data: values.slice(0, -6) };
+}
+
+function addressKindFromHrp(hrp: string): AddressKind | undefined {
+  for (const [kind, kindHrp] of Object.entries(ADDRESS_KIND_HRPS) as Array<[AddressKind, string]>) {
+    if (kindHrp === hrp) return kind;
+  }
+  return undefined;
 }
 
 function hrpExpand(hrp: string): number[] {
