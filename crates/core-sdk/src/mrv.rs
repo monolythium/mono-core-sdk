@@ -41,6 +41,7 @@ pub const MRV_TX_EXTENSION_KIND: u8 = 0x30;
 pub const MRV_TX_EXTENSION_V1: u8 = 0x01;
 
 const MRV_CODE_HASH_DOMAIN: &[u8] = b"MONO_MRV_CODE_V1";
+const MRV_CONTRACT_ADDRESS_DOMAIN: &[u8] = b"mono:riscv:contract-address:v1";
 const MONO_SYSCALL_MODULE: &str = "mono";
 
 /// Approved MRV RISC-V profile.
@@ -848,6 +849,45 @@ pub fn mrv_bech32_to_address_kind(
     })
 }
 
+/// Derive the deterministic `monoc` address for an MRV deployment.
+///
+/// This mirrors mono-core runtime deployment address derivation so SDK
+/// callers can precompute the contract address before the deploy transaction
+/// is included.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when `deployer_address` is malformed or
+/// `artifact_hash_hex` is not a 32-byte `0x` hash.
+pub fn derive_mrv_contract_address(
+    deployer_address: &str,
+    deployer_nonce: u64,
+    artifact_hash_hex: &str,
+) -> Result<String, MrvValidationError> {
+    let (deployer_kind, deployer_bytes) = mrv_bech32_to_address(deployer_address)?;
+    let artifact_hash = decode_hex("artifactHash", artifact_hash_hex)?;
+    if artifact_hash.len() != 32 {
+        return Err(MrvValidationError::InvalidHexLength {
+            field: "artifactHash",
+            expected: 32,
+        });
+    }
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(MRV_CONTRACT_ADDRESS_DOMAIN);
+    hasher.update(deployer_kind.hrp().as_bytes());
+    hasher.update(&[0]);
+    hasher.update(&deployer_bytes);
+    hasher.update(&deployer_nonce.to_be_bytes());
+    hasher.update(&artifact_hash);
+    let digest = hasher.finalize();
+    let mut contract_bytes = [0u8; 20];
+    contract_bytes.copy_from_slice(&digest.as_bytes()[..20]);
+    Ok(mrv_address_to_bech32(
+        MrvAddressKind::Contract,
+        contract_bytes,
+    ))
+}
+
 /// Validate MRV artifact metadata against the supplied code bytes.
 ///
 /// # Errors
@@ -1372,6 +1412,32 @@ mod tests {
             bytes
         );
         assert!(mrv_bech32_to_address_kind(&contract, MrvAddressKind::User).is_err());
+    }
+
+    #[test]
+    fn derives_mrv_deploy_contract_address_from_runtime_preimage() {
+        let deployer = mrv_address_to_bech32(MrvAddressKind::User, [0x11; 20]);
+        let smart_account = mrv_address_to_bech32(MrvAddressKind::SmartAccount, [0x11; 20]);
+        let artifact_hash = "0x598501b99b388ca564905b49040c6d315a55fb13bf34a6f002aa04960a27895d";
+
+        let contract = derive_mrv_contract_address(&deployer, 7, artifact_hash).unwrap();
+        let (kind, bytes) = mrv_bech32_to_address(&contract).unwrap();
+
+        assert_eq!(kind, MrvAddressKind::Contract);
+        assert_eq!(bytes.len(), 20);
+        assert_eq!(
+            contract,
+            derive_mrv_contract_address(&deployer, 7, artifact_hash).unwrap()
+        );
+        assert_ne!(
+            contract,
+            derive_mrv_contract_address(&deployer, 8, artifact_hash).unwrap()
+        );
+        assert_ne!(
+            contract,
+            derive_mrv_contract_address(&smart_account, 7, artifact_hash).unwrap()
+        );
+        assert!(derive_mrv_contract_address(&deployer, 7, "0x1234").is_err());
     }
 
     #[test]

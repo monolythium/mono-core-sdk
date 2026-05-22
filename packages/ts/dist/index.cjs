@@ -1745,6 +1745,7 @@ var LYTHOSHI_PER_LYTH = 100000000n;
 var MRV_TX_EXTENSION_KIND = 48;
 var MRV_TX_EXTENSION_V1 = 1;
 var MRV_CODE_HASH_DOMAIN = new TextEncoder().encode("MONO_MRV_CODE_V1");
+var MRV_CONTRACT_ADDRESS_DOMAIN = new TextEncoder().encode("mono:riscv:contract-address:v1");
 var MONO_SYSCALL_MODULE = "mono";
 var SYSCALLS = [
   [257, "storage_read"],
@@ -1783,6 +1784,25 @@ function mrvAddressToBech32(kind, bytes) {
 }
 function mrvBech32ToAddress(address, expectedKind) {
   return typedBech32ToAddress(address, expectedKind);
+}
+function deriveMrvContractAddress(deployerAddress, deployerNonce, artifactHashHex) {
+  const deployer = typedBech32ToAddress(deployerAddress);
+  const artifactHash = hexToBytes2(artifactHashHex, "artifactHash");
+  if (artifactHash.length !== 32) throw new MrvValidationError("artifactHash must be 32 bytes");
+  const nonceValue = normalizeU64(deployerNonce, "deployerNonce");
+  const nonce = new Uint8Array(8);
+  new DataView(nonce.buffer).setBigUint64(0, nonceValue, false);
+  const digest = blake3_js.blake3(
+    concatBytes2(
+      MRV_CONTRACT_ADDRESS_DOMAIN,
+      new TextEncoder().encode(ADDRESS_KIND_HRPS[deployer.kind]),
+      Uint8Array.of(0),
+      hexToBytes2(deployer.hex, "deployerAddress"),
+      nonce,
+      artifactHash
+    )
+  );
+  return addressToTypedBech32("contract", digest.slice(0, 20));
 }
 function validateMrvArtifactMetadata(metadata, code) {
   const codeBytes = bytesFrom(code, "code");
@@ -1918,6 +1938,16 @@ function validateExecutionUnitLimit(field, value) {
   if (value !== void 0 && BigInt(value) === 0n) {
     throw new MrvValidationError(`${field} must be greater than zero`);
   }
+}
+function normalizeU64(value, field) {
+  if (typeof value === "number" && !Number.isSafeInteger(value)) {
+    throw new MrvValidationError(`${field} must be a safe unsigned integer`);
+  }
+  const out = BigInt(value);
+  if (out < 0n || out > 0xffffffffffffffffn) {
+    throw new MrvValidationError(`${field} must fit in u64`);
+  }
+  return out;
 }
 function validateHexLength(field, value, expected) {
   const bytes = hexToBytes2(value, field);
@@ -2520,6 +2550,7 @@ exports.bech32ToAddressBytes = bech32ToAddressBytes;
 exports.composeClaimBoundMessage = composeClaimBoundMessage;
 exports.decodeHasPubkeyReturn = decodeHasPubkeyReturn;
 exports.decodeLookupPubkeyReturn = decodeLookupPubkeyReturn;
+exports.deriveMrvContractAddress = deriveMrvContractAddress;
 exports.encodeBlockSelector = encodeBlockSelector;
 exports.encodeClaimPolicyByAddressCalldata = encodeClaimPolicyByAddressCalldata;
 exports.encodeDisableCalldata = encodeDisableCalldata;

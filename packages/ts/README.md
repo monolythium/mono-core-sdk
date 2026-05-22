@@ -117,6 +117,8 @@ execution-unit fields.
 import {
   MRV_FORMAT_VERSION,
   MRV_PROFILE_MONO_RV32IM_V1,
+  deriveMrvContractAddress,
+  mrvAddressToBech32,
   mrvCodeHashHex,
   mrvV1TransactionExtension,
   validateMrvArtifactMetadata,
@@ -138,7 +140,9 @@ const metadata = {
 
 const validated = validateMrvArtifactMetadata(metadata, code);
 const extension = mrvV1TransactionExtension();
-console.log(validated.syscalls, extension);
+const deployer = mrvAddressToBech32("user", new Uint8Array(20).fill(0x11));
+const deployAddress = deriveMrvContractAddress(deployer, 7n, validated.codeHash);
+console.log(validated.syscalls, extension, deployAddress);
 ```
 
 ### Spending-policy helpers
