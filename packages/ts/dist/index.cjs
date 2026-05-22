@@ -109,6 +109,9 @@ var ApiClient = class {
   async transactionReceipt(hash) {
     return this.get(`/transactions/${encodePathSegment(hash)}/receipt`);
   }
+  async transactionNativeReceipt(hash) {
+    return this.get(`/transactions/${encodePathSegment(hash)}/native-receipt`);
+  }
   async addressProfile(address) {
     return this.get(`/addresses/${encodePathSegment(address)}/profile`);
   }
@@ -605,6 +608,7 @@ function parseTomlScalar(raw) {
 }
 
 // src/client.ts
+var MAX_NATIVE_RECEIPT_EVENTS = 1e3;
 var SDK_VERSION2 = "0.1.0";
 function resolveChainInfo(network, registry) {
   if (registry) {
@@ -863,6 +867,10 @@ var RpcClient = class _RpcClient {
   /** `lyth_decodeTx` — explorer-grade decoded transaction envelope. */
   async lythDecodeTx(txHash) {
     return this.call("lyth_decodeTx", [txHash]);
+  }
+  /** `lyth_nativeReceipt` — native RISC-V receipt metadata and typed native event rows. */
+  async lythNativeReceipt(txHash) {
+    return this.call("lyth_nativeReceipt", [txHash]);
   }
   /** `lyth_gapRecords` — retained ingestion/indexing gaps for a block range. */
   async lythGapRecords(fromBlock, toBlock) {
@@ -2583,6 +2591,7 @@ exports.CHAIN_REGISTRY = CHAIN_REGISTRY;
 exports.CHAIN_REGISTRY_RAW_BASE = CHAIN_REGISTRY_RAW_BASE;
 exports.LYTHOSHI_PER_LYTH = LYTHOSHI_PER_LYTH;
 exports.LYTH_DECIMALS = LYTH_DECIMALS;
+exports.MAX_NATIVE_RECEIPT_EVENTS = MAX_NATIVE_RECEIPT_EVENTS;
 exports.ML_DSA_65_PUBLIC_KEY_LEN = ML_DSA_65_PUBLIC_KEY_LEN;
 exports.ML_DSA_65_SIGNATURE_LEN = ML_DSA_65_SIGNATURE_LEN;
 exports.MONOLYTHIUM_NETWORKS = MONOLYTHIUM_NETWORKS;

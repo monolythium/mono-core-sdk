@@ -35,9 +35,9 @@ EVM-compatible `eth_*` / `net_*` / `web3_*` surface and the chain-native
 `lyth_decodeTx`, `lyth_gapRecords`, `lyth_dagParents`, `lyth_richList`,
 `lyth_txFeed`, `lyth_addressProfile`, `lyth_addressFlow`, `lyth_search`,
 `lyth_chainStats`, `lyth_clobMarkets`, `lyth_clobTrades`, `lyth_clobOhlc`,
-`lyth_clobOrderBook`, and `lyth_addressActivityKind`. Wire types are generated
-from the Rust SDK via `ts-rs` where possible, with SDK-local convenience types
-for newer explorer envelopes.
+`lyth_clobOrderBook`, `lyth_nativeReceipt`, and `lyth_addressActivityKind`.
+Wire types are generated from the Rust SDK via `ts-rs` where possible, with
+SDK-local convenience types for newer explorer envelopes.
 
 Quantities surface as `bigint` to preserve full precision. Use
 `parseQuantity` only when you know the value fits in `Number.MAX_SAFE_INTEGER`.
@@ -54,9 +54,15 @@ const api = new ApiClient("https://rpc.testnet.monolythium.com");
 
 const latest = await api.block("latest");
 const txs = await api.blockTransactions("latest", 0, 25);
+const nativeReceipt = await api.transactionNativeReceipt("0x...");
 const activity = await api.addressActivity("0x123456789abcdef0112233445566778899aabbcc");
 
-console.log(latest.data.block.blockHash, txs.data.totalTransactions, activity.data.entries.length);
+console.log(
+  latest.data.block.blockHash,
+  txs.data.totalTransactions,
+  nativeReceipt.data.eventCount,
+  activity.data.entries.length,
+);
 ```
 
 ### Chain registry

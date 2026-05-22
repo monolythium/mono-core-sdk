@@ -22,11 +22,11 @@ use crate::types::{
     DelegationCapResponse, DelegationHistoryRecord, DelegationsResponse, EncryptionKeyResponse,
     EntityRatchetResponse, FeeHistoryResponse, GapRecordsResponse, IndexerStatus,
     LythUpgradeStatusResponse, MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent,
-    MeshUnsignedTxResponse, MetricsRangeResponse, OperatorCapabilitiesResponse, PeerSummary,
-    PeerSummaryAggregate, PendingTxSummary, PrecompileDescriptor, RegistryRecord, RichListResponse,
-    RoundInfo, SearchResponse, StorageProofBatch, SyncStatus, TokenBalanceRecord,
-    TpmAttestationResponse, TransactionReceipt, TransactionView, TxFeedResponse, TxStatusResponse,
-    VerticesAtRoundResponse,
+    MeshUnsignedTxResponse, MetricsRangeResponse, NativeReceiptResponse,
+    OperatorCapabilitiesResponse, PeerSummary, PeerSummaryAggregate, PendingTxSummary,
+    PrecompileDescriptor, RegistryRecord, RichListResponse, RoundInfo, SearchResponse,
+    StorageProofBatch, SyncStatus, TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt,
+    TransactionView, TxFeedResponse, TxStatusResponse, VerticesAtRoundResponse,
 };
 
 /// Typed JSON-RPC client for a `mono-core` node.
@@ -497,6 +497,15 @@ impl RpcClient {
     /// `lyth_decodeTx` — explorer-grade decoded transaction envelope.
     pub async fn lyth_decode_tx(&self, tx_hash: &str) -> Result<DecodeTxResponse, SdkError> {
         self.call("lyth_decodeTx", json!([tx_hash])).await
+    }
+
+    /// `lyth_nativeReceipt` — native RISC-V receipt metadata and typed
+    /// native event rows for a confirmed transaction.
+    pub async fn lyth_native_receipt(
+        &self,
+        tx_hash: &str,
+    ) -> Result<NativeReceiptResponse, SdkError> {
+        self.call("lyth_nativeReceipt", json!([tx_hash])).await
     }
 
     /// `lyth_gapRecords` — retained ingestion/indexing gaps for a block range.

@@ -15,7 +15,7 @@ use crate::error::SdkError;
 use crate::types::{
     AddressFlowResponse, AddressProfileResponse, BlockSelector, ChainStatsResponse,
     ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse,
-    ClobTradesResponse, SearchResponse, TxFeedResponse,
+    ClobTradesResponse, NativeReceiptResponse, SearchResponse, TxFeedResponse,
 };
 
 /// Typed HTTP API client for `/api/v1`.
@@ -157,6 +157,15 @@ impl ApiClient {
         hash: &str,
     ) -> Result<ApiEnvelope<ApiTransactionReceiptData>, SdkError> {
         self.get(&format!("transactions/{hash}/receipt"), &[]).await
+    }
+
+    /// `/api/v1/transactions/{hash}/native-receipt`.
+    pub async fn transaction_native_receipt(
+        &self,
+        hash: &str,
+    ) -> Result<ApiEnvelope<NativeReceiptResponse>, SdkError> {
+        self.get(&format!("transactions/{hash}/native-receipt"), &[])
+            .await
     }
 
     /// `/api/v1/addresses/{address}/profile`.

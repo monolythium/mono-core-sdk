@@ -209,6 +209,60 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(calls[0].params).toEqual(["0x1111111111111111111111111111111111111111", 75, "0x01"]);
   });
 
+  it("lyth_nativeReceipt reads typed RISC-V receipt metadata and event rows", async () => {
+    const txHash = `0x${"22".repeat(32)}`;
+    const decoded = {
+      block_height: 100,
+      tx_index: 0,
+      sequence: 0,
+      family: "agent",
+      event_name: "agent.escrow.created",
+      payload_hash: `0x${"44".repeat(32)}`,
+    };
+    const { fetch, calls } = mockFetch({
+      txHash,
+      blockHash: `0x${"33".repeat(32)}`,
+      blockHeight: 100,
+      txIndex: 0,
+      schema: "riscv.receipt.v1",
+      artifactHash: `0x${"aa".repeat(32)}`,
+      counters: { cycles: 44, syscallUnits: 3, stateIoUnits: 2 },
+      reverted: false,
+      nativeDeltaCount: 0,
+      eventCount: 1,
+      events: [
+        {
+          blockHeight: 100,
+          txIndex: 0,
+          logIndex: 0,
+          address: "monoc1nativeeventemitter",
+          eventTopic: `0x${"11".repeat(32)}`,
+          decoded,
+          decodedJson: JSON.stringify(decoded),
+        },
+      ],
+      source: {
+        chainProvider: "mock_chain",
+        indexerProvider: "native_events",
+        metadataLogIndex: 0xffff_ffff,
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const receipt = await client.lythNativeReceipt(txHash);
+
+    expect(receipt.artifactHash).toBe(`0x${"aa".repeat(32)}`);
+    expect(receipt.counters).toEqual({ cycles: 44, syscallUnits: 3, stateIoUnits: 2 });
+    expect(receipt.nativeDeltaCount).toBe(0);
+    expect(receipt.eventCount).toBe(1);
+    expect(receipt.events[0].address).toBe("monoc1nativeeventemitter");
+    expect(receipt.events[0].eventTopic).toBe(`0x${"11".repeat(32)}`);
+    expect(receipt.events[0].decoded).toEqual(decoded);
+    expect(receipt.events[0].decodedJson).toBe(JSON.stringify(decoded));
+    expect(calls[0].method).toBe("lyth_nativeReceipt");
+    expect(calls[0].params).toEqual([txHash]);
+  });
+
   it("live explorer helpers call the new chain RPC surfaces", async () => {
     const address = "0x1111111111111111111111111111111111111111";
     const txHash = `0x${"22".repeat(32)}`;

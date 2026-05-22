@@ -110,6 +110,61 @@ describe("ApiClient", () => {
     });
   });
 
+  it("reads native receipt envelopes from /api/v1/transactions/{hash}/native-receipt", async () => {
+    const txHash = `0x${"22".repeat(32)}`;
+    const decoded = {
+      block_height: 100,
+      tx_index: 0,
+      sequence: 0,
+      family: "agent",
+      event_name: "agent.escrow.created",
+      payload_hash: `0x${"44".repeat(32)}`,
+    };
+    const { fetch, calls } = mockGet(
+      apiEnvelope({
+        txHash,
+        blockHash: `0x${"33".repeat(32)}`,
+        blockHeight: 100,
+        txIndex: 0,
+        schema: "riscv.receipt.v1",
+        artifactHash: `0x${"aa".repeat(32)}`,
+        counters: { cycles: 44, syscallUnits: 3, stateIoUnits: 2 },
+        reverted: false,
+        nativeDeltaCount: 0,
+        eventCount: 1,
+        events: [
+          {
+            blockHeight: 100,
+            txIndex: 0,
+            logIndex: 0,
+            address: "monoc1nativeeventemitter",
+            eventTopic: `0x${"11".repeat(32)}`,
+            decoded,
+            decodedJson: JSON.stringify(decoded),
+          },
+        ],
+        source: {
+          chainProvider: "mock_chain",
+          indexerProvider: "native_events",
+          metadataLogIndex: 0xffff_ffff,
+        },
+      }),
+    );
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    const receipt = await client.transactionNativeReceipt(txHash);
+
+    expect(receipt.data.artifactHash).toBe(`0x${"aa".repeat(32)}`);
+    expect(receipt.data.counters.stateIoUnits).toBe(2);
+    expect(receipt.data.eventCount).toBe(1);
+    expect(receipt.data.events[0].decoded).toEqual(decoded);
+    expect(receipt.data.events[0].decodedJson).toBe(JSON.stringify(decoded));
+    expect(calls[0]).toEqual({
+      url: `https://rpc.example/api/v1/transactions/${txHash}/native-receipt`,
+      method: "GET",
+    });
+  });
+
   it("wraps search, transaction-feed, address aggregate, stats, and market routes", async () => {
     const { fetch, calls } = mockGet(apiEnvelope({ schemaVersion: 1 }));
     const client = new ApiClient("https://rpc.example", { fetch });

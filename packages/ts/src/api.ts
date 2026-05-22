@@ -18,6 +18,7 @@ import type {
   ClobOhlcResponse,
   ClobOrderBookResponse,
   ClobTradesResponse,
+  NativeReceiptResponse,
   OperatorCapabilitiesResponse,
   RuntimeBuildProvenance,
   RuntimeUpgradeStatus,
@@ -234,6 +235,8 @@ export interface ApiTransactionReceiptData {
   receipt: ApiTransactionReceipt;
   source: { chainProvider: string };
 }
+
+export type ApiTransactionNativeReceiptData = NativeReceiptResponse;
 
 export interface ApiAddressActivityData {
   address: string;
@@ -461,6 +464,12 @@ export class ApiClient {
 
   async transactionReceipt(hash: string): Promise<ApiEnvelope<ApiTransactionReceiptData>> {
     return this.get(`/transactions/${encodePathSegment(hash)}/receipt`);
+  }
+
+  async transactionNativeReceipt(
+    hash: string,
+  ): Promise<ApiEnvelope<ApiTransactionNativeReceiptData>> {
+    return this.get(`/transactions/${encodePathSegment(hash)}/native-receipt`);
   }
 
   async addressProfile(address: string): Promise<ApiEnvelope<AddressProfileResponse>> {
