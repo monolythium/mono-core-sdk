@@ -43,6 +43,7 @@ export type {
   ApiRuntimeProvenanceData,
   ApiServiceProbeData,
   ApiTransactionData,
+  ApiTransactionNativeReceiptData,
   ApiTransactionReceipt,
   ApiTransactionReceiptData,
   ApiTransactionView,
@@ -50,7 +51,7 @@ export type {
   ApiUpgradeStatus,
   ApiUpgradeStatusData,
 } from "./api.js";
-export { RpcClient, parseQuantity, parseQuantityBig } from "./client.js";
+export { MAX_NATIVE_RECEIPT_EVENTS, RpcClient, parseQuantity, parseQuantityBig } from "./client.js";
 export type {
   AddressActivityKind,
   AddressFlowResponse,
@@ -76,6 +77,10 @@ export type {
   MetricsRangeSample,
   MetricsRangeSeries,
   MetricsRangeStatus,
+  NativeReceiptCounters,
+  NativeReceiptEvent,
+  NativeReceiptResponse,
+  NativeReceiptSource,
   NetworkClientOptions,
   OperatorAuthorityResponse,
   OperatorCapabilitiesResponse,

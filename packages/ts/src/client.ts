@@ -108,6 +108,45 @@ export interface TxFeedResponse {
   transactions: TxFeedTransaction[];
 }
 
+export const MAX_NATIVE_RECEIPT_EVENTS = 1_000;
+
+export interface NativeReceiptCounters {
+  cycles: number;
+  syscallUnits: number;
+  stateIoUnits: number;
+}
+
+export interface NativeReceiptEvent {
+  blockHeight: number;
+  txIndex: number;
+  logIndex: number;
+  address: string;
+  eventTopic: string;
+  decoded: unknown;
+  decodedJson: string;
+}
+
+export interface NativeReceiptSource {
+  chainProvider: string;
+  indexerProvider: string;
+  metadataLogIndex: number;
+}
+
+export interface NativeReceiptResponse {
+  txHash: string;
+  blockHash: string;
+  blockHeight: number;
+  txIndex: number;
+  schema: string;
+  artifactHash: string;
+  counters: NativeReceiptCounters;
+  reverted: boolean;
+  nativeDeltaCount: number;
+  eventCount: number;
+  events: NativeReceiptEvent[];
+  source: NativeReceiptSource;
+}
+
 export interface AddressProfileResponse {
   schemaVersion: number;
   address: string;
@@ -922,6 +961,11 @@ export class RpcClient {
   /** `lyth_decodeTx` — explorer-grade decoded transaction envelope. */
   async lythDecodeTx(txHash: string): Promise<DecodeTxResponse> {
     return this.call("lyth_decodeTx", [txHash]);
+  }
+
+  /** `lyth_nativeReceipt` — native RISC-V receipt metadata and typed native event rows. */
+  async lythNativeReceipt(txHash: string): Promise<NativeReceiptResponse> {
+    return this.call("lyth_nativeReceipt", [txHash]);
   }
 
   /** `lyth_gapRecords` — retained ingestion/indexing gaps for a block range. */

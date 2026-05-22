@@ -169,6 +169,85 @@ pub struct TransactionReceipt {
     pub gas_used: u64,
 }
 
+/// Maximum native receipt event rows returned by the node's v4.1 API surface.
+pub const MAX_NATIVE_RECEIPT_EVENTS: usize = 1_000;
+
+/// Execution counters reported by a native RISC-V receipt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeReceiptCounters {
+    /// Deterministic instruction-cycle count.
+    pub cycles: u64,
+    /// Units consumed by host syscalls.
+    pub syscall_units: u64,
+    /// Units consumed by authenticated state reads and writes.
+    pub state_io_units: u64,
+}
+
+/// One decoded native event row inside a native receipt response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeReceiptEvent {
+    /// Block height containing the receipt.
+    pub block_height: u64,
+    /// Transaction index within the block.
+    pub tx_index: u32,
+    /// Per-receipt native event row index.
+    pub log_index: u32,
+    /// Typed native event emitter address as returned by the node API.
+    pub address: String,
+    /// Durable event topic hash.
+    pub event_topic: Hash,
+    /// Structured typed event payload decoded by the node.
+    pub decoded: serde_json::Value,
+    /// Raw JSON payload emitted by the native event projector.
+    pub decoded_json: String,
+}
+
+/// Provider/source metadata attached to a native receipt response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeReceiptSource {
+    /// Chain provider that supplied the canonical transaction receipt.
+    pub chain_provider: String,
+    /// Indexer provider used for native event rows.
+    pub indexer_provider: String,
+    /// Reserved log index that carries the receipt metadata row.
+    pub metadata_log_index: u32,
+}
+
+/// Typed response returned by `lyth_nativeReceipt` and
+/// `/api/v1/transactions/{hash}/native-receipt`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeReceiptResponse {
+    /// Transaction hash.
+    pub tx_hash: Hash,
+    /// Inclusion block hash.
+    pub block_hash: Hash,
+    /// Inclusion block height.
+    pub block_height: u64,
+    /// Transaction index within the block.
+    pub tx_index: u32,
+    /// Native receipt schema version.
+    pub schema: String,
+    /// Consensus artifact hash from the RISC-V receipt.
+    pub artifact_hash: Hash,
+    /// Execution counters reported by the RISC-V runner.
+    pub counters: NativeReceiptCounters,
+    /// True when execution failed through the typed revert path.
+    pub reverted: bool,
+    /// Count of native state deltas carried by the receipt.
+    pub native_delta_count: u32,
+    /// Count of typed native events carried by the receipt.
+    pub event_count: u32,
+    /// Typed native events in receipt order. Nodes cap this at
+    /// [`MAX_NATIVE_RECEIPT_EVENTS`].
+    pub events: Vec<NativeReceiptEvent>,
+    /// Provider/source metadata for the response.
+    pub source: NativeReceiptSource,
+}
+
 /// Ethereum-shaped transaction view returned by `eth_getTransactionByHash`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
@@ -1807,4 +1886,76 @@ pub struct PeerSummary {
     /// Whether the peer is in any gossip mesh.
     #[serde(rename = "inMesh")]
     pub in_mesh: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_receipt_response_decodes_camel_case_wire_shape() {
+        let tx_hash = format!("0x{}", "11".repeat(32));
+        let block_hash = format!("0x{}", "22".repeat(32));
+        let artifact_hash = format!("0x{}", "aa".repeat(32));
+        let event_topic = format!("0x{}", "33".repeat(32));
+        let decoded = serde_json::json!({
+            "block_height": 100,
+            "tx_index": 0,
+            "sequence": 0,
+            "family": "agent",
+            "event_name": "agent.escrow.created",
+            "payload_hash": format!("0x{}", "44".repeat(32))
+        });
+        let wire = serde_json::json!({
+            "txHash": tx_hash,
+            "blockHash": block_hash,
+            "blockHeight": 100,
+            "txIndex": 0,
+            "schema": "riscv.receipt.v1",
+            "artifactHash": artifact_hash,
+            "counters": {
+                "cycles": 44,
+                "syscallUnits": 3,
+                "stateIoUnits": 2
+            },
+            "reverted": false,
+            "nativeDeltaCount": 0,
+            "eventCount": 1,
+            "events": [{
+                "blockHeight": 100,
+                "txIndex": 0,
+                "logIndex": 0,
+                "address": "monoc1nativeeventemitter",
+                "eventTopic": event_topic,
+                "decoded": decoded,
+                "decodedJson": decoded.to_string()
+            }],
+            "source": {
+                "chainProvider": "mock_chain",
+                "indexerProvider": "native_events",
+                "metadataLogIndex": u32::MAX
+            }
+        });
+
+        let receipt: NativeReceiptResponse = serde_json::from_value(wire).unwrap();
+
+        assert_eq!(receipt.schema, "riscv.receipt.v1");
+        assert_eq!(receipt.artifact_hash, format!("0x{}", "aa".repeat(32)));
+        assert_eq!(receipt.counters.cycles, 44);
+        assert_eq!(receipt.counters.syscall_units, 3);
+        assert_eq!(receipt.counters.state_io_units, 2);
+        assert!(!receipt.reverted);
+        assert_eq!(receipt.native_delta_count, 0);
+        assert_eq!(receipt.event_count, 1);
+        assert_eq!(receipt.source.metadata_log_index, u32::MAX);
+        assert_eq!(
+            receipt.events[0].event_topic,
+            format!("0x{}", "33".repeat(32))
+        );
+        assert_eq!(
+            receipt.events[0].decoded["event_name"],
+            serde_json::json!("agent.escrow.created")
+        );
+        assert_eq!(receipt.events[0].decoded_json, decoded.to_string());
+    }
 }
