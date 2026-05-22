@@ -5,10 +5,69 @@
 
 use bech32::primitives::decode::CheckedHrpstring;
 use bech32::{Bech32m, Hrp};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Human-readable prefix for Monolythium bech32m addresses.
 pub const ADDRESS_HRP: &str = "mono";
+
+/// Allocated v4.1 typed address HRPs.
+pub const ADDRESS_HRPS: [&str; 6] = ["mono", "monos", "monoc", "monok", "monom", "monox"];
+
+/// Reserved typed address HRPs. Decoders reject these with a reserved-HRP error.
+pub const RESERVED_ADDRESS_HRPS: [&str; 4] = ["monor", "monop", "monoi", "monoa"];
+
+/// Typed address discriminator from ADR-0038.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum AddressKind {
+    /// User externally-owned account (`mono`).
+    #[serde(rename = "user")]
+    User,
+    /// Smart account (`monos`).
+    #[serde(rename = "smartAccount")]
+    SmartAccount,
+    /// RISC-V contract account (`monoc`).
+    #[serde(rename = "contract")]
+    Contract,
+    /// Operator cluster identity (`monok`).
+    #[serde(rename = "cluster")]
+    Cluster,
+    /// Multisig identity (`monom`).
+    #[serde(rename = "multisig")]
+    Multisig,
+    /// System native module identity (`monox`).
+    #[serde(rename = "systemModule")]
+    SystemModule,
+}
+
+impl AddressKind {
+    /// Stable bech32m HRP for this address kind.
+    #[must_use]
+    pub const fn hrp(self) -> &'static str {
+        match self {
+            Self::User => "mono",
+            Self::SmartAccount => "monos",
+            Self::Contract => "monoc",
+            Self::Cluster => "monok",
+            Self::Multisig => "monom",
+            Self::SystemModule => "monox",
+        }
+    }
+
+    /// Resolve an allocated HRP to an address kind.
+    #[must_use]
+    pub fn from_hrp(hrp: &str) -> Option<Self> {
+        match hrp {
+            "mono" => Some(Self::User),
+            "monos" => Some(Self::SmartAccount),
+            "monoc" => Some(Self::Contract),
+            "monok" => Some(Self::Cluster),
+            "monom" => Some(Self::Multisig),
+            "monox" => Some(Self::SystemModule),
+            _ => None,
+        }
+    }
+}
 
 /// Errors returned by address parsing and display helpers.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -34,6 +93,14 @@ pub enum AddressError {
         expected: &'static str,
     },
 
+    /// The address used a reserved HRP.
+    #[error("reserved address hrp '{0}'")]
+    ReservedHrp(String),
+
+    /// The address used an unknown HRP.
+    #[error("unknown address hrp '{0}'")]
+    UnknownHrp(String),
+
     /// The bech32m payload was not exactly 20 bytes.
     #[error("expected 20-byte payload, got {got} bytes")]
     WrongLength {
@@ -46,7 +113,14 @@ pub enum AddressError {
 #[must_use]
 #[allow(clippy::expect_used)]
 pub fn address_to_bech32(addr: [u8; 20]) -> String {
-    let hrp = Hrp::parse(ADDRESS_HRP).expect("ADDRESS_HRP is valid");
+    address_to_typed_bech32(AddressKind::User, addr)
+}
+
+/// Encode raw 20-byte address bytes with the HRP for `kind`.
+#[must_use]
+#[allow(clippy::expect_used)]
+pub fn address_to_typed_bech32(kind: AddressKind, addr: [u8; 20]) -> String {
+    let hrp = Hrp::parse(kind.hrp()).expect("AddressKind HRP is valid");
     bech32::encode::<Bech32m>(hrp, &addr).expect("20-byte bech32m encode cannot fail")
 }
 
@@ -55,21 +129,46 @@ pub fn address_to_bech32(addr: [u8; 20]) -> String {
 /// # Errors
 /// Returns [`AddressError`] for checksum, HRP, or payload-length failures.
 pub fn bech32_to_address(s: &str) -> Result<[u8; 20], AddressError> {
+    typed_bech32_to_address_kind(s, AddressKind::User)
+}
+
+/// Decode any allocated typed bech32m address.
+///
+/// # Errors
+/// Returns [`AddressError`] for checksum, HRP, or payload-length failures.
+pub fn typed_bech32_to_address(s: &str) -> Result<(AddressKind, [u8; 20]), AddressError> {
     let parsed = CheckedHrpstring::new::<Bech32m>(s)
         .map_err(|e| AddressError::Bech32Decode(e.to_string()))?;
     let hrp = parsed.hrp().as_str().to_lowercase();
-    if hrp != ADDRESS_HRP {
-        return Err(AddressError::WrongHrp {
-            got: hrp,
-            expected: ADDRESS_HRP,
-        });
+    if RESERVED_ADDRESS_HRPS.contains(&hrp.as_str()) {
+        return Err(AddressError::ReservedHrp(hrp));
     }
+    let kind = AddressKind::from_hrp(&hrp).ok_or_else(|| AddressError::UnknownHrp(hrp.clone()))?;
     let bytes: Vec<u8> = parsed.byte_iter().collect();
     if bytes.len() != 20 {
         return Err(AddressError::WrongLength { got: bytes.len() });
     }
     let mut out = [0u8; 20];
     out.copy_from_slice(&bytes);
+    Ok((kind, out))
+}
+
+/// Decode a typed bech32m address and require a specific address kind.
+///
+/// # Errors
+/// Returns [`AddressError`] when the checksum, HRP, payload length, or expected
+/// kind check fails.
+pub fn typed_bech32_to_address_kind(
+    s: &str,
+    expected: AddressKind,
+) -> Result<[u8; 20], AddressError> {
+    let (kind, out) = typed_bech32_to_address(s)?;
+    if kind != expected {
+        return Err(AddressError::WrongHrp {
+            got: kind.hrp().to_owned(),
+            expected: expected.hrp(),
+        });
+    }
     Ok(out)
 }
 
@@ -86,10 +185,10 @@ pub fn hex_to_address(s: &str) -> Result<[u8; 20], AddressError> {
         return Err(AddressError::InvalidHexShape);
     }
     let mut out = [0u8; 20];
-    for i in 0..20 {
+    for (i, slot) in out.iter_mut().enumerate() {
         let hi = decode_hex_nibble(body.as_bytes()[i * 2])?;
         let lo = decode_hex_nibble(body.as_bytes()[i * 2 + 1])?;
-        out[i] = (hi << 4) | lo;
+        *slot = (hi << 4) | lo;
     }
     Ok(out)
 }
@@ -158,5 +257,37 @@ mod tests {
         let addr = [0x42; 20];
         assert_eq!(parse_address(&address_to_hex(addr)).unwrap(), addr);
         assert_eq!(parse_address(&address_to_bech32(addr)).unwrap(), addr);
+    }
+
+    #[test]
+    fn typed_bech32_round_trip_keeps_hrp_kind() {
+        let addr = [0x33; 20];
+        let display = address_to_typed_bech32(AddressKind::Contract, addr);
+        assert!(display.starts_with("monoc1"));
+        assert_eq!(
+            typed_bech32_to_address(&display).unwrap(),
+            (AddressKind::Contract, addr)
+        );
+        assert_eq!(
+            typed_bech32_to_address_kind(&display, AddressKind::Contract).unwrap(),
+            addr
+        );
+        assert!(matches!(
+            typed_bech32_to_address_kind(&display, AddressKind::User),
+            Err(AddressError::WrongHrp { .. })
+        ));
+    }
+
+    #[test]
+    fn typed_bech32_rejects_reserved_hrp() {
+        let addr = [0x44; 20];
+        let reserved = {
+            let hrp = Hrp::parse("monor").unwrap();
+            bech32::encode::<Bech32m>(hrp, &addr).unwrap()
+        };
+        assert_eq!(
+            typed_bech32_to_address(&reserved),
+            Err(AddressError::ReservedHrp("monor".to_owned()))
+        );
     }
 }

@@ -10,6 +10,14 @@
 
 #![cfg(feature = "ts-bindings")]
 
+use monolythium_core_sdk::mrv::{
+    MrvAbiManifest, MrvAbiParam, MrvAbiSymbol, MrvAbiSymbolKind, MrvAbiType, MrvAddressKind,
+    MrvArtifactMetadata, MrvBuildMetadata, MrvCallRequest, MrvCallResponse, MrvCallStatus,
+    MrvDeployRequest, MrvDeployResponse, MrvEventRecord, MrvExecutionReceipt, MrvMemoryLimits,
+    MrvMeterCounters, MrvNativeStateDelta, MrvResolvedSyscall, MrvRevertPayload, MrvRiscvProfile,
+    MrvStorageNamespace, MrvSyscallImport, MrvTransactionExtension, MrvTypedAddress,
+    MrvValidatedArtifactMetadata,
+};
 use monolythium_core_sdk::types::{
     AccountPolicy, AccountProofResponse, AddressActivityArchiveRedirect, AddressActivityEntry,
     AddressActivityKindResponse, AddressActivityKindRetention, AddressLabelRecord, AssetPolicy,
@@ -91,6 +99,33 @@ fn export_bindings() {
     TpmAttestationResponse::export_all_to(&out).expect("TpmAttestationResponse");
     TransactionReceipt::export_all_to(&out).expect("TransactionReceipt");
     TransactionView::export_all_to(&out).expect("TransactionView");
+
+    MrvAbiManifest::export_all_to(&out).expect("MrvAbiManifest");
+    MrvAbiParam::export_all_to(&out).expect("MrvAbiParam");
+    MrvAbiSymbol::export_all_to(&out).expect("MrvAbiSymbol");
+    MrvAbiSymbolKind::export_all_to(&out).expect("MrvAbiSymbolKind");
+    MrvAbiType::export_all_to(&out).expect("MrvAbiType");
+    MrvAddressKind::export_all_to(&out).expect("MrvAddressKind");
+    MrvArtifactMetadata::export_all_to(&out).expect("MrvArtifactMetadata");
+    MrvBuildMetadata::export_all_to(&out).expect("MrvBuildMetadata");
+    MrvCallRequest::export_all_to(&out).expect("MrvCallRequest");
+    MrvCallResponse::export_all_to(&out).expect("MrvCallResponse");
+    MrvCallStatus::export_all_to(&out).expect("MrvCallStatus");
+    MrvDeployRequest::export_all_to(&out).expect("MrvDeployRequest");
+    MrvDeployResponse::export_all_to(&out).expect("MrvDeployResponse");
+    MrvEventRecord::export_all_to(&out).expect("MrvEventRecord");
+    MrvExecutionReceipt::export_all_to(&out).expect("MrvExecutionReceipt");
+    MrvMemoryLimits::export_all_to(&out).expect("MrvMemoryLimits");
+    MrvMeterCounters::export_all_to(&out).expect("MrvMeterCounters");
+    MrvNativeStateDelta::export_all_to(&out).expect("MrvNativeStateDelta");
+    MrvResolvedSyscall::export_all_to(&out).expect("MrvResolvedSyscall");
+    MrvRevertPayload::export_all_to(&out).expect("MrvRevertPayload");
+    MrvRiscvProfile::export_all_to(&out).expect("MrvRiscvProfile");
+    MrvStorageNamespace::export_all_to(&out).expect("MrvStorageNamespace");
+    MrvSyscallImport::export_all_to(&out).expect("MrvSyscallImport");
+    MrvTransactionExtension::export_all_to(&out).expect("MrvTransactionExtension");
+    MrvTypedAddress::export_all_to(&out).expect("MrvTypedAddress");
+    MrvValidatedArtifactMetadata::export_all_to(&out).expect("MrvValidatedArtifactMetadata");
 
     // Sanity check — at least one file should exist.
     let count = std::fs::read_dir(&out)

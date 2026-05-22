@@ -1,5 +1,6 @@
 'use strict';
 
+var blake3_js = require('@noble/hashes/blake3.js');
 var ethers = require('ethers');
 
 // src/error.ts
@@ -1552,6 +1553,15 @@ function normalizeMempoolSnapshot(value) {
 
 // src/address.ts
 var ADDRESS_HRP = "mono";
+var ADDRESS_KIND_HRPS = {
+  user: "mono",
+  smartAccount: "monos",
+  contract: "monoc",
+  cluster: "monok",
+  multisig: "monom",
+  systemModule: "monox"
+};
+var RESERVED_ADDRESS_HRPS = ["monor", "monop", "monoi", "monoa"];
 var CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 var CHARSET_MAP = new Map([...CHARSET].map((c, i) => [c, i]));
 var BECH32M_CONST = 734539939;
@@ -1578,24 +1588,41 @@ function addressBytesToHex(address) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 function addressToBech32(address) {
+  return addressToTypedBech32("user", address);
+}
+function addressToTypedBech32(kind, address) {
   const bytes = typeof address === "string" ? hexToAddressBytes(address) : expectLength2(address, 20, "address");
+  return encodeBech32m(ADDRESS_KIND_HRPS[kind], bytes);
+}
+function encodeBech32m(hrp, bytes) {
   const words = convertBits([...bytes], 8, 5, true);
-  const checksum = createChecksum(ADDRESS_HRP, words);
-  return `${ADDRESS_HRP}1${[...words, ...checksum].map((v) => CHARSET[v]).join("")}`;
+  const checksum = createChecksum(hrp, words);
+  return `${hrp}1${[...words, ...checksum].map((v) => CHARSET[v]).join("")}`;
 }
 function bech32ToAddressBytes(address) {
+  return typedBech32ToAddress(address, "user").bytes;
+}
+function bech32ToAddress(address) {
+  return addressBytesToHex(bech32ToAddressBytes(address));
+}
+function typedBech32ToAddress(address, expectedKind) {
   const parsed = decodeBech32m(address);
-  if (parsed.hrp !== ADDRESS_HRP) {
-    throw new AddressError(`unexpected hrp '${parsed.hrp}', expected '${ADDRESS_HRP}'`);
+  if (RESERVED_ADDRESS_HRPS.includes(parsed.hrp)) {
+    throw new AddressError(`reserved address hrp '${parsed.hrp}'`);
+  }
+  const kind = addressKindFromHrp(parsed.hrp);
+  if (kind === void 0) {
+    throw new AddressError(`unknown address hrp '${parsed.hrp}'`);
+  }
+  if (expectedKind !== void 0 && kind !== expectedKind) {
+    throw new AddressError(`unexpected hrp '${parsed.hrp}', expected '${ADDRESS_KIND_HRPS[expectedKind]}'`);
   }
   const bytes = convertBits(parsed.data, 5, 8, false);
   if (bytes.length !== 20) {
     throw new AddressError(`expected 20-byte payload, got ${bytes.length} bytes`);
   }
-  return Uint8Array.from(bytes);
-}
-function bech32ToAddress(address) {
-  return addressBytesToHex(bech32ToAddressBytes(address));
+  const out = Uint8Array.from(bytes);
+  return { kind, address: address.toLowerCase(), bytes: out, hex: addressBytesToHex(out) };
 }
 function parseAddress(address) {
   if (address.startsWith("0x") || address.startsWith("0X")) {
@@ -1633,6 +1660,12 @@ function decodeBech32m(input) {
     throw new AddressError("bech32m checksum mismatch");
   }
   return { hrp, data: values.slice(0, -6) };
+}
+function addressKindFromHrp(hrp) {
+  for (const [kind, kindHrp] of Object.entries(ADDRESS_KIND_HRPS)) {
+    if (kindHrp === hrp) return kind;
+  }
+  return void 0;
 }
 function hrpExpand(hrp) {
   const high = [...hrp].map((c) => c.charCodeAt(0) >> 5);
@@ -1698,6 +1731,229 @@ function expectLength2(value, len, name) {
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
 
+// src/mrv.ts
+var MRV_FORMAT_VERSION = 1;
+var MRV_PROFILE_MONO_RV32IM_V1 = "mono_rv32im_v1";
+var MRV_MEMORY_PAGE_BYTES = 65536;
+var MRV_MAX_CODE_BYTES = 16 * 1024 * 1024;
+var MRV_MAX_DEBUG_BYTES = 16 * 1024 * 1024;
+var MRV_MAX_MEMORY_PAGES = 1024;
+var MRV_MAX_ABI_SYMBOLS = 1024;
+var MRV_MAX_STORAGE_NAMESPACE_BYTES = 64;
+var LYTH_DECIMALS = 8;
+var LYTHOSHI_PER_LYTH = 100000000n;
+var MRV_TX_EXTENSION_KIND = 48;
+var MRV_TX_EXTENSION_V1 = 1;
+var MRV_CODE_HASH_DOMAIN = new TextEncoder().encode("MONO_MRV_CODE_V1");
+var MONO_SYSCALL_MODULE = "mono";
+var SYSCALLS = [
+  [257, "storage_read"],
+  [258, "storage_write"],
+  [259, "storage_delete"],
+  [513, "caller"],
+  [514, "contract_address"],
+  [515, "block_height"],
+  [516, "block_hash"],
+  [769, "call_contract"],
+  [770, "emit_event"],
+  [771, "transfer_native"],
+  [1025, "verify_signature"],
+  [1026, "hash"],
+  [1281, "revert"]
+];
+var SYSCALL_NAME_BY_ID = new Map(SYSCALLS);
+var SYSCALL_ID_BY_NAME = new Map(SYSCALLS.map(([id, name]) => [name, id]));
+var MrvValidationError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "MrvValidationError";
+  }
+};
+function mrvCodeHashHex(code) {
+  const codeBytes = bytesFrom(code, "code");
+  const len = new Uint8Array(8);
+  new DataView(len.buffer).setBigUint64(0, BigInt(codeBytes.length), false);
+  return bytesToHex2(blake3_js.blake3(concatBytes2(MRV_CODE_HASH_DOMAIN, len, codeBytes)));
+}
+function mrvV1TransactionExtension() {
+  return { kind: MRV_TX_EXTENSION_KIND, bodyHex: "0x01" };
+}
+function mrvAddressToBech32(kind, bytes) {
+  return addressToTypedBech32(kind, bytesFrom(bytes, "address"));
+}
+function mrvBech32ToAddress(address, expectedKind) {
+  return typedBech32ToAddress(address, expectedKind);
+}
+function validateMrvArtifactMetadata(metadata, code) {
+  const codeBytes = bytesFrom(code, "code");
+  if (metadata.formatVersion !== MRV_FORMAT_VERSION) {
+    throw new MrvValidationError(
+      `unsupported MRV format version ${metadata.formatVersion}, expected ${MRV_FORMAT_VERSION}`
+    );
+  }
+  if (metadata.profile !== MRV_PROFILE_MONO_RV32IM_V1) {
+    throw new MrvValidationError(`unsupported MRV profile ${metadata.profile}`);
+  }
+  if (codeBytes.length === 0) {
+    throw new MrvValidationError("MRV code is empty");
+  }
+  if (codeBytes.length > MRV_MAX_CODE_BYTES) {
+    throw new MrvValidationError(`MRV code has ${codeBytes.length} bytes, max ${MRV_MAX_CODE_BYTES}`);
+  }
+  if (metadata.codeBytes !== BigInt(codeBytes.length)) {
+    throw new MrvValidationError(
+      `metadata codeBytes ${metadata.codeBytes.toString()} does not match supplied code length ${codeBytes.length}`
+    );
+  }
+  if (metadata.debugBytes > BigInt(MRV_MAX_DEBUG_BYTES)) {
+    throw new MrvValidationError(`MRV debug section has ${metadata.debugBytes.toString()} bytes`);
+  }
+  validateHexLength("codeHash", metadata.codeHash, 32);
+  validateHexLength("sourceDigest", metadata.build.sourceDigest, 32);
+  validateMemory(metadata.memory.initialPages, metadata.memory.maxPages, metadata.memory.stackBytes);
+  validateStorageNamespace(metadata.storageNamespace.name, metadata.storageNamespace.version);
+  validateAbi(metadata.abi);
+  const syscalls = validateImports(metadata.imports);
+  const computed = mrvCodeHashHex(codeBytes);
+  if (metadata.codeHash.toLowerCase() !== computed) {
+    throw new MrvValidationError(`MRV code hash mismatch: declared ${metadata.codeHash}, computed ${computed}`);
+  }
+  return {
+    codeHash: computed,
+    profile: metadata.profile,
+    memory: metadata.memory,
+    storageNamespace: metadata.storageNamespace,
+    syscalls,
+    abiSymbolCount: BigInt(metadata.abi.symbols.length),
+    codeBytes: BigInt(codeBytes.length)
+  };
+}
+function validateMrvDeployRequest(request) {
+  if (request.from !== void 0) typedBech32ToAddress(request.from, "user");
+  hexToBytes2(request.artifactBytes, "artifactBytes");
+  validateDecimal("valueLythoshi", request.valueLythoshi);
+  validateOptionalDecimal("maxExecutionFeeLythoshi", request.maxExecutionFeeLythoshi);
+  validateOptionalDecimal("priorityTipLythoshi", request.priorityTipLythoshi);
+  validateExecutionUnitLimit("executionUnitLimit", request.executionUnitLimit);
+}
+function validateMrvCallRequest(request) {
+  if (request.from !== void 0) typedBech32ToAddress(request.from, "user");
+  typedBech32ToAddress(request.contractAddress, "contract");
+  hexToBytes2(request.input, "input");
+  validateDecimal("valueLythoshi", request.valueLythoshi);
+  validateOptionalDecimal("maxExecutionFeeLythoshi", request.maxExecutionFeeLythoshi);
+  validateOptionalDecimal("priorityTipLythoshi", request.priorityTipLythoshi);
+  validateExecutionUnitLimit("executionUnitLimit", request.executionUnitLimit);
+}
+function validateMemory(initialPages, maxPages, stackBytes) {
+  if (initialPages === 0) throw new MrvValidationError("initialPages is zero");
+  if (maxPages === 0) throw new MrvValidationError("maxPages is zero");
+  if (initialPages > maxPages) throw new MrvValidationError("initialPages exceeds maxPages");
+  if (maxPages > MRV_MAX_MEMORY_PAGES) throw new MrvValidationError("maxPages exceeds bound");
+  if (stackBytes === 0) throw new MrvValidationError("stackBytes is zero");
+  const maxBytes = maxPages * MRV_MEMORY_PAGE_BYTES;
+  if (stackBytes > maxBytes) throw new MrvValidationError("stackBytes exceeds max memory");
+  if (stackBytes % 16 !== 0) throw new MrvValidationError("stackBytes must be 16-byte aligned");
+}
+function validateStorageNamespace(name, version2) {
+  if (version2 === 0) throw new MrvValidationError("storage namespace version must be non-zero");
+  if (name.length > MRV_MAX_STORAGE_NAMESPACE_BYTES) throw new MrvValidationError("storage namespace is too long");
+  if (!isIdentifier(name)) throw new MrvValidationError("storage namespace is not canonical");
+}
+function validateAbi(abi) {
+  if (abi.symbols.length === 0) throw new MrvValidationError("MRV ABI must declare at least one symbol");
+  if (abi.symbols.length > MRV_MAX_ABI_SYMBOLS) {
+    throw new MrvValidationError(`MRV ABI has ${abi.symbols.length} symbols, max ${MRV_MAX_ABI_SYMBOLS}`);
+  }
+  const seen = /* @__PURE__ */ new Set();
+  for (const symbol of abi.symbols) {
+    if (!isIdentifier(symbol.name)) throw new MrvValidationError(`invalid MRV ABI symbol '${symbol.name}'`);
+    if (seen.has(symbol.name)) throw new MrvValidationError(`duplicate MRV ABI symbol '${symbol.name}'`);
+    seen.add(symbol.name);
+    for (const param of [...symbol.inputs, ...symbol.outputs]) {
+      if (!isIdentifier(param.name)) throw new MrvValidationError(`invalid MRV ABI parameter '${param.name}'`);
+      validateAbiType(param.ty);
+    }
+  }
+}
+function validateAbiType(ty) {
+  if (ty.kind === "fixedBytes" && ty.len === 0) {
+    throw new MrvValidationError("fixed bytes length is zero");
+  }
+}
+function validateImports(imports) {
+  const seen = /* @__PURE__ */ new Set();
+  const resolved = [];
+  for (const imp of imports) {
+    if (imp.module !== MONO_SYSCALL_MODULE) {
+      throw new MrvValidationError(`forbidden host import ${imp.module}.${imp.name}`);
+    }
+    const expectedName = SYSCALL_NAME_BY_ID.get(imp.id);
+    if (expectedName === void 0) throw new MrvValidationError(`unknown MRV syscall id ${imp.id}`);
+    const expectedId = SYSCALL_ID_BY_NAME.get(imp.name);
+    if (expectedId === void 0) throw new MrvValidationError(`unknown MRV syscall name '${imp.name}'`);
+    if (expectedId !== imp.id) {
+      throw new MrvValidationError(`MRV syscall name/id mismatch for ${imp.name}: declared ${imp.id}`);
+    }
+    if (seen.has(imp.id)) throw new MrvValidationError(`duplicate MRV syscall '${expectedName}'`);
+    seen.add(imp.id);
+    resolved.push({ id: imp.id, name: expectedName });
+  }
+  return resolved;
+}
+function validateOptionalDecimal(field, value) {
+  if (value !== void 0) validateDecimal(field, value);
+}
+function validateDecimal(field, value) {
+  if (!/^(0|[1-9][0-9]*)$/.test(value)) {
+    throw new MrvValidationError(`${field} must be a canonical unsigned decimal string`);
+  }
+  try {
+    BigInt(value);
+  } catch {
+    throw new MrvValidationError(`${field} must be a canonical unsigned decimal string`);
+  }
+}
+function validateExecutionUnitLimit(field, value) {
+  if (value !== void 0 && BigInt(value) === 0n) {
+    throw new MrvValidationError(`${field} must be greater than zero`);
+  }
+}
+function validateHexLength(field, value, expected) {
+  const bytes = hexToBytes2(value, field);
+  if (bytes.length !== expected) throw new MrvValidationError(`${field} must be ${expected} bytes`);
+}
+function bytesFrom(value, field) {
+  if (typeof value === "string") return hexToBytes2(value, field);
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+function hexToBytes2(value, field) {
+  if (!/^0x(?:[0-9a-fA-F]{2})*$/.test(value)) {
+    throw new MrvValidationError(`${field} must be 0x-prefixed even-length hex`);
+  }
+  const out = new Uint8Array((value.length - 2) / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = Number.parseInt(value.slice(2 + i * 2, 4 + i * 2), 16);
+  }
+  return out;
+}
+function bytesToHex2(bytes) {
+  return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+function concatBytes2(...parts) {
+  const len = parts.reduce((sum, item) => sum + item.length, 0);
+  const out = new Uint8Array(len);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+function isIdentifier(value) {
+  return /^[a-z][a-z0-9_]*$/.test(value);
+}
+
 // src/spending-policy.ts
 var SET_POLICY_CLAIM_DOMAIN_TAG = "lyth.spending-policy.claim.v1";
 var ML_DSA_65_PUBLIC_KEY_LEN = 1952;
@@ -1722,7 +1978,7 @@ function spendingPolicyAddressHex() {
 function composeClaimBoundMessage(chainId, args, opts) {
   const precompileAddress = toAddressBytes(opts?.precompileAddress ?? PRECOMPILE_ADDRESSES.SPENDING_POLICY);
   const normalized = normalizeArgs(args);
-  return concatBytes2(
+  return concatBytes3(
     new TextEncoder().encode(SET_POLICY_CLAIM_DOMAIN_TAG),
     uint64Bytes(chainId, "chainId"),
     precompileAddress,
@@ -1737,9 +1993,9 @@ function composeClaimBoundMessage(chainId, args, opts) {
 }
 function encodeSetPolicyCalldata(args) {
   const normalized = normalizeArgs(args);
-  return bytesToHex2(
-    concatBytes2(
-      hexToBytes2(SPENDING_POLICY_SELECTORS.setPolicy),
+  return bytesToHex3(
+    concatBytes3(
+      hexToBytes3(SPENDING_POLICY_SELECTORS.setPolicy),
       encodePolicyWords(normalized)
     )
   );
@@ -1758,9 +2014,9 @@ function encodeSetPolicyClaimCalldata(args, subAccountPubkey, subAccountSig) {
       `subAccountSig must be ${ML_DSA_65_SIGNATURE_LEN} bytes, got ${sig.length}`
     );
   }
-  return bytesToHex2(
-    concatBytes2(
-      hexToBytes2(SPENDING_POLICY_SELECTORS.setPolicyClaim),
+  return bytesToHex3(
+    concatBytes3(
+      hexToBytes3(SPENDING_POLICY_SELECTORS.setPolicyClaim),
       encodePolicyWords(normalized),
       pubkey,
       sig
@@ -1775,9 +2031,9 @@ function encodeClaimPolicyByAddressCalldata(args, subAccountSig) {
       `subAccountSig must be ${ML_DSA_65_SIGNATURE_LEN} bytes, got ${sig.length}`
     );
   }
-  return bytesToHex2(
-    concatBytes2(
-      hexToBytes2(SPENDING_POLICY_SELECTORS.claimPolicyByAddress),
+  return bytesToHex3(
+    concatBytes3(
+      hexToBytes3(SPENDING_POLICY_SELECTORS.claimPolicyByAddress),
       encodePolicyWords(normalized),
       sig
     )
@@ -1800,7 +2056,7 @@ function normalizeArgs(args) {
   };
 }
 function encodePolicyWords(args) {
-  return concatBytes2(
+  return concatBytes3(
     encodeAddressWord(args.subAccount),
     encodeAddressWord(args.principal),
     encodeUint128Word(args.dailyCapWei),
@@ -1810,13 +2066,13 @@ function encodePolicyWords(args) {
   );
 }
 function encodeSingleAddressCall(selector, address) {
-  return bytesToHex2(concatBytes2(hexToBytes2(selector), encodeAddressWord(toAddressBytes(address))));
+  return bytesToHex3(concatBytes3(hexToBytes3(selector), encodeAddressWord(toAddressBytes(address))));
 }
 function encodeAddressWord(address) {
-  return concatBytes2(new Uint8Array(12), address);
+  return concatBytes3(new Uint8Array(12), address);
 }
 function encodeUint128Word(value) {
-  return concatBytes2(new Uint8Array(16), uint128Bytes(value, "uint128"));
+  return concatBytes3(new Uint8Array(16), uint128Bytes(value, "uint128"));
 }
 function toAddressBytes(value) {
   if (typeof value === "string") {
@@ -1826,11 +2082,11 @@ function toAddressBytes(value) {
 }
 function toBytes2(value) {
   if (typeof value === "string") {
-    return hexToBytes2(value);
+    return hexToBytes3(value);
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes2(hex) {
+function hexToBytes3(hex) {
   const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
   if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
     throw new SpendingPolicyError("invalid hex bytes");
@@ -1841,10 +2097,10 @@ function hexToBytes2(hex) {
   }
   return out;
 }
-function bytesToHex2(bytes) {
+function bytesToHex3(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function concatBytes2(...parts) {
+function concatBytes3(...parts) {
   const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
   let offset = 0;
   for (const part of parts) {
@@ -1912,9 +2168,9 @@ function encodeRegisterPubkeyCalldata(pubkey) {
       `pubkey must be ${PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN} bytes, got ${bytes.length}`
     );
   }
-  return bytesToHex3(
-    concatBytes3(
-      hexToBytes3(PUBKEY_REGISTRY_SELECTORS.registerPubkey),
+  return bytesToHex4(
+    concatBytes4(
+      hexToBytes4(PUBKEY_REGISTRY_SELECTORS.registerPubkey),
       uint256Word(32n),
       uint256Word(BigInt(bytes.length)),
       bytes
@@ -1967,10 +2223,10 @@ function decodeHasPubkeyReturn(data) {
   throw new PubkeyRegistryError("hasPubkey bool must be 0 or 1");
 }
 function encodeSingleAddressCall2(selector, address) {
-  return bytesToHex3(concatBytes3(hexToBytes3(selector), addressWord(toAddressBytes2(address))));
+  return bytesToHex4(concatBytes4(hexToBytes4(selector), addressWord(toAddressBytes2(address))));
 }
 function addressWord(address) {
-  return concatBytes3(new Uint8Array(12), address);
+  return concatBytes4(new Uint8Array(12), address);
 }
 function toAddressBytes2(value) {
   if (typeof value === "string") {
@@ -1980,11 +2236,11 @@ function toAddressBytes2(value) {
 }
 function toBytes3(value) {
   if (typeof value === "string") {
-    return hexToBytes3(value);
+    return hexToBytes4(value);
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes3(hex) {
+function hexToBytes4(hex) {
   const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
   if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
     throw new PubkeyRegistryError("invalid hex bytes");
@@ -1995,10 +2251,10 @@ function hexToBytes3(hex) {
   }
   return out;
 }
-function bytesToHex3(bytes) {
+function bytesToHex4(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function concatBytes3(...parts) {
+function concatBytes4(...parts) {
   const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
   let offset = 0;
   for (const part of parts) {
@@ -2212,18 +2468,32 @@ function translateBlockOut(header) {
 var version = "0.1.0";
 
 exports.ADDRESS_HRP = ADDRESS_HRP;
+exports.ADDRESS_KIND_HRPS = ADDRESS_KIND_HRPS;
 exports.AddressError = AddressError;
 exports.ApiClient = ApiClient;
 exports.BURN_ADDR = BURN_ADDR;
 exports.CHAIN_REGISTRY = CHAIN_REGISTRY;
 exports.CHAIN_REGISTRY_RAW_BASE = CHAIN_REGISTRY_RAW_BASE;
+exports.LYTHOSHI_PER_LYTH = LYTHOSHI_PER_LYTH;
+exports.LYTH_DECIMALS = LYTH_DECIMALS;
 exports.ML_DSA_65_PUBLIC_KEY_LEN = ML_DSA_65_PUBLIC_KEY_LEN;
 exports.ML_DSA_65_SIGNATURE_LEN = ML_DSA_65_SIGNATURE_LEN;
 exports.MONOLYTHIUM_NETWORKS = MONOLYTHIUM_NETWORKS;
 exports.MONOLYTHIUM_TESTNET_CHAIN_ID = MONOLYTHIUM_TESTNET_CHAIN_ID;
 exports.MONOLYTHIUM_TESTNET_NETWORK_NAME = MONOLYTHIUM_TESTNET_NETWORK_NAME;
+exports.MRV_FORMAT_VERSION = MRV_FORMAT_VERSION;
+exports.MRV_MAX_ABI_SYMBOLS = MRV_MAX_ABI_SYMBOLS;
+exports.MRV_MAX_CODE_BYTES = MRV_MAX_CODE_BYTES;
+exports.MRV_MAX_DEBUG_BYTES = MRV_MAX_DEBUG_BYTES;
+exports.MRV_MAX_MEMORY_PAGES = MRV_MAX_MEMORY_PAGES;
+exports.MRV_MAX_STORAGE_NAMESPACE_BYTES = MRV_MAX_STORAGE_NAMESPACE_BYTES;
+exports.MRV_MEMORY_PAGE_BYTES = MRV_MEMORY_PAGE_BYTES;
+exports.MRV_PROFILE_MONO_RV32IM_V1 = MRV_PROFILE_MONO_RV32IM_V1;
+exports.MRV_TX_EXTENSION_KIND = MRV_TX_EXTENSION_KIND;
+exports.MRV_TX_EXTENSION_V1 = MRV_TX_EXTENSION_V1;
 exports.MonolythiumProvider = MonolythiumProvider;
 exports.MonolythiumSigner = MonolythiumSigner;
+exports.MrvValidationError = MrvValidationError;
 exports.NODE_REGISTRY_CAPABILITIES = NODE_REGISTRY_CAPABILITIES;
 exports.NODE_REGISTRY_CAPABILITY_MASK = NODE_REGISTRY_CAPABILITY_MASK;
 exports.NODE_REGISTRY_PUBLIC_SERVICE_MASK = NODE_REGISTRY_PUBLIC_SERVICE_MASK;
@@ -2233,6 +2503,7 @@ exports.PRECOMPILE_ADDRESSES = PRECOMPILE_ADDRESSES;
 exports.PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN = PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN;
 exports.PUBKEY_REGISTRY_SELECTORS = PUBKEY_REGISTRY_SELECTORS;
 exports.PubkeyRegistryError = PubkeyRegistryError;
+exports.RESERVED_ADDRESS_HRPS = RESERVED_ADDRESS_HRPS;
 exports.RpcClient = RpcClient;
 exports.SERVICE_PROBE_STATUS = SERVICE_PROBE_STATUS;
 exports.SET_POLICY_CLAIM_DOMAIN_TAG = SET_POLICY_CLAIM_DOMAIN_TAG;
@@ -2242,6 +2513,7 @@ exports.SpendingPolicyError = SpendingPolicyError;
 exports.TESTNET_69420 = TESTNET_69420;
 exports.addressBytesToHex = addressBytesToHex;
 exports.addressToBech32 = addressToBech32;
+exports.addressToTypedBech32 = addressToTypedBech32;
 exports.apiEndpointFromRpcEndpoint = apiEndpointFromRpcEndpoint;
 exports.bech32ToAddress = bech32ToAddress;
 exports.bech32ToAddressBytes = bech32ToAddressBytes;
@@ -2268,6 +2540,10 @@ exports.isConcreteServiceProbeStatus = isConcreteServiceProbeStatus;
 exports.isSinglePublicServiceProbeMask = isSinglePublicServiceProbeMask;
 exports.isValidNodeRegistryCapabilities = isValidNodeRegistryCapabilities;
 exports.isValidPublicServiceProbeMask = isValidPublicServiceProbeMask;
+exports.mrvAddressToBech32 = mrvAddressToBech32;
+exports.mrvBech32ToAddress = mrvBech32ToAddress;
+exports.mrvCodeHashHex = mrvCodeHashHex;
+exports.mrvV1TransactionExtension = mrvV1TransactionExtension;
 exports.nodeRegistryAddressHex = nodeRegistryAddressHex;
 exports.normalizeAddressHex = normalizeAddressHex;
 exports.parseAddress = parseAddress;
@@ -2280,6 +2556,10 @@ exports.spendingPolicyAddressHex = spendingPolicyAddressHex;
 exports.translateBlockOut = translateBlockOut;
 exports.translateReceiptOut = translateReceiptOut;
 exports.translateTxIn = translateTxIn;
+exports.typedBech32ToAddress = typedBech32ToAddress;
+exports.validateMrvArtifactMetadata = validateMrvArtifactMetadata;
+exports.validateMrvCallRequest = validateMrvCallRequest;
+exports.validateMrvDeployRequest = validateMrvDeployRequest;
 exports.version = version;
 //# sourceMappingURL=index.cjs.map
 //# sourceMappingURL=index.cjs.map

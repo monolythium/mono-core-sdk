@@ -24,13 +24,15 @@ pub mod api;
 pub mod client;
 pub mod consts;
 pub mod error;
+pub mod mrv;
 pub mod pubkey_registry;
 pub mod spending_policy;
 pub mod types;
 
 pub use address::{
-    address_to_bech32, address_to_hex, bech32_to_address, hex_to_address, parse_address,
-    AddressError, ADDRESS_HRP,
+    address_to_bech32, address_to_hex, address_to_typed_bech32, bech32_to_address, hex_to_address,
+    parse_address, typed_bech32_to_address, typed_bech32_to_address_kind, AddressError,
+    AddressKind, ADDRESS_HRP, ADDRESS_HRPS, RESERVED_ADDRESS_HRPS,
 };
 pub use api::ApiClient;
 pub use client::RpcClient;

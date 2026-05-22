@@ -96,6 +96,51 @@ const display = addressToBech32("0x123456789abcdef0112233445566778899aabbcc");
 const wire = bech32ToAddress(display);
 ```
 
+V4.1 typed address helpers also encode role-specific HRPs such as `monoc` for
+RISC-V contracts:
+
+```ts
+import { addressToTypedBech32, typedBech32ToAddress } from "@monolythium/core-sdk";
+
+const contract = addressToTypedBech32("contract", "0x2222222222222222222222222222222222222222");
+const decoded = typedBech32ToAddress(contract, "contract");
+```
+
+### MRV / RISC-V helpers
+
+The package includes the first v4.1 MRV SDK slice: artifact metadata
+validation, MRV v1 transaction extension descriptors, typed contract address
+helpers, and native deploy/call request models with lythoshi and
+execution-unit fields.
+
+```ts
+import {
+  MRV_FORMAT_VERSION,
+  MRV_PROFILE_MONO_RV32IM_V1,
+  mrvCodeHashHex,
+  mrvV1TransactionExtension,
+  validateMrvArtifactMetadata,
+} from "@monolythium/core-sdk";
+
+const code = new Uint8Array([0x13, 0x00, 0x00, 0x00]);
+const metadata = {
+  formatVersion: MRV_FORMAT_VERSION,
+  profile: MRV_PROFILE_MONO_RV32IM_V1,
+  codeHash: mrvCodeHashHex(code),
+  codeBytes: 4n,
+  debugBytes: 0n,
+  abi: { symbols: [{ name: "transfer", kind: "function", inputs: [], outputs: [] }] },
+  imports: [{ module: "mono", name: "emit_event", id: 0x0302 }],
+  memory: { initialPages: 1, maxPages: 4, stackBytes: 16384 },
+  storageNamespace: { name: "contract_state", version: 1 },
+  build: { toolchain: "mono-riscv", sourceDigest: `0x${"00".repeat(32)}`, profile: "release" },
+};
+
+const validated = validateMrvArtifactMetadata(metadata, code);
+const extension = mrvV1TransactionExtension();
+console.log(validated.syscalls, extension);
+```
+
 ### Spending-policy helpers
 
 Fresh sub-account policy claims must use `claimPolicyByAddress` or

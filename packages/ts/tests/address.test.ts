@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  ADDRESS_KIND_HRPS,
   addressBytesToHex,
   addressToBech32,
+  addressToTypedBech32,
   bech32ToAddress,
   bech32ToAddressBytes,
   hexToAddressBytes,
   normalizeAddressHex,
   parseAddress,
+  typedBech32ToAddress,
 } from "../src/index.js";
 
 describe("address helpers", () => {
@@ -33,5 +36,16 @@ describe("address helpers", () => {
 
   it("rejects invalid checksum", () => {
     expect(() => bech32ToAddress("mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdcq")).toThrow();
+  });
+
+  it("round-trips typed bech32m contract addresses", () => {
+    const hex = "0x3333333333333333333333333333333333333333";
+    const display = addressToTypedBech32("contract", hex);
+    expect(display.startsWith(`${ADDRESS_KIND_HRPS.contract}1`)).toBe(true);
+    const decoded = typedBech32ToAddress(display, "contract");
+    expect(decoded.kind).toBe("contract");
+    expect(decoded.hex).toBe(hex);
+    expect([...decoded.bytes]).toEqual([...hexToAddressBytes(hex)]);
+    expect(() => typedBech32ToAddress(display, "user")).toThrow();
   });
 });

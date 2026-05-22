@@ -330,7 +330,7 @@ impl ApiClient {
                 data,
             });
         }
-        if !status.is_success() && !(allow_unavailable_body && status.as_u16() == 503) {
+        if !(status.is_success() || allow_unavailable_body && status.as_u16() == 503) {
             return Err(SdkError::Malformed(format!(
                 "HTTP {status} with no API error envelope"
             )));
