@@ -20,7 +20,8 @@ use monolythium_core_sdk::mrv::{
 };
 use monolythium_core_sdk::types::{
     AccountPolicy, AccountProofResponse, AddressActivityArchiveRedirect, AddressActivityEntry,
-    AddressActivityKindResponse, AddressActivityKindRetention, AddressLabelRecord, AssetPolicy,
+    AddressActivityKindResponse, AddressActivityKindRetention, AddressLabelRecord,
+    AgentReputationCategoryScope, AgentReputationRecord, AgentReputationResponse, AssetPolicy,
     BlockHeader, BlockTag, BlsCertificateResponse, CallRequest, CapabilitiesResponse,
     CapabilityDescriptor, CheckpointRecord, ClobMarketRecord, ClobMarketResponse,
     ClusterDelegatorsResponse, ClusterEntityResponse, ClusterResignationRow,
@@ -50,6 +51,9 @@ fn export_bindings() {
     AddressActivityKindResponse::export_all_to(&out).expect("AddressActivityKindResponse");
     AddressActivityKindRetention::export_all_to(&out).expect("AddressActivityKindRetention");
     AddressLabelRecord::export_all_to(&out).expect("AddressLabelRecord");
+    AgentReputationCategoryScope::export_all_to(&out).expect("AgentReputationCategoryScope");
+    AgentReputationRecord::export_all_to(&out).expect("AgentReputationRecord");
+    AgentReputationResponse::export_all_to(&out).expect("AgentReputationResponse");
     AssetPolicy::export_all_to(&out).expect("AssetPolicy");
     BlsCertificateResponse::export_all_to(&out).expect("BlsCertificateResponse");
     BlockHeader::export_all_to(&out).expect("BlockHeader");

@@ -227,6 +227,186 @@ function encodePathSegment(value) {
   return encodeURIComponent(typeof value === "bigint" ? value.toString() : String(value));
 }
 
+// src/address.ts
+var ADDRESS_HRP = "mono";
+var ADDRESS_KIND_HRPS = {
+  user: "mono",
+  smartAccount: "monos",
+  contract: "monoc",
+  cluster: "monok",
+  multisig: "monom",
+  systemModule: "monox"
+};
+var RESERVED_ADDRESS_HRPS = ["monor", "monop", "monoi", "monoa"];
+var CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+var CHARSET_MAP = new Map([...CHARSET].map((c, i) => [c, i]));
+var BECH32M_CONST = 734539939;
+var HEX_20_BYTE_RE = /^0x[0-9a-fA-F]{40}$/;
+var AddressError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "AddressError";
+  }
+};
+function hexToAddressBytes(address) {
+  if (!HEX_20_BYTE_RE.test(address)) {
+    throw new AddressError("expected 0x-prefixed 20-byte hex address");
+  }
+  const out = new Uint8Array(20);
+  const body = address.slice(2);
+  for (let i = 0; i < 20; i++) {
+    out[i] = Number.parseInt(body.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+function addressBytesToHex(address) {
+  const bytes = expectLength(address, 20, "address");
+  return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+function addressToBech32(address) {
+  return addressToTypedBech32("user", address);
+}
+function addressToTypedBech32(kind, address) {
+  const bytes = typeof address === "string" ? hexToAddressBytes(address) : expectLength(address, 20, "address");
+  return encodeBech32m(ADDRESS_KIND_HRPS[kind], bytes);
+}
+function encodeBech32m(hrp, bytes) {
+  const words = convertBits([...bytes], 8, 5, true);
+  const checksum = createChecksum(hrp, words);
+  return `${hrp}1${[...words, ...checksum].map((v) => CHARSET[v]).join("")}`;
+}
+function bech32ToAddressBytes(address) {
+  return typedBech32ToAddress(address, "user").bytes;
+}
+function bech32ToAddress(address) {
+  return addressBytesToHex(bech32ToAddressBytes(address));
+}
+function typedBech32ToAddress(address, expectedKind) {
+  const parsed = decodeBech32m(address);
+  if (RESERVED_ADDRESS_HRPS.includes(parsed.hrp)) {
+    throw new AddressError(`reserved address hrp '${parsed.hrp}'`);
+  }
+  const kind = addressKindFromHrp(parsed.hrp);
+  if (kind === void 0) {
+    throw new AddressError(`unknown address hrp '${parsed.hrp}'`);
+  }
+  if (expectedKind !== void 0 && kind !== expectedKind) {
+    throw new AddressError(`unexpected hrp '${parsed.hrp}', expected '${ADDRESS_KIND_HRPS[expectedKind]}'`);
+  }
+  const bytes = convertBits(parsed.data, 5, 8, false);
+  if (bytes.length !== 20) {
+    throw new AddressError(`expected 20-byte payload, got ${bytes.length} bytes`);
+  }
+  const out = Uint8Array.from(bytes);
+  return { kind, address: address.toLowerCase(), bytes: out, hex: addressBytesToHex(out) };
+}
+function parseAddress(address) {
+  if (address.startsWith("0x") || address.startsWith("0X")) {
+    return hexToAddressBytes(address);
+  }
+  return bech32ToAddressBytes(address);
+}
+function normalizeAddressHex(address) {
+  return addressBytesToHex(parseAddress(address));
+}
+function decodeBech32m(input) {
+  if (input.length < 8) {
+    throw new AddressError("bech32m address is too short");
+  }
+  const hasLower = input !== input.toUpperCase();
+  const hasUpper = input !== input.toLowerCase();
+  if (hasLower && hasUpper) {
+    throw new AddressError("bech32m address cannot mix upper and lower case");
+  }
+  const s = input.toLowerCase();
+  const sep = s.lastIndexOf("1");
+  if (sep <= 0 || sep + 7 > s.length) {
+    throw new AddressError("bech32m separator/checksum shape is invalid");
+  }
+  const hrp = s.slice(0, sep);
+  const values = [];
+  for (const c of s.slice(sep + 1)) {
+    const v = CHARSET_MAP.get(c);
+    if (v === void 0) {
+      throw new AddressError(`invalid bech32m character '${c}'`);
+    }
+    values.push(v);
+  }
+  if (!verifyChecksum(hrp, values)) {
+    throw new AddressError("bech32m checksum mismatch");
+  }
+  return { hrp, data: values.slice(0, -6) };
+}
+function addressKindFromHrp(hrp) {
+  for (const [kind, kindHrp] of Object.entries(ADDRESS_KIND_HRPS)) {
+    if (kindHrp === hrp) return kind;
+  }
+  return void 0;
+}
+function hrpExpand(hrp) {
+  const high = [...hrp].map((c) => c.charCodeAt(0) >> 5);
+  const low = [...hrp].map((c) => c.charCodeAt(0) & 31);
+  return [...high, 0, ...low];
+}
+function polymod(values) {
+  const generators = [996825010, 642813549, 513874426, 1027748829, 705979059];
+  let chk = 1;
+  for (const value of values) {
+    const top = chk >> 25;
+    chk = (chk & 33554431) << 5 ^ value;
+    for (let i = 0; i < 5; i++) {
+      if ((top >> i & 1) === 1) {
+        chk ^= generators[i];
+      }
+    }
+  }
+  return chk >>> 0;
+}
+function createChecksum(hrp, data) {
+  const values = [...hrpExpand(hrp), ...data, 0, 0, 0, 0, 0, 0];
+  const mod = polymod(values) ^ BECH32M_CONST;
+  const out = [];
+  for (let p = 0; p < 6; p++) {
+    out.push(mod >> 5 * (5 - p) & 31);
+  }
+  return out;
+}
+function verifyChecksum(hrp, values) {
+  return polymod([...hrpExpand(hrp), ...values]) === BECH32M_CONST;
+}
+function convertBits(data, fromBits, toBits, pad) {
+  let acc = 0;
+  let bits = 0;
+  const ret = [];
+  const maxv = (1 << toBits) - 1;
+  const maxAcc = (1 << fromBits + toBits - 1) - 1;
+  for (const value of data) {
+    if (value < 0 || value >> fromBits !== 0) {
+      throw new AddressError("invalid address payload value");
+    }
+    acc = (acc << fromBits | value) & maxAcc;
+    bits += fromBits;
+    while (bits >= toBits) {
+      bits -= toBits;
+      ret.push(acc >> bits & maxv);
+    }
+  }
+  if (pad) {
+    if (bits > 0) {
+      ret.push(acc << toBits - bits & maxv);
+    }
+  } else if (bits >= fromBits || (acc << toBits - bits & maxv) !== 0) {
+    throw new AddressError("invalid bech32m padding");
+  }
+  return ret;
+}
+function expectLength(value, len, name) {
+  if (value.length !== len) {
+    throw new AddressError(`${name} must be ${len} bytes`);
+  }
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+
 // src/consts.ts
 var BURN_ADDR = "0x0000000000000000000000000000000000000000";
 var PRECOMPILE_ADDRESSES = {
@@ -348,11 +528,11 @@ function encodeReportServiceProbeCalldata(args) {
   return bytesToHex(
     concatBytes(
       hexToBytes(NODE_REGISTRY_SELECTORS.reportServiceProbe),
-      expectLength(toBytes(args.peerId), 32, "peerId"),
+      expectLength2(toBytes(args.peerId), 32, "peerId"),
       uint32Word(args.serviceMask),
       uint8Word(args.status),
       uint32Word(latencyMs),
-      expectLength(toBytes(args.probeDigest), 32, "probeDigest")
+      expectLength2(toBytes(args.probeDigest), 32, "probeDigest")
     )
   );
 }
@@ -417,7 +597,7 @@ function concatBytes(...parts) {
   }
   return out;
 }
-function expectLength(value, len, name) {
+function expectLength2(value, len, name) {
   if (value.length !== len) {
     throw new NodeRegistryError(`${name} must be ${len} bytes, got ${value.length}`);
   }
@@ -861,6 +1041,10 @@ var RpcClient = class _RpcClient {
   /** `lyth_addressActivityKind` — activity index coverage for one address. */
   async lythAddressActivityKind(address) {
     return this.call("lyth_addressActivityKind", [address]);
+  }
+  /** `lyth_agentReputation` — reputation accumulators for an agent provider. */
+  async lythAgentReputation(provider, categoryId = 0) {
+    return this.call("lyth_agentReputation", [normalizeUserBech32Address(provider), categoryId]);
   }
   /** `lyth_decodeTx` — explorer-grade decoded transaction envelope. */
   async lythDecodeTx(txHash) {
@@ -1531,6 +1715,14 @@ function normalizeBlockHeader(value) {
     gas_limit: parseRpcBigint(h["gas_limit"], "block header gas_limit")
   };
 }
+function normalizeUserBech32Address(address) {
+  try {
+    return addressToBech32(typeof address === "string" ? parseAddress(address) : address);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw SdkError.malformed(`invalid provider address: ${message}`);
+  }
+}
 function normalizeRoundInfo(value) {
   if (!value || typeof value !== "object") {
     throw SdkError.malformed("round info must be an object");
@@ -1556,188 +1748,6 @@ function normalizeMempoolSnapshot(value) {
     bytes_by_class: bytesByClass.map((v, i) => parseRpcBigint(v, `mempool bytes_by_class[${i}]`))
   };
 }
-
-// src/address.ts
-var ADDRESS_HRP = "mono";
-var ADDRESS_KIND_HRPS = {
-  user: "mono",
-  smartAccount: "monos",
-  contract: "monoc",
-  cluster: "monok",
-  multisig: "monom",
-  systemModule: "monox"
-};
-var RESERVED_ADDRESS_HRPS = ["monor", "monop", "monoi", "monoa"];
-var CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
-var CHARSET_MAP = new Map([...CHARSET].map((c, i) => [c, i]));
-var BECH32M_CONST = 734539939;
-var HEX_20_BYTE_RE = /^0x[0-9a-fA-F]{40}$/;
-var AddressError = class extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "AddressError";
-  }
-};
-function hexToAddressBytes(address) {
-  if (!HEX_20_BYTE_RE.test(address)) {
-    throw new AddressError("expected 0x-prefixed 20-byte hex address");
-  }
-  const out = new Uint8Array(20);
-  const body = address.slice(2);
-  for (let i = 0; i < 20; i++) {
-    out[i] = Number.parseInt(body.slice(i * 2, i * 2 + 2), 16);
-  }
-  return out;
-}
-function addressBytesToHex(address) {
-  const bytes = expectLength2(address, 20, "address");
-  return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
-}
-function addressToBech32(address) {
-  return addressToTypedBech32("user", address);
-}
-function addressToTypedBech32(kind, address) {
-  const bytes = typeof address === "string" ? hexToAddressBytes(address) : expectLength2(address, 20, "address");
-  return encodeBech32m(ADDRESS_KIND_HRPS[kind], bytes);
-}
-function encodeBech32m(hrp, bytes) {
-  const words = convertBits([...bytes], 8, 5, true);
-  const checksum = createChecksum(hrp, words);
-  return `${hrp}1${[...words, ...checksum].map((v) => CHARSET[v]).join("")}`;
-}
-function bech32ToAddressBytes(address) {
-  return typedBech32ToAddress(address, "user").bytes;
-}
-function bech32ToAddress(address) {
-  return addressBytesToHex(bech32ToAddressBytes(address));
-}
-function typedBech32ToAddress(address, expectedKind) {
-  const parsed = decodeBech32m(address);
-  if (RESERVED_ADDRESS_HRPS.includes(parsed.hrp)) {
-    throw new AddressError(`reserved address hrp '${parsed.hrp}'`);
-  }
-  const kind = addressKindFromHrp(parsed.hrp);
-  if (kind === void 0) {
-    throw new AddressError(`unknown address hrp '${parsed.hrp}'`);
-  }
-  if (expectedKind !== void 0 && kind !== expectedKind) {
-    throw new AddressError(`unexpected hrp '${parsed.hrp}', expected '${ADDRESS_KIND_HRPS[expectedKind]}'`);
-  }
-  const bytes = convertBits(parsed.data, 5, 8, false);
-  if (bytes.length !== 20) {
-    throw new AddressError(`expected 20-byte payload, got ${bytes.length} bytes`);
-  }
-  const out = Uint8Array.from(bytes);
-  return { kind, address: address.toLowerCase(), bytes: out, hex: addressBytesToHex(out) };
-}
-function parseAddress(address) {
-  if (address.startsWith("0x") || address.startsWith("0X")) {
-    return hexToAddressBytes(address);
-  }
-  return bech32ToAddressBytes(address);
-}
-function normalizeAddressHex(address) {
-  return addressBytesToHex(parseAddress(address));
-}
-function decodeBech32m(input) {
-  if (input.length < 8) {
-    throw new AddressError("bech32m address is too short");
-  }
-  const hasLower = input !== input.toUpperCase();
-  const hasUpper = input !== input.toLowerCase();
-  if (hasLower && hasUpper) {
-    throw new AddressError("bech32m address cannot mix upper and lower case");
-  }
-  const s = input.toLowerCase();
-  const sep = s.lastIndexOf("1");
-  if (sep <= 0 || sep + 7 > s.length) {
-    throw new AddressError("bech32m separator/checksum shape is invalid");
-  }
-  const hrp = s.slice(0, sep);
-  const values = [];
-  for (const c of s.slice(sep + 1)) {
-    const v = CHARSET_MAP.get(c);
-    if (v === void 0) {
-      throw new AddressError(`invalid bech32m character '${c}'`);
-    }
-    values.push(v);
-  }
-  if (!verifyChecksum(hrp, values)) {
-    throw new AddressError("bech32m checksum mismatch");
-  }
-  return { hrp, data: values.slice(0, -6) };
-}
-function addressKindFromHrp(hrp) {
-  for (const [kind, kindHrp] of Object.entries(ADDRESS_KIND_HRPS)) {
-    if (kindHrp === hrp) return kind;
-  }
-  return void 0;
-}
-function hrpExpand(hrp) {
-  const high = [...hrp].map((c) => c.charCodeAt(0) >> 5);
-  const low = [...hrp].map((c) => c.charCodeAt(0) & 31);
-  return [...high, 0, ...low];
-}
-function polymod(values) {
-  const generators = [996825010, 642813549, 513874426, 1027748829, 705979059];
-  let chk = 1;
-  for (const value of values) {
-    const top = chk >> 25;
-    chk = (chk & 33554431) << 5 ^ value;
-    for (let i = 0; i < 5; i++) {
-      if ((top >> i & 1) === 1) {
-        chk ^= generators[i];
-      }
-    }
-  }
-  return chk >>> 0;
-}
-function createChecksum(hrp, data) {
-  const values = [...hrpExpand(hrp), ...data, 0, 0, 0, 0, 0, 0];
-  const mod = polymod(values) ^ BECH32M_CONST;
-  const out = [];
-  for (let p = 0; p < 6; p++) {
-    out.push(mod >> 5 * (5 - p) & 31);
-  }
-  return out;
-}
-function verifyChecksum(hrp, values) {
-  return polymod([...hrpExpand(hrp), ...values]) === BECH32M_CONST;
-}
-function convertBits(data, fromBits, toBits, pad) {
-  let acc = 0;
-  let bits = 0;
-  const ret = [];
-  const maxv = (1 << toBits) - 1;
-  const maxAcc = (1 << fromBits + toBits - 1) - 1;
-  for (const value of data) {
-    if (value < 0 || value >> fromBits !== 0) {
-      throw new AddressError("invalid address payload value");
-    }
-    acc = (acc << fromBits | value) & maxAcc;
-    bits += fromBits;
-    while (bits >= toBits) {
-      bits -= toBits;
-      ret.push(acc >> bits & maxv);
-    }
-  }
-  if (pad) {
-    if (bits > 0) {
-      ret.push(acc << toBits - bits & maxv);
-    }
-  } else if (bits >= fromBits || (acc << toBits - bits & maxv) !== 0) {
-    throw new AddressError("invalid bech32m padding");
-  }
-  return ret;
-}
-function expectLength2(value, len, name) {
-  if (value.length !== len) {
-    throw new AddressError(`${name} must be ${len} bytes`);
-  }
-  return value instanceof Uint8Array ? value : Uint8Array.from(value);
-}
-
-// src/mrv.ts
 var MRV_FORMAT_VERSION = 1;
 var MRV_PROFILE_MONO_RV32IM_V1 = "mono_rv32im_v1";
 var MRV_MEMORY_PAGE_BYTES = 65536;

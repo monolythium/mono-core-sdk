@@ -1,8 +1,9 @@
 //! Wire-shape types returned by [`crate::RpcClient`].
 //!
 //! These mirror the JSON the node serializes — quantities are
-//! `0x`-prefixed hex strings, hashes / addresses / bytes are
-//! `0x`-prefixed lower-case hex, structured types use camelCase
+//! `0x`-prefixed hex strings, hashes / bytes are `0x`-prefixed
+//! lower-case hex, address fields use either legacy `0x` hex or typed
+//! bech32m as documented on the field, and structured types use camelCase
 //! field names. The SDK does not yet depend on any internal
 //! mono-core crates; when those land the wrapper types here forward
 //! to them transparently.
@@ -18,7 +19,9 @@ use ts_rs::TS;
 /// envelope verbatim — callers can `crate::types::hex_decode` on demand.
 pub type Hex = String;
 
-/// `0x`-prefixed hex 20-byte address.
+/// Address string. Legacy RPC compatibility surfaces use `0x`-prefixed
+/// 20-byte hex; v4.1 user-facing surfaces may use typed bech32m such as
+/// `mono1...`.
 pub type Address = String;
 
 /// `0x`-prefixed hex 32-byte hash.
@@ -570,6 +573,81 @@ pub struct AddressActivityKindResponse {
     #[serde(default)]
     #[cfg_attr(feature = "ts-bindings", ts(optional))]
     pub retention: Option<AddressActivityKindRetention>,
+}
+
+/// Reputation category scope returned by `lyth_agentReputation`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "AgentReputationCategoryScope.ts")
+)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentReputationCategoryScope {
+    Global,
+    Category,
+}
+
+/// One reputation accumulator row returned by `lyth_agentReputation`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "AgentReputationRecord.ts")
+)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentReputationRecord {
+    /// Provider user address (`mono1...` bech32m).
+    pub provider: Address,
+    /// Reputation category id.
+    pub category_id: u32,
+    /// Block height that last updated this record.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number"))]
+    pub block_height: u64,
+    /// Sum of speed scores multiplied by 10.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number"))]
+    pub speed_sum_x10: u64,
+    /// Sum of quality scores multiplied by 10.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number"))]
+    pub quality_sum_x10: u64,
+    /// Sum of communication scores multiplied by 10.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number"))]
+    pub communication_sum_x10: u64,
+    /// Sum of accuracy scores multiplied by 10.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number"))]
+    pub accuracy_sum_x10: u64,
+    /// Number of samples included in the accumulators.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number"))]
+    pub sample_count: u64,
+    /// Average speed score multiplied by 10.
+    pub avg_speed_x10: u32,
+    /// Average quality score multiplied by 10.
+    pub avg_quality_x10: u32,
+    /// Average communication score multiplied by 10.
+    pub avg_communication_x10: u32,
+    /// Average accuracy score multiplied by 10.
+    pub avg_accuracy_x10: u32,
+}
+
+/// `lyth_agentReputation` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "AgentReputationResponse.ts")
+)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentReputationResponse {
+    /// Response schema version.
+    pub schema_version: u32,
+    /// Queried provider user address (`mono1...` bech32m).
+    pub provider: Address,
+    /// Queried category id.
+    pub category_id: u32,
+    /// Whether the node resolved the global or category-specific scope.
+    pub category_scope: AgentReputationCategoryScope,
+    /// Reputation row, or `null` when no row exists for the provider/category.
+    pub record: Option<AgentReputationRecord>,
 }
 
 /// `lyth_indexerStatus` envelope. `null` on the wire surfaces as
@@ -1957,5 +2035,46 @@ mod tests {
             serde_json::json!("agent.escrow.created")
         );
         assert_eq!(receipt.events[0].decoded_json, decoded.to_string());
+    }
+
+    #[test]
+    fn agent_reputation_response_decodes_camel_case_wire_shape() {
+        let provider = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+        let wire = serde_json::json!({
+            "schemaVersion": 1,
+            "provider": provider,
+            "categoryId": 7,
+            "categoryScope": "category",
+            "record": {
+                "provider": provider,
+                "categoryId": 7,
+                "blockHeight": 123,
+                "speedSumX10": 460,
+                "qualitySumX10": 450,
+                "communicationSumX10": 440,
+                "accuracySumX10": 430,
+                "sampleCount": 5,
+                "avgSpeedX10": 92,
+                "avgQualityX10": 90,
+                "avgCommunicationX10": 88,
+                "avgAccuracyX10": 86
+            }
+        });
+
+        let reputation: AgentReputationResponse = serde_json::from_value(wire).unwrap();
+
+        assert_eq!(reputation.schema_version, 1);
+        assert_eq!(reputation.provider, provider);
+        assert_eq!(reputation.category_id, 7);
+        assert_eq!(
+            reputation.category_scope,
+            AgentReputationCategoryScope::Category
+        );
+        let record = reputation.record.unwrap();
+        assert_eq!(record.provider, provider);
+        assert_eq!(record.block_height, 123);
+        assert_eq!(record.sample_count, 5);
+        assert_eq!(record.avg_speed_x10, 92);
+        assert_eq!(record.avg_accuracy_x10, 86);
     }
 }

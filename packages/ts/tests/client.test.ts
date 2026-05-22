@@ -10,6 +10,7 @@ import {
   SERVICE_PROBE_STATUS,
   RpcClient,
   SdkError,
+  addressToTypedBech32,
   parseQuantity,
   parseQuantityBig,
 } from "../src/index.js";
@@ -207,6 +208,72 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     await client.lythGetAddressActivity("0x1111111111111111111111111111111111111111", 75, "0x01");
     expect(calls[0].method).toBe("lyth_getAddressActivity");
     expect(calls[0].params).toEqual(["0x1111111111111111111111111111111111111111", 75, "0x01"]);
+  });
+
+  it("lyth_agentReputation sends user bech32 provider and defaults category", async () => {
+    const providerHex = "0x123456789abcdef0112233445566778899aabbcc";
+    const provider = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+    const { fetch, calls } = mockFetch({
+      schemaVersion: 1,
+      provider,
+      categoryId: 0,
+      categoryScope: "global",
+      record: {
+        provider,
+        categoryId: 0,
+        blockHeight: 123,
+        speedSumX10: 460,
+        qualitySumX10: 450,
+        communicationSumX10: 440,
+        accuracySumX10: 430,
+        sampleCount: 5,
+        avgSpeedX10: 92,
+        avgQualityX10: 90,
+        avgCommunicationX10: 88,
+        avgAccuracyX10: 86,
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const reputation = await client.lythAgentReputation(providerHex);
+
+    expect(reputation.categoryScope).toBe("global");
+    expect(reputation.record?.avgSpeedX10).toBe(92);
+    expect(calls[0].method).toBe("lyth_agentReputation");
+    expect(calls[0].params).toEqual([provider, 0]);
+  });
+
+  it("lyth_agentReputation forwards explicit category for mono provider", async () => {
+    const provider = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+    const { fetch, calls } = mockFetch({
+      schemaVersion: 1,
+      provider,
+      categoryId: 7,
+      categoryScope: "category",
+      record: null,
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    await expect(client.lythAgentReputation(provider, 7)).resolves.toMatchObject({
+      categoryId: 7,
+      record: null,
+    });
+    expect(calls[0].method).toBe("lyth_agentReputation");
+    expect(calls[0].params).toEqual([provider, 7]);
+  });
+
+  it("lyth_agentReputation rejects non-user provider addresses before fetch", async () => {
+    const { fetch, calls } = mockFetch(null);
+    const client = new RpcClient("http://x", { fetch });
+    const contract = addressToTypedBech32(
+      "contract",
+      "0x123456789abcdef0112233445566778899aabbcc",
+    );
+
+    await expect(client.lythAgentReputation(contract)).rejects.toMatchObject({
+      kind: "malformed",
+    });
+    expect(calls).toHaveLength(0);
   });
 
   it("lyth_nativeReceipt reads typed RISC-V receipt metadata and event rows", async () => {
