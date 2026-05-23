@@ -35,7 +35,9 @@ pub use address::{
     AddressKind, ADDRESS_HRP, ADDRESS_HRPS, RESERVED_ADDRESS_HRPS,
 };
 pub use api::ApiClient;
-pub use client::RpcClient;
+pub use client::{
+    MrvCallNativeEncryptedSubmitResult, MrvDeployNativeEncryptedSubmitResult, RpcClient,
+};
 pub use consts::{burn_addr_hex, BURN_ADDR};
 pub use error::SdkError;
 pub use mrv::{

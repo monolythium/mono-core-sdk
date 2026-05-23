@@ -13,6 +13,12 @@ use serde_json::{json, Value};
 
 use crate::address::{address_to_bech32, parse_address};
 use crate::error::SdkError;
+use crate::mrv::{
+    build_mrv_call_native_encrypted_submission, build_mrv_deploy_native_encrypted_submission,
+    MrvCallNativeEncryptedSubmission, MrvCallNativeTxPlan, MrvDeployNativeEncryptedSubmission,
+    MrvDeployNativeTxPlan, MrvEncryptionKey, MrvMempoolClass, MrvNativeEncryptedSubmission,
+    MrvValidationError,
+};
 use crate::types::{
     AccountPolicy, AccountProofResponse, AddressActivityEntry, AddressActivityKindResponse,
     AddressFlowResponse, AddressLabelRecord, AddressProfileResponse, AgentReputationResponse,
@@ -30,6 +36,28 @@ use crate::types::{
     TpmAttestationResponse, TransactionReceipt, TransactionView, TxFeedResponse, TxStatusResponse,
     VerticesAtRoundResponse,
 };
+
+/// Result from building and submitting an encrypted MRV deploy envelope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvDeployNativeEncryptedSubmitResult {
+    /// Transaction hash returned by `lyth_submitEncrypted`.
+    #[serde(rename = "txHash")]
+    pub tx_hash: String,
+    /// Validated deploy plan plus encrypted envelope material.
+    pub encrypted: MrvDeployNativeEncryptedSubmission,
+}
+
+/// Result from building and submitting an encrypted MRV call envelope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvCallNativeEncryptedSubmitResult {
+    /// Transaction hash returned by `lyth_submitEncrypted`.
+    #[serde(rename = "txHash")]
+    pub tx_hash: String,
+    /// Validated call plan plus encrypted envelope material.
+    pub encrypted: MrvCallNativeEncryptedSubmission,
+}
 
 /// Typed JSON-RPC client for a `mono-core` node.
 ///
@@ -793,6 +821,98 @@ impl RpcClient {
         self.call("lyth_getEncryptionKey", json!([])).await
     }
 
+    /// Fetch the cluster encryption key in the MRV helper shape.
+    pub async fn lyth_get_mrv_encryption_key(&self) -> Result<MrvEncryptionKey, SdkError> {
+        Ok(self.lyth_get_encryption_key().await?.into())
+    }
+
+    /// Submit already-built encrypted MRV envelope material.
+    ///
+    /// This is the Rust SDK counterpart to the TypeScript
+    /// `submitEncryptedEnvelope` helper. It only proves client submission to
+    /// the node RPC surface; admission, threshold decrypt, reveal, and
+    /// execution are still node/runtime responsibilities.
+    pub async fn lyth_submit_mrv_native_encrypted_submission(
+        &self,
+        submission: &MrvNativeEncryptedSubmission,
+    ) -> Result<String, SdkError> {
+        self.lyth_submit_encrypted(&submission.envelope_wire_hex)
+            .await
+    }
+
+    /// Build and submit an encrypted MRV deploy transaction.
+    ///
+    /// If `encryption_key` is `None`, the client first calls
+    /// `lyth_getEncryptionKey`. The caller still owns ML-DSA-65 key material:
+    /// `inner_signature` must be the signature over the plan's native
+    /// transaction sighash, and `sign_outer_digest` must sign the encrypted
+    /// envelope digest supplied by the helper.
+    pub async fn submit_mrv_deploy_native_encrypted<F>(
+        &self,
+        plan: &MrvDeployNativeTxPlan,
+        inner_signature: &[u8],
+        public_key: &[u8],
+        encryption_key: Option<MrvEncryptionKey>,
+        mempool_class: Option<MrvMempoolClass>,
+        sign_outer_digest: F,
+    ) -> Result<MrvDeployNativeEncryptedSubmitResult, SdkError>
+    where
+        F: FnOnce(&[u8; 32]) -> Result<Vec<u8>, MrvValidationError>,
+    {
+        let encryption_key = match encryption_key {
+            Some(encryption_key) => encryption_key,
+            None => self.lyth_get_mrv_encryption_key().await?,
+        };
+        let encrypted = build_mrv_deploy_native_encrypted_submission(
+            plan,
+            inner_signature,
+            public_key,
+            &encryption_key,
+            mempool_class,
+            sign_outer_digest,
+        )
+        .map_err(mrv_validation_to_sdk_error)?;
+        let tx_hash = self
+            .lyth_submit_mrv_native_encrypted_submission(&encrypted.submission)
+            .await?;
+        Ok(MrvDeployNativeEncryptedSubmitResult { tx_hash, encrypted })
+    }
+
+    /// Build and submit an encrypted MRV call transaction.
+    ///
+    /// This mirrors [`Self::submit_mrv_deploy_native_encrypted`] for call
+    /// plans and does not hide wallet signing behind the SDK.
+    pub async fn submit_mrv_call_native_encrypted<F>(
+        &self,
+        plan: &MrvCallNativeTxPlan,
+        inner_signature: &[u8],
+        public_key: &[u8],
+        encryption_key: Option<MrvEncryptionKey>,
+        mempool_class: Option<MrvMempoolClass>,
+        sign_outer_digest: F,
+    ) -> Result<MrvCallNativeEncryptedSubmitResult, SdkError>
+    where
+        F: FnOnce(&[u8; 32]) -> Result<Vec<u8>, MrvValidationError>,
+    {
+        let encryption_key = match encryption_key {
+            Some(encryption_key) => encryption_key,
+            None => self.lyth_get_mrv_encryption_key().await?,
+        };
+        let encrypted = build_mrv_call_native_encrypted_submission(
+            plan,
+            inner_signature,
+            public_key,
+            &encryption_key,
+            mempool_class,
+            sign_outer_digest,
+        )
+        .map_err(mrv_validation_to_sdk_error)?;
+        let tx_hash = self
+            .lyth_submit_mrv_native_encrypted_submission(&encrypted.submission)
+            .await?;
+        Ok(MrvCallNativeEncryptedSubmitResult { tx_hash, encrypted })
+    }
+
     /// `lyth_syncStatus` — DAG-sync driver snapshot, or `None` when the
     /// running node has no driver wired.
     pub async fn lyth_sync_status(&self) -> Result<Option<DagSyncStatus>, SdkError> {
@@ -1038,9 +1158,22 @@ fn agent_reputation_params(provider: &str, category_id: Option<u32>) -> Result<V
     Ok(json!([provider, category_id.unwrap_or(0)]))
 }
 
+fn mrv_validation_to_sdk_error(err: MrvValidationError) -> SdkError {
+    SdkError::Malformed(format!("invalid MRV encrypted submission: {err}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread::{self, JoinHandle};
+    use std::time::Duration;
+
+    use crate::mrv::{
+        build_mrv_deploy_native_tx_plan, MrvNativeTxBuildOptions, ML_DSA_65_PUBLIC_KEY_LEN,
+        ML_DSA_65_SIGNATURE_LEN,
+    };
 
     #[test]
     fn parses_hex_quantities() {
@@ -1121,5 +1254,133 @@ mod tests {
         let c = RpcClient::new("http://localhost:8545").unwrap();
         let c2 = c.clone();
         assert_eq!(c.endpoint(), c2.endpoint());
+    }
+
+    #[tokio::test]
+    async fn mrv_encrypted_submit_fetches_key_and_submits_envelope() {
+        use ml_kem::{kem::KeyExport, DecapsulationKey, MlKem768};
+
+        let seed: ml_kem::Seed = [0x45; 64].into();
+        let dk = DecapsulationKey::<MlKem768>::from_seed(seed);
+        let encapsulation_key = dk.encapsulation_key().to_bytes();
+        let (endpoint, server) = spawn_rpc_server(vec![
+            json!({
+                "algo": "ml-kem-768",
+                "epoch": 12,
+                "encapsulationKey": test_hex(encapsulation_key.as_ref()),
+            }),
+            json!("0xfeedface"),
+        ]);
+
+        let client = RpcClient::new(endpoint).unwrap();
+        let plan = build_mrv_deploy_native_tx_plan(
+            &[0x13, 0x00, 0x00, 0x00],
+            None,
+            MrvNativeTxBuildOptions::new(69_420, 7, 100_000, 25).priority_tip_lythoshi(1),
+        )
+        .unwrap();
+        let inner_signature = vec![0x55; ML_DSA_65_SIGNATURE_LEN];
+        let public_key = vec![0x66; ML_DSA_65_PUBLIC_KEY_LEN];
+        let result = client
+            .submit_mrv_deploy_native_encrypted(
+                &plan,
+                &inner_signature,
+                &public_key,
+                None,
+                Some(MrvMempoolClass::ContractCall),
+                |_| Ok(vec![0x77; ML_DSA_65_SIGNATURE_LEN]),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.tx_hash, "0xfeedface");
+        assert_eq!(result.encrypted.request.artifact_bytes, "0x13000000");
+        assert!(result
+            .encrypted
+            .submission
+            .envelope_wire_hex
+            .starts_with("0x"));
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0]["method"], "lyth_getEncryptionKey");
+        assert_eq!(requests[0]["params"], json!([]));
+        assert_eq!(requests[1]["method"], "lyth_submitEncrypted");
+        assert_eq!(
+            requests[1]["params"],
+            json!([result.encrypted.submission.envelope_wire_hex])
+        );
+    }
+
+    fn spawn_rpc_server(results: Vec<Value>) -> (String, JoinHandle<Vec<Value>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let handle = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for result in results {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let request = read_http_json_request(&mut stream);
+                let id = request.get("id").cloned().unwrap_or(Value::Null);
+                let body = json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": result,
+                })
+                .to_string();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .unwrap();
+                requests.push(request);
+            }
+            requests
+        });
+        (endpoint, handle)
+    }
+
+    fn read_http_json_request(stream: &mut std::net::TcpStream) -> Value {
+        let mut buf = Vec::new();
+        let mut tmp = [0u8; 1024];
+        loop {
+            let read = stream.read(&mut tmp).unwrap();
+            assert_ne!(read, 0, "client closed before sending JSON-RPC body");
+            buf.extend_from_slice(&tmp[..read]);
+            if let Some((body_start, content_len)) = http_body_start_and_len(&buf) {
+                if buf.len() >= body_start + content_len {
+                    return serde_json::from_slice(&buf[body_start..body_start + content_len])
+                        .unwrap();
+                }
+            }
+        }
+    }
+
+    fn http_body_start_and_len(buf: &[u8]) -> Option<(usize, usize)> {
+        let header_end = buf.windows(4).position(|window| window == b"\r\n\r\n")?;
+        let headers = std::str::from_utf8(&buf[..header_end]).unwrap();
+        let content_len = headers
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("content-length:")
+                    .or_else(|| line.strip_prefix("Content-Length:"))
+            })?
+            .trim()
+            .parse::<usize>()
+            .unwrap();
+        Some((header_end + 4, content_len))
+    }
+
+    fn test_hex(bytes: &[u8]) -> String {
+        let mut out = String::from("0x");
+        for byte in bytes {
+            use std::fmt::Write as _;
+            write!(&mut out, "{byte:02x}").unwrap();
+        }
+        out
     }
 }

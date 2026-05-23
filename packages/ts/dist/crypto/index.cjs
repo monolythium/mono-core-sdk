@@ -416,6 +416,8 @@ var MempoolClass = {
   PrivacyOp: 2,
   CLOBOp: 3,
   AgentOp: 4,
+  FoundationOp: 5,
+  /** @deprecated Use FoundationOp. */
   GovernanceOp: 5,
   RWAOp: 6
 };
