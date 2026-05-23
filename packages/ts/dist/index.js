@@ -2012,6 +2012,7 @@ var MRV_MAX_MEMORY_PAGES = 1024;
 var MRV_MAX_ABI_SYMBOLS = 1024;
 var MRV_MAX_STORAGE_NAMESPACE_BYTES = 64;
 var LYTH_DECIMALS = 8;
+var NATIVE_LYTH_DECIMALS = LYTH_DECIMALS;
 var LYTHOSHI_PER_LYTH = 100000000n;
 var MRV_TX_EXTENSION_KIND = 48;
 var MRV_TX_EXTENSION_V1 = 1;
@@ -2041,6 +2042,42 @@ var MrvValidationError = class extends Error {
     this.name = "MrvValidationError";
   }
 };
+function formatLyth(lythoshi, options = {}) {
+  const amount = BigInt(normalizeDecimalLike("lythoshi", lythoshi));
+  const whole = amount / LYTHOSHI_PER_LYTH;
+  const fraction = amount % LYTHOSHI_PER_LYTH;
+  let formatted = formatWholeWithCommas(whole);
+  if (fraction !== 0n) {
+    formatted += `.${fraction.toString().padStart(NATIVE_LYTH_DECIMALS, "0").replace(/0+$/, "")}`;
+  }
+  if (options.includeUnit !== false) {
+    formatted += " LYTH";
+  }
+  return formatted;
+}
+function formatLythoshi(lythoshi, options = {}) {
+  return formatLyth(lythoshi, options);
+}
+function parseLythToLythoshi(input) {
+  const numeric = stripLythUnit(input);
+  const parts = numeric.split(".");
+  if (parts.length > 2) {
+    throw new MrvValidationError("lyth amount must be a canonical LYTH decimal");
+  }
+  const [wholeRaw, fractionRaw = ""] = parts;
+  if (!isCanonicalWholeLyth(wholeRaw)) {
+    throw new MrvValidationError("lyth amount must be a canonical LYTH decimal");
+  }
+  if (numeric.includes(".") && fractionRaw.length === 0) {
+    throw new MrvValidationError("lyth amount must be a canonical LYTH decimal");
+  }
+  if (fractionRaw.length > NATIVE_LYTH_DECIMALS || !/^[0-9]*$/.test(fractionRaw)) {
+    throw new MrvValidationError("lyth amount supports at most 8 decimal places");
+  }
+  const whole = BigInt(wholeRaw.replaceAll(",", ""));
+  const fraction = fractionRaw === "" ? 0n : BigInt(fractionRaw.padEnd(NATIVE_LYTH_DECIMALS, "0"));
+  return whole * LYTHOSHI_PER_LYTH + fraction;
+}
 function mrvCodeHashHex(code) {
   const codeBytes = bytesFrom(code, "code");
   const len = new Uint8Array(8);
@@ -2352,6 +2389,35 @@ function normalizeBytesHex(value, field) {
 }
 function normalizeOptionalDecimalLike(field, value) {
   return value === void 0 ? void 0 : normalizeDecimalLike(field, value);
+}
+function formatWholeWithCommas(value) {
+  const digits = value.toString();
+  const firstGroupLen = digits.length % 3;
+  const groups = [];
+  let index = 0;
+  if (firstGroupLen !== 0) {
+    groups.push(digits.slice(0, firstGroupLen));
+    index = firstGroupLen;
+  }
+  while (index < digits.length) {
+    groups.push(digits.slice(index, index + 3));
+    index += 3;
+  }
+  return groups.join(",");
+}
+function stripLythUnit(input) {
+  const trimmed = input.trim();
+  const withoutUnit = trimmed.replace(/\s+LYTH$/i, "").trim();
+  if (withoutUnit.length === 0) {
+    throw new MrvValidationError("lyth amount must be a canonical LYTH decimal");
+  }
+  return withoutUnit;
+}
+function isCanonicalWholeLyth(value) {
+  if (/^(0|[1-9][0-9]*)$/.test(value)) {
+    return true;
+  }
+  return /^[1-9][0-9]{0,2}(,[0-9]{3})+$/.test(value);
 }
 function normalizeDecimalLike(field, value, defaultValue) {
   if (value === void 0) {
@@ -2945,6 +3011,6 @@ function translateBlockOut(header) {
 // src/index.ts
 var version = "0.1.0";
 
-export { ADDRESS_HRP, ADDRESS_KIND_HRPS, AddressError, ApiClient, BURN_ADDR, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MonolythiumProvider, MonolythiumSigner, MrvValidationError, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, bech32ToAddress, bech32ToAddressBytes, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPlan, buildMrvDeployRequest, composeClaimBoundMessage, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, deriveMrvContractAddress, encodeBlockSelector, encodeClaimPolicyByAddressCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLookupPubkeyCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, fetchChainInfoLatest, fetchChainRegistryLatest, getChainInfo, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isConcreteServiceProbeStatus, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nodeRegistryAddressHex, normalizeAddressHex, parseAddress, parseChainRegistryToml, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, version };
+export { ADDRESS_HRP, ADDRESS_KIND_HRPS, AddressError, ApiClient, BURN_ADDR, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MonolythiumProvider, MonolythiumSigner, MrvValidationError, NATIVE_LYTH_DECIMALS, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, bech32ToAddress, bech32ToAddressBytes, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPlan, buildMrvDeployRequest, composeClaimBoundMessage, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, deriveMrvContractAddress, encodeBlockSelector, encodeClaimPolicyByAddressCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLookupPubkeyCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, getChainInfo, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isConcreteServiceProbeStatus, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nodeRegistryAddressHex, normalizeAddressHex, parseAddress, parseChainRegistryToml, parseLythToLythoshi, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, version };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

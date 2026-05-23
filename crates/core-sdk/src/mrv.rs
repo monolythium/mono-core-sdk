@@ -35,6 +35,8 @@ pub const MRV_MAX_ABI_SYMBOLS: usize = 1024;
 pub const MRV_MAX_STORAGE_NAMESPACE_BYTES: usize = 64;
 /// Native LYTH decimal precision.
 pub const LYTH_DECIMALS: u32 = 8;
+/// Native LYTH decimal precision, named for app-facing amount surfaces.
+pub const NATIVE_LYTH_DECIMALS: u32 = LYTH_DECIMALS;
 /// Lythoshi in one LYTH.
 pub const LYTHOSHI_PER_LYTH: u128 = 100_000_000;
 /// Signed transaction extension kind for MRV execution.
@@ -53,6 +55,90 @@ const TX_HASH_TAG_IDENTITY: u8 = 0x02;
 const MRV_CODE_HASH_DOMAIN: &[u8] = b"MONO_MRV_CODE_V1";
 const MRV_CONTRACT_ADDRESS_DOMAIN: &[u8] = b"mono:riscv:contract-address:v1";
 const MONO_SYSCALL_MODULE: &str = "mono";
+
+/// Formatting options for app-facing LYTH display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LythFormatOptions {
+    /// Include the trailing ` LYTH` unit label.
+    pub include_unit: bool,
+}
+
+impl LythFormatOptions {
+    /// Default wallet/app display: numeric value plus ` LYTH`.
+    pub const DEFAULT: Self = Self { include_unit: true };
+
+    /// Numeric-only display for callers composing their own unit label.
+    pub const NUMERIC_ONLY: Self = Self {
+        include_unit: false,
+    };
+}
+
+impl Default for LythFormatOptions {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// Format a lythoshi-denominated amount as canonical LYTH display text.
+#[must_use]
+pub fn format_lyth(lythoshi: u128, options: LythFormatOptions) -> String {
+    let whole = lythoshi / LYTHOSHI_PER_LYTH;
+    let fraction = lythoshi % LYTHOSHI_PER_LYTH;
+    let mut formatted = format_whole_with_commas(whole);
+    if fraction != 0 {
+        formatted.push('.');
+        formatted.push_str(&visible_fraction(fraction));
+    }
+    if options.include_unit {
+        formatted.push_str(" LYTH");
+    }
+    formatted
+}
+
+/// Alias named after the atomic unit used by public SDK callers.
+#[must_use]
+pub fn format_lythoshi(lythoshi: u128, options: LythFormatOptions) -> String {
+    format_lyth(lythoshi, options)
+}
+
+/// Parse a canonical LYTH string into lythoshi.
+///
+/// Accepts raw numeric strings (`"5000.5"`) and formatted strings from
+/// [`format_lyth`] (`"5,000.5 LYTH"`). Rejects non-canonical comma
+/// grouping and more than eight fractional digits.
+pub fn parse_lyth_to_lythoshi(input: &str) -> Result<u128, MrvValidationError> {
+    let numeric = strip_lyth_unit(input)?;
+    let mut parts = numeric.split('.');
+    let whole_raw = parts.next().unwrap_or_default();
+    let fraction_raw = parts.next().unwrap_or_default();
+    if parts.next().is_some()
+        || !is_canonical_whole_lyth(whole_raw)
+        || (numeric.contains('.') && fraction_raw.is_empty())
+        || fraction_raw.len() > NATIVE_LYTH_DECIMALS as usize
+        || !fraction_raw.bytes().all(|b| b.is_ascii_digit())
+    {
+        return Err(MrvValidationError::InvalidDecimal { field: "lyth" });
+    }
+    let whole = whole_raw
+        .replace(',', "")
+        .parse::<u128>()
+        .map_err(|_| MrvValidationError::InvalidDecimal { field: "lyth" })?;
+    let fraction = if fraction_raw.is_empty() {
+        0
+    } else {
+        let mut padded = fraction_raw.to_owned();
+        while padded.len() < NATIVE_LYTH_DECIMALS as usize {
+            padded.push('0');
+        }
+        padded
+            .parse::<u128>()
+            .map_err(|_| MrvValidationError::InvalidDecimal { field: "lyth" })?
+    };
+    whole
+        .checked_mul(LYTHOSHI_PER_LYTH)
+        .and_then(|scaled| scaled.checked_add(fraction))
+        .ok_or(MrvValidationError::InvalidDecimal { field: "lyth" })
+}
 
 /// Approved MRV RISC-V profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1673,6 +1759,76 @@ fn parse_u128_decimal(field: &'static str, value: &str) -> Result<u128, MrvValid
         .map_err(|_| MrvValidationError::InvalidDecimal { field })
 }
 
+fn visible_fraction(fraction: u128) -> String {
+    format!("{fraction:08}").trim_end_matches('0').to_owned()
+}
+
+fn format_whole_with_commas(value: u128) -> String {
+    let digits = value.to_string();
+    let first_group_len = digits.len() % 3;
+    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
+    let mut index = 0;
+    if first_group_len != 0 {
+        formatted.push_str(&digits[..first_group_len]);
+        index = first_group_len;
+        if index < digits.len() {
+            formatted.push(',');
+        }
+    }
+    while index < digits.len() {
+        formatted.push_str(&digits[index..index + 3]);
+        index += 3;
+        if index < digits.len() {
+            formatted.push(',');
+        }
+    }
+    formatted
+}
+
+fn strip_lyth_unit(input: &str) -> Result<&str, MrvValidationError> {
+    let trimmed = input.trim();
+    let numeric = if trimmed.len() >= 4 && trimmed[trimmed.len() - 4..].eq_ignore_ascii_case("LYTH")
+    {
+        let before_unit = &trimmed[..trimmed.len() - 4];
+        if before_unit
+            .as_bytes()
+            .last()
+            .is_none_or(u8::is_ascii_whitespace)
+        {
+            before_unit.trim_end()
+        } else {
+            return Err(MrvValidationError::InvalidDecimal { field: "lyth" });
+        }
+    } else {
+        trimmed
+    };
+    if numeric.is_empty() {
+        return Err(MrvValidationError::InvalidDecimal { field: "lyth" });
+    }
+    Ok(numeric)
+}
+
+fn is_canonical_whole_lyth(value: &str) -> bool {
+    if value == "0" {
+        return true;
+    }
+    if !value.contains(',') {
+        return !value.starts_with('0') && value.bytes().all(|b| b.is_ascii_digit());
+    }
+    let mut groups = value.split(',');
+    let Some(first) = groups.next() else {
+        return false;
+    };
+    if first.is_empty()
+        || first.len() > 3
+        || first.starts_with('0')
+        || !first.bytes().all(|b| b.is_ascii_digit())
+    {
+        return false;
+    }
+    groups.all(|group| group.len() == 3 && group.bytes().all(|b| b.is_ascii_digit()))
+}
+
 fn push_u256_be(out: &mut Vec<u8>, value: u128) {
     out.extend_from_slice(&[0u8; 16]);
     out.extend_from_slice(&value.to_be_bytes());
@@ -2029,6 +2185,36 @@ fn is_identifier(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lyth_amount_helpers_use_eight_decimal_precision() {
+        let cases = [
+            (0, "0 LYTH"),
+            (1, "0.00000001 LYTH"),
+            (50_000, "0.0005 LYTH"),
+            (12_340_000, "0.1234 LYTH"),
+            (12_345_678, "0.12345678 LYTH"),
+            (500_050_000_000, "5,000.5 LYTH"),
+        ];
+
+        assert_eq!(NATIVE_LYTH_DECIMALS, 8);
+        for (lythoshi, expected) in cases {
+            assert_eq!(format_lyth(lythoshi, LythFormatOptions::DEFAULT), expected);
+            assert_eq!(
+                format_lythoshi(lythoshi, LythFormatOptions::DEFAULT),
+                expected
+            );
+            assert_eq!(parse_lyth_to_lythoshi(expected).unwrap(), lythoshi);
+        }
+        assert_eq!(
+            format_lyth(500_050_000_000, LythFormatOptions::NUMERIC_ONLY),
+            "5,000.5"
+        );
+        assert_eq!(parse_lyth_to_lythoshi("1.00000001").unwrap(), 100_000_001);
+        assert!(parse_lyth_to_lythoshi("1.").is_err());
+        assert!(parse_lyth_to_lythoshi("1.000000001").is_err());
+        assert!(parse_lyth_to_lythoshi("12,34 LYTH").is_err());
+    }
 
     fn valid_metadata() -> MrvArtifactMetadata {
         let code = [0x13, 0x00, 0x00, 0x00];
