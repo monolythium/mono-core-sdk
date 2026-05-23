@@ -391,7 +391,84 @@ function encodePathSegment(value) {
   return encodeURIComponent(typeof value === "bigint" ? value.toString() : String(value));
 }
 
+// src/consts.ts
+var BURN_ADDR = "0x0000000000000000000000000000000000000000";
+var PRECOMPILE_ADDRESSES = {
+  /** Native fungible-token factory — non-gateable, foundational. */
+  TOKEN_FACTORY: "0x0000000000000000000000000000000000001000",
+  /** Native central-limit order book — gateable. */
+  CLOB: "0x0000000000000000000000000000000000001001",
+  /** Agent execution surface (zkML-gated, ADR-0011/ADR-0020) — gateable. */
+  AGENT: "0x0000000000000000000000000000000000001003",
+  /** Account privacy policy + stealth/confidential ops — gateable. */
+  PRIVACY: "0x0000000000000000000000000000000000001004",
+  /** Operator + RPC node registry — non-gateable consensus invariant. */
+  NODE_REGISTRY: "0x0000000000000000000000000000000000001005",
+  /** IBC light-client + packet routing — gateable. */
+  IBC: "0x0000000000000000000000000000000000001007",
+  /** Native zk-light-client bridge — gateable. */
+  BRIDGE: "0x0000000000000000000000000000000000001008",
+  /** Decentralized multi-signer oracle (OI-0036) — non-gateable. */
+  ORACLE: "0x0000000000000000000000000000000000001009",
+  /** Distributed delegation primitive (Stage E.5a, Law §7.6) — gateable. */
+  DELEGATION: "0x000000000000000000000000000000000000100A",
+  /** One-time emergency-key registry (Law §5.4 / §2.9) — non-gateable. */
+  EMERGENCY_KEY: "0x0000000000000000000000000000000000001100",
+  /** VRF precompile (Law §5.4 / §5.6). */
+  VRF: "0x0000000000000000000000000000000000001101",
+  /** Streaming-payments primitive (Law §5.4 / §5.7) — gateable. */
+  STREAMING_PAYMENTS: "0x0000000000000000000000000000000000001102",
+  /** Human-readable name registry (Law §5.4 / §5.8) — gateable. */
+  NAME_REGISTRY: "0x0000000000000000000000000000000000001103",
+  /** Cluster-name registry. */
+  CLUSTER_NAME_REGISTRY: "0x0000000000000000000000000000000000001104",
+  /** Agent-commerce attestation precompile. */
+  ATTESTATION: "0x0000000000000000000000000000000000001105",
+  /** Agent-commerce consent precompile. */
+  CONSENT: "0x0000000000000000000000000000000000001106",
+  /** Agent-commerce issuer registry. */
+  ISSUER_REGISTRY: "0x0000000000000000000000000000000000001107",
+  /** Agent-commerce discovery precompile. */
+  DISCOVERY: "0x0000000000000000000000000000000000001108",
+  /** Agent-commerce availability precompile. */
+  AVAILABILITY: "0x0000000000000000000000000000000000001109",
+  /** Agent-commerce escrow precompile. */
+  ESCROW: "0x000000000000000000000000000000000000110A",
+  /** Agent-commerce arbiter registry. */
+  ARBITER_REGISTRY: "0x000000000000000000000000000000000000110B",
+  /** Agent spending policy — gateable, activated by Stage 7 milestones. */
+  SPENDING_POLICY: "0x000000000000000000000000000000000000110C",
+  /** Primary ML-DSA-65 pubkey registry — gateable, ADR-0034. */
+  PUBKEY_REGISTRY: "0x000000000000000000000000000000000000110D"
+};
+
 // src/bridge.ts
+var BRIDGE_SELECTORS = {
+  lockBridgeConfig: "0x8956feb3"
+};
+var BRIDGE_REVERT_TAGS = {
+  bridgeAdminLocked: "0xf807"
+};
+var BridgePrecompileError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "BridgePrecompileError";
+  }
+};
+function bridgeAddressHex() {
+  return PRECOMPILE_ADDRESSES.BRIDGE.toLowerCase();
+}
+function encodeLockBridgeConfigCalldata(bridgeId) {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(BRIDGE_SELECTORS.lockBridgeConfig),
+      expectLength(toBytes(bridgeId), 32, "bridgeId")
+    )
+  );
+}
+function isBridgeAdminLockedRevert(data) {
+  return bytesToHex(toBytes(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeAdminLocked;
+}
 function assessBridgeRoute(route) {
   const blockedReasons = [];
   const warnings = [];
@@ -586,6 +663,41 @@ function normalizedDecimalDigits(value) {
 function trimmedEq(left, right) {
   return left.trim() === right.trim();
 }
+function expectLength(value, len, name) {
+  if (value.length !== len) {
+    throw new BridgePrecompileError(`${name} must be ${len} bytes, got ${value.length}`);
+  }
+  return value;
+}
+function toBytes(value) {
+  if (typeof value === "string") {
+    return hexToBytes(value);
+  }
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+function hexToBytes(hex) {
+  const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
+  if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
+    throw new BridgePrecompileError("invalid hex bytes");
+  }
+  const out = new Uint8Array(body.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = Number.parseInt(body.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+function bytesToHex(bytes) {
+  return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+function concatBytes(...parts) {
+  const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
 
 // src/address.ts
 var ADDRESS_HRP = "mono";
@@ -620,14 +732,14 @@ function hexToAddressBytes(address) {
   return out;
 }
 function addressBytesToHex(address) {
-  const bytes = expectLength(address, 20, "address");
+  const bytes = expectLength2(address, 20, "address");
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 function addressToBech32(address) {
   return addressToTypedBech32("user", address);
 }
 function addressToTypedBech32(kind, address) {
-  const bytes = typeof address === "string" ? hexToAddressBytes(address) : expectLength(address, 20, "address");
+  const bytes = typeof address === "string" ? hexToAddressBytes(address) : expectLength2(address, 20, "address");
   return encodeBech32m(ADDRESS_KIND_HRPS[kind], bytes);
 }
 function encodeBech32m(hrp, bytes) {
@@ -760,63 +872,12 @@ function convertBits(data, fromBits, toBits, pad) {
   }
   return ret;
 }
-function expectLength(value, len, name) {
+function expectLength2(value, len, name) {
   if (value.length !== len) {
     throw new AddressError(`${name} must be ${len} bytes`);
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-
-// src/consts.ts
-var BURN_ADDR = "0x0000000000000000000000000000000000000000";
-var PRECOMPILE_ADDRESSES = {
-  /** Native fungible-token factory — non-gateable, foundational. */
-  TOKEN_FACTORY: "0x0000000000000000000000000000000000001000",
-  /** Native central-limit order book — gateable. */
-  CLOB: "0x0000000000000000000000000000000000001001",
-  /** Agent execution surface (zkML-gated, ADR-0011/ADR-0020) — gateable. */
-  AGENT: "0x0000000000000000000000000000000000001003",
-  /** Account privacy policy + stealth/confidential ops — gateable. */
-  PRIVACY: "0x0000000000000000000000000000000000001004",
-  /** Operator + RPC node registry — non-gateable consensus invariant. */
-  NODE_REGISTRY: "0x0000000000000000000000000000000000001005",
-  /** IBC light-client + packet routing — gateable. */
-  IBC: "0x0000000000000000000000000000000000001007",
-  /** Native zk-light-client bridge — gateable. */
-  BRIDGE: "0x0000000000000000000000000000000000001008",
-  /** Decentralized multi-signer oracle (OI-0036) — non-gateable. */
-  ORACLE: "0x0000000000000000000000000000000000001009",
-  /** Distributed delegation primitive (Stage E.5a, Law §7.6) — gateable. */
-  DELEGATION: "0x000000000000000000000000000000000000100A",
-  /** One-time emergency-key registry (Law §5.4 / §2.9) — non-gateable. */
-  EMERGENCY_KEY: "0x0000000000000000000000000000000000001100",
-  /** VRF precompile (Law §5.4 / §5.6). */
-  VRF: "0x0000000000000000000000000000000000001101",
-  /** Streaming-payments primitive (Law §5.4 / §5.7) — gateable. */
-  STREAMING_PAYMENTS: "0x0000000000000000000000000000000000001102",
-  /** Human-readable name registry (Law §5.4 / §5.8) — gateable. */
-  NAME_REGISTRY: "0x0000000000000000000000000000000000001103",
-  /** Cluster-name registry. */
-  CLUSTER_NAME_REGISTRY: "0x0000000000000000000000000000000000001104",
-  /** Agent-commerce attestation precompile. */
-  ATTESTATION: "0x0000000000000000000000000000000000001105",
-  /** Agent-commerce consent precompile. */
-  CONSENT: "0x0000000000000000000000000000000000001106",
-  /** Agent-commerce issuer registry. */
-  ISSUER_REGISTRY: "0x0000000000000000000000000000000000001107",
-  /** Agent-commerce discovery precompile. */
-  DISCOVERY: "0x0000000000000000000000000000000000001108",
-  /** Agent-commerce availability precompile. */
-  AVAILABILITY: "0x0000000000000000000000000000000000001109",
-  /** Agent-commerce escrow precompile. */
-  ESCROW: "0x000000000000000000000000000000000000110A",
-  /** Agent-commerce arbiter registry. */
-  ARBITER_REGISTRY: "0x000000000000000000000000000000000000110B",
-  /** Agent spending policy — gateable, activated by Stage 7 milestones. */
-  SPENDING_POLICY: "0x000000000000000000000000000000000000110C",
-  /** Primary ML-DSA-65 pubkey registry — gateable, ADR-0034. */
-  PUBKEY_REGISTRY: "0x000000000000000000000000000000000000110D"
-};
 
 // src/node-registry.ts
 var NODE_REGISTRY_CAPABILITIES = {
@@ -885,14 +946,14 @@ function encodeReportServiceProbeCalldata(args) {
     throw new NodeRegistryError(`status ${args.status} is not a concrete service-probe outcome`);
   }
   const latencyMs = expectUint32(args.latencyMs, "latencyMs");
-  return bytesToHex(
-    concatBytes(
-      hexToBytes(NODE_REGISTRY_SELECTORS.reportServiceProbe),
-      expectLength2(toBytes(args.peerId), 32, "peerId"),
+  return bytesToHex2(
+    concatBytes2(
+      hexToBytes2(NODE_REGISTRY_SELECTORS.reportServiceProbe),
+      expectLength3(toBytes2(args.peerId), 32, "peerId"),
       uint32Word(args.serviceMask),
       uint8Word(args.status),
       uint32Word(latencyMs),
-      expectLength2(toBytes(args.probeDigest), 32, "probeDigest")
+      expectLength3(toBytes2(args.probeDigest), 32, "probeDigest")
     )
   );
 }
@@ -928,13 +989,13 @@ function uint8Word(value) {
   out[31] = value;
   return out;
 }
-function toBytes(value) {
+function toBytes2(value) {
   if (typeof value === "string") {
-    return hexToBytes(value);
+    return hexToBytes2(value);
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes(hex) {
+function hexToBytes2(hex) {
   const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
   if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
     throw new NodeRegistryError("invalid hex bytes");
@@ -945,10 +1006,10 @@ function hexToBytes(hex) {
   }
   return out;
 }
-function bytesToHex(bytes) {
+function bytesToHex2(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function concatBytes(...parts) {
+function concatBytes2(...parts) {
   const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
   let offset = 0;
   for (const part of parts) {
@@ -957,7 +1018,7 @@ function concatBytes(...parts) {
   }
   return out;
 }
-function expectLength2(value, len, name) {
+function expectLength3(value, len, name) {
   if (value.length !== len) {
     throw new NodeRegistryError(`${name} must be ${len} bytes, got ${value.length}`);
   }
@@ -2237,7 +2298,7 @@ function normalizeMempoolSnapshot(value) {
 }
 
 // src/crypto/bytes.ts
-function concatBytes2(...chunks) {
+function concatBytes3(...chunks) {
   const len = chunks.reduce((n, c) => n + c.length, 0);
   const out = new Uint8Array(len);
   let off = 0;
@@ -2247,14 +2308,14 @@ function concatBytes2(...chunks) {
   }
   return out;
 }
-function bytesToHex2(bytes) {
+function bytesToHex3(bytes) {
   let out = "0x";
   for (let i = 0; i < bytes.length; i++) {
     out += bytes[i].toString(16).padStart(2, "0");
   }
   return out;
 }
-function hexToBytes2(hex, label = "hex") {
+function hexToBytes3(hex, label = "hex") {
   const stripped = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
   if (stripped.length % 2 !== 0) {
     throw new Error(`${label} must have even length`);
@@ -2390,12 +2451,12 @@ function encryptInnerTx(signedInnerTxBincode, nonceAad, kemEncapsulationKey) {
   const cipher = chacha_js.chacha20poly1305(sharedSecret, nonce, aadFor(nonceAad));
   const aeadCt = cipher.encrypt(signedInnerTxBincode);
   sharedSecret.fill(0);
-  return concatBytes2(kemCt, nonce, aeadCt);
+  return concatBytes3(kemCt, nonce, aeadCt);
 }
 function outerSigDigest(nonceAad, ciphertext, decryptionHint, senderPubkey) {
   const aad = bincodeNonceAad(nonceAad);
   const hint = bincodeDecryptHint(decryptionHint);
-  return sha3_js.keccak_256(concatBytes2(aad, ciphertext, hint, expectBytes(senderPubkey, ML_DSA_65_PUBLIC_KEY_LEN, "senderPubkey")));
+  return sha3_js.keccak_256(concatBytes3(aad, ciphertext, hint, expectBytes(senderPubkey, ML_DSA_65_PUBLIC_KEY_LEN, "senderPubkey")));
 }
 async function buildEncryptedEnvelope(args) {
   const ciphertext = encryptInnerTx(args.signedInnerTxBincode, args.nonceAad, args.kemEncapsulationKey);
@@ -2410,10 +2471,10 @@ async function buildEncryptedEnvelope(args) {
     sender: expectBytes(args.senderAddress, 20, "senderAddress")
   };
   const wireBytes = bincodeEncryptedEnvelope(envelope);
-  return { envelope, wireBytes, wireHex: bytesToHex2(wireBytes) };
+  return { envelope, wireBytes, wireHex: bytesToHex3(wireBytes) };
 }
 function aadFor(aad) {
-  return concatBytes2(DKG_AEAD_DOMAIN_TAG, bincodeNonceAad(aad));
+  return concatBytes3(DKG_AEAD_DOMAIN_TAG, bincodeNonceAad(aad));
 }
 function bincodeMlDsa65OpaqueInto(w, raw) {
   w.enumVariant(ENUM_VARIANT_INDEX_ML_DSA_65);
@@ -2430,7 +2491,7 @@ async function fetchEncryptionKey(client) {
   return {
     algo: result.algo ?? "ml-kem-768",
     epoch: typeof result.epoch === "string" ? BigInt(result.epoch) : BigInt(result.epoch),
-    encapsulationKey: hexToBytes2(result.encapsulationKey, "encapsulationKey")
+    encapsulationKey: hexToBytes3(result.encapsulationKey, "encapsulationKey")
   };
 }
 async function buildEncryptedSubmission(args) {
@@ -2462,7 +2523,7 @@ async function buildEncryptedSubmission(args) {
   return {
     envelopeWireHex: built.wireHex,
     innerSighashHex: `0x${[...signed.sighash].map((b) => b.toString(16).padStart(2, "0")).join("")}`,
-    innerTxHashHex: bytesToHex2(signed.txHash),
+    innerTxHashHex: bytesToHex3(signed.txHash),
     innerWireBytes: signed.wireBytes.length
   };
 }
@@ -2485,7 +2546,7 @@ function normalizeTo(value) {
 }
 function normalizeInput(value) {
   if (value === void 0) return new Uint8Array(0);
-  if (typeof value === "string") return hexToBytes2(value, "input");
+  if (typeof value === "string") return hexToBytes3(value, "input");
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
 
@@ -2643,7 +2704,7 @@ function mrvCodeHashHex(code) {
   const codeBytes = bytesFrom(code, "code");
   const len = new Uint8Array(8);
   new DataView(len.buffer).setBigUint64(0, BigInt(codeBytes.length), false);
-  return bytesToHex3(blake3_js.blake3(concatBytes3(MRV_CODE_HASH_DOMAIN, len, codeBytes)));
+  return bytesToHex4(blake3_js.blake3(concatBytes4(MRV_CODE_HASH_DOMAIN, len, codeBytes)));
 }
 function mrvV1TransactionExtension() {
   return { kind: MRV_TX_EXTENSION_KIND, bodyHex: "0x01" };
@@ -2656,17 +2717,17 @@ function mrvBech32ToAddress(address, expectedKind) {
 }
 function deriveMrvContractAddress(deployerAddress, deployerNonce, artifactHashHex) {
   const deployer = typedBech32ToAddress(deployerAddress);
-  const artifactHash = hexToBytes3(artifactHashHex, "artifactHash");
+  const artifactHash = hexToBytes4(artifactHashHex, "artifactHash");
   if (artifactHash.length !== 32) throw new MrvValidationError("artifactHash must be 32 bytes");
   const nonceValue = normalizeU64(deployerNonce, "deployerNonce");
   const nonce = new Uint8Array(8);
   new DataView(nonce.buffer).setBigUint64(0, nonceValue, false);
   const digest = blake3_js.blake3(
-    concatBytes3(
+    concatBytes4(
       MRV_CONTRACT_ADDRESS_DOMAIN,
       new TextEncoder().encode(ADDRESS_KIND_HRPS[deployer.kind]),
       Uint8Array.of(0),
-      hexToBytes3(deployer.hex, "deployerAddress"),
+      hexToBytes4(deployer.hex, "deployerAddress"),
       nonce,
       artifactHash
     )
@@ -2719,7 +2780,7 @@ function validateMrvArtifactMetadata(metadata, code) {
 }
 function validateMrvDeployRequest(request) {
   if (request.from !== void 0) typedBech32ToAddress(request.from, "user");
-  hexToBytes3(request.artifactBytes, "artifactBytes");
+  hexToBytes4(request.artifactBytes, "artifactBytes");
   validateDecimal("valueLythoshi", request.valueLythoshi);
   validateOptionalDecimal("maxExecutionFeeLythoshi", request.maxExecutionFeeLythoshi);
   validateOptionalDecimal("priorityTipLythoshi", request.priorityTipLythoshi);
@@ -2728,7 +2789,7 @@ function validateMrvDeployRequest(request) {
 function validateMrvCallRequest(request) {
   if (request.from !== void 0) typedBech32ToAddress(request.from, "user");
   typedBech32ToAddress(request.contractAddress, "contract");
-  hexToBytes3(request.input, "input");
+  hexToBytes4(request.input, "input");
   validateDecimal("valueLythoshi", request.valueLythoshi);
   validateOptionalDecimal("maxExecutionFeeLythoshi", request.maxExecutionFeeLythoshi);
   validateOptionalDecimal("priorityTipLythoshi", request.priorityTipLythoshi);
@@ -2959,7 +3020,7 @@ function normalizeNativeTxToHex(value, field) {
   if (bytes.length !== 20) {
     throw new MrvValidationError(`${field} must be a 20-byte address`);
   }
-  return bytesToHex3(bytes).toLowerCase();
+  return bytesToHex4(bytes).toLowerCase();
 }
 function normalizeU64Like(value, field) {
   if (typeof value === "string") {
@@ -3041,7 +3102,7 @@ function applyRequestOptions(request, options) {
   if (nonce !== void 0) request.nonce = nonce;
 }
 function normalizeBytesHex(value, field) {
-  return bytesToHex3(bytesFrom(value, field));
+  return bytesToHex4(bytesFrom(value, field));
 }
 function normalizeOptionalDecimalLike(field, value) {
   return value === void 0 ? void 0 : normalizeDecimalLike(field, value);
@@ -3222,14 +3283,14 @@ function normalizeU64(value, field) {
   return out;
 }
 function validateHexLength(field, value, expected) {
-  const bytes = hexToBytes3(value, field);
+  const bytes = hexToBytes4(value, field);
   if (bytes.length !== expected) throw new MrvValidationError(`${field} must be ${expected} bytes`);
 }
 function bytesFrom(value, field) {
-  if (typeof value === "string") return hexToBytes3(value, field);
+  if (typeof value === "string") return hexToBytes4(value, field);
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes3(value, field) {
+function hexToBytes4(value, field) {
   if (!/^0x(?:[0-9a-fA-F]{2})*$/.test(value)) {
     throw new MrvValidationError(`${field} must be 0x-prefixed even-length hex`);
   }
@@ -3239,10 +3300,10 @@ function hexToBytes3(value, field) {
   }
   return out;
 }
-function bytesToHex3(bytes) {
+function bytesToHex4(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function concatBytes3(...parts) {
+function concatBytes4(...parts) {
   const len = parts.reduce((sum, item) => sum + item.length, 0);
   const out = new Uint8Array(len);
   let offset = 0;
@@ -3276,15 +3337,15 @@ function delegationAddressHex() {
   return PRECOMPILE_ADDRESSES.DELEGATION.toLowerCase();
 }
 function encodeCompleteRedemptionCalldata(index) {
-  return bytesToHex4(
-    concatBytes4(
-      hexToBytes4(DELEGATION_SELECTORS.completeRedemption),
+  return bytesToHex5(
+    concatBytes5(
+      hexToBytes5(DELEGATION_SELECTORS.completeRedemption),
       uint64Word(index, "index")
     )
   );
 }
 function isRedemptionPrincipalUnavailableRevert(data) {
-  return bytesToHex4(toBytes2(data)).toLowerCase() === DELEGATION_REVERT_TAGS.redemptionPrincipalUnavailable;
+  return bytesToHex5(toBytes3(data)).toLowerCase() === DELEGATION_REVERT_TAGS.redemptionPrincipalUnavailable;
 }
 function uint64Word(value, name) {
   const n = toBigint(value, name);
@@ -3312,13 +3373,13 @@ function toBigint(value, name) {
   }
   return BigInt(value);
 }
-function toBytes2(value) {
+function toBytes3(value) {
   if (typeof value === "string") {
-    return hexToBytes4(value);
+    return hexToBytes5(value);
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes4(hex) {
+function hexToBytes5(hex) {
   const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
   if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
     throw new DelegationPrecompileError("invalid hex bytes");
@@ -3329,10 +3390,10 @@ function hexToBytes4(hex) {
   }
   return out;
 }
-function bytesToHex4(bytes) {
+function bytesToHex5(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function concatBytes4(...parts) {
+function concatBytes5(...parts) {
   const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
   let offset = 0;
   for (const part of parts) {
@@ -3366,7 +3427,7 @@ function spendingPolicyAddressHex() {
 function composeClaimBoundMessage(chainId, args, opts) {
   const precompileAddress = toAddressBytes(opts?.precompileAddress ?? PRECOMPILE_ADDRESSES.SPENDING_POLICY);
   const normalized = normalizeArgs(args);
-  return concatBytes5(
+  return concatBytes6(
     new TextEncoder().encode(SET_POLICY_CLAIM_DOMAIN_TAG),
     uint64Bytes(chainId, "chainId"),
     precompileAddress,
@@ -3381,17 +3442,17 @@ function composeClaimBoundMessage(chainId, args, opts) {
 }
 function encodeSetPolicyCalldata(args) {
   const normalized = normalizeArgs(args);
-  return bytesToHex5(
-    concatBytes5(
-      hexToBytes5(SPENDING_POLICY_SELECTORS.setPolicy),
+  return bytesToHex6(
+    concatBytes6(
+      hexToBytes6(SPENDING_POLICY_SELECTORS.setPolicy),
       encodePolicyWords(normalized)
     )
   );
 }
 function encodeSetPolicyClaimCalldata(args, subAccountPubkey, subAccountSig) {
   const normalized = normalizeArgs(args);
-  const pubkey = toBytes3(subAccountPubkey);
-  const sig = toBytes3(subAccountSig);
+  const pubkey = toBytes4(subAccountPubkey);
+  const sig = toBytes4(subAccountSig);
   if (pubkey.length !== ML_DSA_65_PUBLIC_KEY_LEN2) {
     throw new SpendingPolicyError(
       `subAccountPubkey must be ${ML_DSA_65_PUBLIC_KEY_LEN2} bytes, got ${pubkey.length}`
@@ -3402,9 +3463,9 @@ function encodeSetPolicyClaimCalldata(args, subAccountPubkey, subAccountSig) {
       `subAccountSig must be ${ML_DSA_65_SIGNATURE_LEN2} bytes, got ${sig.length}`
     );
   }
-  return bytesToHex5(
-    concatBytes5(
-      hexToBytes5(SPENDING_POLICY_SELECTORS.setPolicyClaim),
+  return bytesToHex6(
+    concatBytes6(
+      hexToBytes6(SPENDING_POLICY_SELECTORS.setPolicyClaim),
       encodePolicyWords(normalized),
       pubkey,
       sig
@@ -3413,15 +3474,15 @@ function encodeSetPolicyClaimCalldata(args, subAccountPubkey, subAccountSig) {
 }
 function encodeClaimPolicyByAddressCalldata(args, subAccountSig) {
   const normalized = normalizeArgs(args);
-  const sig = toBytes3(subAccountSig);
+  const sig = toBytes4(subAccountSig);
   if (sig.length !== ML_DSA_65_SIGNATURE_LEN2) {
     throw new SpendingPolicyError(
       `subAccountSig must be ${ML_DSA_65_SIGNATURE_LEN2} bytes, got ${sig.length}`
     );
   }
-  return bytesToHex5(
-    concatBytes5(
-      hexToBytes5(SPENDING_POLICY_SELECTORS.claimPolicyByAddress),
+  return bytesToHex6(
+    concatBytes6(
+      hexToBytes6(SPENDING_POLICY_SELECTORS.claimPolicyByAddress),
       encodePolicyWords(normalized),
       sig
     )
@@ -3439,12 +3500,12 @@ function normalizeArgs(args) {
     principal: toAddressBytes(args.principal),
     dailyCapLythoshi: toBigint2(args.dailyCapLythoshi, "dailyCapLythoshi"),
     perTxCapLythoshi: toBigint2(args.perTxCapLythoshi, "perTxCapLythoshi"),
-    allowRoot: expectLength3(toBytes3(args.allowRoot), 32, "allowRoot"),
-    denyRoot: expectLength3(toBytes3(args.denyRoot), 32, "denyRoot")
+    allowRoot: expectLength4(toBytes4(args.allowRoot), 32, "allowRoot"),
+    denyRoot: expectLength4(toBytes4(args.denyRoot), 32, "denyRoot")
   };
 }
 function encodePolicyWords(args) {
-  return concatBytes5(
+  return concatBytes6(
     encodeAddressWord(args.subAccount),
     encodeAddressWord(args.principal),
     encodeUint128Word(args.dailyCapLythoshi),
@@ -3454,27 +3515,27 @@ function encodePolicyWords(args) {
   );
 }
 function encodeSingleAddressCall(selector, address) {
-  return bytesToHex5(concatBytes5(hexToBytes5(selector), encodeAddressWord(toAddressBytes(address))));
+  return bytesToHex6(concatBytes6(hexToBytes6(selector), encodeAddressWord(toAddressBytes(address))));
 }
 function encodeAddressWord(address) {
-  return concatBytes5(new Uint8Array(12), address);
+  return concatBytes6(new Uint8Array(12), address);
 }
 function encodeUint128Word(value) {
-  return concatBytes5(new Uint8Array(16), uint128Bytes(value, "uint128"));
+  return concatBytes6(new Uint8Array(16), uint128Bytes(value, "uint128"));
 }
 function toAddressBytes(value) {
   if (typeof value === "string") {
     return hexToAddressBytes(value);
   }
-  return expectLength3(value instanceof Uint8Array ? value : Uint8Array.from(value), 20, "address");
+  return expectLength4(value instanceof Uint8Array ? value : Uint8Array.from(value), 20, "address");
 }
-function toBytes3(value) {
+function toBytes4(value) {
   if (typeof value === "string") {
-    return hexToBytes5(value);
+    return hexToBytes6(value);
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes5(hex) {
+function hexToBytes6(hex) {
   const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
   if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
     throw new SpendingPolicyError("invalid hex bytes");
@@ -3485,10 +3546,10 @@ function hexToBytes5(hex) {
   }
   return out;
 }
-function bytesToHex5(bytes) {
+function bytesToHex6(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function concatBytes5(...parts) {
+function concatBytes6(...parts) {
   const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
   let offset = 0;
   for (const part of parts) {
@@ -3497,7 +3558,7 @@ function concatBytes5(...parts) {
   }
   return out;
 }
-function expectLength3(value, len, name) {
+function expectLength4(value, len, name) {
   if (value.length !== len) {
     throw new SpendingPolicyError(`${name} must be ${len} bytes`);
   }
@@ -3550,15 +3611,15 @@ function pubkeyRegistryAddressHex() {
   return PRECOMPILE_ADDRESSES.PUBKEY_REGISTRY.toLowerCase();
 }
 function encodeRegisterPubkeyCalldata(pubkey) {
-  const bytes = toBytes4(pubkey);
+  const bytes = toBytes5(pubkey);
   if (bytes.length !== PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN) {
     throw new PubkeyRegistryError(
       `pubkey must be ${PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN} bytes, got ${bytes.length}`
     );
   }
-  return bytesToHex6(
-    concatBytes6(
-      hexToBytes6(PUBKEY_REGISTRY_SELECTORS.registerPubkey),
+  return bytesToHex7(
+    concatBytes7(
+      hexToBytes7(PUBKEY_REGISTRY_SELECTORS.registerPubkey),
       uint256Word(32n),
       uint256Word(BigInt(bytes.length)),
       bytes
@@ -3572,7 +3633,7 @@ function encodeHasPubkeyCalldata(address) {
   return encodeSingleAddressCall2(PUBKEY_REGISTRY_SELECTORS.hasPubkey, address);
 }
 function decodeLookupPubkeyReturn(data) {
-  const bytes = toBytes4(data);
+  const bytes = toBytes5(data);
   if (bytes.length < 96) {
     throw new PubkeyRegistryError("lookup return must be at least 96 bytes");
   }
@@ -3597,7 +3658,7 @@ function decodeLookupPubkeyReturn(data) {
   };
 }
 function decodeHasPubkeyReturn(data) {
-  const bytes = toBytes4(data);
+  const bytes = toBytes5(data);
   if (bytes.length !== 32) {
     throw new PubkeyRegistryError("hasPubkey return must be 32 bytes");
   }
@@ -3611,24 +3672,24 @@ function decodeHasPubkeyReturn(data) {
   throw new PubkeyRegistryError("hasPubkey bool must be 0 or 1");
 }
 function encodeSingleAddressCall2(selector, address) {
-  return bytesToHex6(concatBytes6(hexToBytes6(selector), addressWord(toAddressBytes2(address))));
+  return bytesToHex7(concatBytes7(hexToBytes7(selector), addressWord(toAddressBytes2(address))));
 }
 function addressWord(address) {
-  return concatBytes6(new Uint8Array(12), address);
+  return concatBytes7(new Uint8Array(12), address);
 }
 function toAddressBytes2(value) {
   if (typeof value === "string") {
     return hexToAddressBytes(value);
   }
-  return expectLength4(value instanceof Uint8Array ? value : Uint8Array.from(value), 20, "address");
+  return expectLength5(value instanceof Uint8Array ? value : Uint8Array.from(value), 20, "address");
 }
-function toBytes4(value) {
+function toBytes5(value) {
   if (typeof value === "string") {
-    return hexToBytes6(value);
+    return hexToBytes7(value);
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes6(hex) {
+function hexToBytes7(hex) {
   const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
   if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
     throw new PubkeyRegistryError("invalid hex bytes");
@@ -3639,10 +3700,10 @@ function hexToBytes6(hex) {
   }
   return out;
 }
-function bytesToHex6(bytes) {
+function bytesToHex7(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function concatBytes6(...parts) {
+function concatBytes7(...parts) {
   const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
   let offset = 0;
   for (const part of parts) {
@@ -3651,7 +3712,7 @@ function concatBytes6(...parts) {
   }
   return out;
 }
-function expectLength4(value, len, name) {
+function expectLength5(value, len, name) {
   if (value.length !== len) {
     throw new PubkeyRegistryError(`${name} must be ${len} bytes`);
   }
@@ -3859,7 +3920,10 @@ exports.ADDRESS_HRP = ADDRESS_HRP;
 exports.ADDRESS_KIND_HRPS = ADDRESS_KIND_HRPS;
 exports.AddressError = AddressError;
 exports.ApiClient = ApiClient;
+exports.BRIDGE_REVERT_TAGS = BRIDGE_REVERT_TAGS;
+exports.BRIDGE_SELECTORS = BRIDGE_SELECTORS;
 exports.BURN_ADDR = BURN_ADDR;
+exports.BridgePrecompileError = BridgePrecompileError;
 exports.CHAIN_REGISTRY = CHAIN_REGISTRY;
 exports.CHAIN_REGISTRY_RAW_BASE = CHAIN_REGISTRY_RAW_BASE;
 exports.DELEGATION_REVERT_TAGS = DELEGATION_REVERT_TAGS;
@@ -3916,6 +3980,7 @@ exports.assertMrvFeeDisplayConformance = assertMrvFeeDisplayConformance;
 exports.assessBridgeRoute = assessBridgeRoute;
 exports.bech32ToAddress = bech32ToAddress;
 exports.bech32ToAddressBytes = bech32ToAddressBytes;
+exports.bridgeAddressHex = bridgeAddressHex;
 exports.bridgeTransferCandidates = bridgeTransferCandidates;
 exports.buildMrvCallNativeTxPlan = buildMrvCallNativeTxPlan;
 exports.buildMrvCallPlan = buildMrvCallPlan;
@@ -3936,6 +4001,7 @@ exports.encodeCompleteRedemptionCalldata = encodeCompleteRedemptionCalldata;
 exports.encodeDisableCalldata = encodeDisableCalldata;
 exports.encodeEnableCalldata = encodeEnableCalldata;
 exports.encodeHasPubkeyCalldata = encodeHasPubkeyCalldata;
+exports.encodeLockBridgeConfigCalldata = encodeLockBridgeConfigCalldata;
 exports.encodeLookupPubkeyCalldata = encodeLookupPubkeyCalldata;
 exports.encodeRegisterPubkeyCalldata = encodeRegisterPubkeyCalldata;
 exports.encodeReportServiceProbeCalldata = encodeReportServiceProbeCalldata;
@@ -3950,6 +4016,7 @@ exports.getChainInfo = getChainInfo;
 exports.getP2pSeeds = getP2pSeeds;
 exports.getRpcEndpoints = getRpcEndpoints;
 exports.hexToAddressBytes = hexToAddressBytes;
+exports.isBridgeAdminLockedRevert = isBridgeAdminLockedRevert;
 exports.isConcreteServiceProbeStatus = isConcreteServiceProbeStatus;
 exports.isNativeDecodedEvent = isNativeDecodedEvent;
 exports.isRedemptionPrincipalUnavailableRevert = isRedemptionPrincipalUnavailableRevert;

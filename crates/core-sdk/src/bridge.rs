@@ -5,10 +5,73 @@
 //! route disclosures against the v4.1 bridge safety floors.
 
 use serde::{Deserialize, Serialize};
+use sha3::{Digest, Keccak256};
 use std::cmp::Ordering;
+
+use crate::consts::precompile_addresses;
 
 #[cfg(feature = "ts-bindings")]
 use ts_rs::TS;
+
+/// `lockBridgeConfig(bytes32)`.
+pub const SIGHASH_LOCK_BRIDGE_CONFIG: &str = "lockBridgeConfig(bytes32)";
+
+/// Bridge-config revert namespace byte.
+pub const BRIDGE_CONFIG_REVERT_NAMESPACE: u8 = 0xF8;
+
+/// Stable revert payload for a locked Mono-side bridge admin surface.
+pub const REVERT_BRIDGE_ADMIN_LOCKED: [u8; 2] = [BRIDGE_CONFIG_REVERT_NAMESPACE, 0x07];
+
+/// Return true when a revert payload is the stable bridge-admin lock tag.
+#[must_use]
+pub fn is_bridge_admin_locked_revert(data: &[u8]) -> bool {
+    data == REVERT_BRIDGE_ADMIN_LOCKED
+}
+
+/// Return the first four bytes of `keccak256(sighash)`.
+#[must_use]
+pub fn selector_for(sighash: &str) -> [u8; 4] {
+    let digest = Keccak256::digest(sighash.as_bytes());
+    [digest[0], digest[1], digest[2], digest[3]]
+}
+
+/// Selector for `lockBridgeConfig(bytes32)`.
+#[must_use]
+pub fn selector_lock_bridge_config() -> [u8; 4] {
+    selector_for(SIGHASH_LOCK_BRIDGE_CONFIG)
+}
+
+/// Encode `lockBridgeConfig(bytes32)` calldata.
+#[must_use]
+pub fn encode_lock_bridge_config_calldata(bridge_id: [u8; 32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(4 + 32);
+    out.extend_from_slice(&selector_lock_bridge_config());
+    out.extend_from_slice(&bridge_id);
+    out
+}
+
+/// Format raw calldata as `0x...` hex.
+#[must_use]
+pub fn calldata_to_hex(calldata: &[u8]) -> String {
+    let mut out = String::with_capacity(2 + calldata.len() * 2);
+    out.push_str("0x");
+    for b in calldata {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
+/// Encode `lockBridgeConfig(bytes32)` calldata as lower-case hex.
+#[must_use]
+pub fn encode_lock_bridge_config_calldata_hex(bridge_id: [u8; 32]) -> String {
+    calldata_to_hex(&encode_lock_bridge_config_calldata(bridge_id))
+}
+
+/// Return the bridge precompile address as lower-case hex.
+#[must_use]
+pub fn bridge_address_hex() -> String {
+    crate::address::address_to_hex(precompile_addresses::BRIDGE)
+}
 
 /// Mono-side administrative control over route configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -614,6 +677,40 @@ mod tests {
             max_finality_blocks: None,
             max_cooldown_seconds: None,
         }
+    }
+
+    #[test]
+    fn lock_bridge_config_selector_matches_mono_core() {
+        assert_eq!(selector_lock_bridge_config(), [0x89, 0x56, 0xfe, 0xb3]);
+    }
+
+    #[test]
+    fn bridge_admin_locked_revert_tag_matches_mono_core() {
+        assert_eq!(BRIDGE_CONFIG_REVERT_NAMESPACE, 0xF8);
+        assert_eq!(REVERT_BRIDGE_ADMIN_LOCKED, [0xF8, 0x07]);
+        assert!(is_bridge_admin_locked_revert(&[0xF8, 0x07]));
+        assert!(!is_bridge_admin_locked_revert(&[0xF8, 0x06]));
+    }
+
+    #[test]
+    fn lock_bridge_config_calldata_has_canonical_layout() {
+        let bridge_id = [0xabu8; 32];
+        let calldata = encode_lock_bridge_config_calldata(bridge_id);
+        assert_eq!(calldata.len(), 36);
+        assert_eq!(&calldata[..4], &selector_lock_bridge_config());
+        assert_eq!(&calldata[4..36], &bridge_id);
+        assert_eq!(
+            encode_lock_bridge_config_calldata_hex(bridge_id),
+            format!("0x8956feb3{}", "ab".repeat(32))
+        );
+    }
+
+    #[test]
+    fn bridge_address_is_canonical() {
+        assert_eq!(
+            bridge_address_hex(),
+            "0x0000000000000000000000000000000000001008"
+        );
     }
 
     #[test]

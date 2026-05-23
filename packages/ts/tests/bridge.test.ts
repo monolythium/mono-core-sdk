@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  BRIDGE_REVERT_TAGS,
+  BRIDGE_SELECTORS,
+  BridgePrecompileError,
+  PRECOMPILE_ADDRESSES,
   assessBridgeRoute,
+  bridgeAddressHex,
   bridgeTransferCandidates,
+  encodeLockBridgeConfigCalldata,
+  isBridgeAdminLockedRevert,
   rankBridgeRoutes,
   selectBridgeTransferRoute,
   type BridgeRouteDisclosure,
@@ -41,6 +48,42 @@ function transferIntent(): BridgeTransferIntent {
 }
 
 describe("bridge route disclosure helpers", () => {
+  it("exports bridge admin selectors and revert tags pinned to mono-core", () => {
+    expect(BRIDGE_SELECTORS).toEqual({
+      lockBridgeConfig: "0x8956feb3",
+    });
+    expect(BRIDGE_REVERT_TAGS).toEqual({
+      bridgeAdminLocked: "0xf807",
+    });
+    expect(isBridgeAdminLockedRevert("0xf807")).toBe(true);
+    expect(isBridgeAdminLockedRevert(new Uint8Array([0xf8, 0x07]))).toBe(true);
+    expect(isBridgeAdminLockedRevert("0xf806")).toBe(false);
+  });
+
+  it("exports the bridge precompile address", () => {
+    expect(PRECOMPILE_ADDRESSES.BRIDGE).toBe(
+      "0x0000000000000000000000000000000000001008",
+    );
+    expect(bridgeAddressHex()).toBe("0x0000000000000000000000000000000000001008");
+  });
+
+  it("encodes lockBridgeConfig(bytes32) calldata", () => {
+    const bridgeId = `0x${"ab".repeat(32)}`;
+    const calldata = encodeLockBridgeConfigCalldata(bridgeId);
+
+    expect(calldata).toBe(`0x8956feb3${"ab".repeat(32)}`);
+    expect(calldata.startsWith(BRIDGE_SELECTORS.lockBridgeConfig)).toBe(true);
+    expect((calldata.length - 2) / 2).toBe(4 + 32);
+    expect(encodeLockBridgeConfigCalldata(new Uint8Array(32).fill(0xab))).toBe(calldata);
+  });
+
+  it("rejects malformed lockBridgeConfig bridge ids", () => {
+    expect(() => encodeLockBridgeConfigCalldata("0x123")).toThrow(BridgePrecompileError);
+    expect(() => encodeLockBridgeConfigCalldata(`0x${"ab".repeat(31)}`)).toThrow(
+      BridgePrecompileError,
+    );
+  });
+
   it("accepts a floor-compliant disclosed route", () => {
     const assessment = assessBridgeRoute(route("ccip-usdc-eth"));
     expect(assessment.accepted).toBe(true);

@@ -5,9 +5,45 @@
  * node route and do not claim any bridge integration is live.
  */
 
+import { PRECOMPILE_ADDRESSES } from "./consts.js";
+
+export const BRIDGE_SELECTORS = {
+  lockBridgeConfig: "0x8956feb3",
+} as const;
+
+export const BRIDGE_REVERT_TAGS = {
+  bridgeAdminLocked: "0xf807",
+} as const;
+
+export type BridgeBytesInput = string | Uint8Array | readonly number[];
+
 export type BridgeAdminControl = "none" | "consensusOnly" | "operatorKey" | "unknown";
 export type BridgeCircuitBreakerState = "armed" | "paused" | "disabled" | "unknown";
 export type BridgeRiskTier = "low" | "medium" | "high" | "blocked";
+
+export class BridgePrecompileError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BridgePrecompileError";
+  }
+}
+
+export function bridgeAddressHex(): string {
+  return PRECOMPILE_ADDRESSES.BRIDGE.toLowerCase();
+}
+
+export function encodeLockBridgeConfigCalldata(bridgeId: BridgeBytesInput): string {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(BRIDGE_SELECTORS.lockBridgeConfig),
+      expectLength(toBytes(bridgeId), 32, "bridgeId"),
+    ),
+  );
+}
+
+export function isBridgeAdminLockedRevert(data: BridgeBytesInput): boolean {
+  return bytesToHex(toBytes(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeAdminLocked;
+}
 
 export interface BridgeVerifierDisclosure {
   model: string;
@@ -322,4 +358,44 @@ function normalizedDecimalDigits(value: string): string | null {
 
 function trimmedEq(left: string, right: string): boolean {
   return left.trim() === right.trim();
+}
+
+function expectLength(value: Uint8Array, len: number, name: string): Uint8Array {
+  if (value.length !== len) {
+    throw new BridgePrecompileError(`${name} must be ${len} bytes, got ${value.length}`);
+  }
+  return value;
+}
+
+function toBytes(value: BridgeBytesInput): Uint8Array {
+  if (typeof value === "string") {
+    return hexToBytes(value);
+  }
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
+  if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
+    throw new BridgePrecompileError("invalid hex bytes");
+  }
+  const out = new Uint8Array(body.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = Number.parseInt(body.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function concatBytes(...parts: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
 }
