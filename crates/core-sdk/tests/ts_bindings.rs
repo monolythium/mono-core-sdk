@@ -31,9 +31,10 @@ use monolythium_core_sdk::types::{
     FeeHistoryResponse, GapRange, GapRecord, GapRecordsResponse, IndexerStatus, MempoolSnapshot,
     MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse, MrcMetadataRecord,
     MrcMetadataResponse, NativeReceiptFee, PeerSummary, PendingRewardsResponse, PendingRewardsRow,
-    PendingTxSummary, PrecompileDescriptor, RegistryRecord, RichListHolder, RichListResponse,
-    RoundInfo, StorageProofBatch, SyncStatus, TokenBalanceMrcIdentity, TokenBalanceRecord,
-    TpmAttestationResponse, TransactionReceipt, TransactionView,
+    PendingTxSummary, PrecompileDescriptor, RedemptionQueueResponse, RedemptionQueueTicket,
+    RegistryRecord, RichListHolder, RichListResponse, RoundInfo, StorageProofBatch, SyncStatus,
+    TokenBalanceMrcIdentity, TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt,
+    TransactionView,
 };
 use ts_rs::TS;
 
@@ -99,6 +100,8 @@ fn export_bindings() {
     PendingRewardsRow::export_all_to(&out).expect("PendingRewardsRow");
     PendingTxSummary::export_all_to(&out).expect("PendingTxSummary");
     PrecompileDescriptor::export_all_to(&out).expect("PrecompileDescriptor");
+    RedemptionQueueResponse::export_all_to(&out).expect("RedemptionQueueResponse");
+    RedemptionQueueTicket::export_all_to(&out).expect("RedemptionQueueTicket");
     RegistryRecord::export_all_to(&out).expect("RegistryRecord");
     RichListHolder::export_all_to(&out).expect("RichListHolder");
     RichListResponse::export_all_to(&out).expect("RichListResponse");

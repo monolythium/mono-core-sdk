@@ -259,6 +259,11 @@ var ApiClient = class {
       block: block == null ? void 0 : encodeBlockSelector(block)
     });
   }
+  async addressRedemptionQueue(address, block) {
+    return this.get(`/addresses/${encodePathSegment(address)}/redemption-queue`, {
+      block: block == null ? void 0 : encodeBlockSelector(block)
+    });
+  }
   async assetMrcMetadata(assetId, mrcTokenId) {
     return this.get(`/assets/${encodePathSegment(assetId)}/metadata`, {
       mrcTokenId: mrcTokenId ?? void 0
@@ -1462,6 +1467,11 @@ var RpcClient = class _RpcClient {
   async lythPendingRewards(wallet, block) {
     const params = block === void 0 ? [wallet] : [wallet, encodeBlockSelector(block)];
     return this.call("lyth_pendingRewards", params);
+  }
+  /** `lyth_redemptionQueue` — wallet redemption tickets at a block. */
+  async lythRedemptionQueue(wallet, block) {
+    const params = block === void 0 ? [wallet] : [wallet, encodeBlockSelector(block)];
+    return this.call("lyth_redemptionQueue", params);
   }
   /** `lyth_getDelegationHistory` — indexed per-wallet delegation event timeline. */
   async lythGetDelegationHistory(wallet, limit = 50, cursor) {

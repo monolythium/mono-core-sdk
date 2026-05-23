@@ -592,6 +592,37 @@ describe("ApiClient", () => {
     expect(caps.accessPolicy.paidServiceEligibility.selfDeclaration).toBe(false);
   });
 
+  it("wraps address redemption queue API query params", async () => {
+    const wallet = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+    const { fetch, calls } = mockGet(
+      apiEnvelope({
+        wallet,
+        tickets: [
+          {
+            index: 0,
+            cluster: 7,
+            weightBps: 2500,
+            createdHeight: 20,
+            maturityHeight: 120,
+            mature: false,
+          },
+        ],
+        count: 1,
+        returned: 1,
+        block: 99,
+      }),
+    );
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    const queue = await client.addressRedemptionQueue(wallet, 99);
+
+    expect(queue.data.tickets[0].maturityHeight).toBe(120);
+    expect(calls[0]).toEqual({
+      url: `https://rpc.example/api/v1/addresses/${wallet}/redemption-queue?block=0x63`,
+      method: "GET",
+    });
+  });
+
   it("maps API error envelopes to SdkError.rpc", async () => {
     const { fetch } = mockGet(
       {

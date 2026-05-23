@@ -91,6 +91,8 @@ export type { PendingRewardsResponse } from "./PendingRewardsResponse.js";
 export type { PendingRewardsRow } from "./PendingRewardsRow.js";
 export type { PendingTxSummary } from "./PendingTxSummary.js";
 export type { PrecompileDescriptor } from "./PrecompileDescriptor.js";
+export type { RedemptionQueueResponse } from "./RedemptionQueueResponse.js";
+export type { RedemptionQueueTicket } from "./RedemptionQueueTicket.js";
 export type { RegistryRecord } from "./RegistryRecord.js";
 export type { RichListHolder } from "./RichListHolder.js";
 export type { RichListResponse } from "./RichListResponse.js";

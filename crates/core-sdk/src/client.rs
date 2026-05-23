@@ -34,10 +34,10 @@ use crate::types::{
     MetricsRangeResponse, MrcMetadataResponse, NativeEventFilter, NativeEventsFilter,
     NativeEventsResponse, NativeReceiptResponse, OperatorCapabilitiesResponse, PeerSummary,
     PeerSummaryAggregate, PendingRewardsResponse, PendingTxSummary, PrecompileDescriptor,
-    RegistryRecord, RichListResponse, RoundInfo, SearchResponse, StorageProofBatch, SyncStatus,
-    TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt, TransactionView,
-    TxFeedResponse, TxStatusResponse, TypedNativeEventsResponse, TypedNativeReceiptEvent,
-    VerticesAtRoundResponse,
+    RedemptionQueueResponse, RegistryRecord, RichListResponse, RoundInfo, SearchResponse,
+    StorageProofBatch, SyncStatus, TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt,
+    TransactionView, TxFeedResponse, TxStatusResponse, TypedNativeEventsResponse,
+    TypedNativeReceiptEvent, VerticesAtRoundResponse,
 };
 
 /// Result from building and submitting an encrypted MRV deploy envelope.
@@ -823,6 +823,19 @@ impl RpcClient {
         self.call("lyth_pendingRewards", params).await
     }
 
+    /// `lyth_redemptionQueue` — wallet redemption tickets at `block`.
+    pub async fn lyth_redemption_queue(
+        &self,
+        wallet: &str,
+        block: Option<BlockSelector>,
+    ) -> Result<RedemptionQueueResponse, SdkError> {
+        let params = match block {
+            Some(block) => json!([wallet, block.to_param()]),
+            None => json!([wallet]),
+        };
+        self.call("lyth_redemptionQueue", params).await
+    }
+
     /// `lyth_getDelegationHistory` — indexed per-wallet delegation event timeline.
     pub async fn lyth_get_delegation_history(
         &self,
@@ -1601,6 +1614,48 @@ mod tests {
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0]["method"], "lyth_pendingRewards");
+        assert_eq!(requests[0]["params"], json!([wallet, "0x63"]));
+    }
+
+    #[tokio::test]
+    async fn lyth_redemption_queue_serializes_block_and_decodes_tickets() {
+        let wallet = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+        let (endpoint, server) = spawn_rpc_server(vec![json!({
+            "wallet": wallet,
+            "tickets": [{
+                "index": 0,
+                "cluster": 7,
+                "weightBps": 2_500,
+                "createdHeight": 20,
+                "maturityHeight": 120,
+                "mature": false
+            }],
+            "count": 1,
+            "returned": 1,
+            "block": 99
+        })]);
+
+        let client = RpcClient::new(endpoint).unwrap();
+        let response = client
+            .lyth_redemption_queue(wallet, Some(BlockSelector::Number(99)))
+            .await
+            .unwrap();
+
+        assert_eq!(response.wallet, wallet);
+        assert_eq!(response.count, 1);
+        assert_eq!(response.returned, 1);
+        assert_eq!(response.tickets.len(), 1);
+        assert_eq!(response.tickets[0].index, 0);
+        assert_eq!(response.tickets[0].cluster, 7);
+        assert_eq!(response.tickets[0].weight_bps, 2_500);
+        assert_eq!(response.tickets[0].created_height, 20);
+        assert_eq!(response.tickets[0].maturity_height, 120);
+        assert_eq!(response.tickets[0].mature, Some(false));
+        assert_eq!(response.block, json!(99));
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["method"], "lyth_redemptionQueue");
         assert_eq!(requests[0]["params"], json!([wallet, "0x63"]));
     }
 

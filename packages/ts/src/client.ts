@@ -58,6 +58,7 @@ import type {
   PendingRewardsResponse,
   PendingTxSummary,
   PrecompileDescriptor,
+  RedemptionQueueResponse,
   RegistryRecord,
   RichListResponse,
   RoundInfo,
@@ -1323,6 +1324,16 @@ export class RpcClient {
     const params =
       block === undefined ? [wallet] : [wallet, encodeBlockSelector(block)];
     return this.call("lyth_pendingRewards", params);
+  }
+
+  /** `lyth_redemptionQueue` — wallet redemption tickets at a block. */
+  async lythRedemptionQueue(
+    wallet: string,
+    block?: BlockSelector,
+  ): Promise<RedemptionQueueResponse> {
+    const params =
+      block === undefined ? [wallet] : [wallet, encodeBlockSelector(block)];
+    return this.call("lyth_redemptionQueue", params);
   }
 
   /** `lyth_getDelegationHistory` — indexed per-wallet delegation event timeline. */

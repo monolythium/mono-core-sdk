@@ -382,6 +382,46 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(calls[0].params).toEqual([wallet, "0x63"]);
   });
 
+  it("lyth_redemptionQueue reads wallet redemption queue tickets", async () => {
+    const wallet = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+    const { fetch, calls } = mockFetch({
+      wallet,
+      tickets: [
+        {
+          index: 0,
+          cluster: 7,
+          weightBps: 2500,
+          createdHeight: 20,
+          maturityHeight: 120,
+          mature: false,
+        },
+      ],
+      count: 1,
+      returned: 1,
+      block: 99,
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const queue = await client.lythRedemptionQueue(wallet, 99);
+
+    expect(queue.wallet).toBe(wallet);
+    expect(queue.tickets).toEqual([
+      {
+        index: 0,
+        cluster: 7,
+        weightBps: 2500,
+        createdHeight: 20,
+        maturityHeight: 120,
+        mature: false,
+      },
+    ]);
+    expect(queue.count).toBe(1);
+    expect(queue.returned).toBe(1);
+    expect(queue.block).toBe(99);
+    expect(calls[0].method).toBe("lyth_redemptionQueue");
+    expect(calls[0].params).toEqual([wallet, "0x63"]);
+  });
+
   it("lyth_getAddressActivity forwards limit and cursor", async () => {
     const { fetch, calls } = mockFetch([]);
     const client = new RpcClient("http://x", { fetch });
