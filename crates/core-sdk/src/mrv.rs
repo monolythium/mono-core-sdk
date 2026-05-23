@@ -1429,6 +1429,10 @@ pub enum MrvValidationError {
         /// Field name.
         field: &'static str,
     },
+
+    /// Native submission plan failed MRV-specific guardrails.
+    #[error("invalid MRV native submission plan: {0}")]
+    InvalidNativeSubmission(&'static str),
 }
 
 /// Compute the MRV code-section BLAKE3 hash as `0x`-hex.
@@ -1799,6 +1803,68 @@ pub fn build_mrv_call_native_tx_plan(
         fee_preview,
         tx,
     })
+}
+
+/// Assert that a deploy native transaction plan is safe to hand to an
+/// encrypted MRV submission path.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the sign-ready adapter diverges from
+/// the app-facing native facade, the MRV v1 extension is missing/mutated, or
+/// fee fields cannot fit the encrypted AAD u128 budget.
+pub fn assert_mrv_deploy_native_submission_plan(
+    plan: &MrvDeployNativeTxPlan,
+) -> Result<(), MrvValidationError> {
+    assert_mrv_native_submission_envelope(&plan.extension, &plan.native_tx, &plan.tx)?;
+    if plan.tx.to.is_some() {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "deploy tx.to must be null",
+        ));
+    }
+    if plan.tx.input != plan.request.artifact_bytes {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "deploy tx.input must match artifactBytes",
+        ));
+    }
+    Ok(())
+}
+
+/// Assert that a call native transaction plan is safe to hand to an encrypted
+/// MRV submission path.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the sign-ready adapter diverges from
+/// the app-facing native facade, the MRV v1 extension is missing/mutated, the
+/// destination is not the expected 20-byte contract address, or fee fields
+/// cannot fit the encrypted AAD u128 budget.
+pub fn assert_mrv_call_native_submission_plan(
+    plan: &MrvCallNativeTxPlan,
+) -> Result<(), MrvValidationError> {
+    assert_mrv_native_submission_envelope(&plan.extension, &plan.native_tx, &plan.tx)?;
+    let Some(actual_to) = &plan.tx.to else {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "call tx.to must be a 20-byte contract address",
+        ));
+    };
+    let expected_to = address_to_hex(mrv_bech32_to_address_kind(
+        &plan.request.contract_address,
+        MrvAddressKind::Contract,
+    )?);
+    let actual = hex_to_address(actual_to).map_err(|err| MrvValidationError::InvalidAddress {
+        field: "tx.to",
+        reason: err.to_string(),
+    })?;
+    if address_to_hex(actual) != expected_to {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "call tx.to must match contractAddress",
+        ));
+    }
+    if plan.tx.input != plan.request.input {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "call tx.input must match request input",
+        ));
+    }
+    Ok(())
 }
 
 /// Encode the canonical transaction preimage that native transaction signers
@@ -2211,6 +2277,61 @@ fn json_nonnegative_integer(
             "structured_fee.{field} must be a non-negative integer"
         ));
     }
+}
+
+fn assert_mrv_native_submission_envelope(
+    extension: &MrvTransactionExtension,
+    native_tx: &MrvNativeTxFacade,
+    tx: &MrvNativeTxFields,
+) -> Result<(), MrvValidationError> {
+    if tx.extensions.len() != 1 {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "native submission must carry exactly one transaction extension",
+        ));
+    }
+    assert_mrv_v1_extension(extension, "extension")?;
+    assert_mrv_v1_extension(&tx.extensions[0], "tx.extensions[0]")?;
+    if tx.chain_id != native_tx.chain_id
+        || tx.nonce != native_tx.nonce
+        || tx.gas_limit != native_tx.execution_unit_limit
+    {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "transaction adapter counters must match nativeTx",
+        ));
+    }
+    if tx.value != native_tx.value_lythoshi {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "tx.value must match nativeTx.valueLythoshi",
+        ));
+    }
+    if tx.max_fee_per_gas != native_tx.max_execution_fee_lythoshi {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "tx.maxFeePerGas must match nativeTx.maxExecutionFeeLythoshi",
+        ));
+    }
+    if tx.max_priority_fee_per_gas != native_tx.priority_tip_lythoshi {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "tx.maxPriorityFeePerGas must match nativeTx.priorityTipLythoshi",
+        ));
+    }
+    parse_u128_decimal(
+        "maxExecutionFeeLythoshi",
+        &native_tx.max_execution_fee_lythoshi,
+    )?;
+    parse_u128_decimal("priorityTipLythoshi", &native_tx.priority_tip_lythoshi)?;
+    parse_u128_decimal("tx.maxFeePerGas", &tx.max_fee_per_gas)?;
+    parse_u128_decimal("tx.maxPriorityFeePerGas", &tx.max_priority_fee_per_gas)?;
+    Ok(())
+}
+
+fn assert_mrv_v1_extension(
+    extension: &MrvTransactionExtension,
+    field: &'static str,
+) -> Result<(), MrvValidationError> {
+    if extension.kind != MRV_TX_EXTENSION_KIND || extension.body_hex != "0x01" {
+        return Err(MrvValidationError::InvalidNativeSubmission(field));
+    }
+    Ok(())
 }
 
 fn push_u256_be(out: &mut Vec<u8>, value: u128) {
@@ -3036,6 +3157,72 @@ mod tests {
             MrvNativeTxBuildOptions::new(69_420, 0, 1, 1)
         )
         .is_err());
+    }
+
+    #[test]
+    fn native_submission_plan_guardrails_reject_mutated_signing_adapter() {
+        let user = mrv_address_to_bech32(MrvAddressKind::User, [0x11; 20]);
+        let contract = mrv_address_to_bech32(MrvAddressKind::Contract, [0x22; 20]);
+        let deploy = build_mrv_deploy_native_tx_plan(
+            &[0x13, 0x00, 0x00, 0x00],
+            None,
+            MrvNativeTxBuildOptions::new(69_420, 7, 100_000, 25).from(user.clone()),
+        )
+        .unwrap();
+        let call = build_mrv_call_native_tx_plan(
+            &contract,
+            &[0x01, 0x02],
+            MrvNativeTxBuildOptions::new(69_420, 8, 50_000, 10).from(user),
+        )
+        .unwrap();
+
+        assert_mrv_deploy_native_submission_plan(&deploy).unwrap();
+        assert_mrv_call_native_submission_plan(&call).unwrap();
+
+        let mut bad_deploy = deploy.clone();
+        bad_deploy.tx.to = Some("0x2222222222222222222222222222222222222222".to_owned());
+        assert!(matches!(
+            assert_mrv_deploy_native_submission_plan(&bad_deploy),
+            Err(MrvValidationError::InvalidNativeSubmission(
+                "deploy tx.to must be null"
+            ))
+        ));
+
+        let mut bad_call = call.clone();
+        bad_call.tx.to = Some("0x2222".to_owned());
+        assert!(matches!(
+            assert_mrv_call_native_submission_plan(&bad_call),
+            Err(MrvValidationError::InvalidAddress { field: "tx.to", .. })
+        ));
+
+        let mut bad_extension = call.clone();
+        bad_extension.tx.extensions[0].body_hex = "0x02".to_owned();
+        assert!(matches!(
+            assert_mrv_call_native_submission_plan(&bad_extension),
+            Err(MrvValidationError::InvalidNativeSubmission(
+                "tx.extensions[0]"
+            ))
+        ));
+
+        let mut bad_fee = call;
+        bad_fee.tx.max_fee_per_gas = "340282366920938463463374607431768211456".to_owned();
+        assert!(matches!(
+            assert_mrv_call_native_submission_plan(&bad_fee),
+            Err(MrvValidationError::InvalidNativeSubmission(
+                "tx.maxFeePerGas must match nativeTx.maxExecutionFeeLythoshi"
+            ))
+        ));
+
+        let mut bad_u128 = deploy;
+        bad_u128.native_tx.max_execution_fee_lythoshi =
+            "340282366920938463463374607431768211456".to_owned();
+        bad_u128.tx.max_fee_per_gas = bad_u128.native_tx.max_execution_fee_lythoshi.clone();
+        assert!(matches!(
+            assert_mrv_deploy_native_submission_plan(&bad_u128),
+            Err(MrvValidationError::InvalidDecimal {
+                field: "maxExecutionFeeLythoshi"
+            })
+        ));
     }
 
     #[test]
