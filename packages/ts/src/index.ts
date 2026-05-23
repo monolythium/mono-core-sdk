@@ -14,6 +14,19 @@
 export const version = "0.1.0";
 
 export { ApiClient, apiEndpointFromRpcEndpoint } from "./api.js";
+export {
+  assessBridgeRoute,
+  rankBridgeRoutes,
+} from "./bridge.js";
+export type {
+  BridgeAdminControl,
+  BridgeCircuitBreakerState,
+  BridgeRiskTier,
+  BridgeRouteAssessment,
+  BridgeRouteDisclosure,
+  BridgeVerifierDisclosure,
+  RankedBridgeRoute,
+} from "./bridge.js";
 export type {
   ApiAddressActivityData,
   ApiAddressActivityEntry,
