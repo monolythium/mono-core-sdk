@@ -181,6 +181,22 @@ export type {
   VerticesAtRoundResponse,
 } from "./client.js";
 export {
+  NO_EVM_RECEIPTS_ROOT_DOMAIN,
+  NO_EVM_RECEIPT_CODEC,
+  NO_EVM_RECEIPT_PROOF_SCHEMA,
+  NO_EVM_RECEIPT_PROOF_TYPE,
+  NO_EVM_RECEIPT_ROOT_ALGORITHM,
+  NoEvmReceiptProofError,
+  computeNoEvmReceiptsRoot,
+  computeNoEvmTargetReceiptHash,
+  decodeNoEvmReceiptTranscript,
+  verifyNoEvmReceiptProof,
+} from "./receipt-proof.js";
+export type {
+  NoEvmReceiptProofErrorCode,
+  NoEvmReceiptProofVerification,
+} from "./receipt-proof.js";
+export {
   NATIVE_MARKET_EVENT_FAMILY,
   consumeNativeEvents,
   isNativeDecodedEvent,
