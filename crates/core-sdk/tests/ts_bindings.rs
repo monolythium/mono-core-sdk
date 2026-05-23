@@ -39,7 +39,10 @@ use monolythium_core_sdk::types::{
     IndexerStatus, MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent,
     MeshUnsignedTxResponse, MrcAccountRecord, MrcAccountRequest, MrcAccountResponse,
     MrcHoldersRequest, MrcHoldersResponse, MrcMetadataRecord, MrcMetadataResponse,
-    MrcPolicySpendRecord, NativeReceiptFee, PeerSummary, PendingRewardsResponse, PendingRewardsRow,
+    MrcPolicySpendRecord, NativeCollectionRoyaltyStateRecord, NativeMarketStateFilter,
+    NativeMarketStateResponse, NativeMarketStateResponseFilters, NativeMarketStateSource,
+    NativeNftListingStateRecord, NativeReceiptFee, NativeSpotMarketStateRecord,
+    NativeSpotOrderStateRecord, PeerSummary, PendingRewardsResponse, PendingRewardsRow,
     PendingTxSummary, PrecompileDescriptor, RedemptionQueueResponse, RedemptionQueueTicket,
     RegistryRecord, RichListHolder, RichListResponse, RoundInfo, StorageProofBatch, SyncStatus,
     TokenBalanceMrcIdentity, TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt,
@@ -127,7 +130,17 @@ fn export_bindings() {
     MrcMetadataRecord::export_all_to(&out).expect("MrcMetadataRecord");
     MrcMetadataResponse::export_all_to(&out).expect("MrcMetadataResponse");
     MrcPolicySpendRecord::export_all_to(&out).expect("MrcPolicySpendRecord");
+    NativeCollectionRoyaltyStateRecord::export_all_to(&out)
+        .expect("NativeCollectionRoyaltyStateRecord");
+    NativeMarketStateFilter::export_all_to(&out).expect("NativeMarketStateFilter");
+    NativeMarketStateResponse::export_all_to(&out).expect("NativeMarketStateResponse");
+    NativeMarketStateResponseFilters::export_all_to(&out)
+        .expect("NativeMarketStateResponseFilters");
+    NativeMarketStateSource::export_all_to(&out).expect("NativeMarketStateSource");
+    NativeNftListingStateRecord::export_all_to(&out).expect("NativeNftListingStateRecord");
     NativeReceiptFee::export_all_to(&out).expect("NativeReceiptFee");
+    NativeSpotMarketStateRecord::export_all_to(&out).expect("NativeSpotMarketStateRecord");
+    NativeSpotOrderStateRecord::export_all_to(&out).expect("NativeSpotOrderStateRecord");
     PeerSummary::export_all_to(&out).expect("PeerSummary");
     PendingRewardsResponse::export_all_to(&out).expect("PendingRewardsResponse");
     PendingRewardsRow::export_all_to(&out).expect("PendingRewardsRow");

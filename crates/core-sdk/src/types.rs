@@ -1084,6 +1084,257 @@ pub struct NativeEventsResponse {
     pub source: NativeEventsSource,
 }
 
+/// Filter object passed to `lyth_nativeMarketState` and
+/// `/api/v1/native-market-state`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeMarketStateFilter.ts")
+)]
+pub struct NativeMarketStateFilter<'a> {
+    /// Optional exact spot market lookup.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub market_id: Option<&'a str>,
+    /// Optional exact spot order lookup.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_id: Option<&'a str>,
+    /// Optional exact NFT listing lookup.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_id: Option<&'a str>,
+    /// Optional exact collection royalty lookup.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collection_id: Option<&'a str>,
+    /// Include bounded spot orders for a requested market/order.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_spot_orders: Option<bool>,
+    /// Maximum rows per list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+impl<'a> NativeMarketStateFilter<'a> {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            market_id: None,
+            order_id: None,
+            listing_id: None,
+            collection_id: None,
+            include_spot_orders: None,
+            limit: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn market_id(mut self, market_id: &'a str) -> Self {
+        self.market_id = Some(market_id);
+        self
+    }
+
+    #[must_use]
+    pub const fn order_id(mut self, order_id: &'a str) -> Self {
+        self.order_id = Some(order_id);
+        self
+    }
+
+    #[must_use]
+    pub const fn listing_id(mut self, listing_id: &'a str) -> Self {
+        self.listing_id = Some(listing_id);
+        self
+    }
+
+    #[must_use]
+    pub const fn collection_id(mut self, collection_id: &'a str) -> Self {
+        self.collection_id = Some(collection_id);
+        self
+    }
+
+    #[must_use]
+    pub const fn include_spot_orders(mut self, include_spot_orders: bool) -> Self {
+        self.include_spot_orders = Some(include_spot_orders);
+        self
+    }
+
+    #[must_use]
+    pub const fn limit(mut self, limit: u32) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    /// Encode this filter as API query pairs for `/api/v1/native-market-state`.
+    #[must_use]
+    pub fn to_query_pairs(&self) -> Vec<(&'static str, String)> {
+        let mut query = Vec::new();
+        if let Some(market_id) = self.market_id {
+            query.push(("marketId", market_id.to_owned()));
+        }
+        if let Some(order_id) = self.order_id {
+            query.push(("orderId", order_id.to_owned()));
+        }
+        if let Some(listing_id) = self.listing_id {
+            query.push(("listingId", listing_id.to_owned()));
+        }
+        if let Some(collection_id) = self.collection_id {
+            query.push(("collectionId", collection_id.to_owned()));
+        }
+        if let Some(include_spot_orders) = self.include_spot_orders {
+            query.push(("includeSpotOrders", include_spot_orders.to_string()));
+        }
+        if let Some(limit) = self.limit {
+            query.push(("limit", limit.to_string()));
+        }
+        query
+    }
+}
+
+/// Echoed optional predicates for a native market state response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeMarketStateResponseFilters.ts")
+)]
+pub struct NativeMarketStateResponseFilters {
+    #[serde(default)]
+    pub market_id: Option<Hash>,
+    #[serde(default)]
+    pub order_id: Option<Hash>,
+    #[serde(default)]
+    pub listing_id: Option<Hash>,
+    #[serde(default)]
+    pub collection_id: Option<Hash>,
+    pub include_spot_orders: bool,
+}
+
+/// Source metadata attached to a native market current-state response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeMarketStateSource.ts")
+)]
+pub struct NativeMarketStateSource {
+    pub indexer_provider: String,
+    pub projection: String,
+}
+
+/// Current-state native spot market aggregate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeSpotMarketStateRecord.ts")
+)]
+pub struct NativeSpotMarketStateRecord {
+    pub market_id: Hash,
+    pub owner: Address,
+    pub base_asset_id: Hash,
+    pub quote_asset_id: Hash,
+    pub tick_size: String,
+    pub lot_size: String,
+    pub min_quantity: String,
+    pub min_notional: String,
+    pub trade_count: String,
+    pub total_volume_base: String,
+    #[serde(default)]
+    pub last_price: Option<String>,
+    #[serde(default)]
+    pub last_block_height: Option<u64>,
+    pub created_at_block: u64,
+    pub updated_at_block: u64,
+}
+
+/// Current-state native spot order aggregate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeSpotOrderStateRecord.ts")
+)]
+pub struct NativeSpotOrderStateRecord {
+    pub order_id: Hash,
+    pub market_id: Hash,
+    pub owner: Address,
+    pub side: String,
+    pub price: String,
+    pub quantity: String,
+    pub remaining: String,
+    pub status: String,
+    pub expires_at_block: u64,
+    pub updated_at_block: u64,
+}
+
+/// Current-state native NFT listing aggregate.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeNftListingStateRecord.ts")
+)]
+pub struct NativeNftListingStateRecord {
+    pub listing_id: Hash,
+    pub seller: Address,
+    pub standard: String,
+    pub collection_id: Hash,
+    pub token_id: Hash,
+    pub quantity: String,
+    pub payment_asset_id: Hash,
+    pub price: String,
+    #[cfg_attr(feature = "ts-bindings", ts(type = "unknown"))]
+    pub listing_kind: serde_json::Value,
+    pub status: String,
+    pub expires_at_block: u64,
+    #[serde(default)]
+    pub highest_bidder: Option<Address>,
+    #[serde(default)]
+    pub highest_bid: Option<String>,
+    pub updated_at_block: u64,
+}
+
+/// Current-state collection royalty aggregate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeCollectionRoyaltyStateRecord.ts")
+)]
+pub struct NativeCollectionRoyaltyStateRecord {
+    pub collection_id: Hash,
+    #[serde(default)]
+    pub creator: Option<Address>,
+    pub recipient: Address,
+    pub bps: u16,
+    pub updated_at_block: u64,
+}
+
+/// Typed response returned by `lyth_nativeMarketState` and
+/// `/api/v1/native-market-state`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeMarketStateResponse.ts")
+)]
+pub struct NativeMarketStateResponse {
+    pub schema_version: u32,
+    pub limit: u32,
+    pub filters: NativeMarketStateResponseFilters,
+    pub spot_markets: Vec<NativeSpotMarketStateRecord>,
+    pub spot_orders: Vec<NativeSpotOrderStateRecord>,
+    pub nft_listings: Vec<NativeNftListingStateRecord>,
+    pub collection_royalties: Vec<NativeCollectionRoyaltyStateRecord>,
+    pub source: NativeMarketStateSource,
+}
+
 /// Historical native event response with caller-selected decoded payload type.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

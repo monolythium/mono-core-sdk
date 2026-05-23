@@ -248,6 +248,97 @@ export interface NativeEventsResponse<TDecoded = unknown> {
   source: NativeEventsSource;
 }
 
+/** Filter object passed to `lyth_nativeMarketState` and `/api/v1/native-market-state`. */
+export interface NativeMarketStateFilter {
+  marketId?: string | null;
+  orderId?: string | null;
+  listingId?: string | null;
+  collectionId?: string | null;
+  includeSpotOrders?: boolean | null;
+  limit?: number | bigint | string | null;
+}
+
+export interface NativeMarketStateResponseFilters {
+  marketId?: string | null;
+  orderId?: string | null;
+  listingId?: string | null;
+  collectionId?: string | null;
+  includeSpotOrders: boolean;
+}
+
+export interface NativeMarketStateSource {
+  indexerProvider: string;
+  projection: string;
+}
+
+export interface NativeSpotMarketStateRecord {
+  marketId: string;
+  owner: string;
+  baseAssetId: string;
+  quoteAssetId: string;
+  tickSize: string;
+  lotSize: string;
+  minQuantity: string;
+  minNotional: string;
+  tradeCount: string;
+  totalVolumeBase: string;
+  lastPrice: string | null;
+  lastBlockHeight: number | null;
+  createdAtBlock: number;
+  updatedAtBlock: number;
+}
+
+export interface NativeSpotOrderStateRecord {
+  orderId: string;
+  marketId: string;
+  owner: string;
+  side: string;
+  price: string;
+  quantity: string;
+  remaining: string;
+  status: string;
+  expiresAtBlock: number;
+  updatedAtBlock: number;
+}
+
+export interface NativeNftListingStateRecord {
+  listingId: string;
+  seller: string;
+  standard: string;
+  collectionId: string;
+  tokenId: string;
+  quantity: string;
+  paymentAssetId: string;
+  price: string;
+  listingKind: unknown;
+  status: string;
+  expiresAtBlock: number;
+  highestBidder: string | null;
+  highestBid: string | null;
+  updatedAtBlock: number;
+}
+
+export interface NativeCollectionRoyaltyStateRecord {
+  collectionId: string;
+  creator: string | null;
+  recipient: string;
+  bps: number;
+  updatedAtBlock: number;
+}
+
+export interface NativeMarketStateResponse {
+  schemaVersion: number;
+  limit: number;
+  filters: NativeMarketStateResponseFilters;
+  spotMarkets: NativeSpotMarketStateRecord[];
+  spotOrders: NativeSpotOrderStateRecord[];
+  nftListings: NativeNftListingStateRecord[];
+  collectionRoyalties: NativeCollectionRoyaltyStateRecord[];
+  source: NativeMarketStateSource;
+}
+
+export type NativeMarketStateFilterParamValue = string | number | boolean;
+
 export type AgentReputationCategoryScope = "global" | "category";
 
 export interface AgentReputationRecord {
@@ -1243,6 +1334,13 @@ export class RpcClient {
     return nativeMarketEventsFromHistory<TDecoded>(response);
   }
 
+  /** `lyth_nativeMarketState` — current-state native spot and NFT market rows. */
+  async lythNativeMarketState(
+    filter: NativeMarketStateFilter = {},
+  ): Promise<NativeMarketStateResponse> {
+    return this.call("lyth_nativeMarketState", [nativeMarketStateFilterParams(filter)]);
+  }
+
   /** `lyth_gapRecords` — retained ingestion/indexing gaps for a block range. */
   async lythGapRecords(
     fromBlock: number | bigint | string,
@@ -2150,6 +2248,19 @@ function normalizeOperatorRisk(value: unknown): OperatorRiskResponse {
     jailStatus: normalizeJailStatus(row["jailStatus"]),
     reasons: reasons.map(String),
   };
+}
+
+export function nativeMarketStateFilterParams(
+  filter: NativeMarketStateFilter,
+): Record<string, NativeMarketStateFilterParamValue> {
+  const out: Record<string, NativeMarketStateFilterParamValue> = {};
+  if (filter.marketId != null) out.marketId = filter.marketId;
+  if (filter.orderId != null) out.orderId = filter.orderId;
+  if (filter.listingId != null) out.listingId = filter.listingId;
+  if (filter.collectionId != null) out.collectionId = filter.collectionId;
+  if (filter.includeSpotOrders != null) out.includeSpotOrders = filter.includeSpotOrders;
+  if (filter.limit != null) out.limit = encodeRpcU64Number(filter.limit, "limit");
+  return out;
 }
 
 function normalizeBlockHeader(value: unknown): BlockHeader | null {
