@@ -1477,7 +1477,9 @@ export class RpcClient {
   /** `lyth_capabilities` — address-keyed precompile capability map. */
   async lythCapabilities(block?: BlockSelector): Promise<CapabilitiesResponse> {
     const params = block === undefined ? [] : [encodeBlockSelector(block)];
-    return this.call("lyth_capabilities", params);
+    return normalizeCapabilitiesResponse(
+      await this.call<CapabilitiesResponse>("lyth_capabilities", params),
+    );
   }
 
   /**
@@ -2364,5 +2366,12 @@ function normalizeMempoolSnapshot(value: unknown): MempoolSnapshot {
     count_pending: parseRpcBigint(row["count_pending"], "mempool count_pending"),
     mailbox_depth: parseRpcBigint(row["mailbox_depth"], "mempool mailbox_depth"),
     bytes_by_class: bytesByClass.map((v, i) => parseRpcBigint(v, `mempool bytes_by_class[${i}]`)) as MempoolSnapshot["bytes_by_class"],
+  };
+}
+
+function normalizeCapabilitiesResponse(value: CapabilitiesResponse): CapabilitiesResponse {
+  return {
+    ...value,
+    nativeModuleForwarders: value.nativeModuleForwarders ?? {},
   };
 }

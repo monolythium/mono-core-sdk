@@ -2628,6 +2628,36 @@ pub struct CapabilityDescriptor {
     pub activation_height: Option<u64>,
 }
 
+/// MRV forwarder deployment row for a native module surfaced by `lyth_capabilities`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeModuleForwarderDescriptor.ts")
+)]
+pub struct NativeModuleForwarderDescriptor {
+    /// Native module namespace this forwarder calls, for example `"market"`.
+    pub module: String,
+    /// Byte length of the encoded forwarder request.
+    #[serde(rename = "requestBytes")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "requestBytes"))]
+    pub request_bytes: u32,
+    /// Typed MRV contract address hosting the forwarder.
+    #[serde(rename = "contractAddress")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "contractAddress"))]
+    pub contract_address: Address,
+    /// MRV artifact profile used by the deployed forwarder.
+    #[serde(rename = "artifactProfile")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "artifactProfile"))]
+    pub artifact_profile: String,
+    /// Deployment/readiness status reported by the node.
+    pub status: String,
+    /// Whether the deployment has been verified against the expected artifact.
+    #[serde(rename = "deploymentVerified")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "deploymentVerified"))]
+    pub deployment_verified: bool,
+}
+
 /// `lyth_capabilities` response.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
@@ -2641,6 +2671,10 @@ pub struct CapabilitiesResponse {
     pub block_number: u64,
     /// Address-keyed capability map.
     pub capabilities: BTreeMap<Address, CapabilityDescriptor>,
+    /// Native module forwarder deployments keyed by native module name.
+    #[serde(rename = "nativeModuleForwarders", default)]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "nativeModuleForwarders"))]
+    pub native_module_forwarders: BTreeMap<String, Vec<NativeModuleForwarderDescriptor>>,
 }
 
 /// One signature row in `lyth_getLatestCheckpoint`.
@@ -3859,6 +3893,49 @@ mod tests {
             Some("0x3b9aca00")
         );
         assert_eq!(legacy_wire.value_lythoshi.as_deref(), Some("0xa"));
+    }
+
+    #[test]
+    fn capabilities_response_decodes_native_module_forwarders_and_defaults_missing() {
+        let response: CapabilitiesResponse = serde_json::from_value(serde_json::json!({
+            "blockNumber": 256,
+            "capabilities": {},
+            "nativeModuleForwarders": {
+                "market": [
+                    {
+                        "module": "market",
+                        "requestBytes": 132,
+                        "contractAddress": "monoc1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqxk4v02",
+                        "artifactProfile": "mono-rv32im-v1",
+                        "status": "available",
+                        "deploymentVerified": true
+                    }
+                ]
+            }
+        }))
+        .unwrap();
+
+        let market = response
+            .native_module_forwarders
+            .get("market")
+            .expect("market forwarders");
+        assert_eq!(market.len(), 1);
+        assert_eq!(market[0].module, "market");
+        assert_eq!(market[0].request_bytes, 132);
+        assert_eq!(
+            market[0].contract_address,
+            "monoc1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqxk4v02"
+        );
+        assert_eq!(market[0].artifact_profile, "mono-rv32im-v1");
+        assert_eq!(market[0].status, "available");
+        assert!(market[0].deployment_verified);
+
+        let legacy: CapabilitiesResponse = serde_json::from_value(serde_json::json!({
+            "blockNumber": 257,
+            "capabilities": {}
+        }))
+        .unwrap();
+        assert!(legacy.native_module_forwarders.is_empty());
     }
 
     #[test]

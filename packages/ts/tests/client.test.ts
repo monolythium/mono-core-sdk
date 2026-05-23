@@ -19,6 +19,7 @@ import type {
   BridgeRouteDisclosure,
   NativeDecodedEvent,
   NativeEventProjection,
+  NativeModuleForwarderDescriptor,
   NoEvmReceiptProof,
   TokenBalanceRecord,
 } from "../src/index.js";
@@ -2009,11 +2010,31 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
   });
 
   it("lyth_capabilities forwards an optional block selector", async () => {
-    const { fetch, calls } = mockFetch({ blockNumber: 256, capabilities: {} });
+    const marketForwarder: NativeModuleForwarderDescriptor = {
+      module: "market",
+      requestBytes: 132,
+      contractAddress: "monoc1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqxk4v02",
+      artifactProfile: "mono-rv32im-v1",
+      status: "available",
+      deploymentVerified: true,
+    };
+    const { fetch, calls } = mockFetch({
+      blockNumber: 256,
+      capabilities: {},
+      nativeModuleForwarders: { market: [marketForwarder] },
+    });
     const client = new RpcClient("http://x", { fetch });
-    await client.lythCapabilities(256);
+    const caps = await client.lythCapabilities(256);
     expect(calls[0].method).toBe("lyth_capabilities");
     expect(calls[0].params).toEqual(["0x100"]);
+    expect(caps.nativeModuleForwarders.market?.[0]).toEqual(marketForwarder);
+  });
+
+  it("lyth_capabilities defaults native module forwarders for older nodes", async () => {
+    const { fetch } = mockFetch({ blockNumber: 256, capabilities: {} });
+    const client = new RpcClient("http://x", { fetch });
+    const caps = await client.lythCapabilities();
+    expect(caps.nativeModuleForwarders).toEqual({});
   });
 
   it("lyth_getLatestCheckpoint accepts bigint heights", async () => {
