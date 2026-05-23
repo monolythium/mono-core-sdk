@@ -20,23 +20,24 @@ use crate::mrv::{
     MrvValidationError,
 };
 use crate::types::{
-    native_events_from_receipt, typed_native_events_from_response, AccountPolicy,
-    AccountProofResponse, AddressActivityEntry, AddressActivityKindResponse, AddressFlowResponse,
-    AddressLabelRecord, AddressProfileResponse, AgentReputationResponse, AssetPolicy, BlockHeader,
-    BlockSelector, BlsCertificateResponse, CallRequest, CapabilitiesResponse, ChainStatsResponse,
-    CheckpointRecord, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse,
-    ClobOrderBookResponse, ClobTradesResponse, ClusterDelegatorsResponse, ClusterEntityResponse,
-    ClusterResignationsResponse, DagParentsResponse, DagSyncStatus, DecodeTxResponse,
-    DelegationCapResponse, DelegationHistoryRecord, DelegationsResponse, EncryptionKeyResponse,
-    EntityRatchetResponse, FeeHistoryResponse, GapRecordsResponse, IndexerStatus,
-    LythUpgradeStatusResponse, MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent,
-    MeshUnsignedTxResponse, MetricsRangeResponse, MrcMetadataResponse, NativeEventFilter,
-    NativeEventsFilter, NativeEventsResponse, NativeReceiptResponse, OperatorCapabilitiesResponse,
-    PeerSummary, PeerSummaryAggregate, PendingRewardsResponse, PendingTxSummary,
-    PrecompileDescriptor, RegistryRecord, RichListResponse, RoundInfo, SearchResponse,
-    StorageProofBatch, SyncStatus, TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt,
-    TransactionView, TxFeedResponse, TxStatusResponse, TypedNativeEventsResponse,
-    TypedNativeReceiptEvent, VerticesAtRoundResponse,
+    native_events_from_receipt, native_market_events_filter, native_market_events_from_receipt,
+    typed_native_events_from_response, AccountPolicy, AccountProofResponse, AddressActivityEntry,
+    AddressActivityKindResponse, AddressFlowResponse, AddressLabelRecord, AddressProfileResponse,
+    AgentReputationResponse, AssetPolicy, BlockHeader, BlockSelector, BlsCertificateResponse,
+    CallRequest, CapabilitiesResponse, ChainStatsResponse, CheckpointRecord, ClobMarketResponse,
+    ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse, ClobTradesResponse,
+    ClusterDelegatorsResponse, ClusterEntityResponse, ClusterResignationsResponse,
+    DagParentsResponse, DagSyncStatus, DecodeTxResponse, DelegationCapResponse,
+    DelegationHistoryRecord, DelegationsResponse, EncryptionKeyResponse, EntityRatchetResponse,
+    FeeHistoryResponse, GapRecordsResponse, IndexerStatus, LythUpgradeStatusResponse,
+    MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse,
+    MetricsRangeResponse, MrcMetadataResponse, NativeEventFilter, NativeEventsFilter,
+    NativeEventsResponse, NativeReceiptResponse, OperatorCapabilitiesResponse, PeerSummary,
+    PeerSummaryAggregate, PendingRewardsResponse, PendingTxSummary, PrecompileDescriptor,
+    RegistryRecord, RichListResponse, RoundInfo, SearchResponse, StorageProofBatch, SyncStatus,
+    TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt, TransactionView,
+    TxFeedResponse, TxStatusResponse, TypedNativeEventsResponse, TypedNativeReceiptEvent,
+    VerticesAtRoundResponse,
 };
 
 /// Result from building and submitting an encrypted MRV deploy envelope.
@@ -586,6 +587,21 @@ impl RpcClient {
         Ok(native_events_from_receipt::<TDecoded>(&receipt, filter)?)
     }
 
+    /// Typed native market event rows from `lyth_nativeReceipt`.
+    pub async fn lyth_native_receipt_market_events<TDecoded>(
+        &self,
+        tx_hash: &str,
+        filter: NativeEventFilter<'_>,
+    ) -> Result<Vec<TypedNativeReceiptEvent<TDecoded>>, SdkError>
+    where
+        TDecoded: DeserializeOwned,
+    {
+        let receipt = self.lyth_native_receipt(tx_hash).await?;
+        Ok(native_market_events_from_receipt::<TDecoded>(
+            &receipt, filter,
+        )?)
+    }
+
     /// `lyth_nativeEvents` — historical indexed native event rows.
     pub async fn lyth_native_events(
         &self,
@@ -603,6 +619,27 @@ impl RpcClient {
         TDecoded: DeserializeOwned,
     {
         let response = self.lyth_native_events(filter).await?;
+        Ok(typed_native_events_from_response::<TDecoded>(&response)?)
+    }
+
+    /// `lyth_nativeEvents` restricted to native marketplace event rows.
+    pub async fn lyth_native_market_events(
+        &self,
+        filter: NativeEventsFilter<'_>,
+    ) -> Result<NativeEventsResponse, SdkError> {
+        self.lyth_native_events(native_market_events_filter(filter))
+            .await
+    }
+
+    /// `lyth_nativeEvents` market rows with decoded rows converted into a caller-selected type.
+    pub async fn lyth_native_market_events_typed<TDecoded>(
+        &self,
+        filter: NativeEventsFilter<'_>,
+    ) -> Result<TypedNativeEventsResponse<TDecoded>, SdkError>
+    where
+        TDecoded: DeserializeOwned,
+    {
+        let response = self.lyth_native_market_events(filter).await?;
         Ok(typed_native_events_from_response::<TDecoded>(&response)?)
     }
 

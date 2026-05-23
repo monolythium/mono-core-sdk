@@ -10,6 +10,13 @@ interface AgentEscrowCreatedEvent extends NativeDecodedEvent {
   contract_address: string;
 }
 
+interface NativeMarketSaleEvent extends NativeDecodedEvent {
+  family: "market";
+  event_name: "market.nft.sale_settled";
+  listing_id: string;
+  price: string;
+}
+
 interface CapturedGet {
   url: string;
   method: string | undefined;
@@ -389,6 +396,66 @@ describe("ApiClient", () => {
     expect(calls).toEqual([
       {
         url: `https://rpc.example/api/v1/native-events?fromBlock=100&toBlock=105&limit=10&txIndex=0&logIndex=0&address=monos1nativeeventemitter&eventTopic=${eventTopic}&family=agent&eventName=agent.escrow.created&primaryId=${primaryId}&account=${account}&counterparty=${counterparty}`,
+        method: "GET",
+      },
+    ]);
+  });
+
+  it("wraps native market event API query params", async () => {
+    const eventTopic = `0x${"11".repeat(32)}`;
+    const listingId = `0x${"bb".repeat(32)}`;
+    const decoded: NativeMarketSaleEvent = {
+      block_height: 110,
+      tx_index: 0,
+      sequence: 0,
+      family: "market",
+      event_name: "market.nft.sale_settled",
+      payload_hash: `0x${"44".repeat(32)}`,
+      listing_id: listingId,
+      price: "900",
+    };
+    const { fetch, calls } = mockGet(
+      apiEnvelope({
+        schemaVersion: 1,
+        fromBlock: 110,
+        toBlock: 120,
+        limit: 5,
+        filters: {
+          family: "market",
+          eventName: "market.nft.sale_settled",
+        },
+        events: [
+          {
+            blockHeight: 110,
+            txIndex: 0,
+            logIndex: 0,
+            address: "monox1market",
+            eventTopic,
+            decoded: null,
+            decodedJson: JSON.stringify(decoded),
+          },
+        ],
+        source: {
+          indexerProvider: "native_events",
+        },
+      }),
+    );
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    const response = await client.nativeMarketEventsTyped<NativeMarketSaleEvent>({
+      fromBlock: 110,
+      toBlock: 120,
+      limit: 5,
+      family: "agent",
+      eventName: "market.nft.sale_settled",
+    });
+
+    expect(response.data.filters.family).toBe("market");
+    expect(response.data.events[0].decoded.family).toBe("market");
+    expect(response.data.events[0].decoded.listing_id).toBe(listingId);
+    expect(calls).toEqual([
+      {
+        url: "https://rpc.example/api/v1/native-events?fromBlock=110&toBlock=120&limit=5&family=market&eventName=market.nft.sale_settled",
         method: "GET",
       },
     ]);

@@ -307,6 +307,9 @@ pub struct NativeDecodedEvent {
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
+/// Native event family emitted by the RISC-V market module.
+pub const NATIVE_MARKET_EVENT_FAMILY: &str = "market";
+
 /// Optional filters applied to native receipt event rows.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeEventFilter<'a> {
@@ -687,6 +690,24 @@ pub fn native_event_matches(event: &NativeReceiptEvent, filter: NativeEventFilte
     true
 }
 
+/// Force a receipt-event filter to the native market family.
+#[must_use]
+pub const fn native_market_receipt_event_filter<'a>(
+    mut filter: NativeEventFilter<'a>,
+) -> NativeEventFilter<'a> {
+    filter.family = Some(NATIVE_MARKET_EVENT_FAMILY);
+    filter
+}
+
+/// Force a historical native-events filter to the native market family.
+#[must_use]
+pub const fn native_market_events_filter<'a>(
+    mut filter: NativeEventsFilter<'a>,
+) -> NativeEventsFilter<'a> {
+    filter.family = Some(NATIVE_MARKET_EVENT_FAMILY);
+    filter
+}
+
 /// Decode and filter typed native event rows from a native receipt.
 pub fn native_events_from_receipt<TDecoded>(
     receipt: &NativeReceiptResponse,
@@ -723,6 +744,17 @@ where
             .collect::<serde_json::Result<_>>()?,
         source: response.source.clone(),
     })
+}
+
+/// Decode typed native market event rows from a native receipt.
+pub fn native_market_events_from_receipt<TDecoded>(
+    receipt: &NativeReceiptResponse,
+    filter: NativeEventFilter<'_>,
+) -> serde_json::Result<Vec<TypedNativeReceiptEvent<TDecoded>>>
+where
+    TDecoded: DeserializeOwned,
+{
+    native_events_from_receipt(receipt, native_market_receipt_event_filter(filter))
 }
 
 /// Ethereum-shaped transaction view returned by `eth_getTransactionByHash`.
@@ -3278,6 +3310,120 @@ mod tests {
         assert_eq!(typed.events[0].decoded.event_name, "agent.escrow.created");
         assert_eq!(typed.events[0].decoded.amount_lythoshi, "440000000000");
         assert!(typed.events[0].decoded.agent_address.starts_with("mono1"));
+    }
+
+    #[test]
+    fn native_market_helpers_force_market_family() {
+        let receipt_filter = native_market_receipt_event_filter(
+            NativeEventFilter::new()
+                .family("agent")
+                .event_name("market.nft.sale_settled"),
+        );
+        assert_eq!(receipt_filter.family, Some(NATIVE_MARKET_EVENT_FAMILY));
+        assert_eq!(receipt_filter.event_name, Some("market.nft.sale_settled"));
+
+        let historical_filter = native_market_events_filter(
+            NativeEventsFilter::new(100, 120)
+                .family("mrc")
+                .limit(10)
+                .event_name("market.nft.sale_settled"),
+        );
+        assert_eq!(historical_filter.family, Some(NATIVE_MARKET_EVENT_FAMILY));
+        assert_eq!(historical_filter.limit, Some(10));
+        assert_eq!(
+            historical_filter.to_query_pairs(),
+            vec![
+                ("fromBlock", "100".to_owned()),
+                ("toBlock", "120".to_owned()),
+                ("limit", "10".to_owned()),
+                ("family", "market".to_owned()),
+                ("eventName", "market.nft.sale_settled".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn native_market_events_from_receipt_filters_non_market_rows() {
+        #[derive(Debug, Deserialize)]
+        struct MarketEvent {
+            family: String,
+            event_name: String,
+            amount: u64,
+        }
+
+        let market_decoded = serde_json::json!({
+            "block_height": 100,
+            "tx_index": 0,
+            "sequence": 0,
+            "family": "market",
+            "event_name": "market.nft.sale_settled",
+            "payload_hash": format!("0x{}", "44".repeat(32)),
+            "amount": 900
+        });
+        let agent_decoded = serde_json::json!({
+            "block_height": 100,
+            "tx_index": 0,
+            "sequence": 1,
+            "family": "agent",
+            "event_name": "agent.escrow.created",
+            "payload_hash": format!("0x{}", "55".repeat(32)),
+            "amount": 1
+        });
+        let receipt: NativeReceiptResponse = serde_json::from_value(serde_json::json!({
+            "txHash": format!("0x{}", "11".repeat(32)),
+            "blockHash": format!("0x{}", "22".repeat(32)),
+            "blockHeight": 100,
+            "txIndex": 0,
+            "schema": "riscv.receipt.v1",
+            "artifactHash": format!("0x{}", "33".repeat(32)),
+            "counters": { "cycles": 1, "syscallUnits": 0, "stateIoUnits": 0 },
+            "fee": {
+                "total_lythoshi": "0",
+                "total_lyth": "0",
+                "cycles_used": 1,
+                "base_price_per_cycle_lythoshi": "0",
+                "state_io_units": 0,
+                "state_io_price_per_unit_lythoshi": "0",
+                "priority_tip_lythoshi": "0"
+            },
+            "reverted": false,
+            "nativeDeltaCount": 0,
+            "eventCount": 2,
+            "events": [
+                {
+                    "blockHeight": 100,
+                    "txIndex": 0,
+                    "logIndex": 0,
+                    "address": "monox1market",
+                    "eventTopic": format!("0x{}", "66".repeat(32)),
+                    "decoded": market_decoded,
+                    "decodedJson": market_decoded.to_string()
+                },
+                {
+                    "blockHeight": 100,
+                    "txIndex": 0,
+                    "logIndex": 1,
+                    "address": "monox1agent",
+                    "eventTopic": format!("0x{}", "77".repeat(32)),
+                    "decoded": agent_decoded,
+                    "decodedJson": agent_decoded.to_string()
+                }
+            ],
+            "source": {
+                "chainProvider": "mock_chain",
+                "indexerProvider": "native_events",
+                "metadataLogIndex": 4294967295u64
+            }
+        }))
+        .unwrap();
+
+        let rows: Vec<TypedNativeReceiptEvent<MarketEvent>> =
+            native_market_events_from_receipt(&receipt, NativeEventFilter::new()).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].decoded.family, "market");
+        assert_eq!(rows[0].decoded.event_name, "market.nft.sale_settled");
+        assert_eq!(rows[0].decoded.amount, 900);
     }
 
     #[test]

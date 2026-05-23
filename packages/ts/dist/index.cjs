@@ -35,6 +35,10 @@ var SdkError = class _SdkError extends Error {
 };
 
 // src/native-events.ts
+var NATIVE_MARKET_EVENT_FAMILY = "market";
+function nativeMarketEventFilter(filter = {}) {
+  return { ...filter, family: NATIVE_MARKET_EVENT_FAMILY };
+}
 function isNativeDecodedEvent(value) {
   const row = asRecord(value);
   return row !== null && typeof row["block_height"] === "number" && typeof row["tx_index"] === "number" && typeof row["sequence"] === "number" && typeof row["family"] === "string" && typeof row["event_name"] === "string" && typeof row["payload_hash"] === "string";
@@ -74,10 +78,23 @@ function nativeEventsFromReceipt(receipt, filter = {}) {
     decoded: parseNativeDecodedEvent(event)
   }));
 }
+function nativeMarketEventsFromReceipt(receipt, filter = {}) {
+  return nativeEventsFromReceipt(receipt, nativeMarketEventFilter(filter));
+}
 function nativeEventsFromHistory(response) {
   return {
     ...response,
     events: response.events.map((event) => ({
+      ...event,
+      decoded: parseNativeDecodedEvent(event)
+    }))
+  };
+}
+function nativeMarketEventsFromHistory(response) {
+  return {
+    ...response,
+    filters: { ...response.filters, family: NATIVE_MARKET_EVENT_FAMILY },
+    events: response.events.filter((event) => nativeEventMatches(event, { family: NATIVE_MARKET_EVENT_FAMILY })).map((event) => ({
       ...event,
       decoded: parseNativeDecodedEvent(event)
     }))
@@ -191,6 +208,13 @@ var ApiClient = class {
       data: nativeEventsFromReceipt(receipt.data, filter)
     };
   }
+  async transactionNativeReceiptMarketEvents(hash, filter = {}) {
+    const receipt = await this.transactionNativeReceipt(hash);
+    return {
+      ...receipt,
+      data: nativeMarketEventsFromReceipt(receipt.data, filter)
+    };
+  }
   async nativeEvents(filter) {
     return this.get("/native-events", nativeEventsFilterQuery(filter));
   }
@@ -199,6 +223,22 @@ var ApiClient = class {
     return {
       ...response,
       data: nativeEventsFromHistory(response.data)
+    };
+  }
+  async nativeMarketEvents(filter) {
+    return this.nativeEvents({
+      ...filter,
+      family: "market"
+    });
+  }
+  async nativeMarketEventsTyped(filter) {
+    const response = await this.nativeEvents({
+      ...filter,
+      family: "market"
+    });
+    return {
+      ...response,
+      data: nativeMarketEventsFromHistory(response.data)
     };
   }
   async addressProfile(address) {
@@ -1275,6 +1315,11 @@ var RpcClient = class _RpcClient {
     const receipt = await this.lythNativeReceipt(txHash);
     return nativeEventsFromReceipt(receipt, filter);
   }
+  /** Typed native market event rows from `lyth_nativeReceipt`. */
+  async lythNativeReceiptMarketEvents(txHash, filter = {}) {
+    const receipt = await this.lythNativeReceipt(txHash);
+    return nativeMarketEventsFromReceipt(receipt, filter);
+  }
   /** `lyth_nativeEvents` — historical indexed native event rows. */
   async lythNativeEvents(filter) {
     return this.call("lyth_nativeEvents", [nativeEventsFilterParams(filter)]);
@@ -1283,6 +1328,21 @@ var RpcClient = class _RpcClient {
   async lythNativeEventsTyped(filter) {
     const response = await this.lythNativeEvents(filter);
     return nativeEventsFromHistory(response);
+  }
+  /** `lyth_nativeEvents` restricted to native marketplace event rows. */
+  async lythNativeMarketEvents(filter) {
+    return this.lythNativeEvents({
+      ...filter,
+      family: "market"
+    });
+  }
+  /** `lyth_nativeEvents` market rows with decoded rows converted into a caller-selected type. */
+  async lythNativeMarketEventsTyped(filter) {
+    const response = await this.lythNativeEvents({
+      ...filter,
+      family: "market"
+    });
+    return nativeMarketEventsFromHistory(response);
   }
   /** `lyth_gapRecords` — retained ingestion/indexing gaps for a block range. */
   async lythGapRecords(fromBlock, toBlock) {
@@ -3620,6 +3680,7 @@ exports.MonolythiumProvider = MonolythiumProvider;
 exports.MonolythiumSigner = MonolythiumSigner;
 exports.MrvValidationError = MrvValidationError;
 exports.NATIVE_LYTH_DECIMALS = NATIVE_LYTH_DECIMALS;
+exports.NATIVE_MARKET_EVENT_FAMILY = NATIVE_MARKET_EVENT_FAMILY;
 exports.NODE_REGISTRY_CAPABILITIES = NODE_REGISTRY_CAPABILITIES;
 exports.NODE_REGISTRY_CAPABILITY_MASK = NODE_REGISTRY_CAPABILITY_MASK;
 exports.NODE_REGISTRY_PUBLIC_SERVICE_MASK = NODE_REGISTRY_PUBLIC_SERVICE_MASK;
@@ -3691,6 +3752,9 @@ exports.nativeEventMatches = nativeEventMatches;
 exports.nativeEventsFilterParams = nativeEventsFilterParams;
 exports.nativeEventsFromHistory = nativeEventsFromHistory;
 exports.nativeEventsFromReceipt = nativeEventsFromReceipt;
+exports.nativeMarketEventFilter = nativeMarketEventFilter;
+exports.nativeMarketEventsFromHistory = nativeMarketEventsFromHistory;
+exports.nativeMarketEventsFromReceipt = nativeMarketEventsFromReceipt;
 exports.nodeRegistryAddressHex = nodeRegistryAddressHex;
 exports.normalizeAddressHex = normalizeAddressHex;
 exports.parseAddress = parseAddress;

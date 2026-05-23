@@ -7,7 +7,12 @@
  */
 
 import { SdkError } from "./error.js";
-import { nativeEventsFromHistory, nativeEventsFromReceipt } from "./native-events.js";
+import {
+  nativeEventsFromHistory,
+  nativeEventsFromReceipt,
+  nativeMarketEventsFromHistory,
+  nativeMarketEventsFromReceipt,
+} from "./native-events.js";
 import type { ClobMarketResponse } from "./bindings/ClobMarketResponse.js";
 import type { MrcMetadataResponse } from "./bindings/MrcMetadataResponse.js";
 import type { PendingRewardsResponse } from "./bindings/PendingRewardsResponse.js";
@@ -504,6 +509,19 @@ export class ApiClient {
     };
   }
 
+  async transactionNativeReceiptMarketEvents<
+    TDecoded extends NativeDecodedEvent = NativeDecodedEvent,
+  >(
+    hash: string,
+    filter: NativeEventFilter = {},
+  ): Promise<ApiEnvelope<Array<TypedNativeReceiptEvent<TDecoded>>>> {
+    const receipt = await this.transactionNativeReceipt(hash);
+    return {
+      ...receipt,
+      data: nativeMarketEventsFromReceipt<TDecoded>(receipt.data, filter),
+    };
+  }
+
   async nativeEvents<TDecoded = unknown>(
     filter: NativeEventsFilter,
   ): Promise<ApiEnvelope<NativeEventsResponse<TDecoded>>> {
@@ -517,6 +535,28 @@ export class ApiClient {
     return {
       ...response,
       data: nativeEventsFromHistory<TDecoded>(response.data),
+    };
+  }
+
+  async nativeMarketEvents<TDecoded = unknown>(
+    filter: NativeEventsFilter,
+  ): Promise<ApiEnvelope<NativeEventsResponse<TDecoded>>> {
+    return this.nativeEvents<TDecoded>({
+      ...filter,
+      family: "market",
+    });
+  }
+
+  async nativeMarketEventsTyped<
+    TDecoded extends NativeDecodedEvent = NativeDecodedEvent,
+  >(filter: NativeEventsFilter): Promise<ApiEnvelope<NativeEventsResponse<TDecoded>>> {
+    const response = await this.nativeEvents({
+      ...filter,
+      family: "market",
+    });
+    return {
+      ...response,
+      data: nativeMarketEventsFromHistory<TDecoded>(response.data),
     };
   }
 

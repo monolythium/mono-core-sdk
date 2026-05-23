@@ -143,8 +143,12 @@ export type {
   VerticesAtRoundResponse,
 } from "./client.js";
 export {
+  NATIVE_MARKET_EVENT_FAMILY,
   consumeNativeEvents,
   isNativeDecodedEvent,
+  nativeMarketEventFilter,
+  nativeMarketEventsFromHistory,
+  nativeMarketEventsFromReceipt,
   nativeEventMatches,
   nativeEventsFromHistory,
   nativeEventsFromReceipt,

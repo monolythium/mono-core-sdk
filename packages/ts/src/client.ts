@@ -9,7 +9,12 @@
 
 import { addressToBech32, parseAddress } from "./address.js";
 import { SdkError } from "./error.js";
-import { nativeEventsFromHistory, nativeEventsFromReceipt } from "./native-events.js";
+import {
+  nativeEventsFromHistory,
+  nativeEventsFromReceipt,
+  nativeMarketEventsFromHistory,
+  nativeMarketEventsFromReceipt,
+} from "./native-events.js";
 import {
   isConcreteServiceProbeStatus,
   isSinglePublicServiceProbeMask,
@@ -1099,6 +1104,15 @@ export class RpcClient {
     return nativeEventsFromReceipt<TDecoded>(receipt, filter);
   }
 
+  /** Typed native market event rows from `lyth_nativeReceipt`. */
+  async lythNativeReceiptMarketEvents<TDecoded extends NativeDecodedEvent = NativeDecodedEvent>(
+    txHash: string,
+    filter: NativeEventFilter = {},
+  ): Promise<Array<TypedNativeReceiptEvent<TDecoded>>> {
+    const receipt = await this.lythNativeReceipt(txHash);
+    return nativeMarketEventsFromReceipt<TDecoded>(receipt, filter);
+  }
+
   /** `lyth_nativeEvents` — historical indexed native event rows. */
   async lythNativeEvents<TDecoded = unknown>(
     filter: NativeEventsFilter,
@@ -1112,6 +1126,27 @@ export class RpcClient {
   >(filter: NativeEventsFilter): Promise<NativeEventsResponse<TDecoded>> {
     const response = await this.lythNativeEvents(filter);
     return nativeEventsFromHistory<TDecoded>(response);
+  }
+
+  /** `lyth_nativeEvents` restricted to native marketplace event rows. */
+  async lythNativeMarketEvents<TDecoded = unknown>(
+    filter: NativeEventsFilter,
+  ): Promise<NativeEventsResponse<TDecoded>> {
+    return this.lythNativeEvents<TDecoded>({
+      ...filter,
+      family: "market",
+    });
+  }
+
+  /** `lyth_nativeEvents` market rows with decoded rows converted into a caller-selected type. */
+  async lythNativeMarketEventsTyped<
+    TDecoded extends NativeDecodedEvent = NativeDecodedEvent,
+  >(filter: NativeEventsFilter): Promise<NativeEventsResponse<TDecoded>> {
+    const response = await this.lythNativeEvents({
+      ...filter,
+      family: "market",
+    });
+    return nativeMarketEventsFromHistory<TDecoded>(response);
   }
 
   /** `lyth_gapRecords` — retained ingestion/indexing gaps for a block range. */
