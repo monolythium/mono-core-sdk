@@ -13,12 +13,13 @@ use serde_json::Value;
 
 use crate::error::SdkError;
 use crate::types::{
-    native_events_from_receipt, typed_native_events_from_response, AddressFlowResponse,
-    AddressProfileResponse, BlockSelector, ChainStatsResponse, ClobMarketResponse,
-    ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse, ClobTradesResponse,
-    MrcMetadataResponse, NativeEventFilter, NativeEventsFilter, NativeEventsResponse,
-    NativeReceiptFee, NativeReceiptResponse, PendingRewardsResponse, SearchResponse,
-    TxFeedResponse, TypedNativeEventsResponse, TypedNativeReceiptEvent,
+    native_events_from_receipt, native_market_events_filter, native_market_events_from_receipt,
+    typed_native_events_from_response, AddressFlowResponse, AddressProfileResponse, BlockSelector,
+    ChainStatsResponse, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse,
+    ClobOrderBookResponse, ClobTradesResponse, MrcMetadataResponse, NativeEventFilter,
+    NativeEventsFilter, NativeEventsResponse, NativeReceiptFee, NativeReceiptResponse,
+    PendingRewardsResponse, SearchResponse, TxFeedResponse, TypedNativeEventsResponse,
+    TypedNativeReceiptEvent,
 };
 
 /// Typed HTTP API client for `/api/v1`.
@@ -194,6 +195,25 @@ impl ApiClient {
         })
     }
 
+    /// Typed native market event rows from `/transactions/{hash}/native-receipt`.
+    pub async fn transaction_native_receipt_market_events<TDecoded>(
+        &self,
+        hash: &str,
+        filter: NativeEventFilter<'_>,
+    ) -> Result<ApiEnvelope<Vec<TypedNativeReceiptEvent<TDecoded>>>, SdkError>
+    where
+        TDecoded: DeserializeOwned,
+    {
+        let receipt = self.transaction_native_receipt(hash).await?;
+        Ok(ApiEnvelope {
+            schema_version: receipt.schema_version,
+            chain_id: receipt.chain_id,
+            genesis_hash: receipt.genesis_hash,
+            latest: receipt.latest,
+            data: native_market_events_from_receipt::<TDecoded>(&receipt.data, filter)?,
+        })
+    }
+
     /// `/api/v1/native-events`.
     pub async fn native_events(
         &self,
@@ -211,6 +231,33 @@ impl ApiClient {
         TDecoded: DeserializeOwned,
     {
         let response = self.native_events(filter).await?;
+        Ok(ApiEnvelope {
+            schema_version: response.schema_version,
+            chain_id: response.chain_id,
+            genesis_hash: response.genesis_hash,
+            latest: response.latest,
+            data: typed_native_events_from_response::<TDecoded>(&response.data)?,
+        })
+    }
+
+    /// `/api/v1/native-events` restricted to native marketplace event rows.
+    pub async fn native_market_events(
+        &self,
+        filter: NativeEventsFilter<'_>,
+    ) -> Result<ApiEnvelope<NativeEventsResponse>, SdkError> {
+        self.native_events(native_market_events_filter(filter))
+            .await
+    }
+
+    /// `/api/v1/native-events` market rows converted into a caller-selected type.
+    pub async fn native_market_events_typed<TDecoded>(
+        &self,
+        filter: NativeEventsFilter<'_>,
+    ) -> Result<ApiEnvelope<TypedNativeEventsResponse<TDecoded>>, SdkError>
+    where
+        TDecoded: DeserializeOwned,
+    {
+        let response = self.native_market_events(filter).await?;
         Ok(ApiEnvelope {
             schema_version: response.schema_version,
             chain_id: response.chain_id,

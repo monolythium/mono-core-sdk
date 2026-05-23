@@ -24,6 +24,13 @@ interface AgentEscrowCreatedEvent extends NativeDecodedEvent {
   contract_address: string;
 }
 
+interface NativeMarketSaleEvent extends NativeDecodedEvent {
+  family: "market";
+  event_name: "market.nft.sale_settled";
+  listing_id: string;
+  price: string;
+}
+
 interface CapturedCall {
   method: string;
   params: unknown;
@@ -661,6 +668,89 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
         eventName: "agent.escrow.created",
         primaryId,
         account: decoded.agent_address,
+      },
+    ]);
+  });
+
+  it("lythNativeMarketEventsTyped forces market family and filters decoded rows", async () => {
+    const eventTopic = `0x${"aa".repeat(32)}`;
+    const listingId = `0x${"bb".repeat(32)}`;
+    const marketDecoded: NativeMarketSaleEvent = {
+      block_height: 110,
+      tx_index: 0,
+      sequence: 0,
+      family: "market",
+      event_name: "market.nft.sale_settled",
+      payload_hash: `0x${"cc".repeat(32)}`,
+      listing_id: listingId,
+      price: "900",
+    };
+    const agentDecoded: AgentEscrowCreatedEvent = {
+      block_height: 110,
+      tx_index: 0,
+      sequence: 1,
+      family: "agent",
+      event_name: "agent.escrow.created",
+      payload_hash: `0x${"dd".repeat(32)}`,
+      amount_lythoshi: "1",
+      agent_address: "mono1agentconsumer",
+      contract_address: "monos1nativeeventemitter",
+    };
+    const { fetch, calls } = mockFetch({
+      schemaVersion: 1,
+      fromBlock: 110,
+      toBlock: 120,
+      limit: 2,
+      filters: {
+        family: "market",
+        eventName: "market.nft.sale_settled",
+      },
+      events: [
+        {
+          blockHeight: 110,
+          txIndex: 0,
+          logIndex: 0,
+          address: "monox1market",
+          eventTopic,
+          decoded: null,
+          decodedJson: JSON.stringify(marketDecoded),
+        },
+        {
+          blockHeight: 110,
+          txIndex: 0,
+          logIndex: 1,
+          address: "monox1agent",
+          eventTopic: `0x${"ee".repeat(32)}`,
+          decoded: null,
+          decodedJson: JSON.stringify(agentDecoded),
+        },
+      ],
+      source: {
+        indexerProvider: "native_events",
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const response = await client.lythNativeMarketEventsTyped<NativeMarketSaleEvent>({
+      fromBlock: 110,
+      toBlock: 120,
+      limit: 2,
+      family: "agent",
+      eventName: "market.nft.sale_settled",
+    });
+
+    expect(response.filters.family).toBe("market");
+    expect(response.events).toHaveLength(1);
+    expect(response.events[0].decoded.family).toBe("market");
+    expect(response.events[0].decoded.listing_id).toBe(listingId);
+    expect(calls[0].method).toBe("lyth_nativeEvents");
+    expect(calls[0].params).toEqual([
+      {
+        fromBlock: 110,
+        toBlock: 120,
+        limit: 2,
+        family: "market",
+        eventName: "market.nft.sale_settled",
       },
     ]);
   });

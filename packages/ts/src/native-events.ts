@@ -16,12 +16,18 @@ export interface NativeDecodedEvent {
   [field: string]: unknown;
 }
 
+export const NATIVE_MARKET_EVENT_FAMILY = "market" as const;
+
 /** Optional filters applied to native receipt event rows. */
 export interface NativeEventFilter {
   address?: string;
   eventTopic?: string;
   family?: string;
   eventName?: string;
+}
+
+export function nativeMarketEventFilter(filter: NativeEventFilter = {}): NativeEventFilter {
+  return { ...filter, family: NATIVE_MARKET_EVENT_FAMILY };
 }
 
 export type TypedNativeReceiptEvent<TDecoded extends NativeDecodedEvent = NativeDecodedEvent> =
@@ -99,6 +105,15 @@ export function nativeEventsFromReceipt<
     }));
 }
 
+export function nativeMarketEventsFromReceipt<
+  TDecoded extends NativeDecodedEvent = NativeDecodedEvent,
+>(
+  receipt: NativeReceiptResponse<unknown>,
+  filter: NativeEventFilter = {},
+): Array<TypedNativeReceiptEvent<TDecoded>> {
+  return nativeEventsFromReceipt<TDecoded>(receipt, nativeMarketEventFilter(filter));
+}
+
 export function nativeEventsFromHistory<
   TDecoded extends NativeDecodedEvent = NativeDecodedEvent,
 >(response: NativeEventsResponse<unknown>): NativeEventsResponse<TDecoded> {
@@ -108,6 +123,21 @@ export function nativeEventsFromHistory<
       ...event,
       decoded: parseNativeDecodedEvent<TDecoded>(event),
     })),
+  };
+}
+
+export function nativeMarketEventsFromHistory<
+  TDecoded extends NativeDecodedEvent = NativeDecodedEvent,
+>(response: NativeEventsResponse<unknown>): NativeEventsResponse<TDecoded> {
+  return {
+    ...response,
+    filters: { ...response.filters, family: NATIVE_MARKET_EVENT_FAMILY },
+    events: response.events
+      .filter((event) => nativeEventMatches(event, { family: NATIVE_MARKET_EVENT_FAMILY }))
+      .map((event) => ({
+        ...event,
+        decoded: parseNativeDecodedEvent<TDecoded>(event),
+      })),
   };
 }
 

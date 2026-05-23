@@ -62,6 +62,10 @@ pub use mrv::{
     ML_KEM_768_CIPHERTEXT_LEN, ML_KEM_768_ENCAPSULATION_KEY_LEN, ML_KEM_768_SHARED_SECRET_LEN,
     MRV_ENCRYPTION_ALGO_ML_KEM_768, MRV_STRUCTURED_FEE_FIELDS, NATIVE_LYTH_DECIMALS,
 };
+pub use types::{
+    native_market_events_filter, native_market_events_from_receipt,
+    native_market_receipt_event_filter, NATIVE_MARKET_EVENT_FAMILY,
+};
 
 /// Crate version, sourced from `Cargo.toml`.
 #[must_use]
