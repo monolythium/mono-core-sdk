@@ -19,7 +19,7 @@ use crate::address::{
     address_to_hex, address_to_typed_bech32, hex_to_address, typed_bech32_to_address,
     typed_bech32_to_address_kind, AddressKind,
 };
-use crate::types::EncryptionKeyResponse;
+use crate::types::{EncryptionKeyResponse, NativeReceiptFee};
 
 #[cfg(feature = "ts-bindings")]
 use ts_rs::TS;
@@ -244,6 +244,19 @@ pub struct MrvFeeDisplayConformanceReport {
     pub expected_default_fee_text: String,
 }
 
+/// Canonical app-facing display strings for a native receipt fee object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeReceiptFeeDisplay {
+    /// Default surface text suitable for wallet/explorer rows.
+    pub default_fee_text: String,
+    /// Optional detail lines for expanded surfaces.
+    pub detail_texts: Vec<String>,
+    /// Total fee in lythoshi.
+    pub total_lythoshi: String,
+    /// Total fee in canonical LYTH text without the unit suffix.
+    pub total_lyth: String,
+}
+
 /// Check the v4.1 fee-display posture for an app-facing surface.
 #[must_use]
 pub fn check_mrv_fee_display_conformance(
@@ -324,6 +337,36 @@ pub fn assert_mrv_fee_display_conformance(
             failures: report.failures,
         })
     }
+}
+
+/// Format a native receipt fee object for app-facing default fee surfaces.
+///
+/// # Errors
+/// Returns [`MrvValidationError::InvalidDecimal`] when `fee.total_lythoshi`
+/// is not a canonical unsigned decimal value.
+pub fn format_native_receipt_fee_display(
+    fee: &NativeReceiptFee,
+) -> Result<NativeReceiptFeeDisplay, MrvValidationError> {
+    let total = parse_u128_decimal("fee.total_lythoshi", &fee.total_lythoshi)?;
+    let total_lythoshi = fee.total_lythoshi.clone();
+    let total_lyth = format_lyth(total, LythFormatOptions::NUMERIC_ONLY);
+    Ok(NativeReceiptFeeDisplay {
+        default_fee_text: format!("Network fee: {total_lyth} LYTH"),
+        detail_texts: vec![
+            format!(
+                "cycles {}, state I/O {}, total {} lythoshi",
+                fee.cycles_used, fee.state_io_units, total_lythoshi
+            ),
+            format!(
+                "cycle price {} lythoshi, state I/O price {} lythoshi, priority tip {} lythoshi",
+                fee.base_price_per_cycle_lythoshi,
+                fee.state_io_price_per_unit_lythoshi,
+                fee.priority_tip_lythoshi
+            ),
+        ],
+        total_lythoshi,
+        total_lyth,
+    })
 }
 
 /// Approved MRV RISC-V profile.
@@ -3539,6 +3582,43 @@ mod tests {
             )),
             Err(MrvValidationError::FeeDisplayConformance { .. })
         ));
+    }
+
+    #[test]
+    fn native_receipt_fee_display_formats_default_surface() {
+        let fee = NativeReceiptFee {
+            total_lythoshi: "825000000000".to_owned(),
+            total_lyth: "8,250".to_owned(),
+            cycles_used: 47,
+            base_price_per_cycle_lythoshi: "10000000000".to_owned(),
+            state_io_units: 2,
+            state_io_price_per_unit_lythoshi: "40000000000".to_owned(),
+            priority_tip_lythoshi: "15000000000".to_owned(),
+        };
+
+        let display = format_native_receipt_fee_display(&fee).unwrap();
+        assert_eq!(
+            display,
+            NativeReceiptFeeDisplay {
+                default_fee_text: "Network fee: 8,250 LYTH".to_owned(),
+                detail_texts: vec![
+                    "cycles 47, state I/O 2, total 825000000000 lythoshi".to_owned(),
+                    "cycle price 10000000000 lythoshi, state I/O price 40000000000 lythoshi, priority tip 15000000000 lythoshi".to_owned(),
+                ],
+                total_lythoshi: "825000000000".to_owned(),
+                total_lyth: "8,250".to_owned(),
+            }
+        );
+        let detail_refs = display
+            .detail_texts
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        assert_mrv_fee_display_conformance(
+            &MrvFeeDisplayConformanceInput::new(825_000_000_000, &display.default_fee_text)
+                .detail_texts(&detail_refs),
+        )
+        .unwrap();
     }
 
     fn valid_metadata() -> MrvArtifactMetadata {
