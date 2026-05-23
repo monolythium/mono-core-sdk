@@ -473,6 +473,14 @@ var BridgePrecompileError = class extends Error {
     this.name = "BridgePrecompileError";
   }
 };
+var BridgeRouteCatalogueError = class extends Error {
+  blockedReasons;
+  constructor(blockedReasons) {
+    super(`invalid bridge route catalogue: ${blockedReasons.join("; ")}`);
+    this.name = "BridgeRouteCatalogueError";
+    this.blockedReasons = [...blockedReasons];
+  }
+};
 function bridgeAddressHex() {
   return PRECOMPILE_ADDRESSES.BRIDGE.toLowerCase();
 }
@@ -671,6 +679,195 @@ function bridgeRoutesReadiness(request) {
     source
   };
 }
+function buildBridgeRouteCatalogue(routes) {
+  return { routes: routes.map(cloneBridgeRouteCatalogueRoute) };
+}
+function parseBridgeRouteCatalogueJson(json) {
+  const decoded = JSON.parse(json);
+  return normalizeBridgeRouteCatalogue(decoded);
+}
+function normalizeBridgeRouteCatalogue(payload) {
+  const validation = validateBridgeRouteCatalogue(payload);
+  if (!validation.accepted) {
+    throw new BridgeRouteCatalogueError(validation.blockedReasons);
+  }
+  const routes = routeArrayFromCataloguePayload(payload);
+  if (routes == null) {
+    throw new BridgeRouteCatalogueError(["route catalogue must be an array or { routes: [...] }"]);
+  }
+  return { routes: routes.map((route) => coerceBridgeRouteCatalogueRoute(route)) };
+}
+function validateBridgeRouteCatalogue(payload) {
+  const routes = routeArrayFromCataloguePayload(payload);
+  const blockedReasons = [];
+  if (routes == null) {
+    return {
+      accepted: false,
+      routeCount: 0,
+      blockedReasons: ["route catalogue must be an array or { routes: [...] }"]
+    };
+  }
+  if (routes.length === 0) {
+    blockedReasons.push("bridge route import must contain at least one route");
+  }
+  const seen = /* @__PURE__ */ new Set();
+  routes.forEach(
+    (route, idx) => validateBridgeRouteCatalogueRoute(idx, route, seen, blockedReasons)
+  );
+  return {
+    accepted: blockedReasons.length === 0,
+    routeCount: routes.length,
+    blockedReasons
+  };
+}
+function exportBridgeRouteCatalogueJson(payload, options = {}) {
+  const catalogue = normalizeBridgeRouteCatalogue(payload);
+  const value = options.envelope === false ? catalogue.routes : catalogue;
+  return JSON.stringify(value, null, options.space ?? 2);
+}
+var MAX_U256 = (1n << 256n) - 1n;
+function routeArrayFromCataloguePayload(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (isRecord(payload) && Array.isArray(payload.routes)) return payload.routes;
+  return null;
+}
+function validateBridgeRouteCatalogueRoute(idx, value, seen, blockedReasons) {
+  const prefix = `routes[${idx}]`;
+  if (!isRecord(value)) {
+    blockedReasons.push(`${prefix} must be an object`);
+    return;
+  }
+  const tokenId = validateHexBytes(
+    `${prefix}.tokenId`,
+    field(value, "tokenId", "token_id"),
+    32,
+    blockedReasons
+  );
+  const routeId = validateTextField(
+    `${prefix}.routeId`,
+    field(value, "routeId", "route_id"),
+    96,
+    blockedReasons
+  );
+  if (tokenId != null && routeId != null) {
+    const key = `${tokenId}:${routeId}`;
+    if (seen.has(key)) {
+      blockedReasons.push(`${prefix}.routeId duplicate (tokenId, routeId) in bridge route import`);
+    } else {
+      seen.add(key);
+    }
+  }
+  validateHexBytes(
+    `${prefix}.bridgeId`,
+    field(value, "bridgeId", "bridge_id"),
+    32,
+    blockedReasons
+  );
+  validateHexBytes(
+    `${prefix}.wrappedAsset`,
+    field(value, "wrappedAsset", "wrapped_asset"),
+    20,
+    blockedReasons
+  );
+  validateTextField(`${prefix}.bridge`, value.bridge, 64, blockedReasons);
+  validateTextField(`${prefix}.asset`, value.asset, 64, blockedReasons);
+  validateTextField(
+    `${prefix}.sourceChain`,
+    field(value, "sourceChain", "source_chain"),
+    64,
+    blockedReasons
+  );
+  validateTextField(
+    `${prefix}.destinationChain`,
+    field(value, "destinationChain", "destination_chain"),
+    64,
+    blockedReasons
+  );
+  const verifier = value.verifier;
+  if (!isRecord(verifier)) {
+    blockedReasons.push(`${prefix}.verifier must be an object`);
+  } else {
+    validateTextField(`${prefix}.verifier.model`, verifier.model, 64, blockedReasons);
+    const participantCount = field(verifier, "participantCount", "participant_count");
+    if (!isU16(participantCount) || participantCount === 0) {
+      blockedReasons.push(`${prefix}.verifier.participantCount must be non-zero`);
+    }
+    if (!isU16(verifier.threshold) || verifier.threshold === 0) {
+      blockedReasons.push(`${prefix}.verifier.threshold must be in 1..=participantCount`);
+    } else if (isU16(participantCount) && verifier.threshold > participantCount) {
+      blockedReasons.push(`${prefix}.verifier.threshold must be in 1..=participantCount`);
+    }
+  }
+  if (!decimalStringIsPositiveU256(field(value, "drainCapAtomic", "drain_cap_atomic"))) {
+    blockedReasons.push(`${prefix}.drainCapAtomic must be a non-zero decimal u256`);
+  }
+  if (!isSafeIntegerAtLeast(field(value, "finalityBlocks", "finality_blocks"), 1)) {
+    blockedReasons.push(`${prefix}.finalityBlocks must be non-zero`);
+  }
+  if (!isSafeIntegerAtLeast(field(value, "cooldownSeconds", "cooldown_seconds"), 1)) {
+    blockedReasons.push(`${prefix}.cooldownSeconds must be non-zero`);
+  }
+  if (parseBridgeAdminControl(field(value, "adminControl", "admin_control")) == null) {
+    blockedReasons.push(
+      `${prefix}.adminControl expected none, consensusOnly, operatorKey, or unknown`
+    );
+  }
+  if (parseBridgeCircuitBreaker(field(value, "circuitBreaker", "circuit_breaker")) == null) {
+    blockedReasons.push(`${prefix}.circuitBreaker expected armed, paused, disabled, or unknown`);
+  }
+  if (!decimalStringIsPositiveU256(field(value, "insuranceAtomic", "insurance_atomic"))) {
+    blockedReasons.push(`${prefix}.insuranceAtomic must be a non-zero decimal u256`);
+  }
+  if (!isSafeIntegerAtLeast(field(value, "updatedAtBlock", "updated_at_block"), 0)) {
+    blockedReasons.push(`${prefix}.updatedAtBlock must be a non-negative safe integer`);
+  }
+  const incident = field(value, "lastIncidentDate", "last_incident_date");
+  if (incident !== void 0 && incident !== null) {
+    if (typeof incident !== "string" || !incidentDateIsValid(incident)) {
+      blockedReasons.push(`${prefix}.lastIncidentDate must be YYYY-MM-DD`);
+    }
+  }
+}
+function coerceBridgeRouteCatalogueRoute(value) {
+  if (!isRecord(value) || !isRecord(value.verifier)) {
+    throw new BridgeRouteCatalogueError(["route catalogue validation did not normalize an object"]);
+  }
+  const lastIncidentDate = field(value, "lastIncidentDate", "last_incident_date");
+  const route = {
+    tokenId: stringField(value, "tokenId", "token_id"),
+    routeId: stringField(value, "routeId", "route_id").trim(),
+    bridgeId: stringField(value, "bridgeId", "bridge_id"),
+    wrappedAsset: stringField(value, "wrappedAsset", "wrapped_asset"),
+    bridge: stringField(value, "bridge").trim(),
+    asset: stringField(value, "asset").trim(),
+    sourceChain: stringField(value, "sourceChain", "source_chain").trim(),
+    destinationChain: stringField(value, "destinationChain", "destination_chain").trim(),
+    verifier: {
+      model: stringField(value.verifier, "model").trim(),
+      participantCount: numberField(value.verifier, "participantCount", "participant_count"),
+      threshold: numberField(value.verifier, "threshold")
+    },
+    drainCapAtomic: stringField(value, "drainCapAtomic", "drain_cap_atomic").trim(),
+    finalityBlocks: numberField(value, "finalityBlocks", "finality_blocks"),
+    cooldownSeconds: numberField(value, "cooldownSeconds", "cooldown_seconds"),
+    adminControl: parseBridgeAdminControl(field(value, "adminControl", "admin_control")),
+    circuitBreaker: parseBridgeCircuitBreaker(field(value, "circuitBreaker", "circuit_breaker")),
+    insuranceAtomic: stringField(value, "insuranceAtomic", "insurance_atomic").trim(),
+    updatedAtBlock: numberField(value, "updatedAtBlock", "updated_at_block")
+  };
+  if (typeof lastIncidentDate === "string") {
+    route.lastIncidentDate = lastIncidentDate.trim();
+  } else if (lastIncidentDate === null) {
+    route.lastIncidentDate = null;
+  }
+  return route;
+}
+function cloneBridgeRouteCatalogueRoute(route) {
+  return {
+    ...route,
+    verifier: { ...route.verifier }
+  };
+}
 function bridgeRouteCandidate(intent, intentReasons, route) {
   const assessment = assessBridgeRoute(route);
   const blockedReasons = [...intentReasons, ...assessment.blockedReasons];
@@ -762,6 +959,97 @@ function normalizedDecimalDigits(value) {
 }
 function trimmedEq(left, right) {
   return left.trim() === right.trim();
+}
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function field(record, camel, snake) {
+  if (Object.prototype.hasOwnProperty.call(record, camel)) return record[camel];
+  if (snake != null && Object.prototype.hasOwnProperty.call(record, snake)) return record[snake];
+  return void 0;
+}
+function stringField(record, camel, snake) {
+  return field(record, camel, snake);
+}
+function numberField(record, camel, snake) {
+  return field(record, camel, snake);
+}
+function validateTextField(name, value, maxLen, blockedReasons) {
+  if (typeof value !== "string") {
+    blockedReasons.push(`${name} must be 1..=${maxLen} bytes`);
+    return null;
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || utf8ByteLength(trimmed) > maxLen) {
+    blockedReasons.push(`${name} must be 1..=${maxLen} bytes`);
+    return null;
+  }
+  return trimmed;
+}
+function validateHexBytes(name, value, expectedBytes, blockedReasons) {
+  if (typeof value !== "string") {
+    blockedReasons.push(`${name} must be ${expectedBytes} bytes of hex`);
+    return null;
+  }
+  const trimmed = value.trim();
+  const body = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed;
+  if (body.length !== expectedBytes * 2 || !/^[0-9a-fA-F]+$/.test(body)) {
+    blockedReasons.push(`${name} must be ${expectedBytes} bytes of hex`);
+    return null;
+  }
+  return body.toLowerCase();
+}
+function isU16(value) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 65535;
+}
+function isSafeIntegerAtLeast(value, minimum) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= minimum;
+}
+function decimalStringIsPositiveU256(value) {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (!/^[0-9]+$/.test(trimmed)) return false;
+  const parsed = BigInt(trimmed);
+  return parsed > 0n && parsed <= MAX_U256;
+}
+function parseBridgeAdminControl(value) {
+  if (typeof value !== "string") return null;
+  switch (enumKey(value)) {
+    case "none":
+      return "none";
+    case "consensusonly":
+      return "consensusOnly";
+    case "operatorkey":
+      return "operatorKey";
+    case "unknown":
+      return "unknown";
+    default:
+      return null;
+  }
+}
+function parseBridgeCircuitBreaker(value) {
+  if (typeof value !== "string") return null;
+  switch (enumKey(value)) {
+    case "armed":
+      return "armed";
+    case "paused":
+      return "paused";
+    case "disabled":
+      return "disabled";
+    case "unknown":
+      return "unknown";
+    default:
+      return null;
+  }
+}
+function enumKey(value) {
+  return [...value].filter((c) => c !== "_" && c !== "-").join("").toLowerCase();
+}
+function incidentDateIsValid(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
+}
+function utf8ByteLength(value) {
+  return new TextEncoder().encode(value).length;
 }
 function expectLength(value, len, name) {
   if (value.length !== len) {
@@ -2660,10 +2948,10 @@ async function buildEncryptedSubmission(args) {
 async function submitEncryptedEnvelope(client, envelopeWireHex) {
   return client.call("lyth_submitEncrypted", [envelopeWireHex]);
 }
-function u128Checked(value, field) {
+function u128Checked(value, field2) {
   const cap = (1n << 128n) - 1n;
   if (value < 0n || value > cap) {
-    throw new Error(`${field} must fit in u128 for encrypted nonce AAD`);
+    throw new Error(`${field2} must fit in u128 for encrypted nonce AAD`);
   }
   return value;
 }
@@ -3119,44 +3407,44 @@ function assertMrvNativeSubmissionEnvelope(plan) {
   assertU128Lythoshi("maxExecutionFeeLythoshi", plan.nativeTx.maxExecutionFeeLythoshi);
   assertU128Lythoshi("priorityTipLythoshi", plan.nativeTx.priorityTipLythoshi);
 }
-function assertMrvV1Extension(extension, field) {
+function assertMrvV1Extension(extension, field2) {
   if (extension.kind !== MRV_TX_EXTENSION_KIND) {
-    throw new MrvValidationError(`${field}.kind must be MRV v1 extension kind`);
+    throw new MrvValidationError(`${field2}.kind must be MRV v1 extension kind`);
   }
-  const bodyHex = normalizeBytesHex("bodyHex" in extension ? extension.bodyHex : extension.body, `${field}.body`);
+  const bodyHex = normalizeBytesHex("bodyHex" in extension ? extension.bodyHex : extension.body, `${field2}.body`);
   if (bodyHex !== "0x01") {
-    throw new MrvValidationError(`${field}.body must be MRV v1 extension body`);
+    throw new MrvValidationError(`${field2}.body must be MRV v1 extension body`);
   }
 }
-function assertSameBigint(field, actual, expected) {
-  if (normalizeU64Like(actual, field) !== expected) {
-    throw new MrvValidationError(`${field} must match nativeTx`);
+function assertSameBigint(field2, actual, expected) {
+  if (normalizeU64Like(actual, field2) !== expected) {
+    throw new MrvValidationError(`${field2} must match nativeTx`);
   }
 }
-function assertSameDecimal(field, actual, expected) {
-  if (normalizeDecimalLike(field, actual) !== expected) {
-    throw new MrvValidationError(`${field} must match nativeTx`);
+function assertSameDecimal(field2, actual, expected) {
+  if (normalizeDecimalLike(field2, actual) !== expected) {
+    throw new MrvValidationError(`${field2} must match nativeTx`);
   }
 }
-function assertU128Lythoshi(field, value) {
-  const normalized = BigInt(normalizeDecimalLike(field, value));
+function assertU128Lythoshi(field2, value) {
+  const normalized = BigInt(normalizeDecimalLike(field2, value));
   if (normalized > (1n << 128n) - 1n) {
-    throw new MrvValidationError(`${field} must fit in u128 for encrypted submission`);
+    throw new MrvValidationError(`${field2} must fit in u128 for encrypted submission`);
   }
 }
-function normalizeNativeTxToHex(value, field) {
+function normalizeNativeTxToHex(value, field2) {
   if (value === null) return null;
-  const bytes = bytesFrom(value, field);
+  const bytes = bytesFrom(value, field2);
   if (bytes.length !== 20) {
-    throw new MrvValidationError(`${field} must be a 20-byte address`);
+    throw new MrvValidationError(`${field2} must be a 20-byte address`);
   }
   return bytesToHex4(bytes).toLowerCase();
 }
-function normalizeU64Like(value, field) {
+function normalizeU64Like(value, field2) {
   if (typeof value === "string") {
-    return normalizeU64(BigInt(normalizeDecimalLike(field, value)), field);
+    return normalizeU64(BigInt(normalizeDecimalLike(field2, value)), field2);
   }
-  return normalizeU64(value, field);
+  return normalizeU64(value, field2);
 }
 function validateMemory(initialPages, maxPages, stackBytes) {
   if (initialPages === 0) throw new MrvValidationError("initialPages is zero");
@@ -3214,8 +3502,8 @@ function validateImports(imports) {
   }
   return resolved;
 }
-function validateOptionalDecimal(field, value) {
-  if (value !== void 0) validateDecimal(field, value);
+function validateOptionalDecimal(field2, value) {
+  if (value !== void 0) validateDecimal(field2, value);
 }
 function applyRequestOptions(request, options) {
   if (options.from !== void 0) request.from = options.from;
@@ -3231,11 +3519,11 @@ function applyRequestOptions(request, options) {
   const nonce = normalizeOptionalU64("nonce", options.nonce);
   if (nonce !== void 0) request.nonce = nonce;
 }
-function normalizeBytesHex(value, field) {
-  return bytesToHex4(bytesFrom(value, field));
+function normalizeBytesHex(value, field2) {
+  return bytesToHex4(bytesFrom(value, field2));
 }
-function normalizeOptionalDecimalLike(field, value) {
-  return value === void 0 ? void 0 : normalizeDecimalLike(field, value);
+function normalizeOptionalDecimalLike(field2, value) {
+  return value === void 0 ? void 0 : normalizeDecimalLike(field2, value);
 }
 function formatWholeWithCommas(value) {
   const digits = value.toString();
@@ -3296,19 +3584,19 @@ function hasStateIOTerms(tokens) {
   return tokens.some((token, index) => token === "state" && tokens[index + 1] === "i" && tokens[index + 2] === "o");
 }
 function checkStructuredFeeObject(value, expectedTotalLythoshi, failures) {
-  if (!isRecord(value)) {
+  if (!isRecord2(value)) {
     failures.push("structuredFee must be an object");
     return;
   }
   const expectedFields = new Set(MRV_STRUCTURED_FEE_FIELDS);
   const actualFields = Object.keys(value);
-  for (const field of MRV_STRUCTURED_FEE_FIELDS) {
-    if (!(field in value)) failures.push(`structuredFee is missing '${field}'`);
+  for (const field2 of MRV_STRUCTURED_FEE_FIELDS) {
+    if (!(field2 in value)) failures.push(`structuredFee is missing '${field2}'`);
   }
-  for (const field of actualFields) {
-    if (!expectedFields.has(field)) failures.push(`structuredFee has unexpected field '${field}'`);
+  for (const field2 of actualFields) {
+    if (!expectedFields.has(field2)) failures.push(`structuredFee has unexpected field '${field2}'`);
   }
-  const totalLythoshi = stringField(value, "total_lythoshi", failures);
+  const totalLythoshi = stringField2(value, "total_lythoshi", failures);
   if (totalLythoshi !== void 0 && totalLythoshi !== expectedTotalLythoshi) {
     failures.push(`structuredFee.total_lythoshi must be ${expectedTotalLythoshi}`);
   }
@@ -3317,46 +3605,46 @@ function checkStructuredFeeObject(value, expectedTotalLythoshi, failures) {
   if (totalLyth !== void 0 && totalLyth !== expectedTotalLyth) {
     failures.push(`structuredFee.total_lyth must be ${expectedTotalLyth}`);
   }
-  for (const field of [
+  for (const field2 of [
     "base_price_per_cycle_lythoshi",
     "state_io_price_per_unit_lythoshi",
     "priority_tip_lythoshi"
   ]) {
-    stringField(value, field, failures);
+    stringField2(value, field2, failures);
   }
-  for (const field of ["cycles_used", "state_io_units"]) {
-    integerField(value, field, failures);
+  for (const field2 of ["cycles_used", "state_io_units"]) {
+    integerField(value, field2, failures);
   }
 }
-function isRecord(value) {
+function isRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function stringField(value, field, failures) {
-  const fieldValue = value[field];
+function stringField2(value, field2, failures) {
+  const fieldValue = value[field2];
   if (typeof fieldValue !== "string" || !isCanonicalUnsignedDecimalString(fieldValue)) {
-    failures.push(`structuredFee.${field} must be a canonical unsigned decimal string`);
+    failures.push(`structuredFee.${field2} must be a canonical unsigned decimal string`);
     return void 0;
   }
   return fieldValue;
 }
-function lythDecimalField(value, field, failures) {
-  const fieldValue = value[field];
+function lythDecimalField(value, field2, failures) {
+  const fieldValue = value[field2];
   if (typeof fieldValue !== "string") {
-    failures.push(`structuredFee.${field} must be a canonical LYTH decimal string`);
+    failures.push(`structuredFee.${field2} must be a canonical LYTH decimal string`);
     return void 0;
   }
   try {
     parseLythToLythoshi(`${fieldValue} LYTH`);
   } catch {
-    failures.push(`structuredFee.${field} must be a canonical LYTH decimal string`);
+    failures.push(`structuredFee.${field2} must be a canonical LYTH decimal string`);
     return void 0;
   }
   return fieldValue;
 }
-function integerField(value, field, failures) {
-  const fieldValue = value[field];
+function integerField(value, field2, failures) {
+  const fieldValue = value[field2];
   if (typeof fieldValue !== "number" || !Number.isSafeInteger(fieldValue) || fieldValue < 0) {
-    failures.push(`structuredFee.${field} must be a non-negative safe integer`);
+    failures.push(`structuredFee.${field2} must be a non-negative safe integer`);
   }
 }
 function isCanonicalUnsignedDecimalString(value) {
@@ -3368,61 +3656,61 @@ function isCanonicalUnsignedDecimalString(value) {
     return false;
   }
 }
-function normalizeDecimalLike(field, value, defaultValue) {
+function normalizeDecimalLike(field2, value, defaultValue) {
   if (value === void 0) {
-    if (defaultValue === void 0) throw new MrvValidationError(`${field} is required`);
+    if (defaultValue === void 0) throw new MrvValidationError(`${field2} is required`);
     return defaultValue;
   }
   if (typeof value === "string") {
-    validateDecimal(field, value);
+    validateDecimal(field2, value);
     return value;
   }
   if (typeof value === "number" && !Number.isSafeInteger(value)) {
-    throw new MrvValidationError(`${field} must be a safe unsigned integer`);
+    throw new MrvValidationError(`${field2} must be a safe unsigned integer`);
   }
   const out = BigInt(value);
-  if (out < 0n) throw new MrvValidationError(`${field} must be a canonical unsigned decimal string`);
+  if (out < 0n) throw new MrvValidationError(`${field2} must be a canonical unsigned decimal string`);
   return out.toString();
 }
-function normalizeOptionalU64(field, value) {
-  return value === void 0 ? void 0 : normalizeU64(value, field);
+function normalizeOptionalU64(field2, value) {
+  return value === void 0 ? void 0 : normalizeU64(value, field2);
 }
-function validateDecimal(field, value) {
+function validateDecimal(field2, value) {
   if (!/^(0|[1-9][0-9]*)$/.test(value)) {
-    throw new MrvValidationError(`${field} must be a canonical unsigned decimal string`);
+    throw new MrvValidationError(`${field2} must be a canonical unsigned decimal string`);
   }
   try {
     BigInt(value);
   } catch {
-    throw new MrvValidationError(`${field} must be a canonical unsigned decimal string`);
+    throw new MrvValidationError(`${field2} must be a canonical unsigned decimal string`);
   }
 }
-function validateExecutionUnitLimit(field, value) {
+function validateExecutionUnitLimit(field2, value) {
   if (value !== void 0 && BigInt(value) === 0n) {
-    throw new MrvValidationError(`${field} must be greater than zero`);
+    throw new MrvValidationError(`${field2} must be greater than zero`);
   }
 }
-function normalizeU64(value, field) {
+function normalizeU64(value, field2) {
   if (typeof value === "number" && !Number.isSafeInteger(value)) {
-    throw new MrvValidationError(`${field} must be a safe unsigned integer`);
+    throw new MrvValidationError(`${field2} must be a safe unsigned integer`);
   }
   const out = BigInt(value);
   if (out < 0n || out > 0xffffffffffffffffn) {
-    throw new MrvValidationError(`${field} must fit in u64`);
+    throw new MrvValidationError(`${field2} must fit in u64`);
   }
   return out;
 }
-function validateHexLength(field, value, expected) {
-  const bytes = hexToBytes4(value, field);
-  if (bytes.length !== expected) throw new MrvValidationError(`${field} must be ${expected} bytes`);
+function validateHexLength(field2, value, expected) {
+  const bytes = hexToBytes4(value, field2);
+  if (bytes.length !== expected) throw new MrvValidationError(`${field2} must be ${expected} bytes`);
 }
-function bytesFrom(value, field) {
-  if (typeof value === "string") return hexToBytes4(value, field);
+function bytesFrom(value, field2) {
+  if (typeof value === "string") return hexToBytes4(value, field2);
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes4(value, field) {
+function hexToBytes4(value, field2) {
   if (!/^0x(?:[0-9a-fA-F]{2})*$/.test(value)) {
-    throw new MrvValidationError(`${field} must be 0x-prefixed even-length hex`);
+    throw new MrvValidationError(`${field2} must be 0x-prefixed even-length hex`);
   }
   const out = new Uint8Array((value.length - 2) / 2);
   for (let i = 0; i < out.length; i++) {
@@ -4056,6 +4344,7 @@ exports.BRIDGE_SELECTORS = BRIDGE_SELECTORS;
 exports.BRIDGE_SUBMIT_API_BLOCKED_REASON = BRIDGE_SUBMIT_API_BLOCKED_REASON;
 exports.BURN_ADDR = BURN_ADDR;
 exports.BridgePrecompileError = BridgePrecompileError;
+exports.BridgeRouteCatalogueError = BridgeRouteCatalogueError;
 exports.CHAIN_REGISTRY = CHAIN_REGISTRY;
 exports.CHAIN_REGISTRY_RAW_BASE = CHAIN_REGISTRY_RAW_BASE;
 exports.DELEGATION_REVERT_TAGS = DELEGATION_REVERT_TAGS;
@@ -4116,6 +4405,7 @@ exports.bridgeAddressHex = bridgeAddressHex;
 exports.bridgeQuoteSubmitReadiness = bridgeQuoteSubmitReadiness;
 exports.bridgeRoutesReadiness = bridgeRoutesReadiness;
 exports.bridgeTransferCandidates = bridgeTransferCandidates;
+exports.buildBridgeRouteCatalogue = buildBridgeRouteCatalogue;
 exports.buildMrvCallNativeTxPlan = buildMrvCallNativeTxPlan;
 exports.buildMrvCallPlan = buildMrvCallPlan;
 exports.buildMrvCallRequest = buildMrvCallRequest;
@@ -4143,6 +4433,7 @@ exports.encodeSetBridgeResumeCooldownCalldata = encodeSetBridgeResumeCooldownCal
 exports.encodeSetBridgeRouteFinalityCalldata = encodeSetBridgeRouteFinalityCalldata;
 exports.encodeSetPolicyCalldata = encodeSetPolicyCalldata;
 exports.encodeSetPolicyClaimCalldata = encodeSetPolicyClaimCalldata;
+exports.exportBridgeRouteCatalogueJson = exportBridgeRouteCatalogueJson;
 exports.fetchChainInfoLatest = fetchChainInfoLatest;
 exports.fetchChainRegistryLatest = fetchChainRegistryLatest;
 exports.formatLyth = formatLyth;
@@ -4175,7 +4466,9 @@ exports.nativeMarketEventsFromHistory = nativeMarketEventsFromHistory;
 exports.nativeMarketEventsFromReceipt = nativeMarketEventsFromReceipt;
 exports.nodeRegistryAddressHex = nodeRegistryAddressHex;
 exports.normalizeAddressHex = normalizeAddressHex;
+exports.normalizeBridgeRouteCatalogue = normalizeBridgeRouteCatalogue;
 exports.parseAddress = parseAddress;
+exports.parseBridgeRouteCatalogueJson = parseBridgeRouteCatalogueJson;
 exports.parseChainRegistryToml = parseChainRegistryToml;
 exports.parseLythToLythoshi = parseLythToLythoshi;
 exports.parseNativeDecodedEvent = parseNativeDecodedEvent;
@@ -4192,6 +4485,7 @@ exports.translateBlockOut = translateBlockOut;
 exports.translateReceiptOut = translateReceiptOut;
 exports.translateTxIn = translateTxIn;
 exports.typedBech32ToAddress = typedBech32ToAddress;
+exports.validateBridgeRouteCatalogue = validateBridgeRouteCatalogue;
 exports.validateMrvArtifactMetadata = validateMrvArtifactMetadata;
 exports.validateMrvCallRequest = validateMrvCallRequest;
 exports.validateMrvDeployRequest = validateMrvDeployRequest;

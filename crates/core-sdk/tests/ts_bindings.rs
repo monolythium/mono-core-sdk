@@ -12,7 +12,8 @@
 
 use monolythium_core_sdk::bridge::{
     BridgeAdminControl, BridgeCircuitBreakerState, BridgeQuoteSubmitReadiness, BridgeRiskTier,
-    BridgeRouteAssessment, BridgeRouteCandidate, BridgeRouteDisclosure, BridgeRouteSelection,
+    BridgeRouteAssessment, BridgeRouteCandidate, BridgeRouteCatalogue, BridgeRouteCatalogueRoute,
+    BridgeRouteCatalogueValidation, BridgeRouteDisclosure, BridgeRouteSelection,
     BridgeRoutesRequest, BridgeRoutesResponse, BridgeRoutesSource, BridgeTransferIntent,
     BridgeTransferRequest, BridgeVerifierDisclosure,
 };
@@ -69,6 +70,9 @@ fn export_bindings() {
     BridgeRiskTier::export_all_to(&out).expect("BridgeRiskTier");
     BridgeRouteAssessment::export_all_to(&out).expect("BridgeRouteAssessment");
     BridgeRouteCandidate::export_all_to(&out).expect("BridgeRouteCandidate");
+    BridgeRouteCatalogue::export_all_to(&out).expect("BridgeRouteCatalogue");
+    BridgeRouteCatalogueRoute::export_all_to(&out).expect("BridgeRouteCatalogueRoute");
+    BridgeRouteCatalogueValidation::export_all_to(&out).expect("BridgeRouteCatalogueValidation");
     BridgeRouteDisclosure::export_all_to(&out).expect("BridgeRouteDisclosure");
     BridgeRouteSelection::export_all_to(&out).expect("BridgeRouteSelection");
     BridgeRoutesRequest::export_all_to(&out).expect("BridgeRoutesRequest");

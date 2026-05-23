@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
-use std::cmp::Ordering;
+use std::{cmp::Ordering, collections::HashSet};
 
 use crate::consts::precompile_addresses;
 
@@ -194,12 +194,20 @@ fn encode_u256_word(out: &mut Vec<u8>, value: u64) {
 )]
 pub enum BridgeAdminControl {
     /// No Mono-side admin key can mutate route parameters.
+    #[serde(alias = "NONE", alias = "None")]
     None,
     /// Route changes require the chain's consensus/milestone path.
+    #[serde(
+        alias = "consensus_only",
+        alias = "consensus-only",
+        alias = "ConsensusOnly"
+    )]
     ConsensusOnly,
     /// A third-party operator key can mutate Mono-side route parameters.
+    #[serde(alias = "operator_key", alias = "operator-key", alias = "OperatorKey")]
     OperatorKey,
     /// The disclosure did not identify the admin posture.
+    #[serde(alias = "UNKNOWN", alias = "Unknown")]
     Unknown,
 }
 
@@ -213,12 +221,16 @@ pub enum BridgeAdminControl {
 )]
 pub enum BridgeCircuitBreakerState {
     /// Circuit breaker is armed and route is open.
+    #[serde(alias = "ARMED", alias = "Armed")]
     Armed,
     /// Route is intentionally paused.
+    #[serde(alias = "PAUSED", alias = "Paused")]
     Paused,
     /// No circuit breaker is configured.
+    #[serde(alias = "DISABLED", alias = "Disabled")]
     Disabled,
     /// Disclosure did not identify the breaker state.
+    #[serde(alias = "UNKNOWN", alias = "Unknown")]
     Unknown,
 }
 
@@ -234,6 +246,7 @@ pub struct BridgeVerifierDisclosure {
     /// Human-readable verifier model, e.g. `CCIP DON`, `LayerZero DVN`.
     pub model: String,
     /// Number of independent verifier participants.
+    #[serde(alias = "participant_count")]
     pub participant_count: u16,
     /// Minimum approvals needed to release or verify a message.
     pub threshold: u16,
@@ -278,6 +291,114 @@ pub struct BridgeRouteDisclosure {
     #[serde(default)]
     #[cfg_attr(feature = "ts-bindings", ts(optional = nullable))]
     pub last_incident_date: Option<String>,
+}
+
+/// Trusted bridge route catalogue payload accepted by `mono-core` CLI imports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "BridgeRouteCatalogue.ts")
+)]
+pub struct BridgeRouteCatalogue {
+    /// Route rows to import. The CLI also accepts a raw array; SDK exports use this envelope.
+    pub routes: Vec<BridgeRouteCatalogueRoute>,
+}
+
+/// One trusted bridge route import row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "BridgeRouteCatalogueRoute.ts")
+)]
+pub struct BridgeRouteCatalogueRoute {
+    /// Native token id as 32-byte `0x` hex.
+    #[serde(alias = "token_id")]
+    pub token_id: String,
+    /// Stable caller/local route id, unique per token id.
+    #[serde(alias = "route_id")]
+    pub route_id: String,
+    /// Bridge id as 32-byte `0x` hex.
+    #[serde(alias = "bridge_id")]
+    pub bridge_id: String,
+    /// Wrapped asset address as 20-byte `0x` hex.
+    #[serde(alias = "wrapped_asset")]
+    pub wrapped_asset: String,
+    /// Third-party bridge or bridge family name.
+    pub bridge: String,
+    /// Asset symbol or canonical asset id shown to users.
+    pub asset: String,
+    /// Source chain/user-facing origin label.
+    #[serde(alias = "source_chain")]
+    pub source_chain: String,
+    /// Destination chain/user-facing destination label.
+    #[serde(alias = "destination_chain")]
+    pub destination_chain: String,
+    /// Verifier-set disclosure.
+    pub verifier: BridgeVerifierDisclosure,
+    /// Per-window route drain cap as a decimal atomic-unit string.
+    #[serde(alias = "drain_cap_atomic")]
+    pub drain_cap_atomic: String,
+    /// Finality delay before the route should be treated as settled.
+    #[serde(alias = "finality_blocks")]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number"))]
+    pub finality_blocks: u64,
+    /// Route-specific cooldown before reductions or resumed flow are trusted.
+    #[serde(alias = "cooldown_seconds")]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number"))]
+    pub cooldown_seconds: u64,
+    /// Mono-side administrative posture.
+    #[serde(alias = "admin_control")]
+    pub admin_control: BridgeAdminControl,
+    /// Circuit-breaker posture.
+    #[serde(alias = "circuit_breaker")]
+    pub circuit_breaker: BridgeCircuitBreakerState,
+    /// Slashable/insured coverage ceiling as a decimal atomic-unit string.
+    #[serde(alias = "insurance_atomic")]
+    pub insurance_atomic: String,
+    /// Last row update block observed by the importer.
+    #[serde(alias = "updated_at_block")]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number"))]
+    pub updated_at_block: u64,
+    /// Optional last incident date in `YYYY-MM-DD` form.
+    #[serde(
+        default,
+        alias = "last_incident_date",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "ts-bindings", ts(optional = nullable))]
+    pub last_incident_date: Option<String>,
+}
+
+/// Validation report for a trusted bridge route catalogue import payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "BridgeRouteCatalogueValidation.ts")
+)]
+pub struct BridgeRouteCatalogueValidation {
+    /// True when the payload is acceptable for the mono-core CLI import shape.
+    pub accepted: bool,
+    /// Number of route rows present in the normalized catalogue.
+    pub route_count: u32,
+    /// Import-shape failures, including per-route field names.
+    pub blocked_reasons: Vec<String>,
+}
+
+/// Error returned by catalogue JSON parse/export helpers.
+#[derive(Debug, thiserror::Error)]
+pub enum BridgeRouteCatalogueJsonError {
+    /// The JSON payload could not be decoded into the import shape.
+    #[error("bridge route catalogue JSON: {0}")]
+    Json(#[from] serde_json::Error),
+    /// The decoded catalogue did not pass mono-core CLI import validation.
+    #[error("invalid bridge route catalogue: {blocked_reasons:?}")]
+    Invalid { blocked_reasons: Vec<String> },
 }
 
 /// Wallet/policy transfer intent for selecting among disclosed bridge routes.
@@ -564,6 +685,85 @@ impl From<BridgeQuoteSubmitReadiness> for BridgeRoutesResponse {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+enum BridgeRouteCatalogueImportPayload {
+    Envelope(BridgeRouteCatalogue),
+    Routes(Vec<BridgeRouteCatalogueRoute>),
+}
+
+impl From<BridgeRouteCatalogueImportPayload> for BridgeRouteCatalogue {
+    fn from(value: BridgeRouteCatalogueImportPayload) -> Self {
+        match value {
+            BridgeRouteCatalogueImportPayload::Envelope(catalogue) => catalogue,
+            BridgeRouteCatalogueImportPayload::Routes(routes) => BridgeRouteCatalogue { routes },
+        }
+    }
+}
+
+/// Build an import catalogue envelope from route rows.
+#[must_use]
+pub fn build_bridge_route_catalogue(
+    routes: Vec<BridgeRouteCatalogueRoute>,
+) -> BridgeRouteCatalogue {
+    BridgeRouteCatalogue { routes }
+}
+
+/// Parse a trusted bridge route catalogue JSON payload.
+///
+/// Both `{"routes":[...]}` and a raw `[...]` route array are accepted on
+/// input. The returned value is normalized to the envelope shape that SDK
+/// export helpers emit.
+pub fn parse_bridge_route_catalogue_json(
+    json: &str,
+) -> Result<BridgeRouteCatalogue, BridgeRouteCatalogueJsonError> {
+    let payload: BridgeRouteCatalogueImportPayload = serde_json::from_str(json)?;
+    let catalogue = BridgeRouteCatalogue::from(payload);
+    assert_bridge_route_catalogue_valid(&catalogue)?;
+    Ok(catalogue)
+}
+
+/// Validate a trusted bridge route catalogue against the mono-core CLI import shape.
+#[must_use]
+pub fn validate_bridge_route_catalogue(
+    catalogue: &BridgeRouteCatalogue,
+) -> BridgeRouteCatalogueValidation {
+    let mut blocked_reasons = Vec::new();
+    if catalogue.routes.is_empty() {
+        blocked_reasons.push("bridge route import must contain at least one route".to_owned());
+    }
+
+    let mut seen = HashSet::new();
+    for (idx, route) in catalogue.routes.iter().enumerate() {
+        validate_bridge_route_catalogue_route(idx, route, &mut seen, &mut blocked_reasons);
+    }
+
+    BridgeRouteCatalogueValidation {
+        accepted: blocked_reasons.is_empty(),
+        route_count: u32::try_from(catalogue.routes.len()).unwrap_or(u32::MAX),
+        blocked_reasons,
+    }
+}
+
+/// Export a validated trusted bridge route catalogue as pretty JSON envelope.
+pub fn export_bridge_route_catalogue_json(
+    catalogue: &BridgeRouteCatalogue,
+) -> Result<String, BridgeRouteCatalogueJsonError> {
+    assert_bridge_route_catalogue_valid(catalogue)?;
+    Ok(serde_json::to_string_pretty(catalogue)?)
+}
+
+/// Export validated trusted bridge routes as a pretty raw JSON array.
+///
+/// This is provided for parity with the mono-core CLI import reader. Prefer
+/// [`export_bridge_route_catalogue_json`] when a stable envelope is acceptable.
+pub fn export_bridge_route_catalogue_routes_json(
+    catalogue: &BridgeRouteCatalogue,
+) -> Result<String, BridgeRouteCatalogueJsonError> {
+    assert_bridge_route_catalogue_valid(catalogue)?;
+    Ok(serde_json::to_string_pretty(&catalogue.routes)?)
+}
+
 /// Assess one third-party bridge route disclosure.
 #[must_use]
 pub fn assess_bridge_route(route: &BridgeRouteDisclosure) -> BridgeRouteAssessment {
@@ -843,6 +1043,178 @@ pub fn bridge_routes_readiness(request: &BridgeRoutesRequest) -> BridgeRoutesRes
     }
 }
 
+fn assert_bridge_route_catalogue_valid(
+    catalogue: &BridgeRouteCatalogue,
+) -> Result<(), BridgeRouteCatalogueJsonError> {
+    let validation = validate_bridge_route_catalogue(catalogue);
+    if validation.accepted {
+        Ok(())
+    } else {
+        Err(BridgeRouteCatalogueJsonError::Invalid {
+            blocked_reasons: validation.blocked_reasons,
+        })
+    }
+}
+
+fn validate_bridge_route_catalogue_route(
+    idx: usize,
+    route: &BridgeRouteCatalogueRoute,
+    seen: &mut HashSet<(String, String)>,
+    blocked_reasons: &mut Vec<String>,
+) {
+    let prefix = format!("routes[{idx}]");
+    let token_id = validate_hex_bytes(
+        &format!("{prefix}.tokenId"),
+        &route.token_id,
+        32,
+        blocked_reasons,
+    );
+    let route_id = validate_text_field(
+        &format!("{prefix}.routeId"),
+        &route.route_id,
+        96,
+        blocked_reasons,
+    );
+    if let (Some(token_id), Some(route_id)) = (token_id, route_id) {
+        if !seen.insert((token_id, route_id)) {
+            blocked_reasons.push(format!(
+                "{prefix}.routeId duplicate (tokenId, routeId) in bridge route import"
+            ));
+        }
+    }
+
+    validate_hex_bytes(
+        &format!("{prefix}.bridgeId"),
+        &route.bridge_id,
+        32,
+        blocked_reasons,
+    );
+    validate_hex_bytes(
+        &format!("{prefix}.wrappedAsset"),
+        &route.wrapped_asset,
+        20,
+        blocked_reasons,
+    );
+    validate_text_field(
+        &format!("{prefix}.bridge"),
+        &route.bridge,
+        64,
+        blocked_reasons,
+    );
+    validate_text_field(
+        &format!("{prefix}.asset"),
+        &route.asset,
+        64,
+        blocked_reasons,
+    );
+    validate_text_field(
+        &format!("{prefix}.sourceChain"),
+        &route.source_chain,
+        64,
+        blocked_reasons,
+    );
+    validate_text_field(
+        &format!("{prefix}.destinationChain"),
+        &route.destination_chain,
+        64,
+        blocked_reasons,
+    );
+    validate_text_field(
+        &format!("{prefix}.verifier.model"),
+        &route.verifier.model,
+        64,
+        blocked_reasons,
+    );
+    if route.verifier.participant_count == 0 {
+        blocked_reasons.push(format!(
+            "{prefix}.verifier.participantCount must be non-zero"
+        ));
+    }
+    if route.verifier.threshold == 0 || route.verifier.threshold > route.verifier.participant_count
+    {
+        blocked_reasons.push(format!(
+            "{prefix}.verifier.threshold must be in 1..=participantCount"
+        ));
+    }
+    if !decimal_string_is_positive_u256(&route.drain_cap_atomic) {
+        blocked_reasons.push(format!(
+            "{prefix}.drainCapAtomic must be a non-zero decimal u256"
+        ));
+    }
+    if route.finality_blocks == 0 {
+        blocked_reasons.push(format!("{prefix}.finalityBlocks must be non-zero"));
+    }
+    if route.cooldown_seconds == 0 {
+        blocked_reasons.push(format!("{prefix}.cooldownSeconds must be non-zero"));
+    }
+    if !decimal_string_is_positive_u256(&route.insurance_atomic) {
+        blocked_reasons.push(format!(
+            "{prefix}.insuranceAtomic must be a non-zero decimal u256"
+        ));
+    }
+    if route
+        .last_incident_date
+        .as_deref()
+        .is_some_and(|date| !incident_date_is_valid(date))
+    {
+        blocked_reasons.push(format!("{prefix}.lastIncidentDate must be YYYY-MM-DD"));
+    }
+}
+
+fn validate_text_field(
+    field: &str,
+    value: &str,
+    max_len: usize,
+    blocked_reasons: &mut Vec<String>,
+) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > max_len {
+        blocked_reasons.push(format!("{field} must be 1..={max_len} bytes"));
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
+fn validate_hex_bytes(
+    field: &str,
+    value: &str,
+    expected_len: usize,
+    blocked_reasons: &mut Vec<String>,
+) -> Option<String> {
+    let trimmed = value.trim();
+    let body = trimmed.strip_prefix("0x").unwrap_or(trimmed);
+    let expected_hex_len = expected_len.saturating_mul(2);
+    if body.len() != expected_hex_len || !body.bytes().all(|b| b.is_ascii_hexdigit()) {
+        blocked_reasons.push(format!("{field} must be {expected_len} bytes of hex"));
+        None
+    } else {
+        Some(body.to_ascii_lowercase())
+    }
+}
+
+fn decimal_string_is_positive_u256(value: &str) -> bool {
+    const MAX_U256_DECIMAL: &str =
+        "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+    let Some(normalized) = normalized_decimal_digits(value) else {
+        return false;
+    };
+    normalized != "0"
+        && decimal_string_cmp(&normalized, MAX_U256_DECIMAL)
+            .is_some_and(|ordering| ordering != Ordering::Greater)
+}
+
+fn incident_date_is_valid(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.len() == 10
+        && trimmed.as_bytes()[4] == b'-'
+        && trimmed.as_bytes()[7] == b'-'
+        && trimmed
+            .bytes()
+            .enumerate()
+            .all(|(i, b)| matches!(i, 4 | 7) || b.is_ascii_digit())
+}
+
 fn bridge_route_candidate(
     intent: &BridgeTransferIntent,
     intent_reasons: &[String],
@@ -1013,6 +1385,32 @@ mod tests {
         }
     }
 
+    fn catalogue_route(route_id: &str) -> BridgeRouteCatalogueRoute {
+        BridgeRouteCatalogueRoute {
+            token_id: format!("0x{}", "10".repeat(32)),
+            route_id: route_id.to_owned(),
+            bridge_id: format!("0x{}", "b1".repeat(32)),
+            wrapped_asset: format!("0x{}", "a5".repeat(20)),
+            bridge: "Chainlink CCIP".to_owned(),
+            asset: "USDC".to_owned(),
+            source_chain: "Ethereum".to_owned(),
+            destination_chain: "Mono".to_owned(),
+            verifier: BridgeVerifierDisclosure {
+                model: "CCIP DON".to_owned(),
+                participant_count: 16,
+                threshold: 11,
+            },
+            drain_cap_atomic: "250000000000".to_owned(),
+            finality_blocks: 64,
+            cooldown_seconds: 1_800,
+            admin_control: BridgeAdminControl::ConsensusOnly,
+            circuit_breaker: BridgeCircuitBreakerState::Armed,
+            insurance_atomic: "1000000000000".to_owned(),
+            updated_at_block: 7,
+            last_incident_date: None,
+        }
+    }
+
     fn transfer_intent() -> BridgeTransferIntent {
         BridgeTransferIntent {
             asset: "USDC".to_owned(),
@@ -1116,6 +1514,113 @@ mod tests {
             bridge_address_hex(),
             "0x0000000000000000000000000000000000001008"
         );
+    }
+
+    #[test]
+    fn bridge_route_catalogue_exports_cli_import_envelope() {
+        let catalogue = build_bridge_route_catalogue(vec![catalogue_route("ccip-usdc-mainnet")]);
+        let validation = validate_bridge_route_catalogue(&catalogue);
+        assert!(validation.accepted);
+        assert_eq!(validation.route_count, 1);
+
+        let exported = export_bridge_route_catalogue_json(&catalogue).expect("export catalogue");
+        let decoded: serde_json::Value = serde_json::from_str(&exported).expect("json");
+        let token_id = format!("0x{}", "10".repeat(32));
+        assert_eq!(
+            decoded["routes"][0]["tokenId"].as_str(),
+            Some(token_id.as_str())
+        );
+        assert_eq!(
+            decoded["routes"][0]["routeId"].as_str(),
+            Some("ccip-usdc-mainnet")
+        );
+        assert_eq!(decoded["routes"][0]["updatedAtBlock"].as_u64(), Some(7));
+        assert!(decoded["routes"][0].get("lastIncidentDate").is_none());
+
+        let parsed = parse_bridge_route_catalogue_json(&exported).expect("parse envelope");
+        assert_eq!(parsed, catalogue);
+
+        let raw = export_bridge_route_catalogue_routes_json(&catalogue).expect("export routes");
+        let raw_value: serde_json::Value = serde_json::from_str(&raw).expect("raw json");
+        assert!(raw_value.is_array());
+        let parsed_raw = parse_bridge_route_catalogue_json(&raw).expect("parse raw array");
+        assert_eq!(parsed_raw, catalogue);
+    }
+
+    #[test]
+    fn bridge_route_catalogue_parses_cli_field_aliases() {
+        let raw = serde_json::json!([{
+            "token_id": format!("0x{}", "10".repeat(32)),
+            "route_id": "ccip-usdc-mainnet",
+            "bridge_id": format!("0x{}", "b1".repeat(32)),
+            "wrapped_asset": format!("0x{}", "a5".repeat(20)),
+            "bridge": "Chainlink CCIP",
+            "asset": "USDC",
+            "source_chain": "Ethereum",
+            "destination_chain": "Mono",
+            "verifier": {
+                "model": "CCIP DON",
+                "participant_count": 16,
+                "threshold": 11
+            },
+            "drain_cap_atomic": "250000000000",
+            "finality_blocks": 64,
+            "cooldown_seconds": 1800,
+            "admin_control": "consensus_only",
+            "circuit_breaker": "armed",
+            "insurance_atomic": "1000000000000",
+            "updated_at_block": 7,
+            "last_incident_date": "2026-05-23"
+        }]);
+
+        let parsed =
+            parse_bridge_route_catalogue_json(&raw.to_string()).expect("parse raw aliases");
+        assert_eq!(parsed.routes[0].route_id, "ccip-usdc-mainnet");
+        assert_eq!(
+            parsed.routes[0].admin_control,
+            BridgeAdminControl::ConsensusOnly
+        );
+        assert_eq!(
+            parsed.routes[0].last_incident_date.as_deref(),
+            Some("2026-05-23")
+        );
+    }
+
+    #[test]
+    fn bridge_route_catalogue_validation_rejects_import_shape_failures() {
+        let mut first = catalogue_route("duplicate");
+        first.drain_cap_atomic = "0".to_owned();
+        first.finality_blocks = 0;
+        first.last_incident_date = Some("20260523".to_owned());
+        let mut second = catalogue_route("duplicate");
+        second.wrapped_asset = "0x1234".to_owned();
+        let catalogue = build_bridge_route_catalogue(vec![first, second]);
+
+        let validation = validate_bridge_route_catalogue(&catalogue);
+        assert!(!validation.accepted);
+        assert!(validation
+            .blocked_reasons
+            .iter()
+            .any(|reason| reason.contains("duplicate (tokenId, routeId)")));
+        assert!(validation
+            .blocked_reasons
+            .iter()
+            .any(|reason| reason.contains("drainCapAtomic")));
+        assert!(validation
+            .blocked_reasons
+            .iter()
+            .any(|reason| reason.contains("finalityBlocks")));
+        assert!(validation
+            .blocked_reasons
+            .iter()
+            .any(|reason| reason.contains("lastIncidentDate")));
+        assert!(validation
+            .blocked_reasons
+            .iter()
+            .any(|reason| reason.contains("wrappedAsset")));
+
+        let err = export_bridge_route_catalogue_json(&catalogue).unwrap_err();
+        assert!(err.to_string().contains("drainCapAtomic"));
     }
 
     #[test]

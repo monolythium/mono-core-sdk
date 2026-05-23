@@ -21,6 +21,9 @@ export type { BridgeQuoteSubmitReadiness } from "./BridgeQuoteSubmitReadiness.js
 export type { BridgeRiskTier } from "./BridgeRiskTier.js";
 export type { BridgeRouteAssessment } from "./BridgeRouteAssessment.js";
 export type { BridgeRouteCandidate } from "./BridgeRouteCandidate.js";
+export type { BridgeRouteCatalogue } from "./BridgeRouteCatalogue.js";
+export type { BridgeRouteCatalogueRoute } from "./BridgeRouteCatalogueRoute.js";
+export type { BridgeRouteCatalogueValidation } from "./BridgeRouteCatalogueValidation.js";
 export type { BridgeRouteDisclosure } from "./BridgeRouteDisclosure.js";
 export type { BridgeRouteSelection } from "./BridgeRouteSelection.js";
 export type { BridgeRoutesRequest } from "./BridgeRoutesRequest.js";
