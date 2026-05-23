@@ -4587,6 +4587,36 @@ function encodeCancelOrderCalldata(args) {
     )
   );
 }
+function encodeNativeSpotLimitOrderCall(args) {
+  const w = new BincodeWriter();
+  w.enumVariant(0);
+  w.enumVariant(1);
+  w.rawBytes(bytes32FromHex(args.marketId, "marketId"));
+  monoAddressInto(w, args.owner, "owner");
+  w.u64(uint64(args.nonce, "nonce"));
+  w.enumVariant(normalizeSide(args.side));
+  w.u128(positiveU128Decimal(args.price, "price"));
+  w.u128(positiveU128Decimal(args.quantity, "quantity"));
+  w.u64(uint64(args.expiresAtBlock, "expiresAtBlock"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeSpotCancelOrderCall(args) {
+  const w = new BincodeWriter();
+  w.enumVariant(0);
+  w.enumVariant(4);
+  w.rawBytes(bytes32FromHex(args.orderId, "orderId"));
+  monoAddressInto(w, args.caller, "caller");
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeNftBuyListingCall(args) {
+  const w = new BincodeWriter();
+  w.enumVariant(1);
+  w.enumVariant(1);
+  w.rawBytes(bytes32FromHex(args.listingId, "listingId"));
+  monoAddressInto(w, args.buyer, "buyer");
+  w.u64(uint64(args.currentBlock, "currentBlock"));
+  return bytesToHex4(w.toBytes());
+}
 function buildPlaceSpotLimitOrderPlan(args) {
   return {
     method: "eth_sendTransaction",
@@ -4639,6 +4669,14 @@ function buildCancelSpotOrderPlan(args) {
     mempoolClass: MempoolClass.CLOBOp
   };
 }
+var NATIVE_MARKET_ADDRESS_KIND_VARIANTS = {
+  user: 0,
+  smartAccount: 1,
+  contract: 2,
+  cluster: 3,
+  multisig: 4,
+  systemModule: 5
+};
 function normalizePlaceSpotLimitOrderArgs(args) {
   const normalized = normalizeSpotMarketArgs(args);
   return {
@@ -4729,6 +4767,64 @@ function uint64(value, name) {
     throw new MarketActionError(`${name} must fit uint64`);
   }
   return n;
+}
+function positiveU128Decimal(value, name) {
+  const n = positiveDecimal(value, name);
+  if (n >= 1n << 128n) {
+    throw new MarketActionError(`${name} must fit uint128`);
+  }
+  return n;
+}
+function monoAddressInto(w, input, name) {
+  const { kind, bytes } = normalizeNativeMarketAddress(input, name);
+  w.enumVariant(NATIVE_MARKET_ADDRESS_KIND_VARIANTS[kind]);
+  w.rawBytes(bytes);
+}
+function normalizeNativeMarketAddress(input, name) {
+  if (typeof input === "string") {
+    return normalizeNativeMarketAddressString(input, void 0, name);
+  }
+  if (isAddressByteInput(input)) {
+    return { kind: "user", bytes: expectAddressBytes(input, name) };
+  }
+  if (typeof input === "object" && input !== null) {
+    const kind = input.kind ?? "user";
+    if (!(kind in NATIVE_MARKET_ADDRESS_KIND_VARIANTS)) {
+      throw new MarketActionError(`${name}.kind is not a supported native address kind`);
+    }
+    const address = input.address;
+    if (typeof address === "string") {
+      return normalizeNativeMarketAddressString(address, kind, name);
+    }
+    return { kind, bytes: expectAddressBytes(address, name) };
+  }
+  throw new MarketActionError(`${name} must be a 20-byte address`);
+}
+function isAddressByteInput(input) {
+  return input instanceof Uint8Array || Array.isArray(input);
+}
+function normalizeNativeMarketAddressString(address, expectedKind, name) {
+  try {
+    if (address.startsWith("0x") || address.startsWith("0X")) {
+      return { kind: expectedKind ?? "user", bytes: hexToAddressBytes(address) };
+    }
+    const parsed = typedBech32ToAddress(address, expectedKind);
+    return { kind: parsed.kind, bytes: parsed.bytes };
+  } catch (error) {
+    const detail = error instanceof Error ? `: ${error.message}` : "";
+    throw new MarketActionError(`${name} must be a 20-byte hex or typed bech32m address${detail}`);
+  }
+}
+function expectAddressBytes(value, name) {
+  if (value.length !== 20) {
+    throw new MarketActionError(`${name} must be a 20-byte address`);
+  }
+  for (const byte of value) {
+    if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
+      throw new MarketActionError(`${name} must contain bytes`);
+    }
+  }
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
 function uint8Word2(value) {
   const out = new Uint8Array(32);
@@ -5061,6 +5157,9 @@ exports.encodeHasPubkeyCalldata = encodeHasPubkeyCalldata;
 exports.encodeLockBridgeConfigCalldata = encodeLockBridgeConfigCalldata;
 exports.encodeLookupPubkeyCalldata = encodeLookupPubkeyCalldata;
 exports.encodeMrvDeployPayload = encodeMrvDeployPayload;
+exports.encodeNativeNftBuyListingCall = encodeNativeNftBuyListingCall;
+exports.encodeNativeSpotCancelOrderCall = encodeNativeSpotCancelOrderCall;
+exports.encodeNativeSpotLimitOrderCall = encodeNativeSpotLimitOrderCall;
 exports.encodePlaceLimitOrderCalldata = encodePlaceLimitOrderCalldata;
 exports.encodePlaceMarketOrderCalldata = encodePlaceMarketOrderCalldata;
 exports.encodePlaceMarketOrderExCalldata = encodePlaceMarketOrderExCalldata;

@@ -6,7 +6,9 @@
  */
 
 import { keccak_256 } from "@noble/hashes/sha3.js";
+import { hexToAddressBytes, typedBech32ToAddress, type AddressKind } from "./address.js";
 import { PRECOMPILE_ADDRESSES } from "./consts.js";
+import { BincodeWriter } from "./crypto/bincode.js";
 import { bytesToHex, concatBytes, hexToBytes } from "./crypto/bytes.js";
 import { MempoolClass } from "./crypto/envelope.js";
 
@@ -37,6 +39,15 @@ export const CLOB_SELECTORS = {
 
 export type SpotLimitOrderSide = "buy" | "sell";
 export type SpotMarketOrderMode = "fill-or-refund" | "fill-or-rest-at-cap";
+export type NativeMarketAddressKind = AddressKind;
+export type NativeMarketAddressInput =
+  | string
+  | Uint8Array
+  | readonly number[]
+  | {
+      kind?: NativeMarketAddressKind;
+      address: string | Uint8Array | readonly number[];
+    };
 
 export interface PlaceSpotLimitOrderArgs {
   /**
@@ -87,6 +98,39 @@ export interface PlaceSpotMarketOrderExArgs extends PlaceSpotMarketOrderArgs {
 export interface CancelSpotOrderArgs {
   /** 32-byte order id returned by the CLOB precompile. */
   orderId: string;
+}
+
+export interface EncodeNativeSpotLimitOrderArgs {
+  /** 32-byte native spot market id. */
+  marketId: string;
+  /** Owner MonoAddress; 0x addresses and raw 20-byte inputs default to user kind. */
+  owner: NativeMarketAddressInput;
+  /** Per-owner order nonce encoded as uint64. */
+  nonce: string | number | bigint;
+  /** `buy` maps to native `OrderSide::Bid`; `sell` maps to native `OrderSide::Ask`. */
+  side: SpotLimitOrderSide;
+  /** Positive integer decimal string encoded as native MrcAmount/u128. */
+  price: string;
+  /** Positive integer decimal string encoded as native MrcAmount/u128. */
+  quantity: string;
+  /** uint64 expiry block encoded as `expires_at_block`. */
+  expiresAtBlock: string | number | bigint;
+}
+
+export interface EncodeNativeSpotCancelOrderArgs {
+  /** 32-byte native order id. */
+  orderId: string;
+  /** Caller MonoAddress; 0x addresses and raw 20-byte inputs default to user kind. */
+  caller: NativeMarketAddressInput;
+}
+
+export interface EncodeNativeNftBuyListingArgs {
+  /** 32-byte native NFT listing id. */
+  listingId: string;
+  /** Buyer MonoAddress; 0x addresses and raw 20-byte inputs default to user kind. */
+  buyer: NativeMarketAddressInput;
+  /** Current block attached to the native buy call. */
+  currentBlock: string | number | bigint;
 }
 
 export interface EthSendTransactionRequest {
@@ -171,6 +215,39 @@ export function encodeCancelOrderCalldata(args: CancelSpotOrderArgs): string {
   );
 }
 
+export function encodeNativeSpotLimitOrderCall(args: EncodeNativeSpotLimitOrderArgs): string {
+  const w = new BincodeWriter();
+  w.enumVariant(0); // NativeMarketCall::Spot
+  w.enumVariant(1); // SpotMarketCall::PlaceLimitOrder
+  w.rawBytes(bytes32FromHex(args.marketId, "marketId"));
+  monoAddressInto(w, args.owner, "owner");
+  w.u64(uint64(args.nonce, "nonce"));
+  w.enumVariant(normalizeSide(args.side));
+  w.u128(positiveU128Decimal(args.price, "price"));
+  w.u128(positiveU128Decimal(args.quantity, "quantity"));
+  w.u64(uint64(args.expiresAtBlock, "expiresAtBlock"));
+  return bytesToHex(w.toBytes());
+}
+
+export function encodeNativeSpotCancelOrderCall(args: EncodeNativeSpotCancelOrderArgs): string {
+  const w = new BincodeWriter();
+  w.enumVariant(0); // NativeMarketCall::Spot
+  w.enumVariant(4); // SpotMarketCall::CancelOrder
+  w.rawBytes(bytes32FromHex(args.orderId, "orderId"));
+  monoAddressInto(w, args.caller, "caller");
+  return bytesToHex(w.toBytes());
+}
+
+export function encodeNativeNftBuyListingCall(args: EncodeNativeNftBuyListingArgs): string {
+  const w = new BincodeWriter();
+  w.enumVariant(1); // NativeMarketCall::Nft
+  w.enumVariant(1); // NftMarketCall::BuyListing
+  w.rawBytes(bytes32FromHex(args.listingId, "listingId"));
+  monoAddressInto(w, args.buyer, "buyer");
+  w.u64(uint64(args.currentBlock, "currentBlock"));
+  return bytesToHex(w.toBytes());
+}
+
 export function buildPlaceSpotLimitOrderPlan(args: PlaceSpotLimitOrderArgs): MarketTransactionPlan {
   return {
     method: "eth_sendTransaction",
@@ -249,6 +326,15 @@ interface NormalizedPlaceSpotMarketOrderArgs {
 interface NormalizedPlaceSpotMarketOrderExArgs extends NormalizedPlaceSpotMarketOrderArgs {
   mode: 0 | 1;
 }
+
+const NATIVE_MARKET_ADDRESS_KIND_VARIANTS: Record<NativeMarketAddressKind, number> = {
+  user: 0,
+  smartAccount: 1,
+  contract: 2,
+  cluster: 3,
+  multisig: 4,
+  systemModule: 5,
+};
 
 function normalizePlaceSpotLimitOrderArgs(args: PlaceSpotLimitOrderArgs): NormalizedPlaceSpotLimitOrderArgs {
   const normalized = normalizeSpotMarketArgs(args);
@@ -356,6 +442,77 @@ function uint64(value: string | number | bigint, name: string): bigint {
     throw new MarketActionError(`${name} must fit uint64`);
   }
   return n;
+}
+
+function positiveU128Decimal(value: string, name: string): bigint {
+  const n = positiveDecimal(value, name);
+  if (n >= (1n << 128n)) {
+    throw new MarketActionError(`${name} must fit uint128`);
+  }
+  return n;
+}
+
+function monoAddressInto(w: BincodeWriter, input: NativeMarketAddressInput, name: string): void {
+  const { kind, bytes } = normalizeNativeMarketAddress(input, name);
+  w.enumVariant(NATIVE_MARKET_ADDRESS_KIND_VARIANTS[kind]);
+  w.rawBytes(bytes);
+}
+
+function normalizeNativeMarketAddress(
+  input: NativeMarketAddressInput,
+  name: string,
+): { kind: NativeMarketAddressKind; bytes: Uint8Array } {
+  if (typeof input === "string") {
+    return normalizeNativeMarketAddressString(input, undefined, name);
+  }
+  if (isAddressByteInput(input)) {
+    return { kind: "user", bytes: expectAddressBytes(input, name) };
+  }
+  if (typeof input === "object" && input !== null) {
+    const kind = input.kind ?? "user";
+    if (!(kind in NATIVE_MARKET_ADDRESS_KIND_VARIANTS)) {
+      throw new MarketActionError(`${name}.kind is not a supported native address kind`);
+    }
+    const address = input.address;
+    if (typeof address === "string") {
+      return normalizeNativeMarketAddressString(address, kind, name);
+    }
+    return { kind, bytes: expectAddressBytes(address, name) };
+  }
+  throw new MarketActionError(`${name} must be a 20-byte address`);
+}
+
+function isAddressByteInput(input: NativeMarketAddressInput): input is Uint8Array | readonly number[] {
+  return input instanceof Uint8Array || Array.isArray(input);
+}
+
+function normalizeNativeMarketAddressString(
+  address: string,
+  expectedKind: NativeMarketAddressKind | undefined,
+  name: string,
+): { kind: NativeMarketAddressKind; bytes: Uint8Array } {
+  try {
+    if (address.startsWith("0x") || address.startsWith("0X")) {
+      return { kind: expectedKind ?? "user", bytes: hexToAddressBytes(address) };
+    }
+    const parsed = typedBech32ToAddress(address, expectedKind);
+    return { kind: parsed.kind, bytes: parsed.bytes };
+  } catch (error) {
+    const detail = error instanceof Error ? `: ${error.message}` : "";
+    throw new MarketActionError(`${name} must be a 20-byte hex or typed bech32m address${detail}`);
+  }
+}
+
+function expectAddressBytes(value: Uint8Array | readonly number[], name: string): Uint8Array {
+  if (value.length !== 20) {
+    throw new MarketActionError(`${name} must be a 20-byte address`);
+  }
+  for (const byte of value) {
+    if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
+      throw new MarketActionError(`${name} must contain bytes`);
+    }
+  }
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
 
 function uint8Word(value: 0 | 1): Uint8Array {
