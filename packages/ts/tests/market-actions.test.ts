@@ -3,9 +3,15 @@ import {
   CLOB_MARKET_ID_DOMAIN_TAG,
   CLOB_SELECTORS,
   MarketActionError,
+  NATIVE_MARKET_MODULE_ADDRESS,
+  NATIVE_MARKET_MODULE_ADDRESS_BYTES,
   PRECOMPILE_ADDRESSES,
   addressToTypedBech32,
   buildCancelSpotOrderPlan,
+  buildNativeMarketModuleCallEnvelope,
+  buildNativeNftBuyListingModuleCall,
+  buildNativeSpotCancelOrderModuleCall,
+  buildNativeSpotLimitOrderModuleCall,
   buildPlaceSpotLimitOrderPlan,
   buildPlaceSpotMarketOrderExPlan,
   buildPlaceSpotMarketOrderPlan,
@@ -201,6 +207,62 @@ describe("native market action builders", () => {
     ).toBe(rustNativeBuyListingGolden);
   });
 
+  it("builds native market module call envelopes for RISC-V call_contract", () => {
+    expect(NATIVE_MARKET_MODULE_ADDRESS_BYTES).toBe("0x4d41524b45545f4e41544956455f4d4f445f5631");
+    expect(NATIVE_MARKET_MODULE_ADDRESS).toBe(
+      addressToTypedBech32("systemModule", NATIVE_MARKET_MODULE_ADDRESS_BYTES),
+    );
+
+    expect(buildNativeMarketModuleCallEnvelope(rustNativeBuyListingGolden, 44_000)).toEqual({
+      module: "market",
+      call: {
+        to: NATIVE_MARKET_MODULE_ADDRESS,
+        input: rustNativeBuyListingGolden,
+        valueLythoshi: "0",
+        maxCycles: "44000",
+      },
+    });
+
+    expect(
+      buildNativeSpotLimitOrderModuleCall(
+        {
+          marketId: `0x${"11".repeat(32)}`,
+          owner: `0x${"22".repeat(20)}`,
+          nonce: 7,
+          side: "buy",
+          price: "125",
+          quantity: "50",
+          expiresAtBlock: 999,
+        },
+        "22000",
+      ).call,
+    ).toMatchObject({
+      to: NATIVE_MARKET_MODULE_ADDRESS,
+      input: rustNativeLimitOrderGolden,
+      valueLythoshi: "0",
+      maxCycles: "22000",
+    });
+    expect(
+      buildNativeSpotCancelOrderModuleCall(
+        {
+          orderId: `0x${"33".repeat(32)}`,
+          caller: `0x${"44".repeat(20)}`,
+        },
+        22_000n,
+      ).call.input,
+    ).toBe(rustNativeCancelOrderGolden);
+    expect(
+      buildNativeNftBuyListingModuleCall(
+        {
+          listingId: `0x${"55".repeat(32)}`,
+          buyer: `0x${"66".repeat(20)}`,
+          currentBlock: 777,
+        },
+        22_000,
+      ).call.input,
+    ).toBe(rustNativeBuyListingGolden);
+  });
+
   it("rejects malformed market action inputs", () => {
     expect(() => encodePlaceLimitOrderCalldata({ ...args, marketId: "0x1234" })).toThrow(MarketActionError);
     expect(() =>
@@ -266,5 +328,7 @@ describe("native market action builders", () => {
         currentBlock: -1,
       }),
     ).toThrow(/currentBlock/);
+    expect(() => buildNativeMarketModuleCallEnvelope("0xabc", 1)).toThrow(/input/);
+    expect(() => buildNativeMarketModuleCallEnvelope("0x", -1)).toThrow(/maxCycles/);
   });
 });

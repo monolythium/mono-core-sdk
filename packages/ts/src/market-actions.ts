@@ -6,13 +6,18 @@
  */
 
 import { keccak_256 } from "@noble/hashes/sha3.js";
-import { hexToAddressBytes, typedBech32ToAddress, type AddressKind } from "./address.js";
+import { addressToTypedBech32, hexToAddressBytes, typedBech32ToAddress, type AddressKind } from "./address.js";
 import { PRECOMPILE_ADDRESSES } from "./consts.js";
 import { BincodeWriter } from "./crypto/bincode.js";
 import { bytesToHex, concatBytes, hexToBytes } from "./crypto/bytes.js";
 import { MempoolClass } from "./crypto/envelope.js";
 
 export const CLOB_MARKET_ID_DOMAIN_TAG = 0xc1 as const;
+export const NATIVE_MARKET_MODULE_ADDRESS_BYTES = "0x4d41524b45545f4e41544956455f4d4f445f5631" as const;
+export const NATIVE_MARKET_MODULE_ADDRESS = addressToTypedBech32(
+  "systemModule",
+  NATIVE_MARKET_MODULE_ADDRESS_BYTES,
+);
 
 export const CLOB_SELECTORS = {
   /**
@@ -133,6 +138,22 @@ export interface EncodeNativeNftBuyListingArgs {
   currentBlock: string | number | bigint;
 }
 
+export interface NativeMarketModuleContractCall {
+  /** Stable typed system-module address (`MARKET_NATIVE_MOD_V1`). */
+  to: string;
+  /** Native market router bincode payload. */
+  input: string;
+  /** Native market module calls must not carry native value. */
+  valueLythoshi: "0";
+  /** Maximum cycles delegated to the RISC-V host call. */
+  maxCycles: string;
+}
+
+export interface NativeMarketModuleCallEnvelope {
+  module: "market";
+  call: NativeMarketModuleContractCall;
+}
+
 export interface EthSendTransactionRequest {
   to: string;
   value: "0x0";
@@ -246,6 +267,42 @@ export function encodeNativeNftBuyListingCall(args: EncodeNativeNftBuyListingArg
   monoAddressInto(w, args.buyer, "buyer");
   w.u64(uint64(args.currentBlock, "currentBlock"));
   return bytesToHex(w.toBytes());
+}
+
+export function buildNativeMarketModuleCallEnvelope(
+  input: string,
+  maxCycles: string | number | bigint,
+): NativeMarketModuleCallEnvelope {
+  return {
+    module: "market",
+    call: {
+      to: NATIVE_MARKET_MODULE_ADDRESS,
+      input: normalizeHexBytes(input, "input"),
+      valueLythoshi: "0",
+      maxCycles: uint64(maxCycles, "maxCycles").toString(10),
+    },
+  };
+}
+
+export function buildNativeSpotLimitOrderModuleCall(
+  args: EncodeNativeSpotLimitOrderArgs,
+  maxCycles: string | number | bigint,
+): NativeMarketModuleCallEnvelope {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeSpotLimitOrderCall(args), maxCycles);
+}
+
+export function buildNativeSpotCancelOrderModuleCall(
+  args: EncodeNativeSpotCancelOrderArgs,
+  maxCycles: string | number | bigint,
+): NativeMarketModuleCallEnvelope {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeSpotCancelOrderCall(args), maxCycles);
+}
+
+export function buildNativeNftBuyListingModuleCall(
+  args: EncodeNativeNftBuyListingArgs,
+  maxCycles: string | number | bigint,
+): NativeMarketModuleCallEnvelope {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeNftBuyListingCall(args), maxCycles);
 }
 
 export function buildPlaceSpotLimitOrderPlan(args: PlaceSpotLimitOrderArgs): MarketTransactionPlan {
@@ -450,6 +507,19 @@ function positiveU128Decimal(value: string, name: string): bigint {
     throw new MarketActionError(`${name} must fit uint128`);
   }
   return n;
+}
+
+function normalizeHexBytes(value: string, name: string): string {
+  if (typeof value !== "string" || !value.startsWith("0x")) {
+    throw new MarketActionError(`${name} must be 0x-prefixed hex bytes`);
+  }
+  try {
+    hexToBytes(value, name);
+  } catch (error) {
+    const detail = error instanceof Error ? `: ${error.message}` : "";
+    throw new MarketActionError(`${name} must be 0x-prefixed hex bytes${detail}`);
+  }
+  return value.toLowerCase();
 }
 
 function monoAddressInto(w: BincodeWriter, input: NativeMarketAddressInput, name: string): void {
