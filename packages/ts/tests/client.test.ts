@@ -18,6 +18,7 @@ import {
 import type {
   BridgeRouteDisclosure,
   NativeDecodedEvent,
+  NativeEventProjection,
   NoEvmReceiptProof,
   TokenBalanceRecord,
 } from "../src/index.js";
@@ -33,8 +34,16 @@ interface AgentEscrowCreatedEvent extends NativeDecodedEvent {
 interface NativeMarketSaleEvent extends NativeDecodedEvent {
   family: "market";
   event_name: "market.nft.sale_settled";
+  market_surface: "nft";
+  market_asset_id: string;
+  market_related_asset_id: string;
   listing_id: string;
   price: string;
+  quantity: string;
+  remaining: string;
+  status: "filled";
+  nft_standard: "mrc721";
+  royalty_bps: number;
 }
 
 interface Mrc4626DepositEvent extends NativeDecodedEvent {
@@ -1118,15 +1127,26 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
   it("lythNativeMarketEventsTyped forces market family and filters decoded rows", async () => {
     const eventTopic = `0x${"aa".repeat(32)}`;
     const listingId = `0x${"bb".repeat(32)}`;
+    const marketAssetId = `0x${"21".repeat(32)}`;
+    const marketRelatedAssetId = `0x${"22".repeat(32)}`;
     const marketDecoded: NativeMarketSaleEvent = {
       block_height: 110,
       tx_index: 0,
       sequence: 0,
       family: "market",
       event_name: "market.nft.sale_settled",
+      market_surface: "nft",
+      market_asset_id: marketAssetId,
+      market_related_asset_id: marketRelatedAssetId,
       payload_hash: `0x${"cc".repeat(32)}`,
       listing_id: listingId,
       price: "900",
+      quantity: "1",
+      remaining: "0",
+      status: "filled",
+      nft_standard: "mrc721",
+      royalty_bps: 250,
+      listing_kind: { english: "fixed_price" },
     };
     const agentDecoded: AgentEscrowCreatedEvent = {
       block_height: 110,
@@ -1186,6 +1206,16 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(response.events).toHaveLength(1);
     expect(response.events[0].decoded.family).toBe("market");
     expect(response.events[0].decoded.listing_id).toBe(listingId);
+    const projection: NativeEventProjection = response.events[0].decoded;
+    expect(projection.market_surface).toBe("nft");
+    expect(projection.market_asset_id).toBe(marketAssetId);
+    expect(projection.market_related_asset_id).toBe(marketRelatedAssetId);
+    expect(projection.price).toBe("900");
+    expect(projection.quantity).toBe("1");
+    expect(projection.remaining).toBe("0");
+    expect(projection.status).toBe("filled");
+    expect(projection.nft_standard).toBe("mrc721");
+    expect(projection.royalty_bps).toBe(250);
     expect(calls[0].method).toBe("lyth_nativeEvents");
     expect(calls[0].params).toEqual([
       {
@@ -1196,6 +1226,70 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
         eventName: "market.nft.sale_settled",
       },
     ]);
+  });
+
+  it("lythNativeMarketEventsTyped exposes spot market order ids", async () => {
+    const marketAssetId = `0x${"31".repeat(32)}`;
+    const marketRelatedAssetId = `0x${"32".repeat(32)}`;
+    const marketOrderId = `0x${"33".repeat(32)}`;
+    const marketRelatedOrderId = `0x${"34".repeat(32)}`;
+    const decoded: NativeEventProjection = {
+      block_height: 121,
+      tx_index: 0,
+      sequence: 0,
+      family: "market",
+      event_name: "market.spot.order_filled",
+      market_surface: "spot",
+      market_asset_id: marketAssetId,
+      market_related_asset_id: marketRelatedAssetId,
+      market_order_id: marketOrderId,
+      market_related_order_id: marketRelatedOrderId,
+      payload_hash: `0x${"35".repeat(32)}`,
+      price: "50",
+      quantity: "10",
+      remaining: "0",
+      side: "ask",
+      status: "filled",
+      expires_at_block: 150,
+      tick_size: "1",
+      lot_size: "1",
+      min_quantity: "1",
+      min_notional: "50",
+    };
+    const { fetch } = mockFetch({
+      schemaVersion: 1,
+      fromBlock: 121,
+      toBlock: 121,
+      limit: 1,
+      filters: { family: "market" },
+      events: [
+        {
+          blockHeight: 121,
+          txIndex: 0,
+          logIndex: 0,
+          address: "monox1market",
+          eventTopic: `0x${"36".repeat(32)}`,
+          decoded: null,
+          decodedJson: JSON.stringify(decoded),
+        },
+      ],
+      source: {
+        indexerProvider: "native_events",
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const response = await client.lythNativeMarketEventsTyped<NativeEventProjection>({
+      fromBlock: 121,
+      toBlock: 121,
+    });
+
+    expect(response.events[0].decoded.market_order_id).toBe(marketOrderId);
+    expect(response.events[0].decoded.market_related_order_id).toBe(marketRelatedOrderId);
+    expect(response.events[0].decoded.market_asset_id).toBe(marketAssetId);
+    expect(response.events[0].decoded.market_related_asset_id).toBe(marketRelatedAssetId);
+    expect(response.events[0].decoded.price).toBe("50");
+    expect(response.events[0].decoded.min_notional).toBe("50");
   });
 
   it("live explorer helpers call the new chain RPC surfaces", async () => {

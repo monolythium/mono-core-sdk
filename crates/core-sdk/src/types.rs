@@ -666,9 +666,131 @@ pub struct NativeDecodedEvent {
     pub sequence: u32,
     pub family: String,
     pub event_name: String,
+    #[serde(
+        default,
+        alias = "marketSurface",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub market_surface: Option<String>,
+    #[serde(
+        default,
+        alias = "marketAssetId",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub market_asset_id: Option<Hash>,
+    #[serde(
+        default,
+        alias = "marketRelatedAssetId",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub market_related_asset_id: Option<Hash>,
+    #[serde(
+        default,
+        alias = "marketOrderId",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub market_order_id: Option<Hash>,
+    #[serde(
+        default,
+        alias = "marketRelatedOrderId",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub market_related_order_id: Option<Hash>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_lossless_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub price: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_lossless_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub quantity: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_lossless_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub remaining: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(
+        default,
+        alias = "nftStandard",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub nft_standard: Option<String>,
+    #[serde(default, alias = "royaltyBps", skip_serializing_if = "Option::is_none")]
+    pub royalty_bps: Option<u16>,
+    #[serde(
+        default,
+        alias = "listingKind",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub listing_kind: Option<serde_json::Value>,
+    #[serde(
+        default,
+        alias = "expiresAtBlock",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub expires_at_block: Option<u64>,
+    #[serde(
+        default,
+        alias = "tickSize",
+        deserialize_with = "deserialize_optional_lossless_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tick_size: Option<String>,
+    #[serde(
+        default,
+        alias = "lotSize",
+        deserialize_with = "deserialize_optional_lossless_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub lot_size: Option<String>,
+    #[serde(
+        default,
+        alias = "minQuantity",
+        deserialize_with = "deserialize_optional_lossless_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub min_quantity: Option<String>,
+    #[serde(
+        default,
+        alias = "minNotional",
+        deserialize_with = "deserialize_optional_lossless_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub min_notional: Option<String>,
     pub payload_hash: Hash,
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
+}
+
+/// Alias matching mono-core's native event projection naming.
+pub type NativeEventProjection = NativeDecodedEvent;
+
+fn deserialize_optional_lossless_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    value
+        .map(|v| match v {
+            serde_json::Value::String(s) => Ok(s),
+            serde_json::Value::Number(n) => Ok(n.to_string()),
+            serde_json::Value::Bool(b) => Ok(b.to_string()),
+            serde_json::Value::Null
+            | serde_json::Value::Array(_)
+            | serde_json::Value::Object(_) => Err(serde::de::Error::custom(
+                "expected string, number, bool, or null for optional lossless scalar",
+            )),
+        })
+        .transpose()
 }
 
 /// Native event family emitted by the RISC-V market module.
@@ -4469,6 +4591,75 @@ mod tests {
         assert_eq!(typed.decoded.primary_id, vault_id);
         assert!(typed.decoded.account.starts_with("mono1"));
         assert!(typed.decoded.counterparty.starts_with("mono1"));
+    }
+
+    #[test]
+    fn native_event_projection_decodes_optional_market_fields() {
+        let market_asset_id = format!("0x{}", "21".repeat(32));
+        let market_related_asset_id = format!("0x{}", "22".repeat(32));
+        let market_order_id = format!("0x{}", "23".repeat(32));
+        let market_related_order_id = format!("0x{}", "24".repeat(32));
+        let listing_kind = serde_json::json!({ "english": "fixed_price" });
+        let decoded: NativeEventProjection = serde_json::from_value(serde_json::json!({
+            "block_height": 102,
+            "tx_index": 0,
+            "sequence": 3,
+            "family": "market",
+            "event_name": "market.spot.order_filled",
+            "marketSurface": "spot",
+            "marketAssetId": market_asset_id.clone(),
+            "marketRelatedAssetId": market_related_asset_id.clone(),
+            "marketOrderId": market_order_id.clone(),
+            "marketRelatedOrderId": market_related_order_id.clone(),
+            "price": 50,
+            "quantity": "10",
+            "remaining": 0,
+            "side": "bid",
+            "status": "filled",
+            "nftStandard": "mrc1155",
+            "royaltyBps": 250,
+            "listingKind": listing_kind.clone(),
+            "expiresAtBlock": 77,
+            "tickSize": 1,
+            "lotSize": "2",
+            "minQuantity": 3,
+            "minNotional": "150",
+            "payload_hash": format!("0x{}", "44".repeat(32))
+        }))
+        .unwrap();
+
+        assert_eq!(decoded.family, "market");
+        assert_eq!(decoded.market_surface.as_deref(), Some("spot"));
+        assert_eq!(
+            decoded.market_asset_id.as_deref(),
+            Some(market_asset_id.as_str())
+        );
+        assert_eq!(
+            decoded.market_related_asset_id.as_deref(),
+            Some(market_related_asset_id.as_str())
+        );
+        assert_eq!(
+            decoded.market_order_id.as_deref(),
+            Some(market_order_id.as_str())
+        );
+        assert_eq!(
+            decoded.market_related_order_id.as_deref(),
+            Some(market_related_order_id.as_str())
+        );
+        assert_eq!(decoded.price.as_deref(), Some("50"));
+        assert_eq!(decoded.quantity.as_deref(), Some("10"));
+        assert_eq!(decoded.remaining.as_deref(), Some("0"));
+        assert_eq!(decoded.side.as_deref(), Some("bid"));
+        assert_eq!(decoded.status.as_deref(), Some("filled"));
+        assert_eq!(decoded.nft_standard.as_deref(), Some("mrc1155"));
+        assert_eq!(decoded.royalty_bps, Some(250));
+        assert_eq!(decoded.listing_kind.as_ref(), Some(&listing_kind));
+        assert_eq!(decoded.expires_at_block, Some(77));
+        assert_eq!(decoded.tick_size.as_deref(), Some("1"));
+        assert_eq!(decoded.lot_size.as_deref(), Some("2"));
+        assert_eq!(decoded.min_quantity.as_deref(), Some("3"));
+        assert_eq!(decoded.min_notional.as_deref(), Some("150"));
+        assert_eq!(decoded.payload_hash, format!("0x{}", "44".repeat(32)));
     }
 
     #[test]
