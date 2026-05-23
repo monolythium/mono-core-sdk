@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::address::{
-    address_to_typed_bech32, typed_bech32_to_address, typed_bech32_to_address_kind, AddressKind,
+    address_to_hex, address_to_typed_bech32, typed_bech32_to_address, typed_bech32_to_address_kind,
+    AddressKind,
 };
 
 #[cfg(feature = "ts-bindings")]
@@ -705,6 +706,139 @@ impl MrvRequestBuildOptions {
     }
 }
 
+/// Required inputs for building the current signed native transaction
+/// envelope around an MRV deploy or call.
+///
+/// Field names on [`MrvNativeTxFields`] intentionally mirror the current
+/// compatibility signing adapter (`maxFeePerGas`, `gasLimit`), but values are
+/// ADR-0037 lythoshi and execution-unit counts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MrvNativeTxBuildOptions {
+    /// Optional typed user address that signs the request.
+    pub from: Option<String>,
+    /// Chain id for the signed transaction envelope.
+    pub chain_id: u64,
+    /// Sender nonce for the signed transaction envelope.
+    pub nonce: u64,
+    /// Native value in lythoshi. Defaults to zero when omitted.
+    pub value_lythoshi: u128,
+    /// Execution-unit ceiling for transaction admission.
+    pub execution_unit_limit: u64,
+    /// Max execution fee in lythoshi.
+    pub max_execution_fee_lythoshi: u128,
+    /// Priority tip in lythoshi. Defaults to zero when omitted.
+    pub priority_tip_lythoshi: u128,
+}
+
+impl MrvNativeTxBuildOptions {
+    /// Build the required native transaction options.
+    #[must_use]
+    pub const fn new(
+        chain_id: u64,
+        nonce: u64,
+        execution_unit_limit: u64,
+        max_execution_fee_lythoshi: u128,
+    ) -> Self {
+        Self {
+            from: None,
+            chain_id,
+            nonce,
+            value_lythoshi: 0,
+            execution_unit_limit,
+            max_execution_fee_lythoshi,
+            priority_tip_lythoshi: 0,
+        }
+    }
+
+    /// Set the typed user address that signs the request.
+    #[must_use]
+    pub fn from(mut self, from: impl Into<String>) -> Self {
+        self.from = Some(from.into());
+        self
+    }
+
+    /// Set native value in lythoshi.
+    #[must_use]
+    pub const fn value_lythoshi(mut self, value: u128) -> Self {
+        self.value_lythoshi = value;
+        self
+    }
+
+    /// Set priority tip in lythoshi.
+    #[must_use]
+    pub const fn priority_tip_lythoshi(mut self, value: u128) -> Self {
+        self.priority_tip_lythoshi = value;
+        self
+    }
+
+    fn request_options(&self) -> MrvRequestBuildOptions {
+        let mut options = MrvRequestBuildOptions::new()
+            .value_lythoshi(self.value_lythoshi)
+            .execution_unit_limit(self.execution_unit_limit)
+            .max_execution_fee_lythoshi(self.max_execution_fee_lythoshi)
+            .priority_tip_lythoshi(self.priority_tip_lythoshi)
+            .nonce(self.nonce);
+        if let Some(from) = &self.from {
+            options = options.from(from.clone());
+        }
+        options
+    }
+}
+
+/// Current native transaction signing shape for MRV deploy/call envelopes.
+///
+/// `maxFeePerGas` and `gasLimit` are compatibility field names inherited by
+/// the signer adapter. MRV callers should treat them as max execution fee in
+/// lythoshi and execution-unit limit respectively.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvNativeTxFields {
+    /// Chain id.
+    #[serde(rename = "chainId")]
+    pub chain_id: u64,
+    /// Sender nonce.
+    pub nonce: u64,
+    /// Priority tip in lythoshi, rendered as a decimal string.
+    #[serde(rename = "maxPriorityFeePerGas")]
+    pub max_priority_fee_per_gas: String,
+    /// Max execution fee in lythoshi, rendered as a decimal string.
+    #[serde(rename = "maxFeePerGas")]
+    pub max_fee_per_gas: String,
+    /// Execution-unit ceiling.
+    #[serde(rename = "gasLimit")]
+    pub gas_limit: u64,
+    /// Destination 20-byte hex address, or `null` for deploy.
+    pub to: Option<String>,
+    /// Native value in lythoshi, rendered as a decimal string.
+    pub value: String,
+    /// Transaction input bytes as `0x`-hex.
+    pub input: String,
+    /// Signed transaction extensions, including the MRV v1 descriptor.
+    pub extensions: Vec<MrvTransactionExtension>,
+}
+
+impl MrvNativeTxFields {
+    fn from_parts(
+        options: &MrvNativeTxBuildOptions,
+        to: Option<String>,
+        input: String,
+        value_lythoshi: &str,
+        extension: MrvTransactionExtension,
+    ) -> Self {
+        Self {
+            chain_id: options.chain_id,
+            nonce: options.nonce,
+            max_priority_fee_per_gas: options.priority_tip_lythoshi.to_string(),
+            max_fee_per_gas: options.max_execution_fee_lythoshi.to_string(),
+            gas_limit: options.execution_unit_limit,
+            to,
+            value: value_lythoshi.to_owned(),
+            input,
+            extensions: vec![extension],
+        }
+    }
+}
+
 /// Fully-built MRV deploy request plus SDK-local execution metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -729,6 +863,38 @@ pub struct MrvCallPlan {
     pub request: MrvCallRequest,
     /// MRV v1 transaction extension descriptor.
     pub extension: MrvTransactionExtension,
+}
+
+/// Fully-built MRV deploy plan plus the current sign-ready native transaction
+/// fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvDeployNativeTxPlan {
+    /// Validated native deploy request.
+    pub request: MrvDeployRequest,
+    /// MRV v1 transaction extension descriptor.
+    pub extension: MrvTransactionExtension,
+    /// Deterministic contract address when artifact hash, signer, and nonce are known.
+    #[serde(
+        rename = "expectedContractAddress",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub expected_contract_address: Option<String>,
+    /// Sign-ready transaction fields for the current native transaction adapter.
+    pub tx: MrvNativeTxFields,
+}
+
+/// Fully-built MRV call plan plus the current sign-ready native transaction
+/// fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvCallNativeTxPlan {
+    /// Validated native call request.
+    pub request: MrvCallRequest,
+    /// MRV v1 transaction extension descriptor.
+    pub extension: MrvTransactionExtension,
+    /// Sign-ready transaction fields for the current native transaction adapter.
+    pub tx: MrvNativeTxFields,
 }
 
 /// Errors returned by MRV SDK validation helpers.
@@ -1191,6 +1357,62 @@ pub fn build_mrv_call_plan(
     Ok(MrvCallPlan {
         request: build_mrv_call_request(contract_address, input, options)?,
         extension: mrv_v1_transaction_extension(),
+    })
+}
+
+/// Build an MRV deploy plan plus current sign-ready native transaction fields.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when request validation fails, a supplied
+/// artifact hash is malformed, or the optional signer address is not a typed
+/// user address.
+pub fn build_mrv_deploy_native_tx_plan(
+    artifact_bytes: &[u8],
+    artifact_hash_hex: Option<&str>,
+    options: MrvNativeTxBuildOptions,
+) -> Result<MrvDeployNativeTxPlan, MrvValidationError> {
+    let plan = build_mrv_deploy_plan(artifact_bytes, artifact_hash_hex, options.request_options())?;
+    let tx = MrvNativeTxFields::from_parts(
+        &options,
+        None,
+        plan.request.artifact_bytes.clone(),
+        &plan.request.value_lythoshi,
+        plan.extension.clone(),
+    );
+    Ok(MrvDeployNativeTxPlan {
+        request: plan.request,
+        extension: plan.extension,
+        expected_contract_address: plan.expected_contract_address,
+        tx,
+    })
+}
+
+/// Build an MRV call plan plus current sign-ready native transaction fields.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when request validation fails or the contract
+/// address is not a typed `monoc` address.
+pub fn build_mrv_call_native_tx_plan(
+    contract_address: &str,
+    input: &[u8],
+    options: MrvNativeTxBuildOptions,
+) -> Result<MrvCallNativeTxPlan, MrvValidationError> {
+    let plan = build_mrv_call_plan(contract_address, input, options.request_options())?;
+    let to = address_to_hex(mrv_bech32_to_address_kind(
+        &plan.request.contract_address,
+        MrvAddressKind::Contract,
+    )?);
+    let tx = MrvNativeTxFields::from_parts(
+        &options,
+        Some(to),
+        plan.request.input.clone(),
+        &plan.request.value_lythoshi,
+        plan.extension.clone(),
+    );
+    Ok(MrvCallNativeTxPlan {
+        request: plan.request,
+        extension: plan.extension,
+        tx,
     })
 }
 
@@ -1727,6 +1949,79 @@ mod tests {
             &contract,
             &[0x01],
             MrvRequestBuildOptions::new().execution_unit_limit(0)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn builders_create_signer_ready_native_tx_plans() {
+        let user = mrv_address_to_bech32(MrvAddressKind::User, [0x11; 20]);
+        let contract = mrv_address_to_bech32(MrvAddressKind::Contract, [0x22; 20]);
+        let artifact_hash = "0x598501b99b388ca564905b49040c6d315a55fb13bf34a6f002aa04960a27895d";
+
+        let deploy = build_mrv_deploy_native_tx_plan(
+            &[0x13, 0x00, 0x00, 0x00],
+            Some(artifact_hash),
+            MrvNativeTxBuildOptions::new(69_420, 7, 100_000, 25)
+                .from(user.clone())
+                .priority_tip_lythoshi(1),
+        )
+        .unwrap();
+        assert_eq!(
+            deploy.expected_contract_address.as_deref(),
+            Some(
+                derive_mrv_contract_address(&user, 7, artifact_hash)
+                    .unwrap()
+                    .as_str()
+            )
+        );
+        assert_eq!(deploy.tx.chain_id, 69_420);
+        assert_eq!(deploy.tx.nonce, 7);
+        assert_eq!(deploy.tx.max_priority_fee_per_gas, "1");
+        assert_eq!(deploy.tx.max_fee_per_gas, "25");
+        assert_eq!(deploy.tx.gas_limit, 100_000);
+        assert_eq!(deploy.tx.to, None);
+        assert_eq!(deploy.tx.value, "0");
+        assert_eq!(deploy.tx.input, "0x13000000");
+        assert_eq!(
+            deploy.tx.extensions,
+            vec![MrvTransactionExtension {
+                kind: MRV_TX_EXTENSION_KIND,
+                body_hex: "0x01".to_owned(),
+            }]
+        );
+
+        let call = build_mrv_call_native_tx_plan(
+            &contract,
+            &[0x01, 0x02],
+            MrvNativeTxBuildOptions::new(69_420, 8, 50_000, 10)
+                .from(user)
+                .value_lythoshi(3),
+        )
+        .unwrap();
+        assert_eq!(call.tx.chain_id, 69_420);
+        assert_eq!(call.tx.nonce, 8);
+        assert_eq!(call.tx.max_priority_fee_per_gas, "0");
+        assert_eq!(call.tx.max_fee_per_gas, "10");
+        assert_eq!(call.tx.gas_limit, 50_000);
+        assert_eq!(
+            call.tx.to.as_deref(),
+            Some("0x2222222222222222222222222222222222222222")
+        );
+        assert_eq!(call.tx.value, "3");
+        assert_eq!(call.tx.input, "0x0102");
+        assert_eq!(call.tx.extensions[0].kind, MRV_TX_EXTENSION_KIND);
+
+        let wire = serde_json::to_value(&call).unwrap();
+        assert_eq!(wire["tx"]["chainId"], 69_420);
+        assert_eq!(wire["tx"]["maxFeePerGas"], "10");
+        assert_eq!(wire["tx"]["gasLimit"], 50_000);
+        assert_eq!(wire["tx"]["extensions"][0]["bodyHex"], "0x01");
+
+        assert!(build_mrv_call_native_tx_plan(
+            &mrv_address_to_bech32(MrvAddressKind::User, [0x33; 20]),
+            &[],
+            MrvNativeTxBuildOptions::new(69_420, 0, 1, 1)
         )
         .is_err());
     }
