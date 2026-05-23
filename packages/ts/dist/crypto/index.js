@@ -517,7 +517,6 @@ async function fetchEncryptionKey(client) {
   };
 }
 async function buildEncryptedSubmission(args) {
-  const signed = args.backend.signEvmTx(args.tx);
   const input = normalizeInput(args.tx.input);
   const to = normalizeTo2(args.tx.to);
   const nonceAad = {
@@ -525,10 +524,14 @@ async function buildEncryptedSubmission(args) {
     nonce: parseBigint(args.tx.nonce, "nonce"),
     chainId: parseBigint(args.tx.chainId, "chainId"),
     class: args.class ?? (to !== null && input.length === 0 ? MempoolClass.Transfer : MempoolClass.ContractCall),
-    maxFeePerGas: u128Saturate(parseBigint(args.tx.maxFeePerGas, "maxFeePerGas")),
-    maxPriorityFeePerGas: u128Saturate(parseBigint(args.tx.maxPriorityFeePerGas, "maxPriorityFeePerGas")),
+    maxFeePerGas: u128Checked(parseBigint(args.tx.maxFeePerGas, "maxFeePerGas"), "maxFeePerGas"),
+    maxPriorityFeePerGas: u128Checked(
+      parseBigint(args.tx.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
+      "maxPriorityFeePerGas"
+    ),
     gasLimit: parseBigint(args.tx.gasLimit, "gasLimit")
   };
+  const signed = args.backend.signEvmTx(args.tx);
   const decryptionHint = { epoch: args.encryptionKey.epoch, scheme: 0 };
   const built = await buildEncryptedEnvelope({
     signedInnerTxBincode: signed.wireBytes,
@@ -549,10 +552,12 @@ async function buildEncryptedSubmission(args) {
 async function submitEncryptedEnvelope(client, envelopeWireHex) {
   return client.call("lyth_submitEncrypted", [envelopeWireHex]);
 }
-function u128Saturate(value) {
+function u128Checked(value, field) {
   const cap = (1n << 128n) - 1n;
-  if (value < 0n) return 0n;
-  return value > cap ? cap : value;
+  if (value < 0n || value > cap) {
+    throw new Error(`${field} must fit in u128 for encrypted nonce AAD`);
+  }
+  return value;
 }
 function normalizeTo2(value) {
   if (value === null) return null;

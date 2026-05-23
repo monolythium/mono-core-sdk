@@ -1954,7 +1954,6 @@ async function fetchEncryptionKey(client) {
   };
 }
 async function buildEncryptedSubmission(args) {
-  const signed = args.backend.signEvmTx(args.tx);
   const input = normalizeInput(args.tx.input);
   const to = normalizeTo(args.tx.to);
   const nonceAad = {
@@ -1962,10 +1961,14 @@ async function buildEncryptedSubmission(args) {
     nonce: parseBigint(args.tx.nonce, "nonce"),
     chainId: parseBigint(args.tx.chainId, "chainId"),
     class: args.class ?? (to !== null && input.length === 0 ? MempoolClass.Transfer : MempoolClass.ContractCall),
-    maxFeePerGas: u128Saturate(parseBigint(args.tx.maxFeePerGas, "maxFeePerGas")),
-    maxPriorityFeePerGas: u128Saturate(parseBigint(args.tx.maxPriorityFeePerGas, "maxPriorityFeePerGas")),
+    maxFeePerGas: u128Checked(parseBigint(args.tx.maxFeePerGas, "maxFeePerGas"), "maxFeePerGas"),
+    maxPriorityFeePerGas: u128Checked(
+      parseBigint(args.tx.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
+      "maxPriorityFeePerGas"
+    ),
     gasLimit: parseBigint(args.tx.gasLimit, "gasLimit")
   };
+  const signed = args.backend.signEvmTx(args.tx);
   const decryptionHint = { epoch: args.encryptionKey.epoch, scheme: 0 };
   const built = await buildEncryptedEnvelope({
     signedInnerTxBincode: signed.wireBytes,
@@ -1986,10 +1989,12 @@ async function buildEncryptedSubmission(args) {
 async function submitEncryptedEnvelope(client, envelopeWireHex) {
   return client.call("lyth_submitEncrypted", [envelopeWireHex]);
 }
-function u128Saturate(value) {
+function u128Checked(value, field) {
   const cap = (1n << 128n) - 1n;
-  if (value < 0n) return 0n;
-  return value > cap ? cap : value;
+  if (value < 0n || value > cap) {
+    throw new Error(`${field} must fit in u128 for encrypted nonce AAD`);
+  }
+  return value;
 }
 function normalizeTo(value) {
   if (value === null) return null;
@@ -2348,6 +2353,31 @@ function buildMrvCallNativeTxPlan(contractAddress, input, options) {
     }
   };
 }
+function assertMrvDeployNativeSubmissionPlan(plan) {
+  assertMrvNativeSubmissionEnvelope(plan);
+  if (plan.tx.to !== null) {
+    throw new MrvValidationError("MRV deploy submission tx.to must be null");
+  }
+  const txInput = normalizeBytesHex(plan.tx.input ?? "0x", "tx.input");
+  if (txInput !== plan.request.artifactBytes) {
+    throw new MrvValidationError("MRV deploy submission tx.input must match artifactBytes");
+  }
+}
+function assertMrvCallNativeSubmissionPlan(plan) {
+  assertMrvNativeSubmissionEnvelope(plan);
+  const actualTo = normalizeNativeTxToHex(plan.tx.to, "tx.to");
+  if (actualTo === null) {
+    throw new MrvValidationError("MRV call submission tx.to must be a 20-byte contract address");
+  }
+  const expectedTo = typedBech32ToAddress(plan.request.contractAddress, "contract").hex.toLowerCase();
+  if (actualTo !== expectedTo) {
+    throw new MrvValidationError("MRV call submission tx.to must match contractAddress");
+  }
+  const txInput = normalizeBytesHex(plan.tx.input ?? "0x", "tx.input");
+  if (txInput !== plan.request.input) {
+    throw new MrvValidationError("MRV call submission tx.input must match request input");
+  }
+}
 function buildMrvNativeFeePreview(executionUnitLimit, maxExecutionFeeLythoshi, priorityTipLythoshi) {
   const totalLythoshi = normalizeDecimalLike("maxExecutionFeeLythoshi", maxExecutionFeeLythoshi);
   return {
@@ -2361,6 +2391,7 @@ function buildMrvNativeFeePreview(executionUnitLimit, maxExecutionFeeLythoshi, p
 }
 async function submitMrvDeployNativeTx(client, backend, artifactBytes, options) {
   const plan = buildMrvDeployNativeTxPlan(artifactBytes, options);
+  assertMrvDeployNativeSubmissionPlan(plan);
   const submission = await buildEncryptedSubmission({
     backend,
     tx: plan.tx,
@@ -2375,6 +2406,7 @@ async function submitMrvDeployNativeTx(client, backend, artifactBytes, options) 
 }
 async function submitMrvCallNativeTx(client, backend, contractAddress, input, options) {
   const plan = buildMrvCallNativeTxPlan(contractAddress, input, options);
+  assertMrvCallNativeSubmissionPlan(plan);
   const submission = await buildEncryptedSubmission({
     backend,
     tx: plan.tx,
@@ -2386,6 +2418,61 @@ async function submitMrvCallNativeTx(client, backend, contractAddress, input, op
     ...submission,
     txHash: await submitEncryptedEnvelope(client, submission.envelopeWireHex)
   };
+}
+function assertMrvNativeSubmissionEnvelope(plan) {
+  const extensions = plan.tx.extensions ?? [];
+  if (extensions.length !== 1) {
+    throw new MrvValidationError("MRV native submission must carry exactly one transaction extension");
+  }
+  assertMrvV1Extension(plan.extension, "extension");
+  assertMrvV1Extension(extensions[0], "tx.extensions[0]");
+  assertSameBigint("tx.chainId", plan.tx.chainId, plan.nativeTx.chainId);
+  assertSameBigint("tx.nonce", plan.tx.nonce, plan.nativeTx.nonce);
+  assertSameBigint("tx.gasLimit", plan.tx.gasLimit, plan.nativeTx.executionUnitLimit);
+  assertSameDecimal("tx.value", plan.tx.value, plan.nativeTx.valueLythoshi);
+  assertSameDecimal("tx.maxFeePerGas", plan.tx.maxFeePerGas, plan.nativeTx.maxExecutionFeeLythoshi);
+  assertSameDecimal("tx.maxPriorityFeePerGas", plan.tx.maxPriorityFeePerGas, plan.nativeTx.priorityTipLythoshi);
+  assertU128Lythoshi("maxExecutionFeeLythoshi", plan.nativeTx.maxExecutionFeeLythoshi);
+  assertU128Lythoshi("priorityTipLythoshi", plan.nativeTx.priorityTipLythoshi);
+}
+function assertMrvV1Extension(extension, field) {
+  if (extension.kind !== MRV_TX_EXTENSION_KIND) {
+    throw new MrvValidationError(`${field}.kind must be MRV v1 extension kind`);
+  }
+  const bodyHex = normalizeBytesHex("bodyHex" in extension ? extension.bodyHex : extension.body, `${field}.body`);
+  if (bodyHex !== "0x01") {
+    throw new MrvValidationError(`${field}.body must be MRV v1 extension body`);
+  }
+}
+function assertSameBigint(field, actual, expected) {
+  if (normalizeU64Like(actual, field) !== expected) {
+    throw new MrvValidationError(`${field} must match nativeTx`);
+  }
+}
+function assertSameDecimal(field, actual, expected) {
+  if (normalizeDecimalLike(field, actual) !== expected) {
+    throw new MrvValidationError(`${field} must match nativeTx`);
+  }
+}
+function assertU128Lythoshi(field, value) {
+  const normalized = BigInt(normalizeDecimalLike(field, value));
+  if (normalized > (1n << 128n) - 1n) {
+    throw new MrvValidationError(`${field} must fit in u128 for encrypted submission`);
+  }
+}
+function normalizeNativeTxToHex(value, field) {
+  if (value === null) return null;
+  const bytes = bytesFrom(value, field);
+  if (bytes.length !== 20) {
+    throw new MrvValidationError(`${field} must be a 20-byte address`);
+  }
+  return bytesToHex3(bytes).toLowerCase();
+}
+function normalizeU64Like(value, field) {
+  if (typeof value === "string") {
+    return normalizeU64(BigInt(normalizeDecimalLike(field, value)), field);
+  }
+  return normalizeU64(value, field);
 }
 function validateMemory(initialPages, maxPages, stackBytes) {
   if (initialPages === 0) throw new MrvValidationError("initialPages is zero");
@@ -3240,6 +3327,8 @@ exports.addressBytesToHex = addressBytesToHex;
 exports.addressToBech32 = addressToBech32;
 exports.addressToTypedBech32 = addressToTypedBech32;
 exports.apiEndpointFromRpcEndpoint = apiEndpointFromRpcEndpoint;
+exports.assertMrvCallNativeSubmissionPlan = assertMrvCallNativeSubmissionPlan;
+exports.assertMrvDeployNativeSubmissionPlan = assertMrvDeployNativeSubmissionPlan;
 exports.assertMrvFeeDisplayConformance = assertMrvFeeDisplayConformance;
 exports.bech32ToAddress = bech32ToAddress;
 exports.bech32ToAddressBytes = bech32ToAddressBytes;
