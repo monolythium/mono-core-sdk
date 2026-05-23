@@ -13,8 +13,8 @@
 use monolythium_core_sdk::bridge::{
     BridgeAdminControl, BridgeCircuitBreakerState, BridgeQuoteSubmitReadiness, BridgeRiskTier,
     BridgeRouteAssessment, BridgeRouteCandidate, BridgeRouteDisclosure, BridgeRouteSelection,
-    BridgeRoutesRequest, BridgeRoutesResponse, BridgeTransferIntent, BridgeTransferRequest,
-    BridgeVerifierDisclosure,
+    BridgeRoutesRequest, BridgeRoutesResponse, BridgeRoutesSource, BridgeTransferIntent,
+    BridgeTransferRequest, BridgeVerifierDisclosure,
 };
 use monolythium_core_sdk::mrv::{
     MrvAbiManifest, MrvAbiParam, MrvAbiSymbol, MrvAbiSymbolKind, MrvAbiType, MrvAddressKind,
@@ -73,6 +73,7 @@ fn export_bindings() {
     BridgeRouteSelection::export_all_to(&out).expect("BridgeRouteSelection");
     BridgeRoutesRequest::export_all_to(&out).expect("BridgeRoutesRequest");
     BridgeRoutesResponse::export_all_to(&out).expect("BridgeRoutesResponse");
+    BridgeRoutesSource::export_all_to(&out).expect("BridgeRoutesSource");
     BridgeTransferIntent::export_all_to(&out).expect("BridgeTransferIntent");
     BridgeTransferRequest::export_all_to(&out).expect("BridgeTransferRequest");
     BridgeVerifierDisclosure::export_all_to(&out).expect("BridgeVerifierDisclosure");

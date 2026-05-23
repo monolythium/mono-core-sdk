@@ -633,7 +633,43 @@ function bridgeQuoteSubmitReadiness(intent, routes) {
   };
 }
 function bridgeRoutesReadiness(request) {
-  return bridgeQuoteSubmitReadiness(request.intent, request.routeDisclosures);
+  const routeDisclosures = request.routeDisclosures ?? [];
+  const source = {
+    address: request.address,
+    routeCount: routeDisclosures.length,
+    globalRouteIndexAvailable: false,
+    routeDisclosureSource: "request.routeDisclosures"
+  };
+  if (request.intent == null) {
+    const blockedReasons = ["bridge route selection requires transfer intent"];
+    if (routeDisclosures.length === 0) {
+      blockedReasons.push("no route disclosures supplied");
+    }
+    return {
+      selection: {
+        selected: null,
+        candidates: [],
+        blockedReasons: [...blockedReasons]
+      },
+      routeSelectionReady: false,
+      quoteReady: false,
+      submitReady: false,
+      blockedReasons,
+      warnings: [],
+      routes: [...routeDisclosures],
+      bridgeRouteDisclosures: [...routeDisclosures],
+      source
+    };
+  }
+  const readiness = bridgeQuoteSubmitReadiness(request.intent, routeDisclosures);
+  return {
+    ...readiness,
+    quoteReady: false,
+    submitReady: false,
+    routes: [...routeDisclosures],
+    bridgeRouteDisclosures: [...routeDisclosures],
+    source
+  };
 }
 function bridgeRouteCandidate(intent, intentReasons, route) {
   const assessment = assessBridgeRoute(route);

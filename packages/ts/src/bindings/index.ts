@@ -25,6 +25,7 @@ export type { BridgeRouteDisclosure } from "./BridgeRouteDisclosure.js";
 export type { BridgeRouteSelection } from "./BridgeRouteSelection.js";
 export type { BridgeRoutesRequest } from "./BridgeRoutesRequest.js";
 export type { BridgeRoutesResponse } from "./BridgeRoutesResponse.js";
+export type { BridgeRoutesSource } from "./BridgeRoutesSource.js";
 export type { BridgeTransferIntent } from "./BridgeTransferIntent.js";
 export type { BridgeTransferRequest } from "./BridgeTransferRequest.js";
 export type { BridgeVerifierDisclosure } from "./BridgeVerifierDisclosure.js";

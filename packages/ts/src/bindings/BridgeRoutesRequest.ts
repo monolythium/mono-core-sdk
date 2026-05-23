@@ -4,13 +4,25 @@ import type { BridgeTransferIntent } from "./BridgeTransferIntent.js";
 
 /**
  * Request body for route-selection/readiness over supplied live disclosures.
+ *
+ * `mono-core` also accepts discovery-only requests that carry no transfer
+ * intent. Those return a route catalogue but keep route selection, quote, and
+ * submit readiness closed.
  */
 export type BridgeRoutesRequest = {
 /**
- * Transfer intent to evaluate.
+ * Optional mono bech32m address used by node/API catalogue discovery.
  */
-intent: BridgeTransferIntent,
+address?: string | null,
+/**
+ * Transfer intent to evaluate. Omitted for discovery-only catalogue calls.
+ */
+intent?: BridgeTransferIntent | null,
 /**
  * Live route disclosures supplied by the node/API/caller.
  */
-routeDisclosures: Array<BridgeRouteDisclosure>, };
+routeDisclosures?: Array<BridgeRouteDisclosure> | null,
+/**
+ * Optional bounded route disclosure cap.
+ */
+limit?: number | null, };
