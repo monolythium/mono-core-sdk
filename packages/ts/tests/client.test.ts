@@ -494,6 +494,75 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(calls[1].params).toEqual([assetId]);
   });
 
+  it("lyth_mrcAccount reads account rows and omits optional spend limit", async () => {
+    const account = "monos1effvdw0d05a35j69wwxplhmctpcclx382n60yf";
+    const controller = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+    const recovery = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+    const assetId = `0x${"bb".repeat(32)}`;
+    const policyHash = `0x${"44".repeat(32)}`;
+    const { fetch, calls } = mockFetchSequence([
+      {
+        schemaVersion: 1,
+        account,
+        spendLimit: 2,
+        smartAccount: {
+          kind: "smart_account",
+          account,
+          controller,
+          recovery,
+          policyHash: null,
+          nonce: "7",
+          updatedAtBlock: 91,
+        },
+        policyAccount: {
+          kind: "policy_account",
+          account,
+          controller,
+          recovery: null,
+          policyHash,
+          nonce: null,
+          updatedAtBlock: 90,
+        },
+        policySpends: [
+          {
+            account,
+            assetId,
+            window: "3600",
+            amount: "1000",
+            spent: "250",
+            updatedAtBlock: 92,
+          },
+        ],
+      },
+      {
+        schemaVersion: 1,
+        account,
+        spendLimit: 50,
+        smartAccount: null,
+        policyAccount: null,
+        policySpends: [],
+      },
+    ]);
+    const client = new RpcClient("http://x", { fetch });
+
+    const limited = await client.lythMrcAccount(account, 2);
+    const defaulted = await client.lythMrcAccount(account);
+
+    expect(limited.smartAccount?.controller).toBe(controller);
+    expect(limited.smartAccount?.recovery).toBe(recovery);
+    expect(limited.smartAccount?.policyHash).toBeNull();
+    expect(limited.smartAccount?.nonce).toBe("7");
+    expect(limited.policyAccount?.policyHash).toBe(policyHash);
+    expect(limited.policySpends[0]).toMatchObject({ assetId, spent: "250" });
+    expect(defaulted.spendLimit).toBe(50);
+    expect(defaulted.policySpends).toEqual([]);
+    expect(calls.map((c) => c.method)).toEqual(["lyth_mrcAccount", "lyth_mrcAccount"]);
+    expect(calls.map((c) => c.params)).toEqual([
+      [account, 2],
+      [account],
+    ]);
+  });
+
   it("lyth_mrcHolders reads MRC holder rows and omits optional limit", async () => {
     const assetId = `0x${"bb".repeat(32)}`;
     const tokenId = `0x${"cc".repeat(32)}`;

@@ -216,10 +216,14 @@ export type {
 } from "./native-events.js";
 export type { ClobMarketRecord } from "./bindings/ClobMarketRecord.js";
 export type { ClobMarketResponse } from "./bindings/ClobMarketResponse.js";
+export type { MrcAccountRecord } from "./bindings/MrcAccountRecord.js";
+export type { MrcAccountRequest } from "./bindings/MrcAccountRequest.js";
+export type { MrcAccountResponse } from "./bindings/MrcAccountResponse.js";
 export type { MrcHoldersRequest } from "./bindings/MrcHoldersRequest.js";
 export type { MrcHoldersResponse } from "./bindings/MrcHoldersResponse.js";
 export type { MrcMetadataRecord } from "./bindings/MrcMetadataRecord.js";
 export type { MrcMetadataResponse } from "./bindings/MrcMetadataResponse.js";
+export type { MrcPolicySpendRecord } from "./bindings/MrcPolicySpendRecord.js";
 export type { RedemptionQueueResponse } from "./bindings/RedemptionQueueResponse.js";
 export type { RedemptionQueueTicket } from "./bindings/RedemptionQueueTicket.js";
 export * from "./mrv.js";

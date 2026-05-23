@@ -42,6 +42,13 @@ SDK-local convenience types for newer explorer envelopes.
 Quantities surface as `bigint` to preserve full precision. Use
 `parseQuantity` only when you know the value fits in `Number.MAX_SAFE_INTEGER`.
 
+### MRC accounts
+
+```ts
+const mrcAccount = await client.lythMrcAccount("monos1effvdw0d05a35j69wwxplhmctpcclx382n60yf", 10);
+console.log(mrcAccount.smartAccount?.controller, mrcAccount.policySpends.length);
+```
+
 ### Node API client
 
 The SDK also exports `ApiClient` for the node's REST-shaped `/api/v1` surface.

@@ -18,10 +18,10 @@ use crate::types::{
     native_events_from_receipt, native_market_events_filter, native_market_events_from_receipt,
     typed_native_events_from_response, AddressFlowResponse, AddressProfileResponse, BlockSelector,
     ChainStatsResponse, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse,
-    ClobOrderBookResponse, ClobTradesResponse, MrcHoldersResponse, MrcMetadataResponse,
-    NativeEventFilter, NativeEventsFilter, NativeEventsResponse, NativeReceiptFee,
-    NativeReceiptResponse, PendingRewardsResponse, RedemptionQueueResponse, SearchResponse,
-    TxFeedResponse, TypedNativeEventsResponse, TypedNativeReceiptEvent,
+    ClobOrderBookResponse, ClobTradesResponse, MrcAccountResponse, MrcHoldersResponse,
+    MrcMetadataResponse, NativeEventFilter, NativeEventsFilter, NativeEventsResponse,
+    NativeReceiptFee, NativeReceiptResponse, PendingRewardsResponse, RedemptionQueueResponse,
+    SearchResponse, TxFeedResponse, TypedNativeEventsResponse, TypedNativeReceiptEvent,
 };
 
 /// Typed HTTP API client for `/api/v1`.
@@ -347,6 +347,16 @@ impl ApiClient {
         });
         self.get(&format!("assets/{asset_id}/metadata"), &query)
             .await
+    }
+
+    /// `/api/v1/mrc/accounts/{account}`.
+    pub async fn mrc_account(
+        &self,
+        account: &str,
+        limit: Option<u32>,
+    ) -> Result<ApiEnvelope<MrcAccountResponse>, SdkError> {
+        let query = limit.map_or_else(Vec::new, |limit| vec![("limit", limit.to_string())]);
+        self.get(&format!("mrc/accounts/{account}"), &query).await
     }
 
     /// `/api/v1/mrc/{standard}/{asset_id}/{token_id}/holders`.
@@ -1061,6 +1071,97 @@ mod tests {
         assert_eq!(
             vault_url.as_str(),
             format!("https://rpc.example/api/v1/mrc/mrc4626/{asset_id}/holders?limit=10")
+        );
+    }
+
+    #[test]
+    fn build_url_encodes_mrc_account_limit_query() {
+        let account = "monos1effvdw0d05a35j69wwxplhmctpcclx382n60yf";
+        let url = build_url(
+            "https://rpc.example/api/v1",
+            &format!("mrc/accounts/{account}"),
+            &[("limit", "2".to_owned())],
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            format!("https://rpc.example/api/v1/mrc/accounts/{account}?limit=2")
+        );
+    }
+
+    #[tokio::test]
+    async fn mrc_account_gets_rest_route_and_decodes_response() {
+        let account = "monos1effvdw0d05a35j69wwxplhmctpcclx382n60yf";
+        let controller = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+        let recovery = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+        let asset_id = format!("0x{}", "bb".repeat(32));
+        let policy_hash = format!("0x{}", "44".repeat(32));
+        let (endpoint, server) = spawn_api_server(json!({
+            "schemaVersion": 1,
+            "chainId": 69420,
+            "genesisHash": format!("0x{}", "00".repeat(32)),
+            "latest": {
+                "available": true,
+                "height": 100,
+                "blockHash": format!("0x{}", "11".repeat(32)),
+                "stateRoot": format!("0x{}", "22".repeat(32)),
+                "timestamp": 123
+            },
+            "data": {
+                "schemaVersion": 1,
+                "account": account,
+                "spendLimit": 2,
+                "smartAccount": {
+                    "kind": "smart_account",
+                    "account": account,
+                    "controller": controller,
+                    "recovery": recovery,
+                    "policyHash": null,
+                    "nonce": "7",
+                    "updatedAtBlock": 91
+                },
+                "policyAccount": {
+                    "kind": "policy_account",
+                    "account": account,
+                    "controller": controller,
+                    "recovery": null,
+                    "policyHash": policy_hash,
+                    "nonce": null,
+                    "updatedAtBlock": 90
+                },
+                "policySpends": [
+                    {
+                        "account": account,
+                        "assetId": asset_id,
+                        "window": "3600",
+                        "amount": "1000",
+                        "spent": "250",
+                        "updatedAtBlock": 92
+                    }
+                ]
+            }
+        }));
+        let client = ApiClient::new(endpoint).unwrap();
+
+        let response = client.mrc_account(account, Some(2)).await.unwrap();
+
+        assert_eq!(response.data.account, account);
+        assert_eq!(response.data.spend_limit, 2);
+        let smart = response.data.smart_account.as_ref().expect("smart account");
+        assert_eq!(smart.controller, controller);
+        assert_eq!(smart.recovery.as_deref(), Some(recovery));
+        assert_eq!(smart.policy_hash, None);
+        let policy = response
+            .data
+            .policy_account
+            .as_ref()
+            .expect("policy account");
+        assert_eq!(policy.policy_hash.as_deref(), Some(policy_hash.as_str()));
+        assert_eq!(response.data.policy_spends[0].spent, "250");
+        let request_line = server.join().unwrap();
+        assert_eq!(
+            request_line,
+            format!("GET /api/v1/mrc/accounts/{account}?limit=2 HTTP/1.1")
         );
     }
 

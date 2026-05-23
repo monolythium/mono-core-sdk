@@ -135,6 +135,16 @@ const vaultHolders = await client.lythMrc4626Holders("0x...", 25);
 const restVaultHolders = await api.mrc4626Holders("0x...", 25);
 ```
 
+Smart/policy account lookup is available on both JSON-RPC and REST. The
+optional limit bounds `policySpends` rows:
+
+```ts
+const mrcAccount = await client.lythMrcAccount("monos1effvdw0d05a35j69wwxplhmctpcclx382n60yf", 10);
+const restAccount = await api.mrcAccount(mrcAccount.account, 10);
+
+console.log(mrcAccount.smartAccount?.controller, mrcAccount.policySpends.length, restAccount.data.spendLimit);
+```
+
 The lower-level helpers are `lythMrcAssetHolders("mrc4626", vaultId, limit)`
 and `mrcAssetHolders("mrc4626", vaultId, limit)`. Native decoded MRC events
 use `family: "mrc"`; `mrc4626.deposit` and `mrc4626.withdraw` may include
