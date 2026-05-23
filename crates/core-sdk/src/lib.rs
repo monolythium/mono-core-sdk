@@ -39,6 +39,7 @@ pub use client::RpcClient;
 pub use consts::{burn_addr_hex, BURN_ADDR};
 pub use error::SdkError;
 pub use mrv::{
+    assert_mrv_call_native_submission_plan, assert_mrv_deploy_native_submission_plan,
     assert_mrv_fee_display_conformance, check_mrv_fee_display_conformance, format_lyth,
     format_lythoshi, parse_lyth_to_lythoshi, LythFormatOptions, MrvFeeDisplayConformanceInput,
     MrvFeeDisplayConformanceReport, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MRV_STRUCTURED_FEE_FIELDS,
