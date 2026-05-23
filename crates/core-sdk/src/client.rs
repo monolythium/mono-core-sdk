@@ -2188,6 +2188,7 @@ mod tests {
                 "orderId": order_id,
                 "marketId": market_id,
                 "owner": owner,
+                "nonce": 7,
                 "side": "bid",
                 "price": "7",
                 "quantity": "30",
@@ -2238,6 +2239,7 @@ mod tests {
 
         assert_eq!(response.schema_version, 1);
         assert_eq!(response.spot_markets[0].trade_count, "2");
+        assert_eq!(response.spot_orders[0].nonce, Some(7));
         assert_eq!(response.spot_orders[0].remaining, "20");
         assert_eq!(response.nft_listings[0].listing_kind["fixedPrice"], true);
         assert_eq!(

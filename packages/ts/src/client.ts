@@ -292,6 +292,8 @@ export interface NativeSpotOrderStateRecord {
   orderId: string;
   marketId: string;
   owner: string;
+  /** Owner-local spot order nonce; omitted by older nodes. */
+  nonce?: number | null;
   side: string;
   price: string;
   quantity: string;

@@ -749,6 +749,7 @@ describe("ApiClient", () => {
             orderId,
             marketId,
             owner,
+            nonce: 9,
             side: "ask",
             price: "8",
             quantity: "30",
@@ -800,6 +801,7 @@ describe("ApiClient", () => {
     });
 
     expect(response.data.spotMarkets[0].tradeCount).toBe("2");
+    expect(response.data.spotOrders[0].nonce).toBe(9);
     expect(response.data.spotOrders[0].remaining).toBe("10");
     expect(response.data.nftListings[0].listingKind).toEqual({
       auction: { reserve: "650" },

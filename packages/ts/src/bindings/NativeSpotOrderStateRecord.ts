@@ -3,4 +3,8 @@
 /**
  * Current-state native spot order aggregate.
  */
-export type NativeSpotOrderStateRecord = { orderId: string, marketId: string, owner: string, side: string, price: string, quantity: string, remaining: string, status: string, expiresAtBlock: bigint, updatedAtBlock: bigint, };
+export type NativeSpotOrderStateRecord = { orderId: string, marketId: string, owner: string,
+/**
+ * Owner-local spot order nonce captured from `LimitOrderPlaced`.
+ */
+nonce?: number | null, side: string, price: string, quantity: string, remaining: string, status: string, expiresAtBlock: bigint, updatedAtBlock: bigint, };
