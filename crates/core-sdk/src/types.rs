@@ -1261,6 +1261,10 @@ pub struct NativeSpotOrderStateRecord {
     pub order_id: Hash,
     pub market_id: Hash,
     pub owner: Address,
+    /// Owner-local spot order nonce captured from `LimitOrderPlaced`.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number | null", optional))]
+    pub nonce: Option<u64>,
     pub side: String,
     pub price: String,
     pub quantity: String,

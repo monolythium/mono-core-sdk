@@ -1396,6 +1396,7 @@ mod tests {
                     "orderId": order_id,
                     "marketId": market_id,
                     "owner": owner,
+                    "nonce": 9,
                     "side": "ask",
                     "price": "8",
                     "quantity": "30",
@@ -1446,6 +1447,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.data.spot_markets[0].owner, owner);
+        assert_eq!(response.data.spot_orders[0].nonce, Some(9));
         assert_eq!(response.data.spot_orders[0].side, "ask");
         assert_eq!(
             response.data.nft_listings[0].listing_kind["auction"]["reserve"],

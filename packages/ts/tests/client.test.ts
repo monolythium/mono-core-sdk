@@ -1331,6 +1331,7 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
           orderId,
           marketId,
           owner,
+          nonce: 7,
           side: "bid",
           price: "7",
           quantity: "30",
@@ -1381,6 +1382,7 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     });
 
     expect(response.spotMarkets[0].tradeCount).toBe("2");
+    expect(response.spotOrders[0].nonce).toBe(7);
     expect(response.spotOrders[0].remaining).toBe("20");
     expect(response.nftListings[0].listingKind).toEqual({ fixedPrice: true });
     expect(response.collectionRoyalties[0].bps).toBe(250);
