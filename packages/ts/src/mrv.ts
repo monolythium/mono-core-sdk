@@ -105,13 +105,24 @@ export interface MrvNativeTxFacade {
   priorityTipLythoshi: string;
 }
 
+export interface MrvNativeFeePreview {
+  totalLythoshi: string;
+  totalLyth: string;
+  cyclesUsed: bigint;
+  executionUnitLimit: bigint;
+  maxExecutionFeeLythoshi: string;
+  priorityTipLythoshi: string;
+}
+
 export interface MrvDeployNativeTxPlan extends MrvDeployPlan {
   nativeTx: MrvNativeTxFacade;
+  feePreview: MrvNativeFeePreview;
   tx: NativeEvmTxFields;
 }
 
 export interface MrvCallNativeTxPlan extends MrvCallPlan {
   nativeTx: MrvNativeTxFacade;
+  feePreview: MrvNativeFeePreview;
   tx: NativeEvmTxFields;
 }
 
@@ -418,6 +429,7 @@ export function buildMrvDeployNativeTxPlan(
       maxExecutionFeeLythoshi: maxExecutionFee,
       priorityTipLythoshi: priorityTip ?? "0",
     },
+    feePreview: buildMrvNativeFeePreview(executionUnitLimit, maxExecutionFee, priorityTip ?? "0"),
     tx: {
       chainId,
       nonce,
@@ -462,6 +474,7 @@ export function buildMrvCallNativeTxPlan(
       maxExecutionFeeLythoshi: maxExecutionFee,
       priorityTipLythoshi: priorityTip ?? "0",
     },
+    feePreview: buildMrvNativeFeePreview(executionUnitLimit, maxExecutionFee, priorityTip ?? "0"),
     tx: {
       chainId,
       nonce,
@@ -473,6 +486,22 @@ export function buildMrvCallNativeTxPlan(
       input: plan.request.input,
       extensions: [plan.extension],
     },
+  };
+}
+
+function buildMrvNativeFeePreview(
+  executionUnitLimit: bigint,
+  maxExecutionFeeLythoshi: string,
+  priorityTipLythoshi: string,
+): MrvNativeFeePreview {
+  const totalLythoshi = normalizeDecimalLike("maxExecutionFeeLythoshi", maxExecutionFeeLythoshi);
+  return {
+    totalLythoshi,
+    totalLyth: formatLyth(totalLythoshi, { includeUnit: false }),
+    cyclesUsed: executionUnitLimit,
+    executionUnitLimit,
+    maxExecutionFeeLythoshi: totalLythoshi,
+    priorityTipLythoshi: normalizeDecimalLike("priorityTipLythoshi", priorityTipLythoshi),
   };
 }
 

@@ -298,6 +298,14 @@ describe("MRV/RISC-V SDK helpers", () => {
       maxExecutionFeeLythoshi: "25",
       priorityTipLythoshi: "1",
     });
+    expect(deploy.feePreview).toEqual({
+      totalLythoshi: "25",
+      totalLyth: "0.00000025",
+      cyclesUsed: 100_000n,
+      executionUnitLimit: 100_000n,
+      maxExecutionFeeLythoshi: "25",
+      priorityTipLythoshi: "1",
+    });
     expect(deploy.tx).toEqual({
       chainId: 69_420n,
       nonce: 7n,
@@ -322,6 +330,14 @@ describe("MRV/RISC-V SDK helpers", () => {
       chainId: 69_420n,
       nonce: 8n,
       valueLythoshi: "3",
+      executionUnitLimit: 50_000n,
+      maxExecutionFeeLythoshi: "10",
+      priorityTipLythoshi: "0",
+    });
+    expect(call.feePreview).toEqual({
+      totalLythoshi: "10",
+      totalLyth: "0.0000001",
+      cyclesUsed: 50_000n,
       executionUnitLimit: 50_000n,
       maxExecutionFeeLythoshi: "10",
       priorityTipLythoshi: "0",
@@ -378,6 +394,7 @@ describe("MRV/RISC-V SDK helpers", () => {
     expect(deploy.txHash).toBe(`0x${"aa".repeat(32)}`);
     expect(deploy.request.artifactBytes).toBe("0x13000000");
     expect(deploy.nativeTx.maxExecutionFeeLythoshi).toBe("25");
+    expect(deploy.feePreview.totalLyth).toBe("0.00000025");
     expect(deploy.innerSighashHex).toMatch(/^0x[0-9a-f]{64}$/);
     expect(deploy.innerTxHashHex).toMatch(/^0x[0-9a-f]{64}$/);
     expect(deploy.envelopeWireHex.startsWith("0x")).toBe(true);
@@ -395,6 +412,7 @@ describe("MRV/RISC-V SDK helpers", () => {
     expect(call.txHash).toBe(`0x${"bb".repeat(32)}`);
     expect(call.request.contractAddress).toBe(contract);
     expect(call.nativeTx.valueLythoshi).toBe("3");
+    expect(call.feePreview.totalLythoshi).toBe("10");
 
     expect(calls.map((c) => c.method)).toEqual([
       "lyth_getEncryptionKey",
