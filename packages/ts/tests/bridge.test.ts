@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  BRIDGE_QUOTE_API_BLOCKED_REASON,
   BRIDGE_REVERT_TAGS,
   BRIDGE_SELECTORS,
+  BRIDGE_SUBMIT_API_BLOCKED_REASON,
   BridgePrecompileError,
   PRECOMPILE_ADDRESSES,
   assessBridgeRoute,
   bridgeAddressHex,
+  bridgeQuoteSubmitReadiness,
   bridgeTransferCandidates,
   encodeLockBridgeConfigCalldata,
   encodeSetBridgeRouteFinalityCalldata,
@@ -281,5 +284,30 @@ describe("bridge route disclosure helpers", () => {
     expect(selection.selected).toBeNull();
     expect(selection.candidates).toEqual([]);
     expect(selection.blockedReasons.some((reason) => reason.includes("no route disclosures"))).toBe(true);
+  });
+
+  it("reports quote/submit as a live mono-core boundary after route selection", () => {
+    const readiness = bridgeQuoteSubmitReadiness(transferIntent(), [route("healthy")]);
+
+    expect(readiness.routeSelectionReady).toBe(true);
+    expect(readiness.quoteReady).toBe(false);
+    expect(readiness.submitReady).toBe(false);
+    expect(readiness.selection.selected?.route.routeId).toBe("healthy");
+    expect(readiness.blockedReasons).toEqual([
+      BRIDGE_QUOTE_API_BLOCKED_REASON,
+      BRIDGE_SUBMIT_API_BLOCKED_REASON,
+    ]);
+  });
+
+  it("preserves route-selection blockers before quote/submit readiness", () => {
+    const readiness = bridgeQuoteSubmitReadiness(transferIntent(), []);
+
+    expect(readiness.routeSelectionReady).toBe(false);
+    expect(readiness.quoteReady).toBe(false);
+    expect(readiness.submitReady).toBe(false);
+    expect(readiness.blockedReasons.some((reason) => reason.includes("no route disclosures"))).toBe(
+      true,
+    );
+    expect(readiness.blockedReasons).not.toContain(BRIDGE_QUOTE_API_BLOCKED_REASON);
   });
 });

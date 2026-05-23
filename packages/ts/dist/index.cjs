@@ -454,6 +454,8 @@ var BRIDGE_REVERT_TAGS = {
   bridgeCooldownZero: "0xfd08",
   bridgeFinalityZero: "0xfd09"
 };
+var BRIDGE_QUOTE_API_BLOCKED_REASON = "bridge quote requires a mono-core live quote API/runtime primitive";
+var BRIDGE_SUBMIT_API_BLOCKED_REASON = "bridge submit requires a mono-core live submit API/runtime primitive";
 var BridgePrecompileError = class extends Error {
   constructor(message) {
     super(message);
@@ -602,6 +604,22 @@ function selectBridgeTransferRoute(intent, routes) {
     blockedReasons.push("no eligible bridge route satisfies the transfer intent and v4.1 floor");
   }
   return { selected, candidates, blockedReasons };
+}
+function bridgeQuoteSubmitReadiness(intent, routes) {
+  const selection = selectBridgeTransferRoute(intent, routes);
+  const routeSelectionReady = selection.selected != null;
+  const blockedReasons = [...selection.blockedReasons];
+  if (routeSelectionReady) {
+    blockedReasons.push(BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_SUBMIT_API_BLOCKED_REASON);
+  }
+  return {
+    selection,
+    routeSelectionReady,
+    quoteReady: false,
+    submitReady: false,
+    blockedReasons,
+    warnings: selection.selected == null ? [] : [...selection.selected.assessment.warnings]
+  };
 }
 function bridgeRouteCandidate(intent, intentReasons, route) {
   const assessment = assessBridgeRoute(route);
@@ -3978,8 +3996,10 @@ exports.ADDRESS_HRP = ADDRESS_HRP;
 exports.ADDRESS_KIND_HRPS = ADDRESS_KIND_HRPS;
 exports.AddressError = AddressError;
 exports.ApiClient = ApiClient;
+exports.BRIDGE_QUOTE_API_BLOCKED_REASON = BRIDGE_QUOTE_API_BLOCKED_REASON;
 exports.BRIDGE_REVERT_TAGS = BRIDGE_REVERT_TAGS;
 exports.BRIDGE_SELECTORS = BRIDGE_SELECTORS;
+exports.BRIDGE_SUBMIT_API_BLOCKED_REASON = BRIDGE_SUBMIT_API_BLOCKED_REASON;
 exports.BURN_ADDR = BURN_ADDR;
 exports.BridgePrecompileError = BridgePrecompileError;
 exports.CHAIN_REGISTRY = CHAIN_REGISTRY;
@@ -4039,6 +4059,7 @@ exports.assessBridgeRoute = assessBridgeRoute;
 exports.bech32ToAddress = bech32ToAddress;
 exports.bech32ToAddressBytes = bech32ToAddressBytes;
 exports.bridgeAddressHex = bridgeAddressHex;
+exports.bridgeQuoteSubmitReadiness = bridgeQuoteSubmitReadiness;
 exports.bridgeTransferCandidates = bridgeTransferCandidates;
 exports.buildMrvCallNativeTxPlan = buildMrvCallNativeTxPlan;
 exports.buildMrvCallPlan = buildMrvCallPlan;

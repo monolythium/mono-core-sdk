@@ -15,11 +15,14 @@ export const version = "0.1.0";
 
 export { ApiClient, apiEndpointFromRpcEndpoint } from "./api.js";
 export {
+  BRIDGE_QUOTE_API_BLOCKED_REASON,
   BRIDGE_REVERT_TAGS,
   BRIDGE_SELECTORS,
+  BRIDGE_SUBMIT_API_BLOCKED_REASON,
   BridgePrecompileError,
   assessBridgeRoute,
   bridgeAddressHex,
+  bridgeQuoteSubmitReadiness,
   bridgeTransferCandidates,
   encodeLockBridgeConfigCalldata,
   encodeSetBridgeRouteFinalityCalldata,
@@ -35,6 +38,7 @@ export type {
   BridgeAdminControl,
   BridgeBytesInput,
   BridgeCircuitBreakerState,
+  BridgeQuoteSubmitReadiness,
   BridgeRiskTier,
   BridgeRouteAssessment,
   BridgeRouteCandidate,

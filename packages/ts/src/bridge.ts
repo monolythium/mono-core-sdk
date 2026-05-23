@@ -20,6 +20,12 @@ export const BRIDGE_REVERT_TAGS = {
   bridgeFinalityZero: "0xfd09",
 } as const;
 
+export const BRIDGE_QUOTE_API_BLOCKED_REASON =
+  "bridge quote requires a mono-core live quote API/runtime primitive";
+
+export const BRIDGE_SUBMIT_API_BLOCKED_REASON =
+  "bridge submit requires a mono-core live submit API/runtime primitive";
+
 export type BridgeBytesInput = string | Uint8Array | readonly number[];
 
 export type BridgeAdminControl = "none" | "consensusOnly" | "operatorKey" | "unknown";
@@ -158,6 +164,22 @@ export interface BridgeRouteSelection {
   blockedReasons: string[];
 }
 
+/**
+ * SDK-only readiness report for the quote/submit boundary.
+ *
+ * The SDK can verify route-selection readiness from supplied disclosures, but
+ * live quote and submit remain blocked until mono-core exposes those
+ * API/runtime primitives.
+ */
+export interface BridgeQuoteSubmitReadiness {
+  selection: BridgeRouteSelection;
+  routeSelectionReady: boolean;
+  quoteReady: boolean;
+  submitReady: boolean;
+  blockedReasons: string[];
+  warnings: string[];
+}
+
 export function assessBridgeRoute(route: BridgeRouteDisclosure): BridgeRouteAssessment {
   const blockedReasons: string[] = [];
   const warnings: string[] = [];
@@ -284,6 +306,28 @@ export function selectBridgeTransferRoute(
   }
 
   return { selected, candidates, blockedReasons };
+}
+
+export function bridgeQuoteSubmitReadiness(
+  intent: BridgeTransferIntent,
+  routes: readonly BridgeRouteDisclosure[],
+): BridgeQuoteSubmitReadiness {
+  const selection = selectBridgeTransferRoute(intent, routes);
+  const routeSelectionReady = selection.selected != null;
+  const blockedReasons = [...selection.blockedReasons];
+
+  if (routeSelectionReady) {
+    blockedReasons.push(BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_SUBMIT_API_BLOCKED_REASON);
+  }
+
+  return {
+    selection,
+    routeSelectionReady,
+    quoteReady: false,
+    submitReady: false,
+    blockedReasons,
+    warnings: selection.selected == null ? [] : [...selection.selected.assessment.warnings],
+  };
 }
 
 function bridgeRouteCandidate(
