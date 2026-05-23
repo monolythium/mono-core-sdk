@@ -9,6 +9,7 @@ import {
   MlDsa65Backend,
   Pqm1Error,
   assemblePqm1Payload,
+  bincodeDecryptHint,
   bincodeEncryptedEnvelope,
   bincodeNonceAad,
   buildEncryptedEnvelope,
@@ -49,6 +50,19 @@ describe("crypto subpath", () => {
       "0x2c0f010000000000070000000000000001000000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000000000000000a086010000000000000000000000000000000000000000000000000000000000000000000000000000040000000000000013000000000000000000000001000000000000003001000000000000000105",
     wireSuffix:
       "0x6666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666",
+  } as const;
+
+  const MRV_ENCRYPTED_ENVELOPE_VECTOR = {
+    nonceAad:
+      "0x1400000000000000111111111111111111111111111111111111111107000000000000002c0f010000000000050000001900000000000000000000000000000001000000000000000000000000000000a086010000000000",
+    decryptHint: "0x09000000000000000000",
+    outerSignatureDigest: "0xd84fed20413cab193ea41e1c73cf58dbba0ee4071e11a3071bdccab6ed61f9a5",
+    wireLen: 6_543,
+    wirePrefix:
+      "0x1400000000000000111111111111111111111111111111111111111107000000000000002c0f010000000000050000001900000000000000000000000000000001000000000000000000000000000000a0860100000000006004000000000000" +
+      "44".repeat(84),
+    wireSuffix:
+      "0x" + "55".repeat(52) + "14000000000000001111111111111111111111111111111111111111",
   } as const;
 
   it("derives deterministic ML-DSA-65 keys and signatures from a seed", () => {
@@ -131,6 +145,41 @@ describe("crypto subpath", () => {
     expect(wire).toHaveLength(MRV_NATIVE_TX_VECTOR.wireLen);
     expect(bytesToHex(wire.slice(0, 160))).toBe(MRV_NATIVE_TX_VECTOR.wirePrefix);
     expect(bytesToHex(wire.slice(-80))).toBe(MRV_NATIVE_TX_VECTOR.wireSuffix);
+  });
+
+  it("matches the Rust encrypted MRV envelope deterministic vector", () => {
+    const nonceAad = {
+      sender: new Uint8Array(20).fill(0x11),
+      nonce: 7n,
+      chainId: 69_420n,
+      class: MempoolClass.FoundationOp,
+      maxFeePerGas: 25n,
+      maxPriorityFeePerGas: 1n,
+      gasLimit: 100_000n,
+    };
+    const decryptionHint = { epoch: 9n, scheme: 0 };
+    const ciphertext = new Uint8Array(1_088 + 12 + 4 + 16).fill(0x44);
+    const senderPubkey = new Uint8Array(ML_DSA_65_PUBLIC_KEY_LEN).fill(0x66);
+    const outerSignature = new Uint8Array(ML_DSA_65_SIGNATURE_LEN).fill(0x55);
+    const envelope = {
+      nonceAad,
+      ciphertext,
+      decryptionHint,
+      senderPubkey,
+      outerSignature,
+      sender: nonceAad.sender,
+    };
+    const wire = bincodeEncryptedEnvelope(envelope);
+
+    expect(MempoolClass.FoundationOp).toBe(5);
+    expect(bytesToHex(bincodeNonceAad(nonceAad))).toBe(MRV_ENCRYPTED_ENVELOPE_VECTOR.nonceAad);
+    expect(bytesToHex(bincodeDecryptHint(decryptionHint))).toBe(MRV_ENCRYPTED_ENVELOPE_VECTOR.decryptHint);
+    expect(bytesToHex(outerSigDigest(nonceAad, ciphertext, decryptionHint, senderPubkey))).toBe(
+      MRV_ENCRYPTED_ENVELOPE_VECTOR.outerSignatureDigest,
+    );
+    expect(wire).toHaveLength(MRV_ENCRYPTED_ENVELOPE_VECTOR.wireLen);
+    expect(bytesToHex(wire.slice(0, 180))).toBe(MRV_ENCRYPTED_ENVELOPE_VECTOR.wirePrefix);
+    expect(bytesToHex(wire.slice(-80))).toBe(MRV_ENCRYPTED_ENVELOPE_VECTOR.wireSuffix);
   });
 
   it("builds an encrypted envelope around signed tx bytes", async () => {

@@ -1393,13 +1393,18 @@ pub enum MrvMempoolClass {
     ClobOp = 3,
     /// Agent operation.
     AgentOp = 4,
-    /// Governance operation.
-    GovernanceOp = 5,
+    /// Foundation operation.
+    FoundationOp = 5,
     /// RWA operation.
     RwaOp = 6,
 }
 
 impl MrvMempoolClass {
+    /// Deprecated alias for the v4.1 whitepaper term [`Self::FoundationOp`].
+    #[allow(non_upper_case_globals)]
+    #[deprecated(note = "use MrvMempoolClass::FoundationOp")]
+    pub const GovernanceOp: Self = Self::FoundationOp;
+
     const fn from_u32(value: u32) -> Option<Self> {
         match value {
             0 => Some(Self::Transfer),
@@ -1407,7 +1412,7 @@ impl MrvMempoolClass {
             2 => Some(Self::PrivacyOp),
             3 => Some(Self::ClobOp),
             4 => Some(Self::AgentOp),
-            5 => Some(Self::GovernanceOp),
+            5 => Some(Self::FoundationOp),
             6 => Some(Self::RwaOp),
             _ => None,
         }
@@ -4039,7 +4044,7 @@ mod tests {
             sender: [0x11; 20],
             nonce: 7,
             chain_id: 69_420,
-            class: MrvMempoolClass::ContractCall,
+            class: MrvMempoolClass::FoundationOp,
             max_execution_unit_price_lythoshi: 25,
             priority_tip_lythoshi: 1,
             execution_unit_limit: 100_000,
@@ -4053,11 +4058,16 @@ mod tests {
         let public_key = vec![0x66; ML_DSA_65_PUBLIC_KEY_LEN];
         let outer_signature = vec![0x55; ML_DSA_65_SIGNATURE_LEN];
 
+        assert_eq!(MrvMempoolClass::FoundationOp.as_u32(), 5);
+        assert_eq!(
+            MrvMempoolClass::from_u32(5),
+            Some(MrvMempoolClass::FoundationOp)
+        );
         assert_eq!(
             hex_encode(&bincode_mrv_encrypted_nonce_aad(&aad).unwrap()),
             concat!(
                 "0x14000000000000001111111111111111111111111111111111111111",
-                "07000000000000002c0f010000000000010000001900000000000000",
+                "07000000000000002c0f010000000000050000001900000000000000",
                 "000000000000000001000000000000000000000000000000a086010000000000"
             )
         );
@@ -4070,7 +4080,7 @@ mod tests {
                 &mrv_encrypted_outer_signature_digest(&aad, &ciphertext, &hint, &public_key)
                     .unwrap()
             ),
-            "0x2b6f8b37424dbc1b320af40dc1fffcfb93da6e302bafb906f81b362c972af075"
+            "0xd84fed20413cab193ea41e1c73cf58dbba0ee4071e11a3071bdccab6ed61f9a5"
         );
 
         let wire = encode_mrv_encrypted_envelope_bincode(
@@ -4087,7 +4097,7 @@ mod tests {
             "{}{}",
             concat!(
                 "0x14000000000000001111111111111111111111111111111111111111",
-                "07000000000000002c0f010000000000010000001900000000000000",
+                "07000000000000002c0f010000000000050000001900000000000000",
                 "000000000000000001000000000000000000000000000000a086010000000000",
                 "6004000000000000",
             ),

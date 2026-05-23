@@ -2317,6 +2317,8 @@ declare const MempoolClass: {
     readonly PrivacyOp: 2;
     readonly CLOBOp: 3;
     readonly AgentOp: 4;
+    readonly FoundationOp: 5;
+    /** @deprecated Use FoundationOp. */
     readonly GovernanceOp: 5;
     readonly RWAOp: 6;
 };
