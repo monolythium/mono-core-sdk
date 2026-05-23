@@ -19,6 +19,9 @@ pub const SIGHASH_LOCK_BRIDGE_CONFIG: &str = "lockBridgeConfig(bytes32)";
 /// `setBridgeResumeCooldown(bytes32,uint64)`.
 pub const SIGHASH_SET_BRIDGE_RESUME_COOLDOWN: &str = "setBridgeResumeCooldown(bytes32,uint64)";
 
+/// `setBridgeRouteFinality(bytes32,uint64)`.
+pub const SIGHASH_SET_BRIDGE_ROUTE_FINALITY: &str = "setBridgeRouteFinality(bytes32,uint64)";
+
 /// Bridge-config revert namespace byte.
 pub const BRIDGE_CONFIG_REVERT_NAMESPACE: u8 = 0xF8;
 
@@ -33,6 +36,9 @@ pub const REVERT_BRIDGE_RESUME_COOLDOWN_ACTIVE: [u8; 2] = [BRIDGE_CONFIG_REVERT_
 
 /// Stable revert payload for a zero bridge resume cooldown.
 pub const REVERT_BRIDGE_COOLDOWN_ZERO: [u8; 2] = [BRIDGE_CALLDATA_REVERT_NAMESPACE, 0x08];
+
+/// Stable revert payload for a zero bridge route finality.
+pub const REVERT_BRIDGE_FINALITY_ZERO: [u8; 2] = [BRIDGE_CALLDATA_REVERT_NAMESPACE, 0x09];
 
 /// Return true when a revert payload is the stable bridge-admin lock tag.
 #[must_use]
@@ -50,6 +56,12 @@ pub fn is_bridge_resume_cooldown_active_revert(data: &[u8]) -> bool {
 #[must_use]
 pub fn is_bridge_cooldown_zero_revert(data: &[u8]) -> bool {
     data == REVERT_BRIDGE_COOLDOWN_ZERO
+}
+
+/// Return true when a revert payload is the stable zero-finality tag.
+#[must_use]
+pub fn is_bridge_finality_zero_revert(data: &[u8]) -> bool {
+    data == REVERT_BRIDGE_FINALITY_ZERO
 }
 
 /// Return the first four bytes of `keccak256(sighash)`.
@@ -71,6 +83,12 @@ pub fn selector_set_bridge_resume_cooldown() -> [u8; 4] {
     selector_for(SIGHASH_SET_BRIDGE_RESUME_COOLDOWN)
 }
 
+/// Selector for `setBridgeRouteFinality(bytes32,uint64)`.
+#[must_use]
+pub fn selector_set_bridge_route_finality() -> [u8; 4] {
+    selector_for(SIGHASH_SET_BRIDGE_ROUTE_FINALITY)
+}
+
 /// Encode `lockBridgeConfig(bytes32)` calldata.
 #[must_use]
 pub fn encode_lock_bridge_config_calldata(bridge_id: [u8; 32]) -> Vec<u8> {
@@ -90,6 +108,19 @@ pub fn encode_set_bridge_resume_cooldown_calldata(
     out.extend_from_slice(&selector_set_bridge_resume_cooldown());
     out.extend_from_slice(&bridge_id);
     encode_u256_word(&mut out, cooldown_blocks);
+    out
+}
+
+/// Encode `setBridgeRouteFinality(bytes32,uint64)` calldata.
+#[must_use]
+pub fn encode_set_bridge_route_finality_calldata(
+    bridge_id: [u8; 32],
+    finality_blocks: u64,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(4 + 64);
+    out.extend_from_slice(&selector_set_bridge_route_finality());
+    out.extend_from_slice(&bridge_id);
+    encode_u256_word(&mut out, finality_blocks);
     out
 }
 
@@ -119,6 +150,18 @@ pub fn encode_set_bridge_resume_cooldown_calldata_hex(
     calldata_to_hex(&encode_set_bridge_resume_cooldown_calldata(
         bridge_id,
         cooldown_blocks,
+    ))
+}
+
+/// Encode `setBridgeRouteFinality(bytes32,uint64)` calldata as lower-case hex.
+#[must_use]
+pub fn encode_set_bridge_route_finality_calldata_hex(
+    bridge_id: [u8; 32],
+    finality_blocks: u64,
+) -> String {
+    calldata_to_hex(&encode_set_bridge_route_finality_calldata(
+        bridge_id,
+        finality_blocks,
     ))
 }
 
@@ -746,6 +789,10 @@ mod tests {
             selector_set_bridge_resume_cooldown(),
             [0x1a, 0x3a, 0x06, 0x72]
         );
+        assert_eq!(
+            selector_set_bridge_route_finality(),
+            [0x8a, 0x06, 0x1e, 0x99]
+        );
     }
 
     #[test]
@@ -755,12 +802,15 @@ mod tests {
         assert_eq!(REVERT_BRIDGE_ADMIN_LOCKED, [0xF8, 0x07]);
         assert_eq!(REVERT_BRIDGE_RESUME_COOLDOWN_ACTIVE, [0xF8, 0x08]);
         assert_eq!(REVERT_BRIDGE_COOLDOWN_ZERO, [0xFD, 0x08]);
+        assert_eq!(REVERT_BRIDGE_FINALITY_ZERO, [0xFD, 0x09]);
         assert!(is_bridge_admin_locked_revert(&[0xF8, 0x07]));
         assert!(!is_bridge_admin_locked_revert(&[0xF8, 0x06]));
         assert!(is_bridge_resume_cooldown_active_revert(&[0xF8, 0x08]));
         assert!(!is_bridge_resume_cooldown_active_revert(&[0xF8, 0x07]));
         assert!(is_bridge_cooldown_zero_revert(&[0xFD, 0x08]));
         assert!(!is_bridge_cooldown_zero_revert(&[0xF8, 0x08]));
+        assert!(is_bridge_finality_zero_revert(&[0xFD, 0x09]));
+        assert!(!is_bridge_finality_zero_revert(&[0xFD, 0x08]));
     }
 
     #[test]
@@ -790,6 +840,25 @@ mod tests {
             encode_set_bridge_resume_cooldown_calldata_hex(bridge_id, 42),
             format!(
                 "0x1a3a0672{}000000000000000000000000000000000000000000000000000000000000002a",
+                "ab".repeat(32)
+            )
+        );
+    }
+
+    #[test]
+    fn set_bridge_route_finality_calldata_has_canonical_layout() {
+        let bridge_id = [0xabu8; 32];
+        let calldata = encode_set_bridge_route_finality_calldata(bridge_id, 42);
+
+        assert_eq!(calldata.len(), 68);
+        assert_eq!(&calldata[..4], &selector_set_bridge_route_finality());
+        assert_eq!(&calldata[4..36], &bridge_id);
+        assert_eq!(&calldata[36..60], &[0u8; 24]);
+        assert_eq!(&calldata[60..68], &42_u64.to_be_bytes());
+        assert_eq!(
+            encode_set_bridge_route_finality_calldata_hex(bridge_id, 42),
+            format!(
+                "0x8a061e99{}000000000000000000000000000000000000000000000000000000000000002a",
                 "ab".repeat(32)
             )
         );

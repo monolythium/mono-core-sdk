@@ -8,9 +8,11 @@ import {
   bridgeAddressHex,
   bridgeTransferCandidates,
   encodeLockBridgeConfigCalldata,
+  encodeSetBridgeRouteFinalityCalldata,
   encodeSetBridgeResumeCooldownCalldata,
   isBridgeAdminLockedRevert,
   isBridgeCooldownZeroRevert,
+  isBridgeFinalityZeroRevert,
   isBridgeResumeCooldownActiveRevert,
   rankBridgeRoutes,
   selectBridgeTransferRoute,
@@ -55,11 +57,13 @@ describe("bridge route disclosure helpers", () => {
     expect(BRIDGE_SELECTORS).toEqual({
       lockBridgeConfig: "0x8956feb3",
       setBridgeResumeCooldown: "0x1a3a0672",
+      setBridgeRouteFinality: "0x8a061e99",
     });
     expect(BRIDGE_REVERT_TAGS).toEqual({
       bridgeAdminLocked: "0xf807",
       bridgeResumeCooldownActive: "0xf808",
       bridgeCooldownZero: "0xfd08",
+      bridgeFinalityZero: "0xfd09",
     });
     expect(isBridgeAdminLockedRevert("0xf807")).toBe(true);
     expect(isBridgeAdminLockedRevert(new Uint8Array([0xf8, 0x07]))).toBe(true);
@@ -70,6 +74,9 @@ describe("bridge route disclosure helpers", () => {
     expect(isBridgeCooldownZeroRevert("0xfd08")).toBe(true);
     expect(isBridgeCooldownZeroRevert(new Uint8Array([0xfd, 0x08]))).toBe(true);
     expect(isBridgeCooldownZeroRevert("0xf808")).toBe(false);
+    expect(isBridgeFinalityZeroRevert("0xfd09")).toBe(true);
+    expect(isBridgeFinalityZeroRevert(new Uint8Array([0xfd, 0x09]))).toBe(true);
+    expect(isBridgeFinalityZeroRevert("0xfd08")).toBe(false);
   });
 
   it("exports the bridge precompile address", () => {
@@ -103,6 +110,20 @@ describe("bridge route disclosure helpers", () => {
     );
   });
 
+  it("encodes setBridgeRouteFinality(bytes32,uint64) calldata", () => {
+    const bridgeId = `0x${"ab".repeat(32)}`;
+    const calldata = encodeSetBridgeRouteFinalityCalldata(bridgeId, 42);
+
+    expect(calldata).toBe(
+      `0x8a061e99${"ab".repeat(32)}000000000000000000000000000000000000000000000000000000000000002a`,
+    );
+    expect(calldata.startsWith(BRIDGE_SELECTORS.setBridgeRouteFinality)).toBe(true);
+    expect((calldata.length - 2) / 2).toBe(4 + 32 + 32);
+    expect(encodeSetBridgeRouteFinalityCalldata(new Uint8Array(32).fill(0xab), "0x2a")).toBe(
+      encodeSetBridgeRouteFinalityCalldata(bridgeId, 42n),
+    );
+  });
+
   it("rejects malformed lockBridgeConfig bridge ids", () => {
     expect(() => encodeLockBridgeConfigCalldata("0x123")).toThrow(BridgePrecompileError);
     expect(() => encodeLockBridgeConfigCalldata(`0x${"ab".repeat(31)}`)).toThrow(
@@ -128,6 +149,27 @@ describe("bridge route disclosure helpers", () => {
     );
     expect(() =>
       encodeSetBridgeResumeCooldownCalldata(new Uint8Array(32), 0x1_0000_0000_0000_0000n),
+    ).toThrow(BridgePrecompileError);
+  });
+
+  it("rejects malformed setBridgeRouteFinality arguments", () => {
+    expect(() => encodeSetBridgeRouteFinalityCalldata("0x123", 42)).toThrow(
+      BridgePrecompileError,
+    );
+    expect(() => encodeSetBridgeRouteFinalityCalldata(`0x${"ab".repeat(31)}`, 42)).toThrow(
+      BridgePrecompileError,
+    );
+    expect(() => encodeSetBridgeRouteFinalityCalldata(new Uint8Array(32), -1)).toThrow(
+      BridgePrecompileError,
+    );
+    expect(() =>
+      encodeSetBridgeRouteFinalityCalldata(new Uint8Array(32), Number.MAX_SAFE_INTEGER + 1),
+    ).toThrow(BridgePrecompileError);
+    expect(() => encodeSetBridgeRouteFinalityCalldata(new Uint8Array(32), "nope")).toThrow(
+      BridgePrecompileError,
+    );
+    expect(() =>
+      encodeSetBridgeRouteFinalityCalldata(new Uint8Array(32), 0x1_0000_0000_0000_0000n),
     ).toThrow(BridgePrecompileError);
   });
 
