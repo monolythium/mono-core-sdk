@@ -214,6 +214,11 @@ var ApiClient = class {
   async addressActivityKind(address) {
     return this.get(`/addresses/${encodePathSegment(address)}/activity-kind`);
   }
+  async addressPendingRewards(address, block) {
+    return this.get(`/addresses/${encodePathSegment(address)}/pending-rewards`, {
+      block: block == null ? void 0 : encodeBlockSelector(block)
+    });
+  }
   async clusters(page = 0, limit = 25) {
     return this.get("/clusters", { page, limit });
   }
