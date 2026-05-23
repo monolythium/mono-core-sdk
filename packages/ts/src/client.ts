@@ -49,6 +49,7 @@ import type {
   MeshTxIntent,
   MeshUnsignedTxResponse,
   PeerSummary,
+  PendingRewardsResponse,
   PendingTxSummary,
   PrecompileDescriptor,
   RegistryRecord,
@@ -1265,6 +1266,16 @@ export class RpcClient {
     const params =
       block === undefined ? [wallet] : [wallet, encodeBlockSelector(block)];
     return this.call("lyth_getDelegations", params);
+  }
+
+  /** `lyth_pendingRewards` — wallet pending rewards at a block. */
+  async lythPendingRewards(
+    wallet: string,
+    block?: BlockSelector,
+  ): Promise<PendingRewardsResponse> {
+    const params =
+      block === undefined ? [wallet] : [wallet, encodeBlockSelector(block)];
+    return this.call("lyth_pendingRewards", params);
   }
 
   /** `lyth_getDelegationHistory` — indexed per-wallet delegation event timeline. */

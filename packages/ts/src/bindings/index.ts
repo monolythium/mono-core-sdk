@@ -85,6 +85,8 @@ export type { OperatorCapabilitiesResponse } from "./OperatorCapabilitiesRespons
 export type { OperatorSurfaceCapability } from "./OperatorSurfaceCapability.js";
 export type { PeerSummary } from "./PeerSummary.js";
 export type { PeerSummaryAggregate } from "./PeerSummaryAggregate.js";
+export type { PendingRewardsResponse } from "./PendingRewardsResponse.js";
+export type { PendingRewardsRow } from "./PendingRewardsRow.js";
 export type { PendingTxSummary } from "./PendingTxSummary.js";
 export type { PrecompileDescriptor } from "./PrecompileDescriptor.js";
 export type { RegistryRecord } from "./RegistryRecord.js";
