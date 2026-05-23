@@ -9,6 +9,7 @@ import type {
   AddressProfileResponse,
   BridgeRouteDisclosure,
   NativeDecodedEvent,
+  NoEvmReceiptProof,
 } from "../src/index.js";
 
 interface AgentEscrowCreatedEvent extends NativeDecodedEvent {
@@ -398,6 +399,62 @@ describe("ApiClient", () => {
       url: `https://rpc.example/api/v1/transactions/${txHash}/native-receipt`,
       method: "GET",
     });
+  });
+
+  it("preserves typed no-EVM proof transcripts from /api/v1 native receipts", async () => {
+    const txHash = `0x${"22".repeat(32)}`;
+    const noEvmProof = {
+      schema: "mono.no_evm_receipt_proof.v1",
+      proofType: "canonicalReceiptsTranscript",
+      rootAlgorithm:
+        "keccak256(monolythium/v2/receipts_root/1 || len || indexed bincode receipts)",
+      receiptCodec: "bincode(protocore_evm::Receipt)",
+      blockHash: `0x${"33".repeat(32)}`,
+      txHash,
+      receiptsRoot: `0x${"44".repeat(32)}`,
+      targetReceiptHash: `0x${"55".repeat(32)}`,
+      blockHeight: 100,
+      txIndex: 0,
+      receiptCount: 2,
+      receiptTranscript: ["0x010203", "0x040506"],
+    } satisfies NoEvmReceiptProof;
+    const { fetch } = mockGet(
+      apiEnvelope({
+        txHash,
+        blockHash: noEvmProof.blockHash,
+        blockHeight: 100,
+        txIndex: 0,
+        schema: "riscv.receipt.v1",
+        artifactHash: `0x${"aa".repeat(32)}`,
+        receiptCommitment: `0x${"bb".repeat(32)}`,
+        noEvmProof,
+        counters: { cycles: 44, syscallUnits: 3, stateIoUnits: 2 },
+        fee: {
+          total_lythoshi: "440000000000",
+          total_lyth: "4,400",
+          cycles_used: 44,
+          base_price_per_cycle_lythoshi: "10000000000",
+          state_io_units: 2,
+          state_io_price_per_unit_lythoshi: "0",
+          priority_tip_lythoshi: "0",
+        },
+        reverted: false,
+        nativeDeltaCount: 0,
+        eventCount: 0,
+        events: [],
+        source: {
+          chainProvider: "mock_chain",
+          indexerProvider: "native_events",
+          metadataLogIndex: 0xffff_ffff,
+        },
+      }),
+    );
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    const receipt = await client.transactionNativeReceipt(txHash);
+
+    expect(receipt.data.noEvmProof).toEqual(noEvmProof);
+    expect(receipt.data.noEvmProof?.targetReceiptHash).toBe(`0x${"55".repeat(32)}`);
   });
 
   it("consumes typed native events from /api/v1 native receipt envelopes", async () => {

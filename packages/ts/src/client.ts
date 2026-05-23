@@ -166,6 +166,21 @@ export interface NativeReceiptSource {
   metadataLogIndex: number;
 }
 
+export interface NoEvmReceiptProof {
+  schema: "mono.no_evm_receipt_proof.v1";
+  proofType: "canonicalReceiptsTranscript";
+  rootAlgorithm: "keccak256(monolythium/v2/receipts_root/1 || len || indexed bincode receipts)";
+  receiptCodec: "bincode(protocore_evm::Receipt)";
+  blockHash: string;
+  txHash: string;
+  receiptsRoot: string;
+  targetReceiptHash: string;
+  blockHeight: number;
+  txIndex: number;
+  receiptCount: number;
+  receiptTranscript: string[];
+}
+
 export interface NativeReceiptResponse<TDecoded = unknown> {
   txHash: string;
   blockHash: string;
@@ -174,8 +189,8 @@ export interface NativeReceiptResponse<TDecoded = unknown> {
   schema: string;
   artifactHash: string;
   receiptCommitment: string;
-  /** Current nodes return `null`; older nodes may omit the field. */
-  noEvmProof?: unknown | null;
+  /** Current nodes may return `null`; older nodes may omit the field. */
+  noEvmProof?: NoEvmReceiptProof | null;
   counters: NativeReceiptCounters;
   fee: NativeReceiptFee;
   reverted: boolean;

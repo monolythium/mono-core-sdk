@@ -136,6 +136,7 @@ export type {
   MetricsRangeSample,
   MetricsRangeSeries,
   MetricsRangeStatus,
+  NoEvmReceiptProof,
   NativeReceiptCounters,
   NativeReceiptEvent,
   NativeReceiptFee,
