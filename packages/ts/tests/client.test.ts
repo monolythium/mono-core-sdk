@@ -866,6 +866,7 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
         },
         decodedCalldata: null,
         memo: null,
+        extensions: [{ kind: 0x30, kindHex: "0x30", bodyHex: "0x01", body: "0x01" }],
         round: 12,
         clusterId: null,
         blsAttestation: null,
@@ -913,7 +914,11 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     const client = new RpcClient("http://x", { fetch });
 
     await expect(client.lythAddressActivityKind(address)).resolves.toMatchObject({ kind: "found" });
-    await expect(client.lythDecodeTx(txHash)).resolves.toMatchObject({ status: "success" });
+    const decodedTx = await client.lythDecodeTx(txHash);
+    expect(decodedTx.status).toBe("success");
+    expect(decodedTx.extensions).toEqual([
+      { kind: 0x30, kindHex: "0x30", bodyHex: "0x01", body: "0x01" },
+    ]);
     await expect(client.lythGapRecords(10n, "12")).resolves.toMatchObject({
       range: { fromBlock: 10, toBlock: 12 },
     });

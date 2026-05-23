@@ -1817,8 +1817,106 @@ pub struct DecodeTxPqAttestation {
     pub signature: String,
 }
 
+/// Transaction extension descriptor included in `lyth_decodeTx`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "DecodeTxExtension.ts")
+)]
+pub struct DecodeTxExtension {
+    /// Extension kind byte as a number.
+    pub kind: u8,
+    /// Extension kind byte as `0x`-hex.
+    #[serde(rename = "kindHex")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "kindHex"))]
+    pub kind_hex: Hex,
+    /// Extension body bytes as `0x`-hex.
+    #[serde(rename = "bodyHex")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "bodyHex"))]
+    pub body_hex: Hex,
+    /// Alias of `bodyHex` emitted by `mono-core` for explorer consumers.
+    pub body: Hex,
+}
+
+#[derive(Debug, Deserialize)]
+struct DecodeTxResponseWire {
+    #[serde(rename = "txHash")]
+    tx_hash: Hash,
+    #[serde(rename = "blockHash")]
+    block_hash: Hash,
+    #[serde(rename = "blockNumber")]
+    block_number: u64,
+    #[serde(rename = "txIndex")]
+    tx_index: u32,
+    from: Address,
+    to: Option<Address>,
+    value: Quantity,
+    nonce: u64,
+    #[serde(rename = "executionUnitLimit")]
+    execution_unit_limit: u64,
+    #[serde(rename = "maxExecutionFeeLythoshi")]
+    max_execution_fee_lythoshi: String,
+    #[serde(rename = "priorityTipLythoshi")]
+    priority_tip_lythoshi: String,
+    #[serde(rename = "executionUnitsUsed")]
+    execution_units_used: Option<u64>,
+    fee: NativeReceiptFee,
+    #[serde(rename = "decodedCalldata")]
+    decoded_calldata: Option<serde_json::Value>,
+    memo: Option<String>,
+    #[serde(default)]
+    extensions: Option<Vec<DecodeTxExtension>>,
+    #[serde(rename = "txExtensions", default)]
+    tx_extensions: Option<Vec<DecodeTxExtension>>,
+    round: Option<u64>,
+    #[serde(rename = "clusterId")]
+    cluster_id: Option<u32>,
+    #[serde(rename = "blsAttestation")]
+    bls_attestation: Option<serde_json::Value>,
+    #[serde(rename = "pqAttestation")]
+    pq_attestation: Option<DecodeTxPqAttestation>,
+    #[serde(rename = "finalityProof")]
+    finality_proof: Option<serde_json::Value>,
+    logs: Vec<DecodeTxLog>,
+    status: String,
+    #[serde(rename = "errorCode")]
+    error_code: Option<String>,
+}
+
+impl From<DecodeTxResponseWire> for DecodeTxResponse {
+    fn from(wire: DecodeTxResponseWire) -> Self {
+        Self {
+            tx_hash: wire.tx_hash,
+            block_hash: wire.block_hash,
+            block_number: wire.block_number,
+            tx_index: wire.tx_index,
+            from: wire.from,
+            to: wire.to,
+            value: wire.value,
+            nonce: wire.nonce,
+            execution_unit_limit: wire.execution_unit_limit,
+            max_execution_fee_lythoshi: wire.max_execution_fee_lythoshi,
+            priority_tip_lythoshi: wire.priority_tip_lythoshi,
+            execution_units_used: wire.execution_units_used,
+            fee: wire.fee,
+            decoded_calldata: wire.decoded_calldata,
+            memo: wire.memo,
+            extensions: wire.extensions.or(wire.tx_extensions).unwrap_or_default(),
+            round: wire.round,
+            cluster_id: wire.cluster_id,
+            bls_attestation: wire.bls_attestation,
+            pq_attestation: wire.pq_attestation,
+            finality_proof: wire.finality_proof,
+            logs: wire.logs,
+            status: wire.status,
+            error_code: wire.error_code,
+        }
+    }
+}
+
 /// `lyth_decodeTx` response.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
 #[cfg_attr(feature = "ts-bindings", ts(export, export_to = "DecodeTxResponse.ts"))]
 pub struct DecodeTxResponse {
@@ -1862,6 +1960,8 @@ pub struct DecodeTxResponse {
     pub decoded_calldata: Option<serde_json::Value>,
     /// Optional memo extracted from the transaction.
     pub memo: Option<String>,
+    /// Signed transaction extensions carried by the decoded transaction.
+    pub extensions: Vec<DecodeTxExtension>,
     /// DAG round associated with finality, when available.
     pub round: Option<u64>,
     /// Cluster id associated with finality, when available.
@@ -1885,6 +1985,15 @@ pub struct DecodeTxResponse {
     /// Node-supplied execution error code when available.
     #[serde(rename = "errorCode")]
     pub error_code: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for DecodeTxResponse {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        DecodeTxResponseWire::deserialize(deserializer).map(Into::into)
+    }
 }
 
 /// Requested block range in `lyth_gapRecords`.
@@ -3230,6 +3339,12 @@ mod tests {
             },
             "decodedCalldata": null,
             "memo": null,
+            "extensions": [{
+                "kind": 48,
+                "kindHex": "0x30",
+                "bodyHex": "0x01",
+                "body": "0x01"
+            }],
             "round": 7,
             "clusterId": null,
             "blsAttestation": null,
@@ -3240,7 +3355,7 @@ mod tests {
             "errorCode": null
         });
 
-        let decoded: DecodeTxResponse = serde_json::from_value(wire).unwrap();
+        let decoded: DecodeTxResponse = serde_json::from_value(wire.clone()).unwrap();
 
         assert_eq!(decoded.value, "0x5f5e100");
         assert_eq!(decoded.execution_unit_limit, 21_000);
@@ -3248,6 +3363,18 @@ mod tests {
         assert_eq!(decoded.priority_tip_lythoshi, "1");
         assert_eq!(decoded.execution_units_used, Some(20_500));
         assert_eq!(decoded.fee.total_lythoshi, "20500");
+        assert_eq!(decoded.extensions.len(), 1);
+        assert_eq!(decoded.extensions[0].kind, 48);
+        assert_eq!(decoded.extensions[0].kind_hex, "0x30");
+        assert_eq!(decoded.extensions[0].body_hex, "0x01");
+        assert_eq!(decoded.extensions[0].body, "0x01");
+
+        let mut alias_wire = wire;
+        let alias_fields = alias_wire.as_object_mut().unwrap();
+        let extensions = alias_fields.remove("extensions").unwrap();
+        alias_fields.insert("txExtensions".to_owned(), extensions);
+        let alias_decoded: DecodeTxResponse = serde_json::from_value(alias_wire).unwrap();
+        assert_eq!(alias_decoded.extensions, decoded.extensions);
 
         let stale = serde_json::json!({
             "txHash": format!("0x{}", "11".repeat(32)),
