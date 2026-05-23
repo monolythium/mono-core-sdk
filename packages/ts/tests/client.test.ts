@@ -14,7 +14,7 @@ import {
   parseQuantity,
   parseQuantityBig,
 } from "../src/index.js";
-import type { NativeDecodedEvent } from "../src/index.js";
+import type { NativeDecodedEvent, TokenBalanceRecord } from "../src/index.js";
 
 interface AgentEscrowCreatedEvent extends NativeDecodedEvent {
   family: "agent";
@@ -249,12 +249,48 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(catalogue.blockNumber).toBe(256);
   });
 
-  it("lyth_getTokenBalances reads indexed asset rows", async () => {
-    const { fetch, calls } = mockFetch([]);
+  it("lyth_getTokenBalances reads indexed asset rows with optional MRC identity", async () => {
+    const tokenId = `0x${"aa".repeat(32)}`;
+    const assetId = `0x${"bb".repeat(32)}`;
+    const childTokenId = `0x${"cc".repeat(32)}`;
+    const legacyBalance: TokenBalanceRecord = {
+      tokenId: `0x${"dd".repeat(32)}`,
+      balance: "0",
+      updatedAtBlock: 89n,
+    };
+    expect(legacyBalance.mrc).toBeUndefined();
+    const { fetch, calls } = mockFetch([
+      {
+        tokenId,
+        balance: "1000",
+        updatedAtBlock: 88,
+        mrc: {
+          standard: "mrc1155",
+          assetId,
+          tokenId: childTokenId,
+        },
+      },
+      {
+        tokenId: `0x${"ee".repeat(32)}`,
+        balance: "25",
+        updatedAtBlock: 90,
+        mrc: null,
+      },
+      {
+        tokenId: legacyBalance.tokenId,
+        balance: legacyBalance.balance,
+        updatedAtBlock: 89,
+      },
+    ]);
     const client = new RpcClient("http://x", { fetch });
-    await client.lythGetTokenBalances("0x1111111111111111111111111111111111111111");
+    const balances = await client.lythGetTokenBalances("0x1111111111111111111111111111111111111111");
     expect(calls[0].method).toBe("lyth_getTokenBalances");
     expect(calls[0].params).toEqual(["0x1111111111111111111111111111111111111111"]);
+    expect(balances[0].mrc?.standard).toBe("mrc1155");
+    expect(balances[0].mrc?.assetId).toBe(assetId);
+    expect(balances[0].mrc?.tokenId).toBe(childTokenId);
+    expect(balances[1].mrc).toBeNull();
+    expect(balances[2].mrc).toBeUndefined();
   });
 
   it("lyth_getAddressLabel returns null for unlabeled addresses", async () => {
@@ -704,6 +740,9 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     const marketId = `0x${"44".repeat(32)}`;
     const cursor = `0x${"00".repeat(16)}`;
     const feedCursor = `0x${"11".repeat(12)}`;
+    const balanceTokenId = `0x${"aa".repeat(32)}`;
+    const balanceAssetId = `0x${"bb".repeat(32)}`;
+    const balanceMrcTokenId = `0x${"cc".repeat(32)}`;
     const { fetch, calls } = mockFetchSequence([
       {
         schemaVersion: 1,
@@ -809,7 +848,23 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
         },
         label: null,
         activity: { kind: "found", retention: null, latest: null },
-        tokenBalances: [],
+        tokenBalances: [
+          {
+            tokenId: balanceTokenId,
+            balance: "1000",
+            updatedAtBlock: 88,
+            mrc: {
+              standard: "mrc721",
+              assetId: balanceAssetId,
+              tokenId: balanceMrcTokenId,
+            },
+          },
+          {
+            tokenId: `0x${"dd".repeat(32)}`,
+            balance: "0",
+            updatedAtBlock: 88,
+          },
+        ],
       },
       {
         schemaVersion: 1,
@@ -859,9 +914,12 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     await expect(client.lythTxFeed(5, feedCursor)).resolves.toMatchObject({
       transactions: [{ txHash }],
     });
-    await expect(client.lythAddressProfile(address)).resolves.toMatchObject({
-      account: { nativeBalance: "100000000" },
-    });
+    const profile = await client.lythAddressProfile(address);
+    expect(profile.account.nativeBalance).toBe("100000000");
+    expect(profile.tokenBalances[0].mrc?.standard).toBe("mrc721");
+    expect(profile.tokenBalances[0].mrc?.assetId).toBe(balanceAssetId);
+    expect(profile.tokenBalances[0].mrc?.tokenId).toBe(balanceMrcTokenId);
+    expect(profile.tokenBalances[1].mrc).toBeUndefined();
     await expect(client.lythAddressFlow(address, 25)).resolves.toMatchObject({
       totals: { inbound: "10" },
     });

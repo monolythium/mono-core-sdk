@@ -95,6 +95,7 @@ export type { RichListResponse } from "./RichListResponse.js";
 export type { RoundInfo } from "./RoundInfo.js";
 export type { StorageProofBatch } from "./StorageProofBatch.js";
 export type { SyncStatus } from "./SyncStatus.js";
+export type { TokenBalanceMrcIdentity } from "./TokenBalanceMrcIdentity.js";
 export type { TokenBalanceRecord } from "./TokenBalanceRecord.js";
 export type { TpmAttestationResponse } from "./TpmAttestationResponse.js";
 export type { TransactionReceipt } from "./TransactionReceipt.js";

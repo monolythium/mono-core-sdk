@@ -898,6 +898,25 @@ pub struct RoundInfo {
     pub height: u64,
 }
 
+/// Native MRC identity attached to a token-balance row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "TokenBalanceMrcIdentity.ts")
+)]
+pub struct TokenBalanceMrcIdentity {
+    /// MRC standard, currently `mrc20`, `mrc721`, or `mrc1155`.
+    pub standard: String,
+    /// MRC asset id, or collection id for token-specific standards.
+    pub asset_id: Hash,
+    /// Token id inside the collection for MRC-721/MRC-1155 rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional = nullable))]
+    pub token_id: Option<Hash>,
+}
+
 /// Per-asset balance row surfaced by `lyth_getTokenBalances`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
@@ -914,6 +933,10 @@ pub struct TokenBalanceRecord {
     /// Block height the balance was last observed at.
     #[serde(rename = "updatedAtBlock")]
     pub updated_at_block: u64,
+    /// Native MRC identity, when the balance came from a native MRC row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional = nullable))]
+    pub mrc: Option<TokenBalanceMrcIdentity>,
 }
 
 /// Address-label row surfaced by `lyth_getAddressLabel`.
@@ -2197,6 +2220,8 @@ pub struct AddressProfileTokenBalance {
     pub balance: String,
     #[serde(rename = "updatedAtBlock")]
     pub updated_at_block: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mrc: Option<TokenBalanceMrcIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2548,6 +2573,108 @@ mod tests {
             Some("0x3b9aca00")
         );
         assert_eq!(legacy_wire.value_lythoshi.as_deref(), Some("0xa"));
+    }
+
+    #[test]
+    fn token_balance_record_decodes_optional_mrc_identity() {
+        let token_id = format!("0x{}", "aa".repeat(32));
+        let asset_id = format!("0x{}", "bb".repeat(32));
+        let nft_token_id = format!("0x{}", "cc".repeat(32));
+
+        let with_mrc: TokenBalanceRecord = serde_json::from_value(serde_json::json!({
+            "tokenId": token_id,
+            "balance": "1000",
+            "updatedAtBlock": 88,
+            "mrc": {
+                "standard": "mrc1155",
+                "assetId": asset_id,
+                "tokenId": nft_token_id
+            }
+        }))
+        .unwrap();
+
+        let mrc = with_mrc.mrc.as_ref().expect("mrc identity");
+        assert_eq!(mrc.standard, "mrc1155");
+        assert_eq!(mrc.asset_id, format!("0x{}", "bb".repeat(32)));
+        assert_eq!(
+            mrc.token_id.as_ref().unwrap(),
+            &format!("0x{}", "cc".repeat(32))
+        );
+
+        let mrc20: TokenBalanceRecord = serde_json::from_value(serde_json::json!({
+            "tokenId": format!("0x{}", "dd".repeat(32)),
+            "balance": "55",
+            "updatedAtBlock": 89,
+            "mrc": {
+                "standard": "mrc20",
+                "assetId": format!("0x{}", "ee".repeat(32))
+            }
+        }))
+        .unwrap();
+        assert_eq!(mrc20.mrc.unwrap().token_id, None);
+
+        let absent_mrc: TokenBalanceRecord = serde_json::from_value(serde_json::json!({
+            "tokenId": format!("0x{}", "11".repeat(32)),
+            "balance": "0",
+            "updatedAtBlock": 90
+        }))
+        .unwrap();
+        assert_eq!(absent_mrc.mrc, None);
+
+        let null_mrc: TokenBalanceRecord = serde_json::from_value(serde_json::json!({
+            "tokenId": format!("0x{}", "22".repeat(32)),
+            "balance": "0",
+            "updatedAtBlock": 91,
+            "mrc": null
+        }))
+        .unwrap();
+        assert_eq!(null_mrc.mrc, None);
+    }
+
+    #[test]
+    fn address_profile_token_balances_decode_optional_mrc_identity() {
+        let response: AddressProfileResponse = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "address": "0x1111111111111111111111111111111111111111",
+            "account": {
+                "nativeBalance": "10",
+                "nonce": 1,
+                "codeHash": format!("0x{}", "00".repeat(32)),
+                "isContract": false
+            },
+            "label": null,
+            "activity": {
+                "kind": "found",
+                "retention": null,
+                "latest": null
+            },
+            "tokenBalances": [
+                {
+                    "tokenId": format!("0x{}", "aa".repeat(32)),
+                    "balance": "1000",
+                    "updatedAtBlock": 88,
+                    "mrc": {
+                        "standard": "mrc721",
+                        "assetId": format!("0x{}", "bb".repeat(32)),
+                        "tokenId": format!("0x{}", "cc".repeat(32))
+                    }
+                },
+                {
+                    "tokenId": format!("0x{}", "dd".repeat(32)),
+                    "balance": "0",
+                    "updatedAtBlock": 88
+                }
+            ]
+        }))
+        .unwrap();
+
+        let mrc = response.token_balances[0]
+            .mrc
+            .as_ref()
+            .expect("profile mrc identity");
+        assert_eq!(mrc.standard, "mrc721");
+        assert_eq!(mrc.asset_id, format!("0x{}", "bb".repeat(32)));
+        assert_eq!(response.token_balances[1].mrc, None);
     }
 
     #[test]

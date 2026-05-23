@@ -60,6 +60,7 @@ import type {
   TpmAttestationResponse,
   TransactionReceipt,
   TransactionView,
+  TokenBalanceMrcIdentity,
   TokenBalanceRecord,
 } from "./bindings/index.js";
 import type { BlockSelector } from "./types.js";
@@ -265,6 +266,7 @@ export interface AddressProfileResponse {
     tokenId: string;
     balance: string;
     updatedAtBlock: number;
+    mrc?: TokenBalanceMrcIdentity | null;
   }>;
 }
 

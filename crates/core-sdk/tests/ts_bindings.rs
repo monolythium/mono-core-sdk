@@ -32,7 +32,8 @@ use monolythium_core_sdk::types::{
     MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse, NativeReceiptFee,
     PeerSummary, PendingRewardsResponse, PendingRewardsRow, PendingTxSummary, PrecompileDescriptor,
     RegistryRecord, RichListHolder, RichListResponse, RoundInfo, StorageProofBatch, SyncStatus,
-    TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt, TransactionView,
+    TokenBalanceMrcIdentity, TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt,
+    TransactionView,
 };
 use ts_rs::TS;
 
@@ -102,6 +103,7 @@ fn export_bindings() {
     RoundInfo::export_all_to(&out).expect("RoundInfo");
     StorageProofBatch::export_all_to(&out).expect("StorageProofBatch");
     SyncStatus::export_all_to(&out).expect("SyncStatus");
+    TokenBalanceMrcIdentity::export_all_to(&out).expect("TokenBalanceMrcIdentity");
     TokenBalanceRecord::export_all_to(&out).expect("TokenBalanceRecord");
     TpmAttestationResponse::export_all_to(&out).expect("TpmAttestationResponse");
     TransactionReceipt::export_all_to(&out).expect("TransactionReceipt");
