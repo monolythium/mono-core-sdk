@@ -39,7 +39,7 @@ pub use address::{
 pub use api::ApiClient;
 pub use bridge::{
     assess_bridge_route, bridge_address_hex, bridge_quote_submit_readiness,
-    bridge_transfer_candidates, encode_lock_bridge_config_calldata,
+    bridge_routes_readiness, bridge_transfer_candidates, encode_lock_bridge_config_calldata,
     encode_lock_bridge_config_calldata_hex, encode_set_bridge_resume_cooldown_calldata,
     encode_set_bridge_resume_cooldown_calldata_hex, encode_set_bridge_route_finality_calldata,
     encode_set_bridge_route_finality_calldata_hex, is_bridge_admin_locked_revert,
@@ -48,8 +48,9 @@ pub use bridge::{
     selector_lock_bridge_config, selector_set_bridge_resume_cooldown,
     selector_set_bridge_route_finality, BridgeAdminControl, BridgeCircuitBreakerState,
     BridgeQuoteSubmitReadiness, BridgeRiskTier, BridgeRouteAssessment, BridgeRouteCandidate,
-    BridgeRouteDisclosure, BridgeRouteSelection, BridgeTransferIntent, BridgeTransferRequest,
-    BridgeVerifierDisclosure, BRIDGE_CALLDATA_REVERT_NAMESPACE, BRIDGE_CONFIG_REVERT_NAMESPACE,
+    BridgeRouteDisclosure, BridgeRouteSelection, BridgeRoutesRequest, BridgeRoutesResponse,
+    BridgeTransferIntent, BridgeTransferRequest, BridgeVerifierDisclosure,
+    BRIDGE_CALLDATA_REVERT_NAMESPACE, BRIDGE_CONFIG_REVERT_NAMESPACE,
     BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_SUBMIT_API_BLOCKED_REASON, REVERT_BRIDGE_ADMIN_LOCKED,
     REVERT_BRIDGE_COOLDOWN_ZERO, REVERT_BRIDGE_FINALITY_ZERO, REVERT_BRIDGE_RESUME_COOLDOWN_ACTIVE,
     SIGHASH_LOCK_BRIDGE_CONFIG, SIGHASH_SET_BRIDGE_RESUME_COOLDOWN,

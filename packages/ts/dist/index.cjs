@@ -271,6 +271,17 @@ var ApiClient = class {
       mrcTokenId: mrcTokenId ?? void 0
     });
   }
+  /**
+   * `/api/v1/bridge/routes`.
+   *
+   * The forthcoming route is read-only `GET`, so the typed request is encoded
+   * as a single JSON query value named `request`.
+   */
+  async bridgeRoutes(request) {
+    return this.get("/bridge/routes", {
+      request: JSON.stringify(request)
+    });
+  }
   async clusters(page = 0, limit = 25) {
     return this.get("/clusters", { page, limit });
   }
@@ -620,6 +631,9 @@ function bridgeQuoteSubmitReadiness(intent, routes) {
     blockedReasons,
     warnings: selection.selected == null ? [] : [...selection.selected.assessment.warnings]
   };
+}
+function bridgeRoutesReadiness(request) {
+  return bridgeQuoteSubmitReadiness(request.intent, request.routeDisclosures);
 }
 function bridgeRouteCandidate(intent, intentReasons, route) {
   const assessment = assessBridgeRoute(route);
@@ -1523,6 +1537,10 @@ var RpcClient = class _RpcClient {
   /** `lyth_getTokenBalances` — indexed per-asset balances for one address. */
   async lythGetTokenBalances(address) {
     return this.call("lyth_getTokenBalances", [address]);
+  }
+  /** `lyth_bridgeRoutes` — read-only bridge route-selection/readiness. */
+  async lythBridgeRoutes(request) {
+    return this.call("lyth_bridgeRoutes", [request]);
   }
   /** `lyth_mrcMetadata` — exact current-state native MRC metadata lookup. */
   async lythMrcMetadata(assetId, tokenId) {
@@ -4060,6 +4078,7 @@ exports.bech32ToAddress = bech32ToAddress;
 exports.bech32ToAddressBytes = bech32ToAddressBytes;
 exports.bridgeAddressHex = bridgeAddressHex;
 exports.bridgeQuoteSubmitReadiness = bridgeQuoteSubmitReadiness;
+exports.bridgeRoutesReadiness = bridgeRoutesReadiness;
 exports.bridgeTransferCandidates = bridgeTransferCandidates;
 exports.buildMrvCallNativeTxPlan = buildMrvCallNativeTxPlan;
 exports.buildMrvCallPlan = buildMrvCallPlan;

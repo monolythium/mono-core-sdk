@@ -9,6 +9,7 @@ import {
   assessBridgeRoute,
   bridgeAddressHex,
   bridgeQuoteSubmitReadiness,
+  bridgeRoutesReadiness,
   bridgeTransferCandidates,
   encodeLockBridgeConfigCalldata,
   encodeSetBridgeRouteFinalityCalldata,
@@ -20,6 +21,7 @@ import {
   rankBridgeRoutes,
   selectBridgeTransferRoute,
   type BridgeRouteDisclosure,
+  type BridgeRoutesRequest,
   type BridgeTransferIntent,
 } from "../src/index.js";
 
@@ -294,6 +296,24 @@ describe("bridge route disclosure helpers", () => {
     expect(readiness.submitReady).toBe(false);
     expect(readiness.selection.selected?.route.routeId).toBe("healthy");
     expect(readiness.blockedReasons).toEqual([
+      BRIDGE_QUOTE_API_BLOCKED_REASON,
+      BRIDGE_SUBMIT_API_BLOCKED_REASON,
+    ]);
+  });
+
+  it("evaluates bridge route request readiness without enabling quote or submit", () => {
+    const request: BridgeRoutesRequest = {
+      intent: transferIntent(),
+      routeDisclosures: [route("healthy")],
+    };
+
+    const response = bridgeRoutesReadiness(request);
+
+    expect(response.routeSelectionReady).toBe(true);
+    expect(response.quoteReady).toBe(false);
+    expect(response.submitReady).toBe(false);
+    expect(response.selection.selected?.route.routeId).toBe("healthy");
+    expect(response.blockedReasons).toEqual([
       BRIDGE_QUOTE_API_BLOCKED_REASON,
       BRIDGE_SUBMIT_API_BLOCKED_REASON,
     ]);
