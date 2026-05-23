@@ -8,9 +8,12 @@ import {
   PRECOMPILE_ADDRESSES,
   addressToTypedBech32,
   buildCancelSpotOrderPlan,
+  buildNativeNftBuyListingForwarderInput,
   buildNativeMarketModuleCallEnvelope,
   buildNativeNftBuyListingModuleCall,
+  buildNativeSpotCancelOrderForwarderInput,
   buildNativeSpotCancelOrderModuleCall,
+  buildNativeSpotLimitOrderForwarderInput,
   buildNativeSpotLimitOrderModuleCall,
   buildPlaceSpotLimitOrderPlan,
   buildPlaceSpotMarketOrderExPlan,
@@ -18,6 +21,7 @@ import {
   clobAddressHex,
   deriveClobMarketId,
   encodeCancelOrderCalldata,
+  encodeNativeMarketModuleForwarderInput,
   encodeNativeNftBuyListingCall,
   encodeNativeSpotCancelOrderCall,
   encodeNativeSpotLimitOrderCall,
@@ -263,6 +267,64 @@ describe("native market action builders", () => {
     ).toBe(rustNativeBuyListingGolden);
   });
 
+  it("encodes native market module calls as MRV forwarder input", () => {
+    const envelope = buildNativeNftBuyListingModuleCall(
+      {
+        listingId: `0x${"55".repeat(32)}`,
+        buyer: `0x${"66".repeat(20)}`,
+        currentBlock: 777,
+      },
+      22_000,
+    );
+    const forwarded = encodeNativeMarketModuleForwarderInput(envelope);
+    expect(forwarded).toEqual({
+      requestBytes: 132,
+      input:
+        "0x" +
+        "07000000" +
+        "05000000" +
+        "4d41524b45545f4e41544956455f4d4f445f5631" +
+        "4800000000000000" +
+        rustNativeBuyListingGolden.slice(2) +
+        "00".repeat(16) +
+        "f055000000000000",
+    });
+
+    expect(
+      buildNativeSpotLimitOrderForwarderInput(
+        {
+          marketId: `0x${"11".repeat(32)}`,
+          owner: `0x${"22".repeat(20)}`,
+          nonce: 7,
+          side: "buy",
+          price: "125",
+          quantity: "50",
+          expiresAtBlock: 999,
+        },
+        22_000,
+      ).requestBytes,
+    ).toBe(176);
+    expect(
+      buildNativeSpotCancelOrderForwarderInput(
+        {
+          orderId: `0x${"33".repeat(32)}`,
+          caller: `0x${"44".repeat(20)}`,
+        },
+        22_000,
+      ).requestBytes,
+    ).toBe(124);
+    expect(
+      buildNativeNftBuyListingForwarderInput(
+        {
+          listingId: `0x${"55".repeat(32)}`,
+          buyer: `0x${"66".repeat(20)}`,
+          currentBlock: 777,
+        },
+        22_000,
+      ).input,
+    ).toBe(forwarded.input);
+  });
+
   it("rejects malformed market action inputs", () => {
     expect(() => encodePlaceLimitOrderCalldata({ ...args, marketId: "0x1234" })).toThrow(MarketActionError);
     expect(() =>
@@ -330,5 +392,27 @@ describe("native market action builders", () => {
     ).toThrow(/currentBlock/);
     expect(() => buildNativeMarketModuleCallEnvelope("0xabc", 1)).toThrow(/input/);
     expect(() => buildNativeMarketModuleCallEnvelope("0x", -1)).toThrow(/maxCycles/);
+    expect(() =>
+      encodeNativeMarketModuleForwarderInput({
+        module: "market",
+        call: {
+          to: PRECOMPILE_ADDRESSES.CLOB,
+          input: rustNativeBuyListingGolden,
+          valueLythoshi: "0",
+          maxCycles: "22000",
+        },
+      }),
+    ).toThrow(/market system module/);
+    expect(() =>
+      encodeNativeMarketModuleForwarderInput({
+        module: "market",
+        call: {
+          to: NATIVE_MARKET_MODULE_ADDRESS,
+          input: rustNativeBuyListingGolden,
+          valueLythoshi: "1" as "0",
+          maxCycles: "22000",
+        },
+      }),
+    ).toThrow(/valueLythoshi/);
   });
 });

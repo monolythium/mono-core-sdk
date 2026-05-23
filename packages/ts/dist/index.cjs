@@ -4633,6 +4633,37 @@ function buildNativeMarketModuleCallEnvelope(input, maxCycles) {
     }
   };
 }
+function encodeNativeMarketModuleForwarderInput(envelope) {
+  if (envelope.module !== "market") {
+    throw new MarketActionError("native market forwarder envelope module must be 'market'");
+  }
+  if (!isNativeMarketModuleAddress(envelope.call.to)) {
+    throw new MarketActionError("native market forwarder call target must be the market system module");
+  }
+  if (envelope.call.valueLythoshi !== "0") {
+    throw new MarketActionError("native market forwarder call valueLythoshi must be 0");
+  }
+  const payload = hexToBytes3(normalizeHexBytes(envelope.call.input, "input"), "input");
+  const maxCycles = uint64(envelope.call.maxCycles, "maxCycles");
+  const w = new BincodeWriter();
+  w.enumVariant(7);
+  w.enumVariant(NATIVE_MARKET_ADDRESS_KIND_VARIANTS.systemModule);
+  w.rawBytes(hexToBytes3(NATIVE_MARKET_MODULE_ADDRESS_BYTES, "native market module address"));
+  w.bytes(payload);
+  w.u128(0n);
+  w.u64(maxCycles);
+  const input = bytesToHex4(w.toBytes());
+  return { input, requestBytes: (input.length - 2) / 2 };
+}
+function buildNativeSpotLimitOrderForwarderInput(args, maxCycles) {
+  return encodeNativeMarketModuleForwarderInput(buildNativeSpotLimitOrderModuleCall(args, maxCycles));
+}
+function buildNativeSpotCancelOrderForwarderInput(args, maxCycles) {
+  return encodeNativeMarketModuleForwarderInput(buildNativeSpotCancelOrderModuleCall(args, maxCycles));
+}
+function buildNativeNftBuyListingForwarderInput(args, maxCycles) {
+  return encodeNativeMarketModuleForwarderInput(buildNativeNftBuyListingModuleCall(args, maxCycles));
+}
 function buildNativeSpotLimitOrderModuleCall(args, maxCycles) {
   return buildNativeMarketModuleCallEnvelope(encodeNativeSpotLimitOrderCall(args), maxCycles);
 }
@@ -4811,6 +4842,10 @@ function normalizeHexBytes(value, name) {
     throw new MarketActionError(`${name} must be 0x-prefixed hex bytes${detail}`);
   }
   return value.toLowerCase();
+}
+function isNativeMarketModuleAddress(value) {
+  const normalized = value.toLowerCase();
+  return normalized === NATIVE_MARKET_MODULE_ADDRESS || normalized === NATIVE_MARKET_MODULE_ADDRESS_BYTES;
 }
 function monoAddressInto(w, input, name) {
   const { kind, bytes } = normalizeNativeMarketAddress(input, name);
@@ -5172,8 +5207,11 @@ exports.buildMrvDeployPayloadRequest = buildMrvDeployPayloadRequest;
 exports.buildMrvDeployPlan = buildMrvDeployPlan;
 exports.buildMrvDeployRequest = buildMrvDeployRequest;
 exports.buildNativeMarketModuleCallEnvelope = buildNativeMarketModuleCallEnvelope;
+exports.buildNativeNftBuyListingForwarderInput = buildNativeNftBuyListingForwarderInput;
 exports.buildNativeNftBuyListingModuleCall = buildNativeNftBuyListingModuleCall;
+exports.buildNativeSpotCancelOrderForwarderInput = buildNativeSpotCancelOrderForwarderInput;
 exports.buildNativeSpotCancelOrderModuleCall = buildNativeSpotCancelOrderModuleCall;
+exports.buildNativeSpotLimitOrderForwarderInput = buildNativeSpotLimitOrderForwarderInput;
 exports.buildNativeSpotLimitOrderModuleCall = buildNativeSpotLimitOrderModuleCall;
 exports.buildPlaceSpotLimitOrderPlan = buildPlaceSpotLimitOrderPlan;
 exports.buildPlaceSpotMarketOrderExPlan = buildPlaceSpotMarketOrderExPlan;
@@ -5200,6 +5238,7 @@ exports.encodeHasPubkeyCalldata = encodeHasPubkeyCalldata;
 exports.encodeLockBridgeConfigCalldata = encodeLockBridgeConfigCalldata;
 exports.encodeLookupPubkeyCalldata = encodeLookupPubkeyCalldata;
 exports.encodeMrvDeployPayload = encodeMrvDeployPayload;
+exports.encodeNativeMarketModuleForwarderInput = encodeNativeMarketModuleForwarderInput;
 exports.encodeNativeNftBuyListingCall = encodeNativeNftBuyListingCall;
 exports.encodeNativeSpotCancelOrderCall = encodeNativeSpotCancelOrderCall;
 exports.encodeNativeSpotLimitOrderCall = encodeNativeSpotLimitOrderCall;

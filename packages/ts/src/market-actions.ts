@@ -154,6 +154,13 @@ export interface NativeMarketModuleCallEnvelope {
   call: NativeMarketModuleContractCall;
 }
 
+export interface NativeMarketForwarderInput {
+  /** Canonical `SyscallRequest::CallContract` bytes for MRV call input. */
+  input: string;
+  /** Byte length of `input`, useful because the minimal forwarder artifact pins this as an immediate. */
+  requestBytes: number;
+}
+
 export interface EthSendTransactionRequest {
   to: string;
   value: "0x0";
@@ -282,6 +289,52 @@ export function buildNativeMarketModuleCallEnvelope(
       maxCycles: uint64(maxCycles, "maxCycles").toString(10),
     },
   };
+}
+
+export function encodeNativeMarketModuleForwarderInput(
+  envelope: NativeMarketModuleCallEnvelope,
+): NativeMarketForwarderInput {
+  if (envelope.module !== "market") {
+    throw new MarketActionError("native market forwarder envelope module must be 'market'");
+  }
+  if (!isNativeMarketModuleAddress(envelope.call.to)) {
+    throw new MarketActionError("native market forwarder call target must be the market system module");
+  }
+  if (envelope.call.valueLythoshi !== "0") {
+    throw new MarketActionError("native market forwarder call valueLythoshi must be 0");
+  }
+  const payload = hexToBytes(normalizeHexBytes(envelope.call.input, "input"), "input");
+  const maxCycles = uint64(envelope.call.maxCycles, "maxCycles");
+  const w = new BincodeWriter();
+  w.enumVariant(7); // SyscallRequest::CallContract
+  w.enumVariant(NATIVE_MARKET_ADDRESS_KIND_VARIANTS.systemModule);
+  w.rawBytes(hexToBytes(NATIVE_MARKET_MODULE_ADDRESS_BYTES, "native market module address"));
+  w.bytes(payload);
+  w.u128(0n);
+  w.u64(maxCycles);
+  const input = bytesToHex(w.toBytes());
+  return { input, requestBytes: (input.length - 2) / 2 };
+}
+
+export function buildNativeSpotLimitOrderForwarderInput(
+  args: EncodeNativeSpotLimitOrderArgs,
+  maxCycles: string | number | bigint,
+): NativeMarketForwarderInput {
+  return encodeNativeMarketModuleForwarderInput(buildNativeSpotLimitOrderModuleCall(args, maxCycles));
+}
+
+export function buildNativeSpotCancelOrderForwarderInput(
+  args: EncodeNativeSpotCancelOrderArgs,
+  maxCycles: string | number | bigint,
+): NativeMarketForwarderInput {
+  return encodeNativeMarketModuleForwarderInput(buildNativeSpotCancelOrderModuleCall(args, maxCycles));
+}
+
+export function buildNativeNftBuyListingForwarderInput(
+  args: EncodeNativeNftBuyListingArgs,
+  maxCycles: string | number | bigint,
+): NativeMarketForwarderInput {
+  return encodeNativeMarketModuleForwarderInput(buildNativeNftBuyListingModuleCall(args, maxCycles));
 }
 
 export function buildNativeSpotLimitOrderModuleCall(
@@ -520,6 +573,11 @@ function normalizeHexBytes(value: string, name: string): string {
     throw new MarketActionError(`${name} must be 0x-prefixed hex bytes${detail}`);
   }
   return value.toLowerCase();
+}
+
+function isNativeMarketModuleAddress(value: string): boolean {
+  const normalized = value.toLowerCase();
+  return normalized === NATIVE_MARKET_MODULE_ADDRESS || normalized === NATIVE_MARKET_MODULE_ADDRESS_BYTES;
 }
 
 function monoAddressInto(w: BincodeWriter, input: NativeMarketAddressInput, name: string): void {
