@@ -1677,6 +1677,48 @@ interface NativeReceiptResponse<TDecoded = unknown> {
     events: Array<NativeReceiptEvent<TDecoded>>;
     source: NativeReceiptSource;
 }
+/** Filter object passed to `lyth_nativeEvents` and `/api/v1/native-events`. */
+interface NativeEventsFilter {
+    fromBlock: number | bigint | string;
+    toBlock: number | bigint | string;
+    limit?: number | bigint | string | null;
+    txIndex?: number | bigint | string | null;
+    logIndex?: number | bigint | string | null;
+    address?: string | null;
+    eventTopic?: string | null;
+    family?: string | null;
+    eventName?: string | null;
+    primaryId?: string | null;
+    relatedId?: string | null;
+    tokenId?: string | null;
+    account?: string | null;
+    counterparty?: string | null;
+}
+interface NativeEventsResponseFilters {
+    txIndex?: number | null;
+    logIndex?: number | null;
+    address?: string | null;
+    eventTopic?: string | null;
+    family?: string | null;
+    eventName?: string | null;
+    primaryId?: string | null;
+    relatedId?: string | null;
+    tokenId?: string | null;
+    account?: string | null;
+    counterparty?: string | null;
+}
+interface NativeEventsSource {
+    indexerProvider: string;
+}
+interface NativeEventsResponse<TDecoded = unknown> {
+    schemaVersion: number;
+    fromBlock: number;
+    toBlock: number;
+    limit: number;
+    filters: NativeEventsResponseFilters;
+    events: Array<NativeReceiptEvent<TDecoded>>;
+    source: NativeEventsSource;
+}
 type AgentReputationCategoryScope = "global" | "category";
 interface AgentReputationRecord {
     provider: string;
@@ -2203,6 +2245,10 @@ declare class RpcClient {
      * it does not require a separate `lyth_nativeEvents` node method.
      */
     lythNativeReceiptEvents<TDecoded extends NativeDecodedEvent = NativeDecodedEvent>(txHash: string, filter?: NativeEventFilter): Promise<Array<TypedNativeReceiptEvent<TDecoded>>>;
+    /** `lyth_nativeEvents` — historical indexed native event rows. */
+    lythNativeEvents<TDecoded = unknown>(filter: NativeEventsFilter): Promise<NativeEventsResponse<TDecoded>>;
+    /** `lyth_nativeEvents` with decoded rows converted into a caller-selected type. */
+    lythNativeEventsTyped<TDecoded extends NativeDecodedEvent = NativeDecodedEvent>(filter: NativeEventsFilter): Promise<NativeEventsResponse<TDecoded>>;
     /** `lyth_gapRecords` — retained ingestion/indexing gaps for a block range. */
     lythGapRecords(fromBlock: number | bigint | string, toBlock: number | bigint | string): Promise<GapRecordsResponse>;
     /** `lyth_dagParents` — parent vertices for a DAG round. */
@@ -2353,6 +2399,7 @@ declare function parseQuantityBig(hex: string): bigint;
  * value exceeds `Number.MAX_SAFE_INTEGER`.
  */
 declare function parseQuantity(hex: string): number;
+declare function nativeEventsFilterParams(filter: NativeEventsFilter): Record<string, unknown>;
 
 /** Common typed payload envelope emitted by the native event projector. */
 interface NativeDecodedEvent {
@@ -2377,6 +2424,7 @@ declare function isNativeDecodedEvent(value: unknown): value is NativeDecodedEve
 declare function parseNativeDecodedEvent<TDecoded extends NativeDecodedEvent = NativeDecodedEvent>(event: Pick<NativeReceiptEvent<unknown>, "decoded" | "decodedJson" | "eventTopic" | "logIndex">): TDecoded;
 declare function nativeEventMatches(event: NativeReceiptEvent<unknown>, filter?: NativeEventFilter): boolean;
 declare function nativeEventsFromReceipt<TDecoded extends NativeDecodedEvent = NativeDecodedEvent>(receipt: NativeReceiptResponse<unknown>, filter?: NativeEventFilter): Array<TypedNativeReceiptEvent<TDecoded>>;
+declare function nativeEventsFromHistory<TDecoded extends NativeDecodedEvent = NativeDecodedEvent>(response: NativeEventsResponse<unknown>): NativeEventsResponse<TDecoded>;
 declare function consumeNativeEvents<TDecoded extends NativeDecodedEvent = NativeDecodedEvent>(receipt: NativeReceiptResponse<unknown>, consumer: NativeEventConsumer<TDecoded>, filter?: NativeEventFilter): Promise<number>;
 
 declare const ML_KEM_768_CIPHERTEXT_LEN = 1088;
@@ -2505,4 +2553,4 @@ declare function buildEncryptedSubmission(args: {
 }): Promise<EncryptedSubmission>;
 declare function submitEncryptedEnvelope(client: RpcClient, envelopeWireHex: string): Promise<string>;
 
-export { type ClobMarketSummary as $, type AddressProfileResponse as A, type BlockSelector as B, type ChainStatsResponse as C, type AddressLabelRecord as D, type EncryptionKey as E, type AgentReputationCategoryScope as F, type AgentReputationRecord as G, type AgentReputationResponse as H, type AssetPolicy as I, type AttestationWindow as J, type BlockHeader as K, type BlockTag as L, MempoolClass as M, type NativeReceiptFee as N, type OperatorCapabilitiesResponse as O, type BlsCertificateResponse as P, CHAIN_REGISTRY as Q, type RuntimeBuildProvenance as R, type SearchResponse as S, type TxFeedResponse as T, CHAIN_REGISTRY_RAW_BASE as U, type CapabilitiesResponse as V, type CapabilityDescriptor as W, type ChainInfo as X, type ChainRegistry as Y, type CheckpointRecord as Z, type ClobMarketRecord as _, type RuntimeUpgradeStatus as a, type Quantity as a$, type ClobTrade as a0, type ClusterDelegatorsResponse as a1, type ClusterDirectoryEntryResponse as a2, type ClusterDirectoryPageResponse as a3, type ClusterEntityResponse as a4, type ClusterMemberResponse as a5, type ClusterResignationRow as a6, type ClusterResignationsResponse as a7, type ClusterStatusResponse as a8, type DagParent as a9, type MeshDecodedTx as aA, type MeshSignedTxResponse as aB, type MeshTxIntent as aC, type MeshUnsignedTxResponse as aD, type MetricsRangeResponse as aE, type MetricsRangeSample as aF, type MetricsRangeSeries as aG, type MetricsRangeStatus as aH, type NativeEventConsumer as aI, type NativeReceiptCounters as aJ, type NativeReceiptEvent as aK, type NativeReceiptSource as aL, type NetworkClientOptions as aM, type NetworkSlug as aN, type OperatorAuthorityResponse as aO, type OperatorInfoResponse as aP, type OperatorRiskResponse as aQ, type OperatorSigningActivityResponse as aR, type OperatorSigningEntry as aS, type OperatorSurfaceCapability as aT, type OperatorSurfaceStatus as aU, type P2pSeed as aV, type PeerSummary as aW, type PeerSummaryAggregate as aX, type PendingTxSummary as aY, type PrecompileCatalogueResponse as aZ, type PrecompileDescriptor as a_, type DagParentsResponse as aa, type DagSyncStatus as ab, type DecodeTxLog as ac, type DecodeTxPqAttestation as ad, type DecodeTxResponse as ae, type DelegationCapResponse as af, type DelegationHistoryRecord as ag, type DelegationRow as ah, type DelegationsResponse as ai, type DutyAbsence as aj, type EncryptionKeyResponse as ak, type EntityRatchetResponse as al, type ExplorerEndpoint as am, type FeeHistoryResponse as an, type GapRange as ao, type GapRecord as ap, type GapRecordsResponse as aq, type Hash as ar, type Hex as as, type IndexerStatus as at, type JailStatusWindow as au, type KeyRotationWindow as av, type LythUpgradePlanStatus as aw, type LythUpgradeStatusResponse as ax, MAX_NATIVE_RECEIPT_EVENTS as ay, type MempoolSnapshot as az, type NativeReceiptResponse as b, buildEncryptedEnvelope as b$, type RegistryRecord as b0, type ReportServiceProbeRequest as b1, type ReportServiceProbeResponse as b2, type RichListHolder as b3, type RichListResponse as b4, type RoundInfo as b5, type RpcEndpoint as b6, type RuntimeProvenanceResponse as b7, type SearchHit as b8, type ServiceProbeStatusLabel as b9, nativeEventsFromReceipt as bA, parseChainRegistryToml as bB, parseNativeDecodedEvent as bC, parseQuantity as bD, parseQuantityBig as bE, DKG_AEAD_TAG_LEN as bF, DKG_NONCE_LEN as bG, type DecryptHint as bH, ENUM_VARIANT_INDEX_ML_DSA_65 as bI, type EncryptedEnvelope as bJ, type EncryptedSubmission as bK, ML_DSA_65_PUBLIC_KEY_LEN as bL, ML_DSA_65_SEED_LEN as bM, ML_DSA_65_SIGNATURE_LEN as bN, ML_DSA_65_SIGNING_KEY_LEN as bO, ML_KEM_768_CIPHERTEXT_LEN as bP, ML_KEM_768_ENCAPSULATION_KEY_LEN as bQ, ML_KEM_768_SHARED_SECRET_LEN as bR, type NativeTxExtension as bS, type NativeTxExtensionDescriptor as bT, type NativeTxExtensionLike as bU, type NonceAad as bV, STANDARD_ALGO_NUMBER_ML_DSA_65 as bW, bincodeDecryptHint as bX, bincodeEncryptedEnvelope as bY, bincodeNonceAad as bZ, bincodeSignedTransaction as b_, type SigningEntryStatus as ba, type StorageProofBatch as bb, type SyncStatus as bc, TESTNET_69420 as bd, type TokenBalanceRecord as be, type TpmAttestationResponse as bf, type TransactionView as bg, type TxFeedReceipt as bh, type TxFeedTransaction as bi, type TxStatusFoundResponse as bj, type TxStatusNotFoundResponse as bk, type TxStatusResponse as bl, type UpcomingDutiesResponse as bm, type UpcomingDutyMap as bn, type UserAddressInput as bo, type VertexAtRound as bp, type VerticesAtRoundResponse as bq, consumeNativeEvents as br, encodeBlockSelector as bs, fetchChainInfoLatest as bt, fetchChainRegistryLatest as bu, getChainInfo as bv, getP2pSeeds as bw, getRpcEndpoints as bx, isNativeDecodedEvent as by, nativeEventMatches as bz, type NativeDecodedEvent as c, buildEncryptedSubmission as c0, encodeMlDsa65Opaque as c1, encodeTransactionForHash as c2, encryptInnerTx as c3, fetchEncryptionKey as c4, mlDsa65AddressFromPublicKey as c5, outerSigDigest as c6, submitEncryptedEnvelope as c7, type NativeEventFilter as d, type TypedNativeReceiptEvent as e, type AddressFlowResponse as f, type ServiceProbeResponse as g, type ClobMarketsResponse as h, type ClobMarketResponse as i, type ClobTradesResponse as j, type ClobOhlcResponse as k, type ClobOrderBookResponse as l, type NativeEvmTxFields as m, RpcClient as n, MlDsa65Backend as o, type RpcClientOptions as p, type TransactionReceipt as q, type CallRequest as r, type AccountPolicy as s, type AccountProofResponse as t, type Address as u, type AddressActivityArchiveRedirect as v, type AddressActivityEntry as w, type AddressActivityKind as x, type AddressActivityKindResponse as y, type AddressActivityKindRetention as z };
+export { type CheckpointRecord as $, type AddressProfileResponse as A, type BlockSelector as B, type ChainStatsResponse as C, type AddressActivityKindResponse as D, type EncryptionKey as E, type AddressActivityKindRetention as F, type AddressLabelRecord as G, type AgentReputationCategoryScope as H, type AgentReputationRecord as I, type AgentReputationResponse as J, type AssetPolicy as K, type AttestationWindow as L, MempoolClass as M, type NativeReceiptFee as N, type OperatorCapabilitiesResponse as O, type BlockHeader as P, type BlockTag as Q, type RuntimeBuildProvenance as R, type SearchResponse as S, type TxFeedResponse as T, type BlsCertificateResponse as U, CHAIN_REGISTRY as V, CHAIN_REGISTRY_RAW_BASE as W, type CapabilitiesResponse as X, type CapabilityDescriptor as Y, type ChainInfo as Z, type ChainRegistry as _, type RuntimeUpgradeStatus as a, type PeerSummaryAggregate as a$, type ClobMarketRecord as a0, type ClobMarketSummary as a1, type ClobTrade as a2, type ClusterDelegatorsResponse as a3, type ClusterDirectoryEntryResponse as a4, type ClusterDirectoryPageResponse as a5, type ClusterEntityResponse as a6, type ClusterMemberResponse as a7, type ClusterResignationRow as a8, type ClusterResignationsResponse as a9, MAX_NATIVE_RECEIPT_EVENTS as aA, type MempoolSnapshot as aB, type MeshDecodedTx as aC, type MeshSignedTxResponse as aD, type MeshTxIntent as aE, type MeshUnsignedTxResponse as aF, type MetricsRangeResponse as aG, type MetricsRangeSample as aH, type MetricsRangeSeries as aI, type MetricsRangeStatus as aJ, type NativeEventConsumer as aK, type NativeEventsResponseFilters as aL, type NativeEventsSource as aM, type NativeReceiptCounters as aN, type NativeReceiptEvent as aO, type NativeReceiptSource as aP, type NetworkClientOptions as aQ, type NetworkSlug as aR, type OperatorAuthorityResponse as aS, type OperatorInfoResponse as aT, type OperatorRiskResponse as aU, type OperatorSigningActivityResponse as aV, type OperatorSigningEntry as aW, type OperatorSurfaceCapability as aX, type OperatorSurfaceStatus as aY, type P2pSeed as aZ, type PeerSummary as a_, type ClusterStatusResponse as aa, type DagParent as ab, type DagParentsResponse as ac, type DagSyncStatus as ad, type DecodeTxLog as ae, type DecodeTxPqAttestation as af, type DecodeTxResponse as ag, type DelegationCapResponse as ah, type DelegationHistoryRecord as ai, type DelegationRow as aj, type DelegationsResponse as ak, type DutyAbsence as al, type EncryptionKeyResponse as am, type EntityRatchetResponse as an, type ExplorerEndpoint as ao, type FeeHistoryResponse as ap, type GapRange as aq, type GapRecord as ar, type GapRecordsResponse as as, type Hash as at, type Hex as au, type IndexerStatus as av, type JailStatusWindow as aw, type KeyRotationWindow as ax, type LythUpgradePlanStatus as ay, type LythUpgradeStatusResponse as az, type NativeReceiptResponse as b, type NonceAad as b$, type PendingTxSummary as b0, type PrecompileCatalogueResponse as b1, type PrecompileDescriptor as b2, type Quantity as b3, type RegistryRecord as b4, type ReportServiceProbeRequest as b5, type ReportServiceProbeResponse as b6, type RichListHolder as b7, type RichListResponse as b8, type RoundInfo as b9, getP2pSeeds as bA, getRpcEndpoints as bB, isNativeDecodedEvent as bC, nativeEventMatches as bD, nativeEventsFilterParams as bE, nativeEventsFromHistory as bF, nativeEventsFromReceipt as bG, parseChainRegistryToml as bH, parseNativeDecodedEvent as bI, parseQuantity as bJ, parseQuantityBig as bK, DKG_AEAD_TAG_LEN as bL, DKG_NONCE_LEN as bM, type DecryptHint as bN, ENUM_VARIANT_INDEX_ML_DSA_65 as bO, type EncryptedEnvelope as bP, type EncryptedSubmission as bQ, ML_DSA_65_PUBLIC_KEY_LEN as bR, ML_DSA_65_SEED_LEN as bS, ML_DSA_65_SIGNATURE_LEN as bT, ML_DSA_65_SIGNING_KEY_LEN as bU, ML_KEM_768_CIPHERTEXT_LEN as bV, ML_KEM_768_ENCAPSULATION_KEY_LEN as bW, ML_KEM_768_SHARED_SECRET_LEN as bX, type NativeTxExtension as bY, type NativeTxExtensionDescriptor as bZ, type NativeTxExtensionLike as b_, type RpcEndpoint as ba, type RuntimeProvenanceResponse as bb, type SearchHit as bc, type ServiceProbeStatusLabel as bd, type SigningEntryStatus as be, type StorageProofBatch as bf, type SyncStatus as bg, TESTNET_69420 as bh, type TokenBalanceRecord as bi, type TpmAttestationResponse as bj, type TransactionView as bk, type TxFeedReceipt as bl, type TxFeedTransaction as bm, type TxStatusFoundResponse as bn, type TxStatusNotFoundResponse as bo, type TxStatusResponse as bp, type UpcomingDutiesResponse as bq, type UpcomingDutyMap as br, type UserAddressInput as bs, type VertexAtRound as bt, type VerticesAtRoundResponse as bu, consumeNativeEvents as bv, encodeBlockSelector as bw, fetchChainInfoLatest as bx, fetchChainRegistryLatest as by, getChainInfo as bz, type NativeDecodedEvent as c, STANDARD_ALGO_NUMBER_ML_DSA_65 as c0, bincodeDecryptHint as c1, bincodeEncryptedEnvelope as c2, bincodeNonceAad as c3, bincodeSignedTransaction as c4, buildEncryptedEnvelope as c5, buildEncryptedSubmission as c6, encodeMlDsa65Opaque as c7, encodeTransactionForHash as c8, encryptInnerTx as c9, fetchEncryptionKey as ca, mlDsa65AddressFromPublicKey as cb, outerSigDigest as cc, submitEncryptedEnvelope as cd, type NativeEventFilter as d, type TypedNativeReceiptEvent as e, type NativeEventsFilter as f, type NativeEventsResponse as g, type AddressFlowResponse as h, type ServiceProbeResponse as i, type ClobMarketsResponse as j, type ClobMarketResponse as k, type ClobTradesResponse as l, type ClobOhlcResponse as m, type ClobOrderBookResponse as n, type NativeEvmTxFields as o, RpcClient as p, MlDsa65Backend as q, type RpcClientOptions as r, type TransactionReceipt as s, type CallRequest as t, type AccountPolicy as u, type AccountProofResponse as v, type Address as w, type AddressActivityArchiveRedirect as x, type AddressActivityEntry as y, type AddressActivityKind as z };

@@ -9,7 +9,7 @@
 
 import { addressToBech32, parseAddress } from "./address.js";
 import { SdkError } from "./error.js";
-import { nativeEventsFromReceipt } from "./native-events.js";
+import { nativeEventsFromHistory, nativeEventsFromReceipt } from "./native-events.js";
 import {
   isConcreteServiceProbeStatus,
   isSinglePublicServiceProbeMask,
@@ -168,6 +168,52 @@ export interface NativeReceiptResponse<TDecoded = unknown> {
   eventCount: number;
   events: Array<NativeReceiptEvent<TDecoded>>;
   source: NativeReceiptSource;
+}
+
+/** Filter object passed to `lyth_nativeEvents` and `/api/v1/native-events`. */
+export interface NativeEventsFilter {
+  fromBlock: number | bigint | string;
+  toBlock: number | bigint | string;
+  limit?: number | bigint | string | null;
+  txIndex?: number | bigint | string | null;
+  logIndex?: number | bigint | string | null;
+  address?: string | null;
+  eventTopic?: string | null;
+  family?: string | null;
+  eventName?: string | null;
+  primaryId?: string | null;
+  relatedId?: string | null;
+  tokenId?: string | null;
+  account?: string | null;
+  counterparty?: string | null;
+}
+
+export interface NativeEventsResponseFilters {
+  txIndex?: number | null;
+  logIndex?: number | null;
+  address?: string | null;
+  eventTopic?: string | null;
+  family?: string | null;
+  eventName?: string | null;
+  primaryId?: string | null;
+  relatedId?: string | null;
+  tokenId?: string | null;
+  account?: string | null;
+  counterparty?: string | null;
+}
+
+export interface NativeEventsSource {
+  indexerProvider: string;
+}
+
+export interface NativeEventsResponse<TDecoded = unknown> {
+  schemaVersion: number;
+  fromBlock: number;
+  toBlock: number;
+  limit: number;
+  filters: NativeEventsResponseFilters;
+  events: Array<NativeReceiptEvent<TDecoded>>;
+  source: NativeEventsSource;
 }
 
 export type AgentReputationCategoryScope = "global" | "category";
@@ -1040,6 +1086,21 @@ export class RpcClient {
     return nativeEventsFromReceipt<TDecoded>(receipt, filter);
   }
 
+  /** `lyth_nativeEvents` — historical indexed native event rows. */
+  async lythNativeEvents<TDecoded = unknown>(
+    filter: NativeEventsFilter,
+  ): Promise<NativeEventsResponse<TDecoded>> {
+    return this.call("lyth_nativeEvents", [nativeEventsFilterParams(filter)]);
+  }
+
+  /** `lyth_nativeEvents` with decoded rows converted into a caller-selected type. */
+  async lythNativeEventsTyped<
+    TDecoded extends NativeDecodedEvent = NativeDecodedEvent,
+  >(filter: NativeEventsFilter): Promise<NativeEventsResponse<TDecoded>> {
+    const response = await this.lythNativeEvents(filter);
+    return nativeEventsFromHistory<TDecoded>(response);
+  }
+
   /** `lyth_gapRecords` — retained ingestion/indexing gaps for a block range. */
   async lythGapRecords(
     fromBlock: number | bigint | string,
@@ -1586,6 +1647,36 @@ function encodeOptionalHeight(v: number | bigint | string | null): number | stri
 
 function encodeRpcU64Number(v: number | bigint | string, label: string): number {
   return parseRpcNumber(v, label);
+}
+
+export function nativeEventsFilterParams(filter: NativeEventsFilter): Record<string, unknown> {
+  return {
+    fromBlock: encodeRpcU64Number(filter.fromBlock, "fromBlock"),
+    toBlock: encodeRpcU64Number(filter.toBlock, "toBlock"),
+    ...optionalRpcNumber("limit", filter.limit),
+    ...optionalRpcNumber("txIndex", filter.txIndex),
+    ...optionalRpcNumber("logIndex", filter.logIndex),
+    ...optionalString("address", filter.address),
+    ...optionalString("eventTopic", filter.eventTopic),
+    ...optionalString("family", filter.family),
+    ...optionalString("eventName", filter.eventName),
+    ...optionalString("primaryId", filter.primaryId),
+    ...optionalString("relatedId", filter.relatedId),
+    ...optionalString("tokenId", filter.tokenId),
+    ...optionalString("account", filter.account),
+    ...optionalString("counterparty", filter.counterparty),
+  };
+}
+
+function optionalRpcNumber(
+  key: string,
+  value: number | bigint | string | null | undefined,
+): Record<string, number> {
+  return value == null ? {} : { [key]: encodeRpcU64Number(value, key) };
+}
+
+function optionalString(key: string, value: string | null | undefined): Record<string, string> {
+  return value == null ? {} : { [key]: value };
 }
 
 function parseRpcBigint(value: unknown, label: string): bigint {

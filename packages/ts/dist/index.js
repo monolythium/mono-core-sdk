@@ -72,6 +72,15 @@ function nativeEventsFromReceipt(receipt, filter = {}) {
     decoded: parseNativeDecodedEvent(event)
   }));
 }
+function nativeEventsFromHistory(response) {
+  return {
+    ...response,
+    events: response.events.map((event) => ({
+      ...event,
+      decoded: parseNativeDecodedEvent(event)
+    }))
+  };
+}
 async function consumeNativeEvents(receipt, consumer, filter = {}) {
   const events = nativeEventsFromReceipt(receipt, filter);
   for (const event of events) {
@@ -178,6 +187,16 @@ var ApiClient = class {
     return {
       ...receipt,
       data: nativeEventsFromReceipt(receipt.data, filter)
+    };
+  }
+  async nativeEvents(filter) {
+    return this.get("/native-events", nativeEventsFilterQuery(filter));
+  }
+  async nativeEventsTyped(filter) {
+    const response = await this.nativeEvents(filter);
+    return {
+      ...response,
+      data: nativeEventsFromHistory(response.data)
     };
   }
   async addressProfile(address) {
@@ -289,6 +308,24 @@ function buildUrl(baseUrl, path, query) {
   }
   const qs = params.toString();
   return qs.length === 0 ? `${cleanBase}${cleanPath}` : `${cleanBase}${cleanPath}?${qs}`;
+}
+function nativeEventsFilterQuery(filter) {
+  return {
+    fromBlock: filter.fromBlock,
+    toBlock: filter.toBlock,
+    limit: filter.limit,
+    txIndex: filter.txIndex,
+    logIndex: filter.logIndex,
+    address: filter.address,
+    eventTopic: filter.eventTopic,
+    family: filter.family,
+    eventName: filter.eventName,
+    primaryId: filter.primaryId,
+    relatedId: filter.relatedId,
+    tokenId: filter.tokenId,
+    account: filter.account,
+    counterparty: filter.counterparty
+  };
 }
 function encodePathBlock(block) {
   return encodePathSegment(encodeBlockSelector(block));
@@ -1134,6 +1171,15 @@ var RpcClient = class _RpcClient {
     const receipt = await this.lythNativeReceipt(txHash);
     return nativeEventsFromReceipt(receipt, filter);
   }
+  /** `lyth_nativeEvents` — historical indexed native event rows. */
+  async lythNativeEvents(filter) {
+    return this.call("lyth_nativeEvents", [nativeEventsFilterParams(filter)]);
+  }
+  /** `lyth_nativeEvents` with decoded rows converted into a caller-selected type. */
+  async lythNativeEventsTyped(filter) {
+    const response = await this.lythNativeEvents(filter);
+    return nativeEventsFromHistory(response);
+  }
   /** `lyth_gapRecords` — retained ingestion/indexing gaps for a block range. */
   async lythGapRecords(fromBlock, toBlock) {
     return this.call("lyth_gapRecords", [
@@ -1500,6 +1546,30 @@ function encodeOptionalHeight(v) {
 }
 function encodeRpcU64Number(v, label) {
   return parseRpcNumber(v, label);
+}
+function nativeEventsFilterParams(filter) {
+  return {
+    fromBlock: encodeRpcU64Number(filter.fromBlock, "fromBlock"),
+    toBlock: encodeRpcU64Number(filter.toBlock, "toBlock"),
+    ...optionalRpcNumber("limit", filter.limit),
+    ...optionalRpcNumber("txIndex", filter.txIndex),
+    ...optionalRpcNumber("logIndex", filter.logIndex),
+    ...optionalString("address", filter.address),
+    ...optionalString("eventTopic", filter.eventTopic),
+    ...optionalString("family", filter.family),
+    ...optionalString("eventName", filter.eventName),
+    ...optionalString("primaryId", filter.primaryId),
+    ...optionalString("relatedId", filter.relatedId),
+    ...optionalString("tokenId", filter.tokenId),
+    ...optionalString("account", filter.account),
+    ...optionalString("counterparty", filter.counterparty)
+  };
+}
+function optionalRpcNumber(key, value) {
+  return value == null ? {} : { [key]: encodeRpcU64Number(value, key) };
+}
+function optionalString(key, value) {
+  return value == null ? {} : { [key]: value };
 }
 function parseRpcBigint(value, label) {
   if (typeof value === "bigint") {
@@ -3411,6 +3481,6 @@ function translateBlockOut(header) {
 // src/index.ts
 var version = "0.1.0";
 
-export { ADDRESS_HRP, ADDRESS_KIND_HRPS, AddressError, ApiClient, BURN_ADDR, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MonolythiumProvider, MonolythiumSigner, MrvValidationError, NATIVE_LYTH_DECIMALS, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, bech32ToAddress, bech32ToAddressBytes, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPlan, buildMrvDeployRequest, checkMrvFeeDisplayConformance, composeClaimBoundMessage, consumeNativeEvents, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, deriveMrvContractAddress, encodeBlockSelector, encodeClaimPolicyByAddressCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLookupPubkeyCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, getChainInfo, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isConcreteServiceProbeStatus, isNativeDecodedEvent, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeEventMatches, nativeEventsFromReceipt, nodeRegistryAddressHex, normalizeAddressHex, parseAddress, parseChainRegistryToml, parseLythToLythoshi, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, version };
+export { ADDRESS_HRP, ADDRESS_KIND_HRPS, AddressError, ApiClient, BURN_ADDR, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MonolythiumProvider, MonolythiumSigner, MrvValidationError, NATIVE_LYTH_DECIMALS, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, bech32ToAddress, bech32ToAddressBytes, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPlan, buildMrvDeployRequest, checkMrvFeeDisplayConformance, composeClaimBoundMessage, consumeNativeEvents, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, deriveMrvContractAddress, encodeBlockSelector, encodeClaimPolicyByAddressCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLookupPubkeyCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, getChainInfo, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isConcreteServiceProbeStatus, isNativeDecodedEvent, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nodeRegistryAddressHex, normalizeAddressHex, parseAddress, parseChainRegistryToml, parseLythToLythoshi, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, version };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

@@ -13,10 +13,12 @@ use serde_json::Value;
 
 use crate::error::SdkError;
 use crate::types::{
-    native_events_from_receipt, AddressFlowResponse, AddressProfileResponse, BlockSelector,
-    ChainStatsResponse, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse,
-    ClobOrderBookResponse, ClobTradesResponse, NativeEventFilter, NativeReceiptFee,
-    NativeReceiptResponse, SearchResponse, TxFeedResponse, TypedNativeReceiptEvent,
+    native_events_from_receipt, typed_native_events_from_response, AddressFlowResponse,
+    AddressProfileResponse, BlockSelector, ChainStatsResponse, ClobMarketResponse,
+    ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse, ClobTradesResponse,
+    NativeEventFilter, NativeEventsFilter, NativeEventsResponse, NativeReceiptFee,
+    NativeReceiptResponse, SearchResponse, TxFeedResponse, TypedNativeEventsResponse,
+    TypedNativeReceiptEvent,
 };
 
 /// Typed HTTP API client for `/api/v1`.
@@ -189,6 +191,32 @@ impl ApiClient {
             genesis_hash: receipt.genesis_hash,
             latest: receipt.latest,
             data: native_events_from_receipt::<TDecoded>(&receipt.data, filter)?,
+        })
+    }
+
+    /// `/api/v1/native-events`.
+    pub async fn native_events(
+        &self,
+        filter: NativeEventsFilter<'_>,
+    ) -> Result<ApiEnvelope<NativeEventsResponse>, SdkError> {
+        self.get("native-events", &filter.to_query_pairs()).await
+    }
+
+    /// `/api/v1/native-events` with decoded rows converted into a caller-selected type.
+    pub async fn native_events_typed<TDecoded>(
+        &self,
+        filter: NativeEventsFilter<'_>,
+    ) -> Result<ApiEnvelope<TypedNativeEventsResponse<TDecoded>>, SdkError>
+    where
+        TDecoded: DeserializeOwned,
+    {
+        let response = self.native_events(filter).await?;
+        Ok(ApiEnvelope {
+            schema_version: response.schema_version,
+            chain_id: response.chain_id,
+            genesis_hash: response.genesis_hash,
+            latest: response.latest,
+            data: typed_native_events_from_response::<TDecoded>(&response.data)?,
         })
     }
 
@@ -767,6 +795,7 @@ pub struct ApiUpgradeStatusData {
 #[cfg(test)]
 mod tests {
     use super::{api_endpoint_from_rpc_endpoint, build_url};
+    use crate::types::NativeEventsFilter;
 
     #[test]
     fn derives_api_endpoint_from_rpc_endpoint() {
@@ -799,6 +828,36 @@ mod tests {
         assert_eq!(
             url.as_str(),
             "https://rpc.example/api/v1/markets/0xabc/ohlc?fromBlock=90&toBlock=100&bucketBlocks=10"
+        );
+    }
+
+    #[test]
+    fn build_url_encodes_native_events_query_filters() {
+        let event_topic = format!("0x{}", "11".repeat(32));
+        let primary_id = format!("0x{}", "77".repeat(32));
+        let url = build_url(
+            "https://rpc.example/api/v1",
+            "native-events",
+            &NativeEventsFilter::new(100, 105)
+                .limit(10)
+                .tx_index(0)
+                .log_index(1)
+                .address("monos1nativeeventemitter")
+                .event_topic(&event_topic)
+                .family("agent")
+                .event_name("agent.escrow.created")
+                .primary_id(&primary_id)
+                .account("mono1agentconsumer")
+                .counterparty("mono1agentcounterparty")
+                .to_query_pairs(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            format!(
+                "https://rpc.example/api/v1/native-events?fromBlock=100&toBlock=105&limit=10&txIndex=0&logIndex=1&address=monos1nativeeventemitter&eventTopic={event_topic}&family=agent&eventName=agent.escrow.created&primaryId={primary_id}&account=mono1agentconsumer&counterparty=mono1agentcounterparty"
+            )
         );
     }
 }

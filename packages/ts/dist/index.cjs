@@ -74,6 +74,15 @@ function nativeEventsFromReceipt(receipt, filter = {}) {
     decoded: parseNativeDecodedEvent(event)
   }));
 }
+function nativeEventsFromHistory(response) {
+  return {
+    ...response,
+    events: response.events.map((event) => ({
+      ...event,
+      decoded: parseNativeDecodedEvent(event)
+    }))
+  };
+}
 async function consumeNativeEvents(receipt, consumer, filter = {}) {
   const events = nativeEventsFromReceipt(receipt, filter);
   for (const event of events) {
@@ -180,6 +189,16 @@ var ApiClient = class {
     return {
       ...receipt,
       data: nativeEventsFromReceipt(receipt.data, filter)
+    };
+  }
+  async nativeEvents(filter) {
+    return this.get("/native-events", nativeEventsFilterQuery(filter));
+  }
+  async nativeEventsTyped(filter) {
+    const response = await this.nativeEvents(filter);
+    return {
+      ...response,
+      data: nativeEventsFromHistory(response.data)
     };
   }
   async addressProfile(address) {
@@ -291,6 +310,24 @@ function buildUrl(baseUrl, path, query) {
   }
   const qs = params.toString();
   return qs.length === 0 ? `${cleanBase}${cleanPath}` : `${cleanBase}${cleanPath}?${qs}`;
+}
+function nativeEventsFilterQuery(filter) {
+  return {
+    fromBlock: filter.fromBlock,
+    toBlock: filter.toBlock,
+    limit: filter.limit,
+    txIndex: filter.txIndex,
+    logIndex: filter.logIndex,
+    address: filter.address,
+    eventTopic: filter.eventTopic,
+    family: filter.family,
+    eventName: filter.eventName,
+    primaryId: filter.primaryId,
+    relatedId: filter.relatedId,
+    tokenId: filter.tokenId,
+    account: filter.account,
+    counterparty: filter.counterparty
+  };
 }
 function encodePathBlock(block) {
   return encodePathSegment(encodeBlockSelector(block));
@@ -1136,6 +1173,15 @@ var RpcClient = class _RpcClient {
     const receipt = await this.lythNativeReceipt(txHash);
     return nativeEventsFromReceipt(receipt, filter);
   }
+  /** `lyth_nativeEvents` — historical indexed native event rows. */
+  async lythNativeEvents(filter) {
+    return this.call("lyth_nativeEvents", [nativeEventsFilterParams(filter)]);
+  }
+  /** `lyth_nativeEvents` with decoded rows converted into a caller-selected type. */
+  async lythNativeEventsTyped(filter) {
+    const response = await this.lythNativeEvents(filter);
+    return nativeEventsFromHistory(response);
+  }
   /** `lyth_gapRecords` — retained ingestion/indexing gaps for a block range. */
   async lythGapRecords(fromBlock, toBlock) {
     return this.call("lyth_gapRecords", [
@@ -1502,6 +1548,30 @@ function encodeOptionalHeight(v) {
 }
 function encodeRpcU64Number(v, label) {
   return parseRpcNumber(v, label);
+}
+function nativeEventsFilterParams(filter) {
+  return {
+    fromBlock: encodeRpcU64Number(filter.fromBlock, "fromBlock"),
+    toBlock: encodeRpcU64Number(filter.toBlock, "toBlock"),
+    ...optionalRpcNumber("limit", filter.limit),
+    ...optionalRpcNumber("txIndex", filter.txIndex),
+    ...optionalRpcNumber("logIndex", filter.logIndex),
+    ...optionalString("address", filter.address),
+    ...optionalString("eventTopic", filter.eventTopic),
+    ...optionalString("family", filter.family),
+    ...optionalString("eventName", filter.eventName),
+    ...optionalString("primaryId", filter.primaryId),
+    ...optionalString("relatedId", filter.relatedId),
+    ...optionalString("tokenId", filter.tokenId),
+    ...optionalString("account", filter.account),
+    ...optionalString("counterparty", filter.counterparty)
+  };
+}
+function optionalRpcNumber(key, value) {
+  return value == null ? {} : { [key]: encodeRpcU64Number(value, key) };
+}
+function optionalString(key, value) {
+  return value == null ? {} : { [key]: value };
 }
 function parseRpcBigint(value, label) {
   if (typeof value === "bigint") {
@@ -3510,6 +3580,8 @@ exports.mrvBech32ToAddress = mrvBech32ToAddress;
 exports.mrvCodeHashHex = mrvCodeHashHex;
 exports.mrvV1TransactionExtension = mrvV1TransactionExtension;
 exports.nativeEventMatches = nativeEventMatches;
+exports.nativeEventsFilterParams = nativeEventsFilterParams;
+exports.nativeEventsFromHistory = nativeEventsFromHistory;
 exports.nativeEventsFromReceipt = nativeEventsFromReceipt;
 exports.nodeRegistryAddressHex = nodeRegistryAddressHex;
 exports.normalizeAddressHex = normalizeAddressHex;

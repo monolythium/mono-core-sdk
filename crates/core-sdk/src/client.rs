@@ -20,21 +20,22 @@ use crate::mrv::{
     MrvValidationError,
 };
 use crate::types::{
-    native_events_from_receipt, AccountPolicy, AccountProofResponse, AddressActivityEntry,
-    AddressActivityKindResponse, AddressFlowResponse, AddressLabelRecord, AddressProfileResponse,
-    AgentReputationResponse, AssetPolicy, BlockHeader, BlockSelector, BlsCertificateResponse,
-    CallRequest, CapabilitiesResponse, ChainStatsResponse, CheckpointRecord, ClobMarketResponse,
-    ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse, ClobTradesResponse,
-    ClusterDelegatorsResponse, ClusterEntityResponse, ClusterResignationsResponse,
-    DagParentsResponse, DagSyncStatus, DecodeTxResponse, DelegationCapResponse,
-    DelegationHistoryRecord, DelegationsResponse, EncryptionKeyResponse, EntityRatchetResponse,
-    FeeHistoryResponse, GapRecordsResponse, IndexerStatus, LythUpgradeStatusResponse,
-    MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse,
-    MetricsRangeResponse, NativeEventFilter, NativeReceiptResponse, OperatorCapabilitiesResponse,
-    PeerSummary, PeerSummaryAggregate, PendingTxSummary, PrecompileDescriptor, RegistryRecord,
-    RichListResponse, RoundInfo, SearchResponse, StorageProofBatch, SyncStatus, TokenBalanceRecord,
+    native_events_from_receipt, typed_native_events_from_response, AccountPolicy,
+    AccountProofResponse, AddressActivityEntry, AddressActivityKindResponse, AddressFlowResponse,
+    AddressLabelRecord, AddressProfileResponse, AgentReputationResponse, AssetPolicy, BlockHeader,
+    BlockSelector, BlsCertificateResponse, CallRequest, CapabilitiesResponse, ChainStatsResponse,
+    CheckpointRecord, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse,
+    ClobOrderBookResponse, ClobTradesResponse, ClusterDelegatorsResponse, ClusterEntityResponse,
+    ClusterResignationsResponse, DagParentsResponse, DagSyncStatus, DecodeTxResponse,
+    DelegationCapResponse, DelegationHistoryRecord, DelegationsResponse, EncryptionKeyResponse,
+    EntityRatchetResponse, FeeHistoryResponse, GapRecordsResponse, IndexerStatus,
+    LythUpgradeStatusResponse, MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent,
+    MeshUnsignedTxResponse, MetricsRangeResponse, NativeEventFilter, NativeEventsFilter,
+    NativeEventsResponse, NativeReceiptResponse, OperatorCapabilitiesResponse, PeerSummary,
+    PeerSummaryAggregate, PendingTxSummary, PrecompileDescriptor, RegistryRecord, RichListResponse,
+    RoundInfo, SearchResponse, StorageProofBatch, SyncStatus, TokenBalanceRecord,
     TpmAttestationResponse, TransactionReceipt, TransactionView, TxFeedResponse, TxStatusResponse,
-    TypedNativeReceiptEvent, VerticesAtRoundResponse,
+    TypedNativeEventsResponse, TypedNativeReceiptEvent, VerticesAtRoundResponse,
 };
 
 /// Result from building and submitting an encrypted MRV deploy envelope.
@@ -569,6 +570,26 @@ impl RpcClient {
     {
         let receipt = self.lyth_native_receipt(tx_hash).await?;
         Ok(native_events_from_receipt::<TDecoded>(&receipt, filter)?)
+    }
+
+    /// `lyth_nativeEvents` — historical indexed native event rows.
+    pub async fn lyth_native_events(
+        &self,
+        filter: NativeEventsFilter<'_>,
+    ) -> Result<NativeEventsResponse, SdkError> {
+        self.call("lyth_nativeEvents", json!([filter])).await
+    }
+
+    /// `lyth_nativeEvents` with decoded rows converted into a caller-selected type.
+    pub async fn lyth_native_events_typed<TDecoded>(
+        &self,
+        filter: NativeEventsFilter<'_>,
+    ) -> Result<TypedNativeEventsResponse<TDecoded>, SdkError>
+    where
+        TDecoded: DeserializeOwned,
+    {
+        let response = self.lyth_native_events(filter).await?;
+        Ok(typed_native_events_from_response::<TDecoded>(&response)?)
     }
 
     /// `lyth_gapRecords` — retained ingestion/indexing gaps for a block range.
@@ -1325,6 +1346,104 @@ mod tests {
         assert_eq!(
             requests[1]["params"],
             json!([result.encrypted.submission.envelope_wire_hex])
+        );
+    }
+
+    #[tokio::test]
+    async fn lyth_native_events_serializes_filter_and_decodes_typed_rows() {
+        #[derive(Debug, serde::Deserialize)]
+        struct AgentEscrowCreatedEvent {
+            family: String,
+            event_name: String,
+            amount_lythoshi: String,
+            agent_address: String,
+        }
+
+        let event_topic = format!("0x{}", "11".repeat(32));
+        let primary_id = format!("0x{}", "77".repeat(32));
+        let decoded = json!({
+            "block_height": 100,
+            "tx_index": 0,
+            "sequence": 0,
+            "family": "agent",
+            "event_name": "agent.escrow.created",
+            "payload_hash": format!("0x{}", "44".repeat(32)),
+            "amount_lythoshi": "440000000000",
+            "agent_address": "mono1agentconsumer"
+        });
+        let (endpoint, server) = spawn_rpc_server(vec![json!({
+            "schemaVersion": 1,
+            "fromBlock": 100,
+            "toBlock": 105,
+            "limit": 25,
+            "filters": {
+                "txIndex": 0,
+                "address": "monos1nativeeventemitter",
+                "eventTopic": event_topic.clone(),
+                "family": "agent",
+                "eventName": "agent.escrow.created",
+                "primaryId": primary_id.clone(),
+                "account": "mono1agentconsumer"
+            },
+            "events": [{
+                "blockHeight": 100,
+                "txIndex": 0,
+                "logIndex": 0,
+                "address": "monos1nativeeventemitter",
+                "eventTopic": event_topic.clone(),
+                "decoded": null,
+                "decodedJson": decoded.to_string()
+            }],
+            "source": {
+                "indexerProvider": "native_events"
+            }
+        })]);
+
+        let client = RpcClient::new(endpoint).unwrap();
+        let response = client
+            .lyth_native_events_typed::<AgentEscrowCreatedEvent>(
+                NativeEventsFilter::new(100, 105)
+                    .limit(25)
+                    .tx_index(0)
+                    .address("monos1nativeeventemitter")
+                    .event_topic(&event_topic)
+                    .family("agent")
+                    .event_name("agent.escrow.created")
+                    .primary_id(&primary_id)
+                    .account("mono1agentconsumer"),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.schema_version, 1);
+        assert_eq!(response.events[0].decoded.family, "agent");
+        assert_eq!(
+            response.events[0].decoded.event_name,
+            "agent.escrow.created"
+        );
+        assert_eq!(response.events[0].decoded.amount_lythoshi, "440000000000");
+        assert!(response.events[0]
+            .decoded
+            .agent_address
+            .starts_with("mono1"));
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["method"], "lyth_nativeEvents");
+        assert_eq!(
+            requests[0]["params"],
+            json!([{
+                "fromBlock": 100,
+                "toBlock": 105,
+                "limit": 25,
+                "txIndex": 0,
+                "address": "monos1nativeeventemitter",
+                "eventTopic": event_topic,
+                "family": "agent",
+                "eventName": "agent.escrow.created",
+                "primaryId": primary_id,
+                "account": "mono1agentconsumer"
+            }])
         );
     }
 

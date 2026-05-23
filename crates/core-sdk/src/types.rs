@@ -352,6 +352,262 @@ impl<'a> NativeEventFilter<'a> {
     }
 }
 
+/// Filter object passed to `lyth_nativeEvents` and `/api/v1/native-events`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeEventsFilter<'a> {
+    /// Inclusive lower block bound.
+    pub from_block: u64,
+    /// Inclusive upper block bound.
+    pub to_block: u64,
+    /// Optional row cap. Nodes reject values above their configured maximum.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// Optional transaction index within each matched block.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_index: Option<u32>,
+    /// Optional native event row index.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_index: Option<u32>,
+    /// Optional typed native event-emitter address.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<&'a str>,
+    /// Optional durable event topic hash.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_topic: Option<&'a str>,
+    /// Optional native module family filter, for example `mrc`, `market`, or `agent`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub family: Option<&'a str>,
+    /// Optional typed event name filter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_name: Option<&'a str>,
+    /// Optional primary event id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_id: Option<&'a str>,
+    /// Optional related event id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub related_id: Option<&'a str>,
+    /// Optional token id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_id: Option<&'a str>,
+    /// Optional primary native account.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<&'a str>,
+    /// Optional native counterparty account.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub counterparty: Option<&'a str>,
+}
+
+impl<'a> NativeEventsFilter<'a> {
+    /// Build a block-range filter with no optional predicates.
+    #[must_use]
+    pub const fn new(from_block: u64, to_block: u64) -> Self {
+        Self {
+            from_block,
+            to_block,
+            limit: None,
+            tx_index: None,
+            log_index: None,
+            address: None,
+            event_topic: None,
+            family: None,
+            event_name: None,
+            primary_id: None,
+            related_id: None,
+            token_id: None,
+            account: None,
+            counterparty: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn limit(mut self, limit: u32) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    #[must_use]
+    pub const fn tx_index(mut self, tx_index: u32) -> Self {
+        self.tx_index = Some(tx_index);
+        self
+    }
+
+    #[must_use]
+    pub const fn log_index(mut self, log_index: u32) -> Self {
+        self.log_index = Some(log_index);
+        self
+    }
+
+    #[must_use]
+    pub const fn address(mut self, address: &'a str) -> Self {
+        self.address = Some(address);
+        self
+    }
+
+    #[must_use]
+    pub const fn event_topic(mut self, event_topic: &'a str) -> Self {
+        self.event_topic = Some(event_topic);
+        self
+    }
+
+    #[must_use]
+    pub const fn family(mut self, family: &'a str) -> Self {
+        self.family = Some(family);
+        self
+    }
+
+    #[must_use]
+    pub const fn event_name(mut self, event_name: &'a str) -> Self {
+        self.event_name = Some(event_name);
+        self
+    }
+
+    #[must_use]
+    pub const fn primary_id(mut self, primary_id: &'a str) -> Self {
+        self.primary_id = Some(primary_id);
+        self
+    }
+
+    #[must_use]
+    pub const fn related_id(mut self, related_id: &'a str) -> Self {
+        self.related_id = Some(related_id);
+        self
+    }
+
+    #[must_use]
+    pub const fn token_id(mut self, token_id: &'a str) -> Self {
+        self.token_id = Some(token_id);
+        self
+    }
+
+    #[must_use]
+    pub const fn account(mut self, account: &'a str) -> Self {
+        self.account = Some(account);
+        self
+    }
+
+    #[must_use]
+    pub const fn counterparty(mut self, counterparty: &'a str) -> Self {
+        self.counterparty = Some(counterparty);
+        self
+    }
+
+    /// Encode this filter as API query pairs for `/api/v1/native-events`.
+    #[must_use]
+    pub fn to_query_pairs(&self) -> Vec<(&'static str, String)> {
+        let mut query = vec![
+            ("fromBlock", self.from_block.to_string()),
+            ("toBlock", self.to_block.to_string()),
+        ];
+        if let Some(limit) = self.limit {
+            query.push(("limit", limit.to_string()));
+        }
+        if let Some(tx_index) = self.tx_index {
+            query.push(("txIndex", tx_index.to_string()));
+        }
+        if let Some(log_index) = self.log_index {
+            query.push(("logIndex", log_index.to_string()));
+        }
+        if let Some(address) = self.address {
+            query.push(("address", address.to_owned()));
+        }
+        if let Some(event_topic) = self.event_topic {
+            query.push(("eventTopic", event_topic.to_owned()));
+        }
+        if let Some(family) = self.family {
+            query.push(("family", family.to_owned()));
+        }
+        if let Some(event_name) = self.event_name {
+            query.push(("eventName", event_name.to_owned()));
+        }
+        if let Some(primary_id) = self.primary_id {
+            query.push(("primaryId", primary_id.to_owned()));
+        }
+        if let Some(related_id) = self.related_id {
+            query.push(("relatedId", related_id.to_owned()));
+        }
+        if let Some(token_id) = self.token_id {
+            query.push(("tokenId", token_id.to_owned()));
+        }
+        if let Some(account) = self.account {
+            query.push(("account", account.to_owned()));
+        }
+        if let Some(counterparty) = self.counterparty {
+            query.push(("counterparty", counterparty.to_owned()));
+        }
+        query
+    }
+}
+
+/// Echoed optional predicates for a `lyth_nativeEvents` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeEventsResponseFilters {
+    #[serde(default)]
+    pub tx_index: Option<u32>,
+    #[serde(default)]
+    pub log_index: Option<u32>,
+    #[serde(default)]
+    pub address: Option<String>,
+    #[serde(default)]
+    pub event_topic: Option<Hash>,
+    #[serde(default)]
+    pub family: Option<String>,
+    #[serde(default)]
+    pub event_name: Option<String>,
+    #[serde(default)]
+    pub primary_id: Option<Hash>,
+    #[serde(default)]
+    pub related_id: Option<Hash>,
+    #[serde(default)]
+    pub token_id: Option<Hash>,
+    #[serde(default)]
+    pub account: Option<String>,
+    #[serde(default)]
+    pub counterparty: Option<String>,
+}
+
+/// Source metadata attached to a native event history response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeEventsSource {
+    /// Indexer provider used for native event rows.
+    pub indexer_provider: String,
+}
+
+/// Typed response returned by `lyth_nativeEvents` and `/api/v1/native-events`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeEventsResponse {
+    /// Schema version pinned by the node.
+    pub schema_version: u32,
+    /// Inclusive lower block bound.
+    pub from_block: u64,
+    /// Inclusive upper block bound.
+    pub to_block: u64,
+    /// Effective row cap used by the node.
+    pub limit: u32,
+    /// Echoed optional predicates.
+    pub filters: NativeEventsResponseFilters,
+    /// Typed native events in canonical indexer order.
+    pub events: Vec<NativeReceiptEvent>,
+    /// Provider/source metadata for the response.
+    pub source: NativeEventsSource,
+}
+
+/// Historical native event response with caller-selected decoded payload type.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypedNativeEventsResponse<TDecoded> {
+    pub schema_version: u32,
+    pub from_block: u64,
+    pub to_block: u64,
+    pub limit: u32,
+    pub filters: NativeEventsResponseFilters,
+    pub events: Vec<TypedNativeReceiptEvent<TDecoded>>,
+    pub source: NativeEventsSource,
+}
+
 /// Native receipt event row with a caller-selected typed decoded payload.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -445,6 +701,28 @@ where
         .filter(|event| native_event_matches(event, filter))
         .map(TypedNativeReceiptEvent::from_receipt_event)
         .collect()
+}
+
+/// Decode historical native event rows into a caller-selected payload type.
+pub fn typed_native_events_from_response<TDecoded>(
+    response: &NativeEventsResponse,
+) -> serde_json::Result<TypedNativeEventsResponse<TDecoded>>
+where
+    TDecoded: DeserializeOwned,
+{
+    Ok(TypedNativeEventsResponse {
+        schema_version: response.schema_version,
+        from_block: response.from_block,
+        to_block: response.to_block,
+        limit: response.limit,
+        filters: response.filters.clone(),
+        events: response
+            .events
+            .iter()
+            .map(TypedNativeReceiptEvent::from_receipt_event)
+            .collect::<serde_json::Result<_>>()?,
+        source: response.source.clone(),
+    })
 }
 
 /// Ethereum-shaped transaction view returned by `eth_getTransactionByHash`.
@@ -2615,6 +2893,132 @@ mod tests {
         assert_eq!(events[0].decoded.amount_lythoshi, "440000000000");
         assert!(events[0].decoded.agent_address.starts_with("mono1"));
         assert!(events[0].decoded.contract_address.starts_with("monoc1"));
+    }
+
+    #[test]
+    fn native_events_filter_serializes_historical_query_params() {
+        let event_topic = format!("0x{}", "11".repeat(32));
+        let primary_id = format!("0x{}", "77".repeat(32));
+        let related_id = format!("0x{}", "88".repeat(32));
+        let token_id = format!("0x{}", "99".repeat(32));
+        let filter = NativeEventsFilter::new(100, 105)
+            .limit(25)
+            .tx_index(0)
+            .log_index(1)
+            .address("monos1nativeeventemitter")
+            .event_topic(&event_topic)
+            .family("agent")
+            .event_name("agent.escrow.created")
+            .primary_id(&primary_id)
+            .related_id(&related_id)
+            .token_id(&token_id)
+            .account("mono1agentconsumer")
+            .counterparty("mono1agentcounterparty");
+
+        assert_eq!(
+            serde_json::to_value(filter).unwrap(),
+            serde_json::json!({
+                "fromBlock": 100,
+                "toBlock": 105,
+                "limit": 25,
+                "txIndex": 0,
+                "logIndex": 1,
+                "address": "monos1nativeeventemitter",
+                "eventTopic": event_topic.clone(),
+                "family": "agent",
+                "eventName": "agent.escrow.created",
+                "primaryId": primary_id.clone(),
+                "relatedId": related_id.clone(),
+                "tokenId": token_id.clone(),
+                "account": "mono1agentconsumer",
+                "counterparty": "mono1agentcounterparty"
+            })
+        );
+        assert_eq!(
+            filter.to_query_pairs(),
+            vec![
+                ("fromBlock", "100".to_owned()),
+                ("toBlock", "105".to_owned()),
+                ("limit", "25".to_owned()),
+                ("txIndex", "0".to_owned()),
+                ("logIndex", "1".to_owned()),
+                ("address", "monos1nativeeventemitter".to_owned()),
+                ("eventTopic", event_topic),
+                ("family", "agent".to_owned()),
+                ("eventName", "agent.escrow.created".to_owned()),
+                ("primaryId", primary_id),
+                ("relatedId", related_id),
+                ("tokenId", token_id),
+                ("account", "mono1agentconsumer".to_owned()),
+                ("counterparty", "mono1agentcounterparty".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn native_events_response_decodes_typed_historical_rows() {
+        #[derive(Debug, Deserialize)]
+        struct AgentEscrowCreatedEvent {
+            family: String,
+            event_name: String,
+            amount_lythoshi: String,
+            agent_address: String,
+        }
+
+        let event_topic = format!("0x{}", "11".repeat(32));
+        let primary_id = format!("0x{}", "77".repeat(32));
+        let decoded = serde_json::json!({
+            "block_height": 100,
+            "tx_index": 0,
+            "sequence": 0,
+            "family": "agent",
+            "event_name": "agent.escrow.created",
+            "payload_hash": format!("0x{}", "44".repeat(32)),
+            "amount_lythoshi": "440000000000",
+            "agent_address": "mono1agentconsumer"
+        });
+        let response: NativeEventsResponse = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "fromBlock": 100,
+            "toBlock": 105,
+            "limit": 25,
+            "filters": {
+                "txIndex": 0,
+                "eventTopic": event_topic.clone(),
+                "family": "agent",
+                "eventName": "agent.escrow.created",
+                "primaryId": primary_id.clone()
+            },
+            "events": [{
+                "blockHeight": 100,
+                "txIndex": 0,
+                "logIndex": 0,
+                "address": "monos1nativeeventemitter",
+                "eventTopic": event_topic.clone(),
+                "decoded": null,
+                "decodedJson": decoded.to_string()
+            }],
+            "source": {
+                "indexerProvider": "native_events"
+            }
+        }))
+        .unwrap();
+
+        let typed: TypedNativeEventsResponse<AgentEscrowCreatedEvent> =
+            typed_native_events_from_response(&response).unwrap();
+
+        assert_eq!(typed.schema_version, 1);
+        assert_eq!(typed.from_block, 100);
+        assert_eq!(
+            typed.filters.primary_id.as_deref(),
+            Some(primary_id.as_str())
+        );
+        assert_eq!(typed.source.indexer_provider, "native_events");
+        assert_eq!(typed.events[0].address, "monos1nativeeventemitter");
+        assert_eq!(typed.events[0].decoded.family, "agent");
+        assert_eq!(typed.events[0].decoded.event_name, "agent.escrow.created");
+        assert_eq!(typed.events[0].decoded.amount_lythoshi, "440000000000");
+        assert!(typed.events[0].decoded.agent_address.starts_with("mono1"));
     }
 
     #[test]

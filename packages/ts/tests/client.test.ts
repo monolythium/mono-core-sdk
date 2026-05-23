@@ -483,6 +483,84 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(calls[0].params).toEqual([txHash]);
   });
 
+  it("lythNativeEvents sends historical filters and decodes typed rows", async () => {
+    const eventTopic = `0x${"11".repeat(32)}`;
+    const primaryId = `0x${"77".repeat(32)}`;
+    const decoded: AgentEscrowCreatedEvent = {
+      block_height: 100,
+      tx_index: 0,
+      sequence: 0,
+      family: "agent",
+      event_name: "agent.escrow.created",
+      payload_hash: `0x${"44".repeat(32)}`,
+      amount_lythoshi: "440000000000",
+      agent_address: "mono1agentconsumer",
+      contract_address: "monos1nativeeventemitter",
+    };
+    const { fetch, calls } = mockFetch({
+      schemaVersion: 1,
+      fromBlock: 100,
+      toBlock: 105,
+      limit: 25,
+      filters: {
+        txIndex: 0,
+        address: decoded.contract_address,
+        eventTopic,
+        family: "agent",
+        eventName: "agent.escrow.created",
+        primaryId,
+        account: decoded.agent_address,
+      },
+      events: [
+        {
+          blockHeight: 100,
+          txIndex: 0,
+          logIndex: 0,
+          address: decoded.contract_address,
+          eventTopic,
+          decoded: null,
+          decodedJson: JSON.stringify(decoded),
+        },
+      ],
+      source: {
+        indexerProvider: "native_events",
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const response = await client.lythNativeEventsTyped<AgentEscrowCreatedEvent>({
+      fromBlock: "100",
+      toBlock: 105n,
+      limit: 25,
+      txIndex: 0,
+      address: decoded.contract_address,
+      eventTopic,
+      family: "agent",
+      eventName: "agent.escrow.created",
+      primaryId,
+      account: decoded.agent_address,
+    });
+
+    expect(response.schemaVersion).toBe(1);
+    expect(response.events[0].decoded.amount_lythoshi).toBe("440000000000");
+    expect(response.events[0].decoded.agent_address).toBe("mono1agentconsumer");
+    expect(calls[0].method).toBe("lyth_nativeEvents");
+    expect(calls[0].params).toEqual([
+      {
+        fromBlock: 100,
+        toBlock: 105,
+        limit: 25,
+        txIndex: 0,
+        address: decoded.contract_address,
+        eventTopic,
+        family: "agent",
+        eventName: "agent.escrow.created",
+        primaryId,
+        account: decoded.agent_address,
+      },
+    ]);
+  });
+
   it("live explorer helpers call the new chain RPC surfaces", async () => {
     const address = "0x1111111111111111111111111111111111111111";
     const txHash = `0x${"22".repeat(32)}`;
