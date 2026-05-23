@@ -11,6 +11,7 @@ import {
   bincodeEncryptedEnvelope,
   bincodeNonceAad,
   buildEncryptedEnvelope,
+  buildEncryptedSubmission,
   bytesToHex,
   bincodeSignedTransaction,
   derivePqm1MlDsa65SeedFromPayload,
@@ -132,6 +133,33 @@ describe("crypto subpath", () => {
     expect(bytesToHex(bincodeEncryptedEnvelope(built.envelope))).toBe(built.wireHex);
     expect(bincodeNonceAad(nonceAad).length).toBeGreaterThan(0);
     expect(outerSigDigest(nonceAad, built.envelope.ciphertext, decryptionHint, backend.publicKey())).toHaveLength(32);
+  });
+
+  it("rejects encrypted submission fee fields outside u128 before envelope build", async () => {
+    const backend = MlDsa65Backend.fromSeed(new Uint8Array(ML_DSA_65_SEED_LEN).fill(0x12));
+    const encryptionKey = {
+      algo: "ml-kem-768",
+      epoch: 1n,
+      encapsulationKey: new Uint8Array(ML_KEM_768_ENCAPSULATION_KEY_LEN).fill(0x34),
+    };
+
+    await expect(
+      buildEncryptedSubmission({
+        backend,
+        encryptionKey,
+        tx: {
+          chainId: 69_420n,
+          nonce: 0n,
+          maxPriorityFeePerGas: 0n,
+          maxFeePerGas: 1n << 128n,
+          gasLimit: 30_000n,
+          to: null,
+          value: 0n,
+          input: "0x13000000",
+          extensions: [{ kind: 0x30, bodyHex: "0x01" }],
+        },
+      }),
+    ).rejects.toThrow(/maxFeePerGas must fit in u128/);
   });
 
   it("round-trips PQM-1 v1 ML-DSA-65 mnemonics using the Rust payload layout", () => {

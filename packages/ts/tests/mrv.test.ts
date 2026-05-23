@@ -8,6 +8,8 @@ import {
   RpcClient,
   addressToTypedBech32,
   assertMrvFeeDisplayConformance,
+  assertMrvCallNativeSubmissionPlan,
+  assertMrvDeployNativeSubmissionPlan,
   buildMrvCallNativeTxPlan,
   buildMrvCallPlan,
   buildMrvCallRequest,
@@ -418,6 +420,55 @@ describe("MRV/RISC-V SDK helpers", () => {
       (_key, value) => (typeof value === "bigint" ? value.toString() : value),
     );
     expect(appWire).not.toMatch(/gas|gwei|wei/i);
+  });
+
+  it("guards MRV encrypted submission plans before signing", () => {
+    const user = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
+    const contract = addressToTypedBech32("contract", "0x2222222222222222222222222222222222222222");
+    const deploy = buildMrvDeployNativeTxPlan("0x13000000", {
+      from: user,
+      chainId: 69_420n,
+      nonce: 7n,
+      executionUnitLimit: 100_000n,
+      maxExecutionFeeLythoshi: "25",
+    });
+    const call = buildMrvCallNativeTxPlan(contract, [0x01, 0x02], {
+      from: user,
+      chainId: 69_420n,
+      nonce: 8n,
+      executionUnitLimit: 50_000n,
+      maxExecutionFeeLythoshi: "10",
+    });
+
+    expect(() => assertMrvDeployNativeSubmissionPlan(deploy)).not.toThrow();
+    expect(() => assertMrvCallNativeSubmissionPlan(call)).not.toThrow();
+    expect(() =>
+      assertMrvDeployNativeSubmissionPlan({
+        ...deploy,
+        tx: { ...deploy.tx, to: "0x2222222222222222222222222222222222222222" },
+      }),
+    ).toThrow(/deploy submission tx\.to must be null/);
+    expect(() =>
+      assertMrvCallNativeSubmissionPlan({
+        ...call,
+        tx: { ...call.tx, to: `0x${"22".repeat(19)}` },
+      }),
+    ).toThrow(/20-byte address/);
+    expect(() =>
+      assertMrvCallNativeSubmissionPlan({
+        ...call,
+        tx: { ...call.tx, extensions: [{ kind: MRV_TX_EXTENSION_KIND, bodyHex: "0x02" }] },
+      }),
+    ).toThrow(/MRV v1 extension body/);
+
+    const tooLargeFee = buildMrvDeployNativeTxPlan("0x13000000", {
+      from: user,
+      chainId: 69_420n,
+      nonce: 7n,
+      executionUnitLimit: 100_000n,
+      maxExecutionFeeLythoshi: (1n << 128n).toString(),
+    });
+    expect(() => assertMrvDeployNativeSubmissionPlan(tooLargeFee)).toThrow(/u128/);
   });
 
   it("submits MRV deploy and call plans through encrypted native envelopes", async () => {
