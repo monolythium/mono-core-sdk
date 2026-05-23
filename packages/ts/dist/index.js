@@ -3149,6 +3149,12 @@ function isIdentifier(value) {
 var DELEGATION_SELECTORS = {
   completeRedemption: "0x26169d0a"
 };
+var DELEGATION_REVERT_TAGS = {
+  redemptionQueueFull: "0x020e",
+  redemptionTicketNotFound: "0x020f",
+  redemptionNotMature: "0x0210",
+  redemptionPrincipalUnavailable: "0x0211"
+};
 var DelegationPrecompileError = class extends Error {
   constructor(message) {
     super(message);
@@ -3165,6 +3171,9 @@ function encodeCompleteRedemptionCalldata(index) {
       uint64Word(index, "index")
     )
   );
+}
+function isRedemptionPrincipalUnavailableRevert(data) {
+  return bytesToHex4(toBytes2(data)).toLowerCase() === DELEGATION_REVERT_TAGS.redemptionPrincipalUnavailable;
 }
 function uint64Word(value, name) {
   const n = toBigint(value, name);
@@ -3191,6 +3200,12 @@ function toBigint(value, name) {
     throw new DelegationPrecompileError(`${name} must be an integer string`);
   }
   return BigInt(value);
+}
+function toBytes2(value) {
+  if (typeof value === "string") {
+    return hexToBytes4(value);
+  }
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
 function hexToBytes4(hex) {
   const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
@@ -3264,8 +3279,8 @@ function encodeSetPolicyCalldata(args) {
 }
 function encodeSetPolicyClaimCalldata(args, subAccountPubkey, subAccountSig) {
   const normalized = normalizeArgs(args);
-  const pubkey = toBytes2(subAccountPubkey);
-  const sig = toBytes2(subAccountSig);
+  const pubkey = toBytes3(subAccountPubkey);
+  const sig = toBytes3(subAccountSig);
   if (pubkey.length !== ML_DSA_65_PUBLIC_KEY_LEN2) {
     throw new SpendingPolicyError(
       `subAccountPubkey must be ${ML_DSA_65_PUBLIC_KEY_LEN2} bytes, got ${pubkey.length}`
@@ -3287,7 +3302,7 @@ function encodeSetPolicyClaimCalldata(args, subAccountPubkey, subAccountSig) {
 }
 function encodeClaimPolicyByAddressCalldata(args, subAccountSig) {
   const normalized = normalizeArgs(args);
-  const sig = toBytes2(subAccountSig);
+  const sig = toBytes3(subAccountSig);
   if (sig.length !== ML_DSA_65_SIGNATURE_LEN2) {
     throw new SpendingPolicyError(
       `subAccountSig must be ${ML_DSA_65_SIGNATURE_LEN2} bytes, got ${sig.length}`
@@ -3313,8 +3328,8 @@ function normalizeArgs(args) {
     principal: toAddressBytes(args.principal),
     dailyCapLythoshi: toBigint2(args.dailyCapLythoshi, "dailyCapLythoshi"),
     perTxCapLythoshi: toBigint2(args.perTxCapLythoshi, "perTxCapLythoshi"),
-    allowRoot: expectLength3(toBytes2(args.allowRoot), 32, "allowRoot"),
-    denyRoot: expectLength3(toBytes2(args.denyRoot), 32, "denyRoot")
+    allowRoot: expectLength3(toBytes3(args.allowRoot), 32, "allowRoot"),
+    denyRoot: expectLength3(toBytes3(args.denyRoot), 32, "denyRoot")
   };
 }
 function encodePolicyWords(args) {
@@ -3342,7 +3357,7 @@ function toAddressBytes(value) {
   }
   return expectLength3(value instanceof Uint8Array ? value : Uint8Array.from(value), 20, "address");
 }
-function toBytes2(value) {
+function toBytes3(value) {
   if (typeof value === "string") {
     return hexToBytes5(value);
   }
@@ -3424,7 +3439,7 @@ function pubkeyRegistryAddressHex() {
   return PRECOMPILE_ADDRESSES.PUBKEY_REGISTRY.toLowerCase();
 }
 function encodeRegisterPubkeyCalldata(pubkey) {
-  const bytes = toBytes3(pubkey);
+  const bytes = toBytes4(pubkey);
   if (bytes.length !== PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN) {
     throw new PubkeyRegistryError(
       `pubkey must be ${PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN} bytes, got ${bytes.length}`
@@ -3446,7 +3461,7 @@ function encodeHasPubkeyCalldata(address) {
   return encodeSingleAddressCall2(PUBKEY_REGISTRY_SELECTORS.hasPubkey, address);
 }
 function decodeLookupPubkeyReturn(data) {
-  const bytes = toBytes3(data);
+  const bytes = toBytes4(data);
   if (bytes.length < 96) {
     throw new PubkeyRegistryError("lookup return must be at least 96 bytes");
   }
@@ -3471,7 +3486,7 @@ function decodeLookupPubkeyReturn(data) {
   };
 }
 function decodeHasPubkeyReturn(data) {
-  const bytes = toBytes3(data);
+  const bytes = toBytes4(data);
   if (bytes.length !== 32) {
     throw new PubkeyRegistryError("hasPubkey return must be 32 bytes");
   }
@@ -3496,7 +3511,7 @@ function toAddressBytes2(value) {
   }
   return expectLength4(value instanceof Uint8Array ? value : Uint8Array.from(value), 20, "address");
 }
-function toBytes3(value) {
+function toBytes4(value) {
   if (typeof value === "string") {
     return hexToBytes6(value);
   }
@@ -3729,6 +3744,6 @@ function translateBlockOut(header) {
 // src/index.ts
 var version = "0.1.0";
 
-export { ADDRESS_HRP, ADDRESS_KIND_HRPS, AddressError, ApiClient, BURN_ADDR, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, DELEGATION_SELECTORS, DelegationPrecompileError, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MonolythiumProvider, MonolythiumSigner, MrvValidationError, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPlan, buildMrvDeployRequest, checkMrvFeeDisplayConformance, composeClaimBoundMessage, consumeNativeEvents, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, delegationAddressHex, deriveMrvContractAddress, encodeBlockSelector, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLookupPubkeyCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, getChainInfo, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isConcreteServiceProbeStatus, isNativeDecodedEvent, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nodeRegistryAddressHex, normalizeAddressHex, parseAddress, parseChainRegistryToml, parseLythToLythoshi, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, rankBridgeRoutes, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, version };
+export { ADDRESS_HRP, ADDRESS_KIND_HRPS, AddressError, ApiClient, BURN_ADDR, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DelegationPrecompileError, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MonolythiumProvider, MonolythiumSigner, MrvValidationError, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPlan, buildMrvDeployRequest, checkMrvFeeDisplayConformance, composeClaimBoundMessage, consumeNativeEvents, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, delegationAddressHex, deriveMrvContractAddress, encodeBlockSelector, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLookupPubkeyCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, getChainInfo, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isConcreteServiceProbeStatus, isNativeDecodedEvent, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nodeRegistryAddressHex, normalizeAddressHex, parseAddress, parseChainRegistryToml, parseLythToLythoshi, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, rankBridgeRoutes, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, version };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

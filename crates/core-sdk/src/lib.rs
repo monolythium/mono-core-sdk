@@ -48,7 +48,10 @@ pub use consts::{burn_addr_hex, BURN_ADDR};
 pub use delegation::{
     calldata_to_hex as delegation_calldata_to_hex, delegation_address_hex,
     encode_complete_redemption_calldata, encode_complete_redemption_calldata_hex,
-    selector_complete_redemption, SIGHASH_COMPLETE_REDEMPTION,
+    is_redemption_principal_unavailable_revert, selector_complete_redemption,
+    DELEGATION_REVERT_NAMESPACE, REVERT_REDEMPTION_NOT_MATURE,
+    REVERT_REDEMPTION_PRINCIPAL_UNAVAILABLE, REVERT_REDEMPTION_QUEUE_FULL,
+    REVERT_REDEMPTION_TICKET_NOT_FOUND, SIGHASH_COMPLETE_REDEMPTION,
 };
 pub use error::SdkError;
 pub use mrv::{

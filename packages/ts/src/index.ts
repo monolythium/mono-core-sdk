@@ -223,10 +223,12 @@ export {
 } from "./address.js";
 export type { AddressKind, TypedAddress } from "./address.js";
 export {
+  DELEGATION_REVERT_TAGS,
   DELEGATION_SELECTORS,
   DelegationPrecompileError,
   delegationAddressHex,
   encodeCompleteRedemptionCalldata,
+  isRedemptionPrincipalUnavailableRevert,
 } from "./delegation.js";
 export {
   ML_DSA_65_PUBLIC_KEY_LEN,

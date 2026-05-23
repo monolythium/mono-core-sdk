@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  DELEGATION_REVERT_TAGS,
   DELEGATION_SELECTORS,
   DelegationPrecompileError,
   PRECOMPILE_ADDRESSES,
   delegationAddressHex,
   encodeCompleteRedemptionCalldata,
+  isRedemptionPrincipalUnavailableRevert,
 } from "../src/index.js";
 
 describe("delegation precompile ABI helpers", () => {
@@ -12,6 +14,18 @@ describe("delegation precompile ABI helpers", () => {
     expect(DELEGATION_SELECTORS).toEqual({
       completeRedemption: "0x26169d0a",
     });
+  });
+
+  it("exports redemption revert tags pinned to mono-core", () => {
+    expect(DELEGATION_REVERT_TAGS).toEqual({
+      redemptionQueueFull: "0x020e",
+      redemptionTicketNotFound: "0x020f",
+      redemptionNotMature: "0x0210",
+      redemptionPrincipalUnavailable: "0x0211",
+    });
+    expect(isRedemptionPrincipalUnavailableRevert("0x0211")).toBe(true);
+    expect(isRedemptionPrincipalUnavailableRevert(new Uint8Array([0x02, 0x11]))).toBe(true);
+    expect(isRedemptionPrincipalUnavailableRevert("0x0210")).toBe(false);
   });
 
   it("exports the delegation precompile address", () => {
