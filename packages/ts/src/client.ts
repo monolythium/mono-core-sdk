@@ -306,6 +306,8 @@ export interface NativeSpotOrderStateRecord {
 export interface NativeNftListingStateRecord {
   listingId: string;
   seller: string;
+  /** Seller-local NFT listing nonce; omitted by older nodes. */
+  nonce?: number | null;
   standard: string;
   collectionId: string;
   tokenId: string;

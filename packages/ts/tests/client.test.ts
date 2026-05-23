@@ -1296,6 +1296,7 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     const marketId = `0x${"aa".repeat(32)}`;
     const orderId = `0x${"bb".repeat(32)}`;
     const listingId = `0x${"cc".repeat(32)}`;
+    const legacyListingId = `0x${"cd".repeat(32)}`;
     const collectionId = `0x${"dd".repeat(32)}`;
     const owner = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
     const { fetch, calls } = mockFetch({
@@ -1345,6 +1346,7 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
         {
           listingId,
           seller: "mono1seller0000000000000000000000000000000000",
+          nonce: 11,
           standard: "mrc721",
           collectionId,
           tokenId: `0x${"33".repeat(32)}`,
@@ -1357,6 +1359,22 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
           highestBidder: "mono1bidder0000000000000000000000000000000000",
           highestBid: "650",
           updatedAtBlock: 46,
+        },
+        {
+          listingId: legacyListingId,
+          seller: "mono1seller0000000000000000000000000000000000",
+          standard: "mrc721",
+          collectionId,
+          tokenId: `0x${"34".repeat(32)}`,
+          quantity: "1",
+          paymentAssetId: `0x${"44".repeat(32)}`,
+          price: "701",
+          listingKind: { fixedPrice: true },
+          status: "open",
+          expiresAtBlock: 121,
+          highestBidder: null,
+          highestBid: null,
+          updatedAtBlock: 47,
         },
       ],
       collectionRoyalties: [
@@ -1384,6 +1402,8 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(response.spotMarkets[0].tradeCount).toBe("2");
     expect(response.spotOrders[0].nonce).toBe(7);
     expect(response.spotOrders[0].remaining).toBe("20");
+    expect(response.nftListings[0].nonce).toBe(11);
+    expect(response.nftListings[1].nonce).toBeUndefined();
     expect(response.nftListings[0].listingKind).toEqual({ fixedPrice: true });
     expect(response.collectionRoyalties[0].bps).toBe(250);
     expect(calls[0].method).toBe("lyth_nativeMarketState");
