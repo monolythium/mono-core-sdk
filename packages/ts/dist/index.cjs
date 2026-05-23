@@ -2269,24 +2269,24 @@ function assessBridgeRoute(route) {
       warnings
     };
   }
-  let score = 100;
+  let score2 = 100;
   if (route.verifier.threshold * 3 <= route.verifier.participantCount) {
-    score -= 10;
+    score2 -= 10;
     warnings.push("verifier threshold is below one-third-plus quorum");
   }
   if (route.cooldownSeconds < 3600) {
-    score -= 10;
+    score2 -= 10;
     warnings.push("cooldown is under one hour");
   }
   if (route.finalityBlocks < 2) {
-    score -= 5;
+    score2 -= 5;
     warnings.push("finality delay is under two blocks");
   }
   return {
     routeId: route.routeId,
     accepted: true,
-    score,
-    riskTier: score >= 90 ? "low" : score >= 75 ? "medium" : "high",
+    score: score2,
+    riskTier: score2 >= 90 ? "low" : score2 >= 75 ? "medium" : "high",
     blockedReasons,
     warnings
   };
@@ -5078,6 +5078,449 @@ function uint256Word2(value, name) {
   return out;
 }
 
+// src/agent-actions.ts
+var NATIVE_AGENT_MODULE_ADDRESS_BYTES = "0x4147454e545f4e41544956455f4d4f445f563031";
+var NATIVE_AGENT_MODULE_ADDRESS = addressToTypedBech32(
+  "systemModule",
+  NATIVE_AGENT_MODULE_ADDRESS_BYTES
+);
+var AgentActionError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "AgentActionError";
+  }
+};
+function encodeNativeAgentRegisterIssuerCall(args) {
+  const w = agentCallWriter(0, 0);
+  monoAddressInto2(w, args.issuer, "issuer");
+  w.u64(uint642(args.nonce, "nonce"));
+  w.rawBytes(bytes32FromHex2(args.metadataHash, "metadataHash"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentIssuerGetCall(issuerId) {
+  const w = agentCallWriter(0, 1);
+  w.rawBytes(bytes32FromHex2(issuerId, "issuerId"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentIssueAttestationCall(args) {
+  const w = agentCallWriter(1, 0);
+  w.rawBytes(bytes32FromHex2(args.issuerId, "issuerId"));
+  monoAddressInto2(w, args.issuer, "issuer");
+  monoAddressInto2(w, args.subject, "subject");
+  w.u64(uint642(args.nonce, "nonce"));
+  w.rawBytes(bytes32FromHex2(args.schemaHash, "schemaHash"));
+  w.rawBytes(bytes32FromHex2(args.payloadHash, "payloadHash"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentRevokeAttestationCall(args) {
+  const w = agentCallWriter(1, 1);
+  w.rawBytes(bytes32FromHex2(args.attestationId, "attestationId"));
+  monoAddressInto2(w, args.issuer, "issuer");
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentAttestationGetCall(attestationId) {
+  const w = agentCallWriter(1, 2);
+  w.rawBytes(bytes32FromHex2(attestationId, "attestationId"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentGrantConsentCall(args) {
+  const w = agentCallWriter(2, 0);
+  monoAddressInto2(w, args.subject, "subject");
+  monoAddressInto2(w, args.grantee, "grantee");
+  w.u64(uint642(args.nonce, "nonce"));
+  w.rawBytes(bytes32FromHex2(args.scopeHash, "scopeHash"));
+  w.u64(uint642(args.expiresAt, "expiresAt"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentRevokeConsentCall(args) {
+  const w = agentCallWriter(2, 1);
+  w.rawBytes(bytes32FromHex2(args.consentId, "consentId"));
+  monoAddressInto2(w, args.subject, "subject");
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentConsentGetCall(consentId) {
+  const w = agentCallWriter(2, 2);
+  w.rawBytes(bytes32FromHex2(consentId, "consentId"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentListServiceCall(args) {
+  const w = agentCallWriter(3, 0);
+  monoAddressInto2(w, args.provider, "provider");
+  w.u64(uint642(args.nonce, "nonce"));
+  w.rawBytes(bytes32FromHex2(args.categoryHash, "categoryHash"));
+  w.rawBytes(bytes32FromHex2(args.metadataHash, "metadataHash"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentDeactivateServiceCall(args) {
+  const w = agentCallWriter(3, 1);
+  w.rawBytes(bytes32FromHex2(args.serviceId, "serviceId"));
+  monoAddressInto2(w, args.provider, "provider");
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentServiceGetCall(serviceId) {
+  const w = agentCallWriter(3, 2);
+  w.rawBytes(bytes32FromHex2(serviceId, "serviceId"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentSetAvailabilityCall(args) {
+  const w = agentCallWriter(4, 0);
+  monoAddressInto2(w, args.provider, "provider");
+  w.u32(uint32(args.maxConcurrent, "maxConcurrent"));
+  w.u8(boolByte(args.paused, "paused"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentOpenAvailabilityCall(args) {
+  const w = agentCallWriter(4, 1);
+  monoAddressInto2(w, args.provider, "provider");
+  monoAddressInto2(w, args.consumer, "consumer");
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentCloseAvailabilityCall(args) {
+  const w = agentCallWriter(4, 2);
+  monoAddressInto2(w, args.provider, "provider");
+  monoAddressInto2(w, args.consumer, "consumer");
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentAvailabilityGetCall(provider) {
+  const w = agentCallWriter(4, 3);
+  monoAddressInto2(w, provider, "provider");
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentRegisterArbiterCall(args) {
+  const w = agentCallWriter(5, 0);
+  monoAddressInto2(w, args.arbiter, "arbiter");
+  w.u64(uint642(args.nonce, "nonce"));
+  w.u16(uint16(args.tier, "tier"));
+  w.rawBytes(bytes32FromHex2(args.metadataHash, "metadataHash"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentArbiterGetCall(arbiterId) {
+  const w = agentCallWriter(5, 1);
+  w.rawBytes(bytes32FromHex2(arbiterId, "arbiterId"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentSetSpendingPolicyCall(args) {
+  const w = agentCallWriter(6, 0);
+  monoAddressInto2(w, args.owner, "owner");
+  monoAddressInto2(w, args.controller, "controller");
+  w.u64(uint642(args.nonce, "nonce"));
+  w.rawBytes(bytes32FromHex2(args.assetId, "assetId"));
+  w.u128(positiveU128Decimal2(args.perActionLimit, "perActionLimit"));
+  w.u128(positiveU128Decimal2(args.windowLimit, "windowLimit"));
+  w.u64(uint642(args.windowSecs, "windowSecs"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentRecordPolicySpendCall(args) {
+  const w = agentCallWriter(6, 1);
+  w.rawBytes(bytes32FromHex2(args.policyId, "policyId"));
+  monoAddressInto2(w, args.controller, "controller");
+  w.u64(uint642(args.window, "window"));
+  w.u128(positiveU128Decimal2(args.amount, "amount"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentSpendingPolicyGetCall(policyId) {
+  const w = agentCallWriter(6, 2);
+  w.rawBytes(bytes32FromHex2(policyId, "policyId"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentCreateEscrowCall(args) {
+  const w = agentCallWriter(7, 0);
+  monoAddressInto2(w, args.buyer, "buyer");
+  monoAddressInto2(w, args.provider, "provider");
+  monoAddressInto2(w, args.arbiter, "arbiter");
+  w.u64(uint642(args.nonce, "nonce"));
+  w.rawBytes(bytes32FromHex2(args.assetId, "assetId"));
+  w.u128(positiveU128Decimal2(args.amount, "amount"));
+  w.rawBytes(bytes32FromHex2(args.termsHash, "termsHash"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentCounterEscrowCall(args) {
+  const w = agentCallWriter(7, 1);
+  w.rawBytes(bytes32FromHex2(args.escrowId, "escrowId"));
+  monoAddressInto2(w, args.actor, "actor");
+  w.rawBytes(bytes32FromHex2(args.termsHash, "termsHash"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentAcceptEscrowCall(args) {
+  const w = agentCallWriter(7, 2);
+  escrowActorInto(w, args);
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentStartEscrowCall(args) {
+  const w = agentCallWriter(7, 3);
+  w.rawBytes(bytes32FromHex2(args.escrowId, "escrowId"));
+  monoAddressInto2(w, args.provider, "provider");
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentSubmitEscrowCall(args) {
+  const w = agentCallWriter(7, 4);
+  w.rawBytes(bytes32FromHex2(args.escrowId, "escrowId"));
+  monoAddressInto2(w, args.provider, "provider");
+  w.rawBytes(bytes32FromHex2(args.payloadHash, "payloadHash"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentApproveEscrowCall(args) {
+  const w = agentCallWriter(7, 5);
+  escrowActorInto(w, args);
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentDisputeEscrowCall(args) {
+  const w = agentCallWriter(7, 6);
+  escrowActorInto(w, args);
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentCancelEscrowCall(args) {
+  const w = agentCallWriter(7, 7);
+  escrowActorInto(w, args);
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentResolveEscrowCall(args) {
+  const w = agentCallWriter(7, 8);
+  w.rawBytes(bytes32FromHex2(args.escrowId, "escrowId"));
+  monoAddressInto2(w, args.actor, "actor");
+  w.enumVariant(normalizeEscrowResolution(args.resolution));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentEscrowGetCall(escrowId) {
+  const w = agentCallWriter(7, 9);
+  w.rawBytes(bytes32FromHex2(escrowId, "escrowId"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentRecordReputationCall(args) {
+  const w = agentCallWriter(8, 0);
+  monoAddressInto2(w, args.reviewer, "reviewer");
+  monoAddressInto2(w, args.subject, "subject");
+  w.u32(uint32(args.categoryId, "categoryId"));
+  reputationScoresInto(w, args.scores);
+  w.rawBytes(bytes32FromHex2(args.payloadHash, "payloadHash"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeAgentReputationGetCall(subject, categoryId) {
+  const w = agentCallWriter(8, 1);
+  monoAddressInto2(w, subject, "subject");
+  w.u32(uint32(categoryId, "categoryId"));
+  return bytesToHex4(w.toBytes());
+}
+function buildNativeAgentModuleCallEnvelope(input, maxCycles) {
+  return {
+    module: "agent",
+    call: {
+      to: NATIVE_AGENT_MODULE_ADDRESS,
+      input: normalizeHexBytes2(input, "input"),
+      valueLythoshi: "0",
+      maxCycles: uint642(maxCycles, "maxCycles").toString(10)
+    }
+  };
+}
+function encodeNativeAgentModuleForwarderInput(envelope) {
+  if (envelope.module !== "agent") {
+    throw new AgentActionError("native agent forwarder envelope module must be 'agent'");
+  }
+  if (!isNativeAgentModuleAddress(envelope.call.to)) {
+    throw new AgentActionError("native agent forwarder call target must be the agent system module");
+  }
+  if (envelope.call.valueLythoshi !== "0") {
+    throw new AgentActionError("native agent forwarder call valueLythoshi must be 0");
+  }
+  const payload = hexToBytes3(normalizeHexBytes2(envelope.call.input, "input"), "input");
+  const maxCycles = uint642(envelope.call.maxCycles, "maxCycles");
+  const w = new BincodeWriter();
+  w.enumVariant(7);
+  w.enumVariant(NATIVE_AGENT_ADDRESS_KIND_VARIANTS.systemModule);
+  w.rawBytes(hexToBytes3(NATIVE_AGENT_MODULE_ADDRESS_BYTES, "native agent module address"));
+  w.bytes(payload);
+  w.u128(0n);
+  w.u64(maxCycles);
+  const input = bytesToHex4(w.toBytes());
+  return { input, requestBytes: (input.length - 2) / 2 };
+}
+function buildNativeAgentSetSpendingPolicyModuleCall(args, maxCycles) {
+  return buildNativeAgentModuleCallEnvelope(encodeNativeAgentSetSpendingPolicyCall(args), maxCycles);
+}
+function buildNativeAgentSetSpendingPolicyForwarderInput(args, maxCycles) {
+  return encodeNativeAgentModuleForwarderInput(buildNativeAgentSetSpendingPolicyModuleCall(args, maxCycles));
+}
+function buildNativeAgentCreateEscrowModuleCall(args, maxCycles) {
+  return buildNativeAgentModuleCallEnvelope(encodeNativeAgentCreateEscrowCall(args), maxCycles);
+}
+function buildNativeAgentCreateEscrowForwarderInput(args, maxCycles) {
+  return encodeNativeAgentModuleForwarderInput(buildNativeAgentCreateEscrowModuleCall(args, maxCycles));
+}
+function buildNativeAgentRecordReputationModuleCall(args, maxCycles) {
+  return buildNativeAgentModuleCallEnvelope(encodeNativeAgentRecordReputationCall(args), maxCycles);
+}
+function buildNativeAgentRecordReputationForwarderInput(args, maxCycles) {
+  return encodeNativeAgentModuleForwarderInput(buildNativeAgentRecordReputationModuleCall(args, maxCycles));
+}
+var NATIVE_AGENT_ADDRESS_KIND_VARIANTS = {
+  user: 0,
+  smartAccount: 1,
+  contract: 2,
+  cluster: 3,
+  multisig: 4,
+  systemModule: 5
+};
+function agentCallWriter(surfaceVariant, callVariant) {
+  const w = new BincodeWriter();
+  w.enumVariant(surfaceVariant);
+  w.enumVariant(callVariant);
+  return w;
+}
+function escrowActorInto(w, args) {
+  w.rawBytes(bytes32FromHex2(args.escrowId, "escrowId"));
+  monoAddressInto2(w, args.actor, "actor");
+}
+function reputationScoresInto(w, scores) {
+  w.u8(score(scores.speed, "scores.speed"));
+  w.u8(score(scores.quality, "scores.quality"));
+  w.u8(score(scores.communication, "scores.communication"));
+  w.u8(score(scores.accuracy, "scores.accuracy"));
+}
+function normalizeEscrowResolution(resolution) {
+  if (resolution === "release-provider") return 0;
+  if (resolution === "refund-buyer") return 1;
+  throw new AgentActionError("resolution must be 'release-provider' or 'refund-buyer'");
+}
+function normalizeBytes32Hex2(value, name) {
+  if (typeof value !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(value)) {
+    throw new AgentActionError(`${name} must be a 32-byte 0x-prefixed hex string`);
+  }
+  return value.toLowerCase();
+}
+function bytes32FromHex2(value, name) {
+  normalizeBytes32Hex2(value, name);
+  return hexToBytes3(value, name);
+}
+function positiveDecimal2(value, name) {
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) {
+    throw new AgentActionError(`${name} must be an integer decimal string`);
+  }
+  const n = BigInt(value);
+  if (n <= 0n) {
+    throw new AgentActionError(`${name} must be positive`);
+  }
+  return n;
+}
+function uint642(value, name) {
+  let n;
+  if (typeof value === "bigint") {
+    n = value;
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) {
+      throw new AgentActionError(`${name} must be a safe integer`);
+    }
+    n = BigInt(value);
+  } else if (/^(0|[1-9][0-9]*|0x[0-9a-fA-F]+)$/.test(value)) {
+    n = BigInt(value);
+  } else {
+    throw new AgentActionError(`${name} must be a nonnegative integer`);
+  }
+  if (n < 0n || n > 0xffffffffffffffffn) {
+    throw new AgentActionError(`${name} must fit uint64`);
+  }
+  return n;
+}
+function uint32(value, name) {
+  const n = uint642(value, name);
+  if (n > 0xffffffffn) {
+    throw new AgentActionError(`${name} must fit uint32`);
+  }
+  return Number(n);
+}
+function uint16(value, name) {
+  const n = uint642(value, name);
+  if (n > 0xffffn) {
+    throw new AgentActionError(`${name} must fit uint16`);
+  }
+  return Number(n);
+}
+function score(value, name) {
+  const n = uint642(value, name);
+  if (n < 1n || n > 5n) {
+    throw new AgentActionError(`${name} must be between 1 and 5`);
+  }
+  return Number(n);
+}
+function boolByte(value, name) {
+  if (value === true) return 1;
+  if (value === false) return 0;
+  throw new AgentActionError(`${name} must be boolean`);
+}
+function positiveU128Decimal2(value, name) {
+  const n = positiveDecimal2(value, name);
+  if (n >= 1n << 128n) {
+    throw new AgentActionError(`${name} must fit uint128`);
+  }
+  return n;
+}
+function normalizeHexBytes2(value, name) {
+  if (typeof value !== "string" || !value.startsWith("0x")) {
+    throw new AgentActionError(`${name} must be 0x-prefixed hex bytes`);
+  }
+  try {
+    hexToBytes3(value, name);
+  } catch (error) {
+    const detail = error instanceof Error ? `: ${error.message}` : "";
+    throw new AgentActionError(`${name} must be 0x-prefixed hex bytes${detail}`);
+  }
+  return value.toLowerCase();
+}
+function isNativeAgentModuleAddress(value) {
+  const normalized = value.toLowerCase();
+  return normalized === NATIVE_AGENT_MODULE_ADDRESS || normalized === NATIVE_AGENT_MODULE_ADDRESS_BYTES;
+}
+function monoAddressInto2(w, input, name) {
+  const { kind, bytes } = normalizeNativeAgentAddress(input, name);
+  w.enumVariant(NATIVE_AGENT_ADDRESS_KIND_VARIANTS[kind]);
+  w.rawBytes(bytes);
+}
+function normalizeNativeAgentAddress(input, name) {
+  if (typeof input === "string") {
+    return normalizeNativeAgentAddressString(input, void 0, name);
+  }
+  if (isAddressByteInput2(input)) {
+    return { kind: "user", bytes: expectAddressBytes2(input, name) };
+  }
+  if (typeof input === "object" && input !== null) {
+    const kind = input.kind ?? "user";
+    if (!(kind in NATIVE_AGENT_ADDRESS_KIND_VARIANTS)) {
+      throw new AgentActionError(`${name}.kind is not a supported native address kind`);
+    }
+    const address = input.address;
+    if (typeof address === "string") {
+      return normalizeNativeAgentAddressString(address, kind, name);
+    }
+    return { kind, bytes: expectAddressBytes2(address, name) };
+  }
+  throw new AgentActionError(`${name} must be a 20-byte address`);
+}
+function isAddressByteInput2(input) {
+  return input instanceof Uint8Array || Array.isArray(input);
+}
+function normalizeNativeAgentAddressString(address, expectedKind, name) {
+  try {
+    if (address.startsWith("0x") || address.startsWith("0X")) {
+      return { kind: expectedKind ?? "user", bytes: hexToAddressBytes(address) };
+    }
+    const parsed = typedBech32ToAddress(address, expectedKind);
+    return { kind: parsed.kind, bytes: parsed.bytes };
+  } catch (error) {
+    const detail = error instanceof Error ? `: ${error.message}` : "";
+    throw new AgentActionError(`${name} must be a 20-byte hex or typed bech32m address${detail}`);
+  }
+}
+function expectAddressBytes2(value, name) {
+  if (value.length !== 20) {
+    throw new AgentActionError(`${name} must be a 20-byte address`);
+  }
+  for (const byte of value) {
+    if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
+      throw new AgentActionError(`${name} must contain bytes`);
+    }
+  }
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+
 // src/ethers/network.ts
 var MONOLYTHIUM_TESTNET_CHAIN_ID = 69420n;
 var MONOLYTHIUM_TESTNET_NETWORK_NAME = "monolythium-testnet";
@@ -5256,6 +5699,7 @@ var version = "0.1.0";
 exports.ADDRESS_HRP = ADDRESS_HRP;
 exports.ADDRESS_KIND_HRPS = ADDRESS_KIND_HRPS;
 exports.AddressError = AddressError;
+exports.AgentActionError = AgentActionError;
 exports.ApiClient = ApiClient;
 exports.BRIDGE_QUOTE_API_BLOCKED_REASON = BRIDGE_QUOTE_API_BLOCKED_REASON;
 exports.BRIDGE_REVERT_TAGS = BRIDGE_REVERT_TAGS;
@@ -5295,6 +5739,8 @@ exports.MarketActionError = MarketActionError;
 exports.MonolythiumProvider = MonolythiumProvider;
 exports.MonolythiumSigner = MonolythiumSigner;
 exports.MrvValidationError = MrvValidationError;
+exports.NATIVE_AGENT_MODULE_ADDRESS = NATIVE_AGENT_MODULE_ADDRESS;
+exports.NATIVE_AGENT_MODULE_ADDRESS_BYTES = NATIVE_AGENT_MODULE_ADDRESS_BYTES;
 exports.NATIVE_LYTH_DECIMALS = NATIVE_LYTH_DECIMALS;
 exports.NATIVE_MARKET_EVENT_FAMILY = NATIVE_MARKET_EVENT_FAMILY;
 exports.NATIVE_MARKET_MODULE_ADDRESS = NATIVE_MARKET_MODULE_ADDRESS;
@@ -5347,6 +5793,13 @@ exports.buildMrvDeployPayloadPlan = buildMrvDeployPayloadPlan;
 exports.buildMrvDeployPayloadRequest = buildMrvDeployPayloadRequest;
 exports.buildMrvDeployPlan = buildMrvDeployPlan;
 exports.buildMrvDeployRequest = buildMrvDeployRequest;
+exports.buildNativeAgentCreateEscrowForwarderInput = buildNativeAgentCreateEscrowForwarderInput;
+exports.buildNativeAgentCreateEscrowModuleCall = buildNativeAgentCreateEscrowModuleCall;
+exports.buildNativeAgentModuleCallEnvelope = buildNativeAgentModuleCallEnvelope;
+exports.buildNativeAgentRecordReputationForwarderInput = buildNativeAgentRecordReputationForwarderInput;
+exports.buildNativeAgentRecordReputationModuleCall = buildNativeAgentRecordReputationModuleCall;
+exports.buildNativeAgentSetSpendingPolicyForwarderInput = buildNativeAgentSetSpendingPolicyForwarderInput;
+exports.buildNativeAgentSetSpendingPolicyModuleCall = buildNativeAgentSetSpendingPolicyModuleCall;
 exports.buildNativeMarketModuleCallEnvelope = buildNativeMarketModuleCallEnvelope;
 exports.buildNativeNftBuyListingForwarderInput = buildNativeNftBuyListingForwarderInput;
 exports.buildNativeNftBuyListingModuleCall = buildNativeNftBuyListingModuleCall;
@@ -5389,6 +5842,39 @@ exports.encodeHasPubkeyCalldata = encodeHasPubkeyCalldata;
 exports.encodeLockBridgeConfigCalldata = encodeLockBridgeConfigCalldata;
 exports.encodeLookupPubkeyCalldata = encodeLookupPubkeyCalldata;
 exports.encodeMrvDeployPayload = encodeMrvDeployPayload;
+exports.encodeNativeAgentAcceptEscrowCall = encodeNativeAgentAcceptEscrowCall;
+exports.encodeNativeAgentApproveEscrowCall = encodeNativeAgentApproveEscrowCall;
+exports.encodeNativeAgentArbiterGetCall = encodeNativeAgentArbiterGetCall;
+exports.encodeNativeAgentAttestationGetCall = encodeNativeAgentAttestationGetCall;
+exports.encodeNativeAgentAvailabilityGetCall = encodeNativeAgentAvailabilityGetCall;
+exports.encodeNativeAgentCancelEscrowCall = encodeNativeAgentCancelEscrowCall;
+exports.encodeNativeAgentCloseAvailabilityCall = encodeNativeAgentCloseAvailabilityCall;
+exports.encodeNativeAgentConsentGetCall = encodeNativeAgentConsentGetCall;
+exports.encodeNativeAgentCounterEscrowCall = encodeNativeAgentCounterEscrowCall;
+exports.encodeNativeAgentCreateEscrowCall = encodeNativeAgentCreateEscrowCall;
+exports.encodeNativeAgentDeactivateServiceCall = encodeNativeAgentDeactivateServiceCall;
+exports.encodeNativeAgentDisputeEscrowCall = encodeNativeAgentDisputeEscrowCall;
+exports.encodeNativeAgentEscrowGetCall = encodeNativeAgentEscrowGetCall;
+exports.encodeNativeAgentGrantConsentCall = encodeNativeAgentGrantConsentCall;
+exports.encodeNativeAgentIssueAttestationCall = encodeNativeAgentIssueAttestationCall;
+exports.encodeNativeAgentIssuerGetCall = encodeNativeAgentIssuerGetCall;
+exports.encodeNativeAgentListServiceCall = encodeNativeAgentListServiceCall;
+exports.encodeNativeAgentModuleForwarderInput = encodeNativeAgentModuleForwarderInput;
+exports.encodeNativeAgentOpenAvailabilityCall = encodeNativeAgentOpenAvailabilityCall;
+exports.encodeNativeAgentRecordPolicySpendCall = encodeNativeAgentRecordPolicySpendCall;
+exports.encodeNativeAgentRecordReputationCall = encodeNativeAgentRecordReputationCall;
+exports.encodeNativeAgentRegisterArbiterCall = encodeNativeAgentRegisterArbiterCall;
+exports.encodeNativeAgentRegisterIssuerCall = encodeNativeAgentRegisterIssuerCall;
+exports.encodeNativeAgentReputationGetCall = encodeNativeAgentReputationGetCall;
+exports.encodeNativeAgentResolveEscrowCall = encodeNativeAgentResolveEscrowCall;
+exports.encodeNativeAgentRevokeAttestationCall = encodeNativeAgentRevokeAttestationCall;
+exports.encodeNativeAgentRevokeConsentCall = encodeNativeAgentRevokeConsentCall;
+exports.encodeNativeAgentServiceGetCall = encodeNativeAgentServiceGetCall;
+exports.encodeNativeAgentSetAvailabilityCall = encodeNativeAgentSetAvailabilityCall;
+exports.encodeNativeAgentSetSpendingPolicyCall = encodeNativeAgentSetSpendingPolicyCall;
+exports.encodeNativeAgentSpendingPolicyGetCall = encodeNativeAgentSpendingPolicyGetCall;
+exports.encodeNativeAgentStartEscrowCall = encodeNativeAgentStartEscrowCall;
+exports.encodeNativeAgentSubmitEscrowCall = encodeNativeAgentSubmitEscrowCall;
 exports.encodeNativeMarketModuleForwarderInput = encodeNativeMarketModuleForwarderInput;
 exports.encodeNativeNftBuyListingCall = encodeNativeNftBuyListingCall;
 exports.encodeNativeNftCancelListingCall = encodeNativeNftCancelListingCall;
