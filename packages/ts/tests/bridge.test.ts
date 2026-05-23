@@ -312,11 +312,32 @@ describe("bridge route disclosure helpers", () => {
     expect(response.routeSelectionReady).toBe(true);
     expect(response.quoteReady).toBe(false);
     expect(response.submitReady).toBe(false);
+    expect(response.routes?.map((entry) => entry.routeId)).toEqual(["healthy"]);
+    expect(response.bridgeRouteDisclosures?.map((entry) => entry.routeId)).toEqual(["healthy"]);
+    expect(response.source).toMatchObject({
+      routeCount: 1,
+      globalRouteIndexAvailable: false,
+      routeDisclosureSource: "request.routeDisclosures",
+    });
     expect(response.selection.selected?.route.routeId).toBe("healthy");
     expect(response.blockedReasons).toEqual([
       BRIDGE_QUOTE_API_BLOCKED_REASON,
       BRIDGE_SUBMIT_API_BLOCKED_REASON,
     ]);
+  });
+
+  it("evaluates discovery-only bridge route requests without selecting routes", () => {
+    const response = bridgeRoutesReadiness({
+      routeDisclosures: [route("healthy")],
+    });
+
+    expect(response.routeSelectionReady).toBe(false);
+    expect(response.quoteReady).toBe(false);
+    expect(response.submitReady).toBe(false);
+    expect(response.routes?.map((entry) => entry.routeId)).toEqual(["healthy"]);
+    expect(response.bridgeRouteDisclosures?.map((entry) => entry.routeId)).toEqual(["healthy"]);
+    expect(response.selection.candidates).toEqual([]);
+    expect(response.blockedReasons).toEqual(["bridge route selection requires transfer intent"]);
   });
 
   it("preserves route-selection blockers before quote/submit readiness", () => {

@@ -351,8 +351,8 @@ impl ApiClient {
 
     /// `/api/v1/bridge/routes`.
     ///
-    /// The forthcoming route is read-only `GET`, so the typed request is
-    /// encoded as a single JSON query value named `request`.
+    /// The route is read-only `GET`, so the typed request is encoded as a
+    /// single JSON query value named `request`.
     pub async fn bridge_routes(
         &self,
         request: &BridgeRoutesRequest,

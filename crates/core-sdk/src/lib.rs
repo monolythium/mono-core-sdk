@@ -49,7 +49,7 @@ pub use bridge::{
     selector_set_bridge_route_finality, BridgeAdminControl, BridgeCircuitBreakerState,
     BridgeQuoteSubmitReadiness, BridgeRiskTier, BridgeRouteAssessment, BridgeRouteCandidate,
     BridgeRouteDisclosure, BridgeRouteSelection, BridgeRoutesRequest, BridgeRoutesResponse,
-    BridgeTransferIntent, BridgeTransferRequest, BridgeVerifierDisclosure,
+    BridgeRoutesSource, BridgeTransferIntent, BridgeTransferRequest, BridgeVerifierDisclosure,
     BRIDGE_CALLDATA_REVERT_NAMESPACE, BRIDGE_CONFIG_REVERT_NAMESPACE,
     BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_SUBMIT_API_BLOCKED_REASON, REVERT_BRIDGE_ADMIN_LOCKED,
     REVERT_BRIDGE_COOLDOWN_ZERO, REVERT_BRIDGE_FINALITY_ZERO, REVERT_BRIDGE_RESUME_COOLDOWN_ACTIVE,

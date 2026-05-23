@@ -47,6 +47,7 @@ export type {
   BridgeRouteSelection,
   BridgeRoutesRequest,
   BridgeRoutesResponse,
+  BridgeRoutesSource,
   BridgeTransferIntent,
   BridgeTransferRequest,
   BridgeVerifierDisclosure,

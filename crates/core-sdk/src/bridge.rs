@@ -442,7 +442,11 @@ pub struct BridgeQuoteSubmitReadiness {
 }
 
 /// Request body for route-selection/readiness over supplied live disclosures.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `mono-core` also accepts discovery-only requests that carry no transfer
+/// intent. Those return a route catalogue but keep route selection, quote, and
+/// submit readiness closed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
 #[cfg_attr(
@@ -450,11 +454,53 @@ pub struct BridgeQuoteSubmitReadiness {
     ts(export, export_to = "BridgeRoutesRequest.ts")
 )]
 pub struct BridgeRoutesRequest {
-    /// Transfer intent to evaluate.
-    pub intent: BridgeTransferIntent,
+    /// Optional mono bech32m address used by node/API catalogue discovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional = nullable))]
+    pub address: Option<String>,
+    /// Transfer intent to evaluate. Omitted for discovery-only catalogue calls.
+    #[serde(
+        default,
+        alias = "transferIntent",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "ts-bindings", ts(optional = nullable))]
+    pub intent: Option<BridgeTransferIntent>,
     /// Live route disclosures supplied by the node/API/caller.
-    #[serde(alias = "routes")]
-    pub route_disclosures: Vec<BridgeRouteDisclosure>,
+    #[serde(
+        default,
+        alias = "routes",
+        alias = "bridgeRouteDisclosures",
+        alias = "bridge_route_disclosures",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "ts-bindings", ts(optional = nullable))]
+    pub route_disclosures: Option<Vec<BridgeRouteDisclosure>>,
+    /// Optional bounded route disclosure cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional = nullable))]
+    pub limit: Option<u32>,
+}
+
+/// Source metadata returned by `lyth_bridgeRoutes` and `/api/v1/bridge/routes`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "BridgeRoutesSource.ts")
+)]
+pub struct BridgeRoutesSource {
+    /// Address whose indexed balances were used for discovery, when supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional = nullable))]
+    pub address: Option<String>,
+    /// Number of catalogue route disclosures returned.
+    pub route_count: u32,
+    /// Whether the node exposes a global route index independent of address rows.
+    pub global_route_index_available: bool,
+    /// Human-readable source of the route disclosure catalogue.
+    pub route_disclosure_source: String,
 }
 
 /// Response for `lyth_bridgeRoutes` and `/api/v1/bridge/routes`.
@@ -469,15 +515,37 @@ pub struct BridgeRoutesResponse {
     /// Closed route-selection result used as the readiness input.
     pub selection: BridgeRouteSelection,
     /// True when a route was selected from the supplied disclosures.
+    #[serde(default)]
     pub route_selection_ready: bool,
     /// True only if the API returns real quote fields.
+    #[serde(default)]
     pub quote_ready: bool,
     /// True only if the API returns real submit fields.
+    #[serde(default)]
     pub submit_ready: bool,
     /// Hard failures for route, quote, or submit readiness.
+    #[serde(default)]
     pub blocked_reasons: Vec<String>,
     /// Non-blocking warnings copied from the selected route, when present.
+    #[serde(default)]
     pub warnings: Vec<String>,
+    /// Raw route catalogue returned by discovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional = nullable))]
+    pub routes: Option<Vec<BridgeRouteDisclosure>>,
+    /// Compatibility alias emitted by `mono-core` for address-profile parity.
+    #[serde(
+        default,
+        alias = "routeDisclosures",
+        alias = "bridge_route_disclosures",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "ts-bindings", ts(optional = nullable))]
+    pub bridge_route_disclosures: Option<Vec<BridgeRouteDisclosure>>,
+    /// Node/API metadata describing where the catalogue was sourced from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional = nullable))]
+    pub source: Option<BridgeRoutesSource>,
 }
 
 impl From<BridgeQuoteSubmitReadiness> for BridgeRoutesResponse {
@@ -489,6 +557,9 @@ impl From<BridgeQuoteSubmitReadiness> for BridgeRoutesResponse {
             submit_ready: value.submit_ready,
             blocked_reasons: value.blocked_reasons,
             warnings: value.warnings,
+            routes: None,
+            bridge_route_disclosures: None,
+            source: None,
         }
     }
 }
@@ -722,12 +793,54 @@ pub fn bridge_quote_submit_readiness(
 
 /// Evaluate route-selection/readiness from a typed bridge-routes request.
 ///
-/// This mirrors the shape expected by the forthcoming read-only node API and
-/// still keeps quote/submit blocked unless a live API response supplies real
-/// fields.
+/// This mirrors the read-only node API and keeps quote/submit blocked for
+/// local evaluation. Discovery-only requests without an intent return the route
+/// catalogue and a closed selection report.
 #[must_use]
 pub fn bridge_routes_readiness(request: &BridgeRoutesRequest) -> BridgeRoutesResponse {
-    bridge_quote_submit_readiness(&request.intent, &request.route_disclosures).into()
+    let routes = request.route_disclosures.clone().unwrap_or_default();
+    let source = Some(BridgeRoutesSource {
+        address: request.address.clone(),
+        route_count: u32::try_from(routes.len()).unwrap_or(u32::MAX),
+        global_route_index_available: false,
+        route_disclosure_source: "request.routeDisclosures".to_owned(),
+    });
+
+    let Some(intent) = request.intent.as_ref() else {
+        let mut blocked_reasons =
+            vec!["bridge route selection requires transfer intent".to_owned()];
+        if routes.is_empty() {
+            blocked_reasons.push("no route disclosures supplied".to_owned());
+        }
+        return BridgeRoutesResponse {
+            selection: BridgeRouteSelection {
+                selected: None,
+                candidates: Vec::new(),
+                blocked_reasons: blocked_reasons.clone(),
+            },
+            route_selection_ready: false,
+            quote_ready: false,
+            submit_ready: false,
+            blocked_reasons,
+            warnings: Vec::new(),
+            routes: Some(routes.clone()),
+            bridge_route_disclosures: Some(routes),
+            source,
+        };
+    };
+
+    let readiness = bridge_quote_submit_readiness(intent, &routes);
+    BridgeRoutesResponse {
+        selection: readiness.selection,
+        route_selection_ready: readiness.route_selection_ready,
+        quote_ready: false,
+        submit_ready: false,
+        blocked_reasons: readiness.blocked_reasons,
+        warnings: readiness.warnings,
+        routes: Some(routes.clone()),
+        bridge_route_disclosures: Some(routes),
+        source,
+    }
 }
 
 fn bridge_route_candidate(
@@ -1181,13 +1294,23 @@ mod tests {
     #[test]
     fn bridge_routes_readiness_uses_request_shape_and_keeps_quote_submit_blocked() {
         let response = bridge_routes_readiness(&BridgeRoutesRequest {
-            intent: transfer_intent(),
-            route_disclosures: vec![route("healthy")],
+            intent: Some(transfer_intent()),
+            route_disclosures: Some(vec![route("healthy")]),
+            ..BridgeRoutesRequest::default()
         });
 
         assert!(response.route_selection_ready);
         assert!(!response.quote_ready);
         assert!(!response.submit_ready);
+        assert_eq!(response.routes.as_ref().map(Vec::len), Some(1));
+        assert_eq!(
+            response.bridge_route_disclosures.as_ref().map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            response.source.as_ref().map(|source| source.route_count),
+            Some(1)
+        );
         assert_eq!(
             response
                 .selection
@@ -1202,6 +1325,31 @@ mod tests {
                 BRIDGE_QUOTE_API_BLOCKED_REASON.to_owned(),
                 BRIDGE_SUBMIT_API_BLOCKED_REASON.to_owned()
             ]
+        );
+    }
+
+    #[test]
+    fn bridge_routes_readiness_supports_discovery_only_catalogues() {
+        let response = bridge_routes_readiness(&BridgeRoutesRequest {
+            route_disclosures: Some(vec![route("healthy")]),
+            ..BridgeRoutesRequest::default()
+        });
+
+        assert!(!response.route_selection_ready);
+        assert!(!response.quote_ready);
+        assert!(!response.submit_ready);
+        assert_eq!(response.routes.as_ref().map(Vec::len), Some(1));
+        assert_eq!(
+            response
+                .bridge_route_disclosures
+                .as_ref()
+                .and_then(|routes| routes.first())
+                .map(|route| route.route_id.as_str()),
+            Some("healthy")
+        );
+        assert_eq!(
+            response.blocked_reasons,
+            vec!["bridge route selection requires transfer intent".to_owned()]
         );
     }
 

@@ -1428,8 +1428,27 @@ mod tests {
 
     #[tokio::test]
     async fn lyth_bridge_routes_sends_typed_request_and_decodes_readiness() {
+        let route = crate::bridge::BridgeRouteDisclosure {
+            route_id: "healthy".to_owned(),
+            bridge: "CCIP".to_owned(),
+            asset: "USDC".to_owned(),
+            source_chain: "Ethereum".to_owned(),
+            destination_chain: "Mono".to_owned(),
+            verifier: crate::bridge::BridgeVerifierDisclosure {
+                model: "DON".to_owned(),
+                participant_count: 7,
+                threshold: 5,
+            },
+            drain_cap_atomic: "100000000000".to_owned(),
+            finality_blocks: 64,
+            cooldown_seconds: 86_400,
+            admin_control: crate::bridge::BridgeAdminControl::ConsensusOnly,
+            circuit_breaker: crate::bridge::BridgeCircuitBreakerState::Armed,
+            insurance_atomic: "50000000000".to_owned(),
+            last_incident_date: None,
+        };
         let request = BridgeRoutesRequest {
-            intent: crate::bridge::BridgeTransferIntent {
+            intent: Some(crate::bridge::BridgeTransferIntent {
                 asset: "USDC".to_owned(),
                 amount_atomic: "1000000".to_owned(),
                 source_chain: "Ethereum".to_owned(),
@@ -1440,26 +1459,9 @@ mod tests {
                 minimum_score: None,
                 max_finality_blocks: None,
                 max_cooldown_seconds: None,
-            },
-            route_disclosures: vec![crate::bridge::BridgeRouteDisclosure {
-                route_id: "healthy".to_owned(),
-                bridge: "CCIP".to_owned(),
-                asset: "USDC".to_owned(),
-                source_chain: "Ethereum".to_owned(),
-                destination_chain: "Mono".to_owned(),
-                verifier: crate::bridge::BridgeVerifierDisclosure {
-                    model: "DON".to_owned(),
-                    participant_count: 7,
-                    threshold: 5,
-                },
-                drain_cap_atomic: "100000000000".to_owned(),
-                finality_blocks: 64,
-                cooldown_seconds: 86_400,
-                admin_control: crate::bridge::BridgeAdminControl::ConsensusOnly,
-                circuit_breaker: crate::bridge::BridgeCircuitBreakerState::Armed,
-                insurance_atomic: "50000000000".to_owned(),
-                last_incident_date: None,
-            }],
+            }),
+            route_disclosures: Some(vec![route]),
+            ..BridgeRoutesRequest::default()
         };
         let reply = crate::bridge::bridge_routes_readiness(&request);
         let (endpoint, server) = spawn_rpc_server(vec![serde_json::to_value(&reply).unwrap()]);
@@ -1474,6 +1476,60 @@ mod tests {
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0]["method"], "lyth_bridgeRoutes");
+        assert_eq!(requests[0]["params"], json!([request]));
+    }
+
+    #[tokio::test]
+    async fn lyth_bridge_routes_decodes_discovery_only_catalogue() {
+        let route = crate::bridge::BridgeRouteDisclosure {
+            route_id: "healthy".to_owned(),
+            bridge: "CCIP".to_owned(),
+            asset: "USDC".to_owned(),
+            source_chain: "Ethereum".to_owned(),
+            destination_chain: "Mono".to_owned(),
+            verifier: crate::bridge::BridgeVerifierDisclosure {
+                model: "DON".to_owned(),
+                participant_count: 7,
+                threshold: 5,
+            },
+            drain_cap_atomic: "100000000000".to_owned(),
+            finality_blocks: 64,
+            cooldown_seconds: 86_400,
+            admin_control: crate::bridge::BridgeAdminControl::ConsensusOnly,
+            circuit_breaker: crate::bridge::BridgeCircuitBreakerState::Armed,
+            insurance_atomic: "50000000000".to_owned(),
+            last_incident_date: None,
+        };
+        let request = BridgeRoutesRequest {
+            route_disclosures: Some(vec![route]),
+            ..BridgeRoutesRequest::default()
+        };
+        let reply = crate::bridge::bridge_routes_readiness(&request);
+        let (endpoint, server) = spawn_rpc_server(vec![serde_json::to_value(&reply).unwrap()]);
+
+        let client = RpcClient::new(endpoint).unwrap();
+        let response = client.lyth_bridge_routes(&request).await.unwrap();
+
+        assert!(!response.route_selection_ready);
+        assert!(!response.quote_ready);
+        assert!(!response.submit_ready);
+        assert_eq!(
+            response
+                .routes
+                .as_ref()
+                .and_then(|routes| routes.first())
+                .map(|route| route.route_id.as_str()),
+            Some("healthy")
+        );
+        assert_eq!(
+            response.source.as_ref().map(|source| source.route_count),
+            Some(1)
+        );
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["method"], "lyth_bridgeRoutes");
+        assert!(requests[0]["params"][0].get("intent").is_none());
         assert_eq!(requests[0]["params"], json!([request]));
     }
 

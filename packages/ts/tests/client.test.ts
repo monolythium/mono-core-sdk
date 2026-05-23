@@ -365,6 +365,14 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
         "bridge submit requires a mono-core live submit API/runtime primitive",
       ],
       warnings: [],
+      routes: request.routeDisclosures,
+      bridgeRouteDisclosures: request.routeDisclosures,
+      source: {
+        address: null,
+        routeCount: 1,
+        globalRouteIndexAvailable: false,
+        routeDisclosureSource: "request.routeDisclosures_or_indexer.tokenBalances",
+      },
     });
     const client = new RpcClient("http://x", { fetch });
 
@@ -375,6 +383,48 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(response.routeSelectionReady).toBe(true);
     expect(response.quoteReady).toBe(false);
     expect(response.submitReady).toBe(false);
+    expect(response.routes?.[0]?.routeId).toBe("healthy");
+    expect(response.bridgeRouteDisclosures?.[0]?.routeId).toBe("healthy");
+    expect(response.source?.routeCount).toBe(1);
+  });
+
+  it("lyth_bridgeRoutes decodes discovery-only route catalogues", async () => {
+    const request = {
+      routeDisclosures: [bridgeRoute("healthy")],
+    };
+    const { fetch, calls } = mockFetch({
+      selection: {
+        selected: null,
+        candidates: [],
+        blockedReasons: ["bridge route selection requires transfer intent"],
+      },
+      routeSelectionReady: false,
+      quoteReady: false,
+      submitReady: false,
+      blockedReasons: ["bridge route selection requires transfer intent"],
+      warnings: [],
+      routes: request.routeDisclosures,
+      bridgeRouteDisclosures: request.routeDisclosures,
+      source: {
+        address: null,
+        routeCount: 1,
+        globalRouteIndexAvailable: false,
+        routeDisclosureSource: "request.routeDisclosures_or_indexer.tokenBalances",
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const response = await client.lythBridgeRoutes(request);
+
+    expect(calls[0].method).toBe("lyth_bridgeRoutes");
+    expect(calls[0].params).toEqual([request]);
+    expect("intent" in (calls[0].params as [Record<string, unknown>])[0]).toBe(false);
+    expect(response.routeSelectionReady).toBe(false);
+    expect(response.quoteReady).toBe(false);
+    expect(response.submitReady).toBe(false);
+    expect(response.routes?.[0]?.routeId).toBe("healthy");
+    expect(response.bridgeRouteDisclosures?.[0]?.routeId).toBe("healthy");
+    expect(response.source?.routeCount).toBe(1);
   });
 
   it("lyth_mrcMetadata reads asset and token metadata rows", async () => {

@@ -263,6 +263,14 @@ describe("ApiClient", () => {
         submitReady: false,
         blockedReasons: [],
         warnings: [],
+        routes: request.routeDisclosures,
+        bridgeRouteDisclosures: request.routeDisclosures,
+        source: {
+          address: null,
+          routeCount: 1,
+          globalRouteIndexAvailable: false,
+          routeDisclosureSource: "request.routeDisclosures_or_indexer.tokenBalances",
+        },
       }),
     );
     const client = new ApiClient("https://rpc.example", { fetch });
@@ -271,9 +279,53 @@ describe("ApiClient", () => {
 
     expect(response.data.quoteReady).toBe(false);
     expect(response.data.submitReady).toBe(false);
+    expect(response.data.routes?.[0]?.routeId).toBe("healthy");
+    expect(response.data.bridgeRouteDisclosures?.[0]?.routeId).toBe("healthy");
+    expect(response.data.source?.routeCount).toBe(1);
     expect(calls[0].method).toBe("GET");
     expect(calls[0].url).toContain("https://rpc.example/api/v1/bridge/routes?request=");
     expect(calls[0].url).toContain("%22routeDisclosures%22%3A%5B");
+  });
+
+  it("decodes discovery-only bridge route catalogues from the API", async () => {
+    const request = {
+      routeDisclosures: [bridgeRoute("healthy")],
+    };
+    const { fetch, calls } = mockGet(
+      apiEnvelope({
+        selection: {
+          selected: null,
+          candidates: [],
+          blockedReasons: ["bridge route selection requires transfer intent"],
+        },
+        routeSelectionReady: false,
+        quoteReady: false,
+        submitReady: false,
+        blockedReasons: ["bridge route selection requires transfer intent"],
+        warnings: [],
+        routes: request.routeDisclosures,
+        bridgeRouteDisclosures: request.routeDisclosures,
+        source: {
+          address: null,
+          routeCount: 1,
+          globalRouteIndexAvailable: false,
+          routeDisclosureSource: "request.routeDisclosures_or_indexer.tokenBalances",
+        },
+      }),
+    );
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    const response = await client.bridgeRoutes(request);
+
+    expect(response.data.routeSelectionReady).toBe(false);
+    expect(response.data.quoteReady).toBe(false);
+    expect(response.data.submitReady).toBe(false);
+    expect(response.data.routes?.[0]?.routeId).toBe("healthy");
+    expect(response.data.bridgeRouteDisclosures?.[0]?.routeId).toBe("healthy");
+    expect(response.data.source?.routeCount).toBe(1);
+    expect(calls[0].url).toContain("https://rpc.example/api/v1/bridge/routes?request=");
+    expect(calls[0].url).toContain("%22routeDisclosures%22%3A%5B");
+    expect(calls[0].url).not.toContain("%22intent%22");
   });
 
   it("reads native receipt envelopes from /api/v1/transactions/{hash}/native-receipt", async () => {
