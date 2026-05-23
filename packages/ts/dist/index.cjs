@@ -34,6 +34,58 @@ var SdkError = class _SdkError extends Error {
   }
 };
 
+// src/native-events.ts
+function isNativeDecodedEvent(value) {
+  const row = asRecord(value);
+  return row !== null && typeof row["block_height"] === "number" && typeof row["tx_index"] === "number" && typeof row["sequence"] === "number" && typeof row["family"] === "string" && typeof row["event_name"] === "string" && typeof row["payload_hash"] === "string";
+}
+function parseNativeDecodedEvent(event) {
+  if (isNativeDecodedEvent(event.decoded)) {
+    return event.decoded;
+  }
+  try {
+    const parsed = JSON.parse(event.decodedJson);
+    if (isNativeDecodedEvent(parsed)) {
+      return parsed;
+    }
+  } catch {
+  }
+  throw SdkError.malformed(
+    `native event ${event.eventTopic} at logIndex ${event.logIndex} is missing a typed decoded payload`
+  );
+}
+function nativeEventMatches(event, filter = {}) {
+  if (filter.address !== void 0 && event.address !== filter.address) return false;
+  if (filter.eventTopic !== void 0 && event.eventTopic !== filter.eventTopic) return false;
+  if (filter.family === void 0 && filter.eventName === void 0) return true;
+  let decoded;
+  try {
+    decoded = parseNativeDecodedEvent(event);
+  } catch {
+    return false;
+  }
+  if (filter.family !== void 0 && decoded.family !== filter.family) return false;
+  if (filter.eventName !== void 0 && decoded.event_name !== filter.eventName) return false;
+  return true;
+}
+function nativeEventsFromReceipt(receipt, filter = {}) {
+  return receipt.events.filter((event) => nativeEventMatches(event, filter)).map((event) => ({
+    ...event,
+    decoded: parseNativeDecodedEvent(event)
+  }));
+}
+async function consumeNativeEvents(receipt, consumer, filter = {}) {
+  const events = nativeEventsFromReceipt(receipt, filter);
+  for (const event of events) {
+    await consumer(event);
+  }
+  return events.length;
+}
+function asRecord(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  return value;
+}
+
 // src/types.ts
 function encodeBlockSelector(b) {
   if (typeof b === "number") return `0x${b.toString(16)}`;
@@ -116,6 +168,19 @@ var ApiClient = class {
   }
   async transactionNativeReceipt(hash) {
     return this.get(`/transactions/${encodePathSegment(hash)}/native-receipt`);
+  }
+  /**
+   * Typed native event rows from `/transactions/{hash}/native-receipt`.
+   *
+   * This helper consumes the existing native receipt API route and returns
+   * its envelope metadata with `data` replaced by the filtered event rows.
+   */
+  async transactionNativeReceiptEvents(hash, filter = {}) {
+    const receipt = await this.transactionNativeReceipt(hash);
+    return {
+      ...receipt,
+      data: nativeEventsFromReceipt(receipt.data, filter)
+    };
   }
   async addressProfile(address) {
     return this.get(`/addresses/${encodePathSegment(address)}/profile`);
@@ -1060,6 +1125,16 @@ var RpcClient = class _RpcClient {
   /** `lyth_nativeReceipt` — native RISC-V receipt metadata and typed native event rows. */
   async lythNativeReceipt(txHash) {
     return this.call("lyth_nativeReceipt", [txHash]);
+  }
+  /**
+   * Typed native event rows from `lyth_nativeReceipt`.
+   *
+   * This helper intentionally consumes the existing receipt RPC surface;
+   * it does not require a separate `lyth_nativeEvents` node method.
+   */
+  async lythNativeReceiptEvents(txHash, filter = {}) {
+    const receipt = await this.lythNativeReceipt(txHash);
+    return nativeEventsFromReceipt(receipt, filter);
   }
   /** `lyth_gapRecords` — retained ingestion/indexing gaps for a block range. */
   async lythGapRecords(fromBlock, toBlock) {
@@ -3340,6 +3415,7 @@ exports.buildMrvDeployPlan = buildMrvDeployPlan;
 exports.buildMrvDeployRequest = buildMrvDeployRequest;
 exports.checkMrvFeeDisplayConformance = checkMrvFeeDisplayConformance;
 exports.composeClaimBoundMessage = composeClaimBoundMessage;
+exports.consumeNativeEvents = consumeNativeEvents;
 exports.decodeHasPubkeyReturn = decodeHasPubkeyReturn;
 exports.decodeLookupPubkeyReturn = decodeLookupPubkeyReturn;
 exports.deriveMrvContractAddress = deriveMrvContractAddress;
@@ -3362,6 +3438,7 @@ exports.getP2pSeeds = getP2pSeeds;
 exports.getRpcEndpoints = getRpcEndpoints;
 exports.hexToAddressBytes = hexToAddressBytes;
 exports.isConcreteServiceProbeStatus = isConcreteServiceProbeStatus;
+exports.isNativeDecodedEvent = isNativeDecodedEvent;
 exports.isSinglePublicServiceProbeMask = isSinglePublicServiceProbeMask;
 exports.isValidNodeRegistryCapabilities = isValidNodeRegistryCapabilities;
 exports.isValidPublicServiceProbeMask = isValidPublicServiceProbeMask;
@@ -3369,11 +3446,14 @@ exports.mrvAddressToBech32 = mrvAddressToBech32;
 exports.mrvBech32ToAddress = mrvBech32ToAddress;
 exports.mrvCodeHashHex = mrvCodeHashHex;
 exports.mrvV1TransactionExtension = mrvV1TransactionExtension;
+exports.nativeEventMatches = nativeEventMatches;
+exports.nativeEventsFromReceipt = nativeEventsFromReceipt;
 exports.nodeRegistryAddressHex = nodeRegistryAddressHex;
 exports.normalizeAddressHex = normalizeAddressHex;
 exports.parseAddress = parseAddress;
 exports.parseChainRegistryToml = parseChainRegistryToml;
 exports.parseLythToLythoshi = parseLythToLythoshi;
+exports.parseNativeDecodedEvent = parseNativeDecodedEvent;
 exports.parseQuantity = parseQuantity;
 exports.parseQuantityBig = parseQuantityBig;
 exports.pubkeyRegistryAddressHex = pubkeyRegistryAddressHex;

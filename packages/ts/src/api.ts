@@ -7,9 +7,15 @@
  */
 
 import { SdkError } from "./error.js";
+import { nativeEventsFromReceipt } from "./native-events.js";
 import type { ClobMarketResponse } from "./bindings/ClobMarketResponse.js";
 import type { BlockSelector } from "./types.js";
 import { encodeBlockSelector } from "./types.js";
+import type {
+  NativeDecodedEvent,
+  NativeEventFilter,
+  TypedNativeReceiptEvent,
+} from "./native-events.js";
 import type {
   AddressFlowResponse,
   AddressProfileResponse,
@@ -236,7 +242,8 @@ export interface ApiTransactionReceiptData {
   source: { chainProvider: string };
 }
 
-export type ApiTransactionNativeReceiptData = NativeReceiptResponse;
+export type ApiTransactionNativeReceiptData<TDecoded = unknown> =
+  NativeReceiptResponse<TDecoded>;
 
 export interface ApiAddressActivityData {
   address: string;
@@ -466,10 +473,29 @@ export class ApiClient {
     return this.get(`/transactions/${encodePathSegment(hash)}/receipt`);
   }
 
-  async transactionNativeReceipt(
+  async transactionNativeReceipt<TDecoded = unknown>(
     hash: string,
-  ): Promise<ApiEnvelope<ApiTransactionNativeReceiptData>> {
+  ): Promise<ApiEnvelope<ApiTransactionNativeReceiptData<TDecoded>>> {
     return this.get(`/transactions/${encodePathSegment(hash)}/native-receipt`);
+  }
+
+  /**
+   * Typed native event rows from `/transactions/{hash}/native-receipt`.
+   *
+   * This helper consumes the existing native receipt API route and returns
+   * its envelope metadata with `data` replaced by the filtered event rows.
+   */
+  async transactionNativeReceiptEvents<
+    TDecoded extends NativeDecodedEvent = NativeDecodedEvent,
+  >(
+    hash: string,
+    filter: NativeEventFilter = {},
+  ): Promise<ApiEnvelope<Array<TypedNativeReceiptEvent<TDecoded>>>> {
+    const receipt = await this.transactionNativeReceipt(hash);
+    return {
+      ...receipt,
+      data: nativeEventsFromReceipt<TDecoded>(receipt.data, filter),
+    };
   }
 
   async addressProfile(address: string): Promise<ApiEnvelope<AddressProfileResponse>> {
