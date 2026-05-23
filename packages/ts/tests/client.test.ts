@@ -1292,6 +1292,108 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(response.events[0].decoded.min_notional).toBe("50");
   });
 
+  it("lythNativeMarketState forwards filter and decodes spot, listing, and royalty rows", async () => {
+    const marketId = `0x${"aa".repeat(32)}`;
+    const orderId = `0x${"bb".repeat(32)}`;
+    const listingId = `0x${"cc".repeat(32)}`;
+    const collectionId = `0x${"dd".repeat(32)}`;
+    const owner = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+    const { fetch, calls } = mockFetch({
+      schemaVersion: 1,
+      limit: 5,
+      filters: {
+        marketId,
+        orderId: null,
+        listingId: null,
+        collectionId: null,
+        includeSpotOrders: true,
+      },
+      spotMarkets: [
+        {
+          marketId,
+          owner,
+          baseAssetId: `0x${"11".repeat(32)}`,
+          quoteAssetId: `0x${"22".repeat(32)}`,
+          tickSize: "10",
+          lotSize: "5",
+          minQuantity: "25",
+          minNotional: "1000",
+          tradeCount: "2",
+          totalVolumeBase: "40",
+          lastPrice: "7",
+          lastBlockHeight: 45,
+          createdAtBlock: 40,
+          updatedAtBlock: 45,
+        },
+      ],
+      spotOrders: [
+        {
+          orderId,
+          marketId,
+          owner,
+          side: "bid",
+          price: "7",
+          quantity: "30",
+          remaining: "20",
+          status: "open",
+          expiresAtBlock: 99,
+          updatedAtBlock: 45,
+        },
+      ],
+      nftListings: [
+        {
+          listingId,
+          seller: "mono1seller0000000000000000000000000000000000",
+          standard: "mrc721",
+          collectionId,
+          tokenId: `0x${"33".repeat(32)}`,
+          quantity: "1",
+          paymentAssetId: `0x${"44".repeat(32)}`,
+          price: "700",
+          listingKind: { fixedPrice: true },
+          status: "open",
+          expiresAtBlock: 120,
+          highestBidder: "mono1bidder0000000000000000000000000000000000",
+          highestBid: "650",
+          updatedAtBlock: 46,
+        },
+      ],
+      collectionRoyalties: [
+        {
+          collectionId,
+          creator: null,
+          recipient: "mono1royalty00000000000000000000000000000000",
+          bps: 250,
+          updatedAtBlock: 47,
+        },
+      ],
+      source: {
+        indexerProvider: "native_market_state",
+        projection: "native_market_state",
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const response = await client.lythNativeMarketState({
+      marketId,
+      includeSpotOrders: true,
+      limit: 5,
+    });
+
+    expect(response.spotMarkets[0].tradeCount).toBe("2");
+    expect(response.spotOrders[0].remaining).toBe("20");
+    expect(response.nftListings[0].listingKind).toEqual({ fixedPrice: true });
+    expect(response.collectionRoyalties[0].bps).toBe(250);
+    expect(calls[0].method).toBe("lyth_nativeMarketState");
+    expect(calls[0].params).toEqual([
+      {
+        marketId,
+        includeSpotOrders: true,
+        limit: 5,
+      },
+    ]);
+  });
+
   it("live explorer helpers call the new chain RPC surfaces", async () => {
     const address = "0x1111111111111111111111111111111111111111";
     const txHash = `0x${"22".repeat(32)}`;

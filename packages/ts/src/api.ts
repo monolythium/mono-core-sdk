@@ -8,6 +8,7 @@
 
 import { SdkError } from "./error.js";
 import type { BridgeRoutesRequest, BridgeRoutesResponse } from "./bridge.js";
+import { nativeMarketStateFilterParams } from "./client.js";
 import {
   nativeEventsFromHistory,
   nativeEventsFromReceipt,
@@ -39,6 +40,8 @@ import type {
   NativeReceiptResponse,
   NativeEventsFilter,
   NativeEventsResponse,
+  NativeMarketStateFilter,
+  NativeMarketStateResponse,
   OperatorCapabilitiesResponse,
   RuntimeBuildProvenance,
   RuntimeUpgradeStatus,
@@ -562,6 +565,12 @@ export class ApiClient {
       ...response,
       data: nativeMarketEventsFromHistory<TDecoded>(response.data),
     };
+  }
+
+  async nativeMarketState(
+    filter: NativeMarketStateFilter = {},
+  ): Promise<ApiEnvelope<NativeMarketStateResponse>> {
+    return this.get("/native-market-state", nativeMarketStateFilterParams(filter));
   }
 
   async addressProfile(address: string): Promise<ApiEnvelope<AddressProfileResponse>> {

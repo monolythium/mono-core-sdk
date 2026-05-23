@@ -32,1113 +32,6 @@ var SdkError = class _SdkError extends Error {
   }
 };
 
-// src/native-events.ts
-var NATIVE_MARKET_EVENT_FAMILY = "market";
-function nativeMarketEventFilter(filter = {}) {
-  return { ...filter, family: NATIVE_MARKET_EVENT_FAMILY };
-}
-function isNativeDecodedEvent(value) {
-  const row = asRecord(value);
-  return row !== null && typeof row["block_height"] === "number" && typeof row["tx_index"] === "number" && typeof row["sequence"] === "number" && typeof row["family"] === "string" && typeof row["event_name"] === "string" && typeof row["payload_hash"] === "string";
-}
-function parseNativeDecodedEvent(event) {
-  if (isNativeDecodedEvent(event.decoded)) {
-    return event.decoded;
-  }
-  try {
-    const parsed = JSON.parse(event.decodedJson);
-    if (isNativeDecodedEvent(parsed)) {
-      return parsed;
-    }
-  } catch {
-  }
-  throw SdkError.malformed(
-    `native event ${event.eventTopic} at logIndex ${event.logIndex} is missing a typed decoded payload`
-  );
-}
-function nativeEventMatches(event, filter = {}) {
-  if (filter.address !== void 0 && event.address !== filter.address) return false;
-  if (filter.eventTopic !== void 0 && event.eventTopic !== filter.eventTopic) return false;
-  if (filter.family === void 0 && filter.eventName === void 0) return true;
-  let decoded;
-  try {
-    decoded = parseNativeDecodedEvent(event);
-  } catch {
-    return false;
-  }
-  if (filter.family !== void 0 && decoded.family !== filter.family) return false;
-  if (filter.eventName !== void 0 && decoded.event_name !== filter.eventName) return false;
-  return true;
-}
-function nativeEventsFromReceipt(receipt, filter = {}) {
-  return receipt.events.filter((event) => nativeEventMatches(event, filter)).map((event) => ({
-    ...event,
-    decoded: parseNativeDecodedEvent(event)
-  }));
-}
-function nativeMarketEventsFromReceipt(receipt, filter = {}) {
-  return nativeEventsFromReceipt(receipt, nativeMarketEventFilter(filter));
-}
-function nativeEventsFromHistory(response) {
-  return {
-    ...response,
-    events: response.events.map((event) => ({
-      ...event,
-      decoded: parseNativeDecodedEvent(event)
-    }))
-  };
-}
-function nativeMarketEventsFromHistory(response) {
-  return {
-    ...response,
-    filters: { ...response.filters, family: NATIVE_MARKET_EVENT_FAMILY },
-    events: response.events.filter((event) => nativeEventMatches(event, { family: NATIVE_MARKET_EVENT_FAMILY })).map((event) => ({
-      ...event,
-      decoded: parseNativeDecodedEvent(event)
-    }))
-  };
-}
-async function consumeNativeEvents(receipt, consumer, filter = {}) {
-  const events = nativeEventsFromReceipt(receipt, filter);
-  for (const event of events) {
-    await consumer(event);
-  }
-  return events.length;
-}
-function asRecord(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
-  return value;
-}
-
-// src/types.ts
-function encodeBlockSelector(b) {
-  if (typeof b === "number") return `0x${b.toString(16)}`;
-  if (typeof b === "bigint") return `0x${b.toString(16)}`;
-  return b;
-}
-
-// src/api.ts
-var SDK_VERSION = "0.1.0";
-function apiEndpointFromRpcEndpoint(endpoint) {
-  const raw = endpoint.trim();
-  if (raw.length === 0) {
-    throw SdkError.endpoint("endpoint cannot be empty");
-  }
-  const noTrailing = raw.replace(/\/+$/, "");
-  if (noTrailing.endsWith("/api/v1")) {
-    return noTrailing;
-  }
-  if (/^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(noTrailing)) {
-    const url = new URL(noTrailing);
-    const path = url.pathname.replace(/\/+$/, "");
-    if (path === "" || path === "/" || path === "/rpc") {
-      url.pathname = "/api/v1";
-    } else if (path.endsWith("/rpc")) {
-      url.pathname = `${path.slice(0, -"/rpc".length)}/api/v1`;
-    } else {
-      url.pathname = "/api/v1";
-    }
-    url.search = "";
-    url.hash = "";
-    return url.toString().replace(/\/+$/, "");
-  }
-  return "/api/v1";
-}
-var ApiClient = class {
-  baseUrl;
-  #fetch;
-  #headers;
-  constructor(endpoint, options = {}) {
-    this.baseUrl = (options.apiBaseUrl ?? apiEndpointFromRpcEndpoint(endpoint)).replace(/\/+$/, "");
-    this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
-    this.#headers = {
-      accept: "application/json",
-      "user-agent": `monolythium-core-sdk/${SDK_VERSION}`,
-      ...options.headers ?? {}
-    };
-  }
-  async get(path, query = {}) {
-    return this.#get(path, query, false);
-  }
-  async health() {
-    return this.#get("/health", {}, true);
-  }
-  async capabilities() {
-    return this.get("/capabilities");
-  }
-  async provenance() {
-    return this.get("/provenance");
-  }
-  async search(query, limit = 10) {
-    return this.get("/search", { q: query, limit });
-  }
-  async stats() {
-    return this.get("/stats");
-  }
-  async block(block = "latest") {
-    return this.get(`/blocks/${encodePathBlock(block)}`);
-  }
-  async blockTransactions(block = "latest", page = 0, limit = 25) {
-    return this.get(`/blocks/${encodePathBlock(block)}/transactions`, { page, limit });
-  }
-  async transactions(limit = 50, cursor) {
-    return this.get("/transactions", { limit, cursor });
-  }
-  async transaction(hash) {
-    return this.get(`/transactions/${encodePathSegment(hash)}`);
-  }
-  async transactionReceipt(hash) {
-    return this.get(`/transactions/${encodePathSegment(hash)}/receipt`);
-  }
-  async transactionNativeReceipt(hash) {
-    return this.get(`/transactions/${encodePathSegment(hash)}/native-receipt`);
-  }
-  /**
-   * Typed native event rows from `/transactions/{hash}/native-receipt`.
-   *
-   * This helper consumes the existing native receipt API route and returns
-   * its envelope metadata with `data` replaced by the filtered event rows.
-   */
-  async transactionNativeReceiptEvents(hash, filter = {}) {
-    const receipt = await this.transactionNativeReceipt(hash);
-    return {
-      ...receipt,
-      data: nativeEventsFromReceipt(receipt.data, filter)
-    };
-  }
-  async transactionNativeReceiptMarketEvents(hash, filter = {}) {
-    const receipt = await this.transactionNativeReceipt(hash);
-    return {
-      ...receipt,
-      data: nativeMarketEventsFromReceipt(receipt.data, filter)
-    };
-  }
-  async nativeEvents(filter) {
-    return this.get("/native-events", nativeEventsFilterQuery(filter));
-  }
-  async nativeEventsTyped(filter) {
-    const response = await this.nativeEvents(filter);
-    return {
-      ...response,
-      data: nativeEventsFromHistory(response.data)
-    };
-  }
-  async nativeMarketEvents(filter) {
-    return this.nativeEvents({
-      ...filter,
-      family: "market"
-    });
-  }
-  async nativeMarketEventsTyped(filter) {
-    const response = await this.nativeEvents({
-      ...filter,
-      family: "market"
-    });
-    return {
-      ...response,
-      data: nativeMarketEventsFromHistory(response.data)
-    };
-  }
-  async addressProfile(address) {
-    return this.get(`/addresses/${encodePathSegment(address)}/profile`);
-  }
-  async addressFlow(address, limit = 250) {
-    return this.get(`/addresses/${encodePathSegment(address)}/flow`, { limit });
-  }
-  async addressActivity(address, limit = 50, cursor) {
-    return this.get(`/addresses/${encodePathSegment(address)}/activity`, {
-      limit,
-      cursor
-    });
-  }
-  async addressActivityKind(address) {
-    return this.get(`/addresses/${encodePathSegment(address)}/activity-kind`);
-  }
-  async addressPendingRewards(address, block) {
-    return this.get(`/addresses/${encodePathSegment(address)}/pending-rewards`, {
-      block: block == null ? void 0 : encodeBlockSelector(block)
-    });
-  }
-  async addressRedemptionQueue(address, block) {
-    return this.get(`/addresses/${encodePathSegment(address)}/redemption-queue`, {
-      block: block == null ? void 0 : encodeBlockSelector(block)
-    });
-  }
-  async assetMrcMetadata(assetId, mrcTokenId) {
-    return this.get(`/assets/${encodePathSegment(assetId)}/metadata`, {
-      mrcTokenId: mrcTokenId ?? void 0
-    });
-  }
-  async mrcAccount(account, limit) {
-    return this.get(`/mrc/accounts/${encodePathSegment(account)}`, {
-      limit: limit ?? void 0
-    });
-  }
-  async mrcHolders(standard, assetId, tokenId, limit) {
-    return this.get(
-      `/mrc/${encodePathSegment(standard)}/${encodePathSegment(assetId)}/${encodePathSegment(
-        tokenId
-      )}/holders`,
-      { limit: limit ?? void 0 }
-    );
-  }
-  /**
-   * Asset-scoped `/api/v1/mrc/{standard}/{assetId}/holders`.
-   *
-   * This is the REST form used by MRC-4626 vault share balances.
-   */
-  async mrcAssetHolders(standard, assetId, limit) {
-    return this.get(
-      `/mrc/${encodePathSegment(standard)}/${encodePathSegment(assetId)}/holders`,
-      { limit: limit ?? void 0 }
-    );
-  }
-  /** `/api/v1/mrc/mrc4626/{vaultId}/holders`. */
-  async mrc4626Holders(vaultId, limit) {
-    return this.mrcAssetHolders("mrc4626", vaultId, limit);
-  }
-  /**
-   * `/api/v1/bridge/routes`.
-   *
-   * The forthcoming route is read-only `GET`, so the typed request is encoded
-   * as a single JSON query value named `request`.
-   */
-  async bridgeRoutes(request) {
-    return this.get("/bridge/routes", {
-      request: JSON.stringify(request)
-    });
-  }
-  async clusters(page = 0, limit = 25) {
-    return this.get("/clusters", { page, limit });
-  }
-  async cluster(clusterId) {
-    return this.get(`/clusters/${encodePathSegment(clusterId)}`);
-  }
-  async operator(operatorId) {
-    return this.get(`/operators/${encodePathSegment(operatorId)}`);
-  }
-  async serviceProbe(peerId, serviceMask) {
-    return this.get(
-      `/service-probes/${encodePathSegment(peerId)}/${encodePathSegment(serviceMask)}`
-    );
-  }
-  async markets(limit = 50) {
-    return this.get("/markets", { limit });
-  }
-  async market(marketId) {
-    return this.get(`/markets/${encodePathSegment(marketId)}`);
-  }
-  async marketTrades(marketId, limit = 50, cursor) {
-    return this.get(`/markets/${encodePathSegment(marketId)}/trades`, { limit, cursor });
-  }
-  async marketOhlc(marketId, fromBlock, toBlock, bucketBlocks) {
-    return this.get(`/markets/${encodePathSegment(marketId)}/ohlc`, {
-      fromBlock,
-      toBlock,
-      bucketBlocks
-    });
-  }
-  async marketOrderBook(marketId, levels = 20) {
-    return this.get(`/markets/${encodePathSegment(marketId)}/orderbook`, { levels });
-  }
-  async upgradeStatus(height) {
-    return this.get("/upgrades/status", {
-      height: height == null ? void 0 : encodeBlockSelector(height)
-    });
-  }
-  async #get(path, query, allowUnavailableBody) {
-    const url = buildUrl(this.baseUrl, path, query);
-    let resp;
-    try {
-      resp = await this.#fetch(url, {
-        method: "GET",
-        headers: this.#headers
-      });
-    } catch (cause) {
-      throw SdkError.transport(
-        `transport failure calling ${url}: ${cause?.message ?? cause}`,
-        cause
-      );
-    }
-    let parsed;
-    try {
-      parsed = await resp.json();
-    } catch (cause) {
-      throw SdkError.malformed(
-        `non-JSON response (HTTP ${resp.status}): ${cause?.message ?? cause}`
-      );
-    }
-    const error = parseApiError(parsed);
-    if (error) {
-      throw SdkError.rpc(error.code, error.message, error.data);
-    }
-    if (!resp.ok && !(allowUnavailableBody && resp.status === 503)) {
-      throw SdkError.transport(`HTTP ${resp.status} calling ${url}`);
-    }
-    return parsed;
-  }
-};
-function parseApiError(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const error = value["error"];
-  if (!error || typeof error !== "object" || Array.isArray(error)) return null;
-  const row = error;
-  if (typeof row["code"] !== "number" || typeof row["message"] !== "string") {
-    return null;
-  }
-  return {
-    code: row["code"],
-    message: row["message"],
-    data: row["data"]
-  };
-}
-function buildUrl(baseUrl, path, query) {
-  const cleanBase = baseUrl.replace(/\/+$/, "");
-  const cleanPath = path.startsWith("/") ? path : `/${path}`;
-  const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(query)) {
-    if (value === void 0 || value === null) continue;
-    params.set(key, typeof value === "bigint" ? value.toString() : String(value));
-  }
-  const qs = params.toString();
-  return qs.length === 0 ? `${cleanBase}${cleanPath}` : `${cleanBase}${cleanPath}?${qs}`;
-}
-function nativeEventsFilterQuery(filter) {
-  return {
-    fromBlock: filter.fromBlock,
-    toBlock: filter.toBlock,
-    limit: filter.limit,
-    txIndex: filter.txIndex,
-    logIndex: filter.logIndex,
-    address: filter.address,
-    eventTopic: filter.eventTopic,
-    family: filter.family,
-    eventName: filter.eventName,
-    primaryId: filter.primaryId,
-    relatedId: filter.relatedId,
-    tokenId: filter.tokenId,
-    account: filter.account,
-    counterparty: filter.counterparty
-  };
-}
-function encodePathBlock(block) {
-  return encodePathSegment(encodeBlockSelector(block));
-}
-function encodePathSegment(value) {
-  return encodeURIComponent(typeof value === "bigint" ? value.toString() : String(value));
-}
-
-// src/consts.ts
-var BURN_ADDR = "0x0000000000000000000000000000000000000000";
-var PRECOMPILE_ADDRESSES = {
-  /** Native fungible-token factory — non-gateable, foundational. */
-  TOKEN_FACTORY: "0x0000000000000000000000000000000000001000",
-  /** Native central-limit order book — gateable. */
-  CLOB: "0x0000000000000000000000000000000000001001",
-  /** Agent execution surface (zkML-gated, ADR-0011/ADR-0020) — gateable. */
-  AGENT: "0x0000000000000000000000000000000000001003",
-  /** Account privacy policy + stealth/confidential ops — gateable. */
-  PRIVACY: "0x0000000000000000000000000000000000001004",
-  /** Operator + RPC node registry — non-gateable consensus invariant. */
-  NODE_REGISTRY: "0x0000000000000000000000000000000000001005",
-  /** IBC light-client + packet routing — gateable. */
-  IBC: "0x0000000000000000000000000000000000001007",
-  /** Native zk-light-client bridge — gateable. */
-  BRIDGE: "0x0000000000000000000000000000000000001008",
-  /** Decentralized multi-signer oracle (OI-0036) — non-gateable. */
-  ORACLE: "0x0000000000000000000000000000000000001009",
-  /** Distributed delegation primitive (Stage E.5a, Law §7.6) — gateable. */
-  DELEGATION: "0x000000000000000000000000000000000000100A",
-  /** One-time emergency-key registry (Law §5.4 / §2.9) — non-gateable. */
-  EMERGENCY_KEY: "0x0000000000000000000000000000000000001100",
-  /** VRF precompile (Law §5.4 / §5.6). */
-  VRF: "0x0000000000000000000000000000000000001101",
-  /** Streaming-payments primitive (Law §5.4 / §5.7) — gateable. */
-  STREAMING_PAYMENTS: "0x0000000000000000000000000000000000001102",
-  /** Human-readable name registry (Law §5.4 / §5.8) — gateable. */
-  NAME_REGISTRY: "0x0000000000000000000000000000000000001103",
-  /** Cluster-name registry. */
-  CLUSTER_NAME_REGISTRY: "0x0000000000000000000000000000000000001104",
-  /** Agent-commerce attestation precompile. */
-  ATTESTATION: "0x0000000000000000000000000000000000001105",
-  /** Agent-commerce consent precompile. */
-  CONSENT: "0x0000000000000000000000000000000000001106",
-  /** Agent-commerce issuer registry. */
-  ISSUER_REGISTRY: "0x0000000000000000000000000000000000001107",
-  /** Agent-commerce discovery precompile. */
-  DISCOVERY: "0x0000000000000000000000000000000000001108",
-  /** Agent-commerce availability precompile. */
-  AVAILABILITY: "0x0000000000000000000000000000000000001109",
-  /** Agent-commerce escrow precompile. */
-  ESCROW: "0x000000000000000000000000000000000000110A",
-  /** Agent-commerce arbiter registry. */
-  ARBITER_REGISTRY: "0x000000000000000000000000000000000000110B",
-  /** Agent spending policy — gateable, activated by Stage 7 milestones. */
-  SPENDING_POLICY: "0x000000000000000000000000000000000000110C",
-  /** Primary ML-DSA-65 pubkey registry — gateable, ADR-0034. */
-  PUBKEY_REGISTRY: "0x000000000000000000000000000000000000110D"
-};
-
-// src/bridge.ts
-var BRIDGE_SELECTORS = {
-  lockBridgeConfig: "0x8956feb3",
-  setBridgeResumeCooldown: "0x1a3a0672",
-  setBridgeRouteFinality: "0x8a061e99"
-};
-var BRIDGE_REVERT_TAGS = {
-  bridgeAdminLocked: "0xf807",
-  bridgeResumeCooldownActive: "0xf808",
-  bridgeCooldownZero: "0xfd08",
-  bridgeFinalityZero: "0xfd09"
-};
-var BRIDGE_QUOTE_API_BLOCKED_REASON = "bridge quote requires a mono-core live quote API/runtime primitive";
-var BRIDGE_SUBMIT_API_BLOCKED_REASON = "bridge submit requires a mono-core live submit API/runtime primitive";
-var BridgePrecompileError = class extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "BridgePrecompileError";
-  }
-};
-var BridgeRouteCatalogueError = class extends Error {
-  blockedReasons;
-  constructor(blockedReasons) {
-    super(`invalid bridge route catalogue: ${blockedReasons.join("; ")}`);
-    this.name = "BridgeRouteCatalogueError";
-    this.blockedReasons = [...blockedReasons];
-  }
-};
-function bridgeAddressHex() {
-  return PRECOMPILE_ADDRESSES.BRIDGE.toLowerCase();
-}
-function encodeLockBridgeConfigCalldata(bridgeId) {
-  return bytesToHex(
-    concatBytes(
-      hexToBytes(BRIDGE_SELECTORS.lockBridgeConfig),
-      expectLength(toBytes(bridgeId), 32, "bridgeId")
-    )
-  );
-}
-function encodeSetBridgeResumeCooldownCalldata(bridgeId, cooldownBlocks) {
-  return bytesToHex(
-    concatBytes(
-      hexToBytes(BRIDGE_SELECTORS.setBridgeResumeCooldown),
-      expectLength(toBytes(bridgeId), 32, "bridgeId"),
-      uint64Word(cooldownBlocks, "cooldownBlocks")
-    )
-  );
-}
-function encodeSetBridgeRouteFinalityCalldata(bridgeId, finalityBlocks) {
-  return bytesToHex(
-    concatBytes(
-      hexToBytes(BRIDGE_SELECTORS.setBridgeRouteFinality),
-      expectLength(toBytes(bridgeId), 32, "bridgeId"),
-      uint64Word(finalityBlocks, "finalityBlocks")
-    )
-  );
-}
-function isBridgeAdminLockedRevert(data) {
-  return bytesToHex(toBytes(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeAdminLocked;
-}
-function isBridgeResumeCooldownActiveRevert(data) {
-  return bytesToHex(toBytes(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeResumeCooldownActive;
-}
-function isBridgeCooldownZeroRevert(data) {
-  return bytesToHex(toBytes(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeCooldownZero;
-}
-function isBridgeFinalityZeroRevert(data) {
-  return bytesToHex(toBytes(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeFinalityZero;
-}
-function assessBridgeRoute(route) {
-  const blockedReasons = [];
-  const warnings = [];
-  if (route.routeId.trim() === "") blockedReasons.push("route id missing");
-  if (route.bridge.trim() === "") blockedReasons.push("bridge name missing");
-  if (route.asset.trim() === "") blockedReasons.push("asset disclosure missing");
-  if (route.verifier.model.trim() === "") blockedReasons.push("verifier model missing");
-  if (route.verifier.threshold < 2 || route.verifier.participantCount < 2) {
-    blockedReasons.push("verifier set must not be 1-of-1");
-  }
-  if (route.verifier.threshold > route.verifier.participantCount) {
-    blockedReasons.push("verifier threshold exceeds participant count");
-  }
-  if (!decimalStringIsPositive(route.drainCapAtomic)) {
-    blockedReasons.push("per-asset drain cap missing or zero");
-  }
-  if (route.finalityBlocks === 0) blockedReasons.push("route finality delay missing");
-  if (route.cooldownSeconds === 0) blockedReasons.push("route cooldown missing");
-  if (route.adminControl !== "none" && route.adminControl !== "consensusOnly") {
-    blockedReasons.push("Mono-side admin control is not consensus-only");
-  }
-  if (route.circuitBreaker === "paused") {
-    blockedReasons.push("route circuit breaker is paused");
-  } else if (route.circuitBreaker === "disabled" || route.circuitBreaker === "unknown") {
-    blockedReasons.push("route circuit breaker missing");
-  }
-  if (!decimalStringIsPositive(route.insuranceAtomic)) {
-    blockedReasons.push("slashable insurance pool missing or zero");
-  }
-  if (route.lastIncidentDate != null) {
-    warnings.push("route reports a prior bridge incident");
-  }
-  if (blockedReasons.length > 0) {
-    return {
-      routeId: route.routeId,
-      accepted: false,
-      score: 0,
-      riskTier: "blocked",
-      blockedReasons,
-      warnings
-    };
-  }
-  let score = 100;
-  if (route.verifier.threshold * 3 <= route.verifier.participantCount) {
-    score -= 10;
-    warnings.push("verifier threshold is below one-third-plus quorum");
-  }
-  if (route.cooldownSeconds < 3600) {
-    score -= 10;
-    warnings.push("cooldown is under one hour");
-  }
-  if (route.finalityBlocks < 2) {
-    score -= 5;
-    warnings.push("finality delay is under two blocks");
-  }
-  return {
-    routeId: route.routeId,
-    accepted: true,
-    score,
-    riskTier: score >= 90 ? "low" : score >= 75 ? "medium" : "high",
-    blockedReasons,
-    warnings
-  };
-}
-function rankBridgeRoutes(routes) {
-  return routes.map((route) => ({ route, assessment: assessBridgeRoute(route) })).sort((left, right) => {
-    if (left.assessment.accepted !== right.assessment.accepted) {
-      return left.assessment.accepted ? -1 : 1;
-    }
-    if (left.assessment.score !== right.assessment.score) {
-      return right.assessment.score - left.assessment.score;
-    }
-    if (left.route.cooldownSeconds !== right.route.cooldownSeconds) {
-      return left.route.cooldownSeconds - right.route.cooldownSeconds;
-    }
-    if (left.route.finalityBlocks !== right.route.finalityBlocks) {
-      return left.route.finalityBlocks - right.route.finalityBlocks;
-    }
-    return left.assessment.routeId.localeCompare(right.assessment.routeId);
-  });
-}
-function bridgeTransferCandidates(intent, routes) {
-  const intentReasons = validateBridgeTransferIntent(intent);
-  return routes.map((route) => bridgeRouteCandidate(intent, intentReasons, route)).sort(compareBridgeCandidates);
-}
-function selectBridgeTransferRoute(intent, routes) {
-  const blockedReasons = validateBridgeTransferIntent(intent);
-  const candidates = bridgeTransferCandidates(intent, routes);
-  if (routes.length === 0) {
-    blockedReasons.push("no route disclosures supplied");
-  }
-  const selectedCandidate = blockedReasons.length === 0 ? candidates.find((candidate) => candidate.eligible) : void 0;
-  const selected = selectedCandidate == null ? null : {
-    intent,
-    route: selectedCandidate.route,
-    assessment: selectedCandidate.assessment
-  };
-  if (selected == null && blockedReasons.length === 0) {
-    blockedReasons.push("no eligible bridge route satisfies the transfer intent and v4.1 floor");
-  }
-  return { selected, candidates, blockedReasons };
-}
-function bridgeQuoteSubmitReadiness(intent, routes) {
-  const selection = selectBridgeTransferRoute(intent, routes);
-  const routeSelectionReady = selection.selected != null;
-  const blockedReasons = [...selection.blockedReasons];
-  if (routeSelectionReady) {
-    blockedReasons.push(BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_SUBMIT_API_BLOCKED_REASON);
-  }
-  return {
-    selection,
-    routeSelectionReady,
-    quoteReady: false,
-    submitReady: false,
-    blockedReasons,
-    warnings: selection.selected == null ? [] : [...selection.selected.assessment.warnings]
-  };
-}
-function bridgeRoutesReadiness(request) {
-  const routeDisclosures = request.routeDisclosures ?? [];
-  const source = {
-    address: request.address,
-    routeCount: routeDisclosures.length,
-    globalRouteIndexAvailable: false,
-    routeDisclosureSource: "request.routeDisclosures"
-  };
-  if (request.intent == null) {
-    const blockedReasons = ["bridge route selection requires transfer intent"];
-    if (routeDisclosures.length === 0) {
-      blockedReasons.push("no route disclosures supplied");
-    }
-    return {
-      selection: {
-        selected: null,
-        candidates: [],
-        blockedReasons: [...blockedReasons]
-      },
-      routeSelectionReady: false,
-      quoteReady: false,
-      submitReady: false,
-      blockedReasons,
-      warnings: [],
-      routes: [...routeDisclosures],
-      bridgeRouteDisclosures: [...routeDisclosures],
-      source
-    };
-  }
-  const readiness = bridgeQuoteSubmitReadiness(request.intent, routeDisclosures);
-  return {
-    ...readiness,
-    quoteReady: false,
-    submitReady: false,
-    routes: [...routeDisclosures],
-    bridgeRouteDisclosures: [...routeDisclosures],
-    source
-  };
-}
-function buildBridgeRouteCatalogue(routes) {
-  return { routes: routes.map(cloneBridgeRouteCatalogueRoute) };
-}
-function parseBridgeRouteCatalogueJson(json) {
-  const decoded = JSON.parse(json);
-  return normalizeBridgeRouteCatalogue(decoded);
-}
-function normalizeBridgeRouteCatalogue(payload) {
-  const validation = validateBridgeRouteCatalogue(payload);
-  if (!validation.accepted) {
-    throw new BridgeRouteCatalogueError(validation.blockedReasons);
-  }
-  const routes = routeArrayFromCataloguePayload(payload);
-  if (routes == null) {
-    throw new BridgeRouteCatalogueError(["route catalogue must be an array or { routes: [...] }"]);
-  }
-  return { routes: routes.map((route) => coerceBridgeRouteCatalogueRoute(route)) };
-}
-function validateBridgeRouteCatalogue(payload) {
-  const routes = routeArrayFromCataloguePayload(payload);
-  const blockedReasons = [];
-  if (routes == null) {
-    return {
-      accepted: false,
-      routeCount: 0,
-      blockedReasons: ["route catalogue must be an array or { routes: [...] }"]
-    };
-  }
-  if (routes.length === 0) {
-    blockedReasons.push("bridge route import must contain at least one route");
-  }
-  const seen = /* @__PURE__ */ new Set();
-  routes.forEach(
-    (route, idx) => validateBridgeRouteCatalogueRoute(idx, route, seen, blockedReasons)
-  );
-  return {
-    accepted: blockedReasons.length === 0,
-    routeCount: routes.length,
-    blockedReasons
-  };
-}
-function exportBridgeRouteCatalogueJson(payload, options = {}) {
-  const catalogue = normalizeBridgeRouteCatalogue(payload);
-  const value = options.envelope === false ? catalogue.routes : catalogue;
-  return JSON.stringify(value, null, options.space ?? 2);
-}
-var MAX_U256 = (1n << 256n) - 1n;
-function routeArrayFromCataloguePayload(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (isRecord(payload) && Array.isArray(payload.routes)) return payload.routes;
-  return null;
-}
-function validateBridgeRouteCatalogueRoute(idx, value, seen, blockedReasons) {
-  const prefix = `routes[${idx}]`;
-  if (!isRecord(value)) {
-    blockedReasons.push(`${prefix} must be an object`);
-    return;
-  }
-  const tokenId = validateHexBytes(
-    `${prefix}.tokenId`,
-    field(value, "tokenId", "token_id"),
-    32,
-    blockedReasons
-  );
-  const routeId = validateTextField(
-    `${prefix}.routeId`,
-    field(value, "routeId", "route_id"),
-    96,
-    blockedReasons
-  );
-  if (tokenId != null && routeId != null) {
-    const key = `${tokenId}:${routeId}`;
-    if (seen.has(key)) {
-      blockedReasons.push(`${prefix}.routeId duplicate (tokenId, routeId) in bridge route import`);
-    } else {
-      seen.add(key);
-    }
-  }
-  validateHexBytes(
-    `${prefix}.bridgeId`,
-    field(value, "bridgeId", "bridge_id"),
-    32,
-    blockedReasons
-  );
-  validateHexBytes(
-    `${prefix}.wrappedAsset`,
-    field(value, "wrappedAsset", "wrapped_asset"),
-    20,
-    blockedReasons
-  );
-  validateTextField(`${prefix}.bridge`, value.bridge, 64, blockedReasons);
-  validateTextField(`${prefix}.asset`, value.asset, 64, blockedReasons);
-  validateTextField(
-    `${prefix}.sourceChain`,
-    field(value, "sourceChain", "source_chain"),
-    64,
-    blockedReasons
-  );
-  validateTextField(
-    `${prefix}.destinationChain`,
-    field(value, "destinationChain", "destination_chain"),
-    64,
-    blockedReasons
-  );
-  const verifier = value.verifier;
-  if (!isRecord(verifier)) {
-    blockedReasons.push(`${prefix}.verifier must be an object`);
-  } else {
-    validateTextField(`${prefix}.verifier.model`, verifier.model, 64, blockedReasons);
-    const participantCount = field(verifier, "participantCount", "participant_count");
-    if (!isU16(participantCount) || participantCount === 0) {
-      blockedReasons.push(`${prefix}.verifier.participantCount must be non-zero`);
-    }
-    if (!isU16(verifier.threshold) || verifier.threshold === 0) {
-      blockedReasons.push(`${prefix}.verifier.threshold must be in 1..=participantCount`);
-    } else if (isU16(participantCount) && verifier.threshold > participantCount) {
-      blockedReasons.push(`${prefix}.verifier.threshold must be in 1..=participantCount`);
-    }
-  }
-  if (!decimalStringIsPositiveU256(field(value, "drainCapAtomic", "drain_cap_atomic"))) {
-    blockedReasons.push(`${prefix}.drainCapAtomic must be a non-zero decimal u256`);
-  }
-  if (!isSafeIntegerAtLeast(field(value, "finalityBlocks", "finality_blocks"), 1)) {
-    blockedReasons.push(`${prefix}.finalityBlocks must be non-zero`);
-  }
-  if (!isSafeIntegerAtLeast(field(value, "cooldownSeconds", "cooldown_seconds"), 1)) {
-    blockedReasons.push(`${prefix}.cooldownSeconds must be non-zero`);
-  }
-  if (parseBridgeAdminControl(field(value, "adminControl", "admin_control")) == null) {
-    blockedReasons.push(
-      `${prefix}.adminControl expected none, consensusOnly, operatorKey, or unknown`
-    );
-  }
-  if (parseBridgeCircuitBreaker(field(value, "circuitBreaker", "circuit_breaker")) == null) {
-    blockedReasons.push(`${prefix}.circuitBreaker expected armed, paused, disabled, or unknown`);
-  }
-  if (!decimalStringIsPositiveU256(field(value, "insuranceAtomic", "insurance_atomic"))) {
-    blockedReasons.push(`${prefix}.insuranceAtomic must be a non-zero decimal u256`);
-  }
-  if (!isSafeIntegerAtLeast(field(value, "updatedAtBlock", "updated_at_block"), 0)) {
-    blockedReasons.push(`${prefix}.updatedAtBlock must be a non-negative safe integer`);
-  }
-  const incident = field(value, "lastIncidentDate", "last_incident_date");
-  if (incident !== void 0 && incident !== null) {
-    if (typeof incident !== "string" || !incidentDateIsValid(incident)) {
-      blockedReasons.push(`${prefix}.lastIncidentDate must be YYYY-MM-DD`);
-    }
-  }
-}
-function coerceBridgeRouteCatalogueRoute(value) {
-  if (!isRecord(value) || !isRecord(value.verifier)) {
-    throw new BridgeRouteCatalogueError(["route catalogue validation did not normalize an object"]);
-  }
-  const lastIncidentDate = field(value, "lastIncidentDate", "last_incident_date");
-  const route = {
-    tokenId: stringField(value, "tokenId", "token_id"),
-    routeId: stringField(value, "routeId", "route_id").trim(),
-    bridgeId: stringField(value, "bridgeId", "bridge_id"),
-    wrappedAsset: stringField(value, "wrappedAsset", "wrapped_asset"),
-    bridge: stringField(value, "bridge").trim(),
-    asset: stringField(value, "asset").trim(),
-    sourceChain: stringField(value, "sourceChain", "source_chain").trim(),
-    destinationChain: stringField(value, "destinationChain", "destination_chain").trim(),
-    verifier: {
-      model: stringField(value.verifier, "model").trim(),
-      participantCount: numberField(value.verifier, "participantCount", "participant_count"),
-      threshold: numberField(value.verifier, "threshold")
-    },
-    drainCapAtomic: stringField(value, "drainCapAtomic", "drain_cap_atomic").trim(),
-    finalityBlocks: numberField(value, "finalityBlocks", "finality_blocks"),
-    cooldownSeconds: numberField(value, "cooldownSeconds", "cooldown_seconds"),
-    adminControl: parseBridgeAdminControl(field(value, "adminControl", "admin_control")),
-    circuitBreaker: parseBridgeCircuitBreaker(field(value, "circuitBreaker", "circuit_breaker")),
-    insuranceAtomic: stringField(value, "insuranceAtomic", "insurance_atomic").trim(),
-    updatedAtBlock: numberField(value, "updatedAtBlock", "updated_at_block")
-  };
-  if (typeof lastIncidentDate === "string") {
-    route.lastIncidentDate = lastIncidentDate.trim();
-  } else if (lastIncidentDate === null) {
-    route.lastIncidentDate = null;
-  }
-  return route;
-}
-function cloneBridgeRouteCatalogueRoute(route) {
-  return {
-    ...route,
-    verifier: { ...route.verifier }
-  };
-}
-function bridgeRouteCandidate(intent, intentReasons, route) {
-  const assessment = assessBridgeRoute(route);
-  const blockedReasons = [...intentReasons, ...assessment.blockedReasons];
-  if (!trimmedEq(route.asset, intent.asset)) {
-    blockedReasons.push("route asset does not match transfer intent");
-  }
-  if (!trimmedEq(route.sourceChain, intent.sourceChain)) {
-    blockedReasons.push("route source chain does not match transfer intent");
-  }
-  if (!trimmedEq(route.destinationChain, intent.destinationChain)) {
-    blockedReasons.push("route destination chain does not match transfer intent");
-  }
-  if (intent.allowedRouteIds != null && !intent.allowedRouteIds.some((routeId) => trimmedEq(routeId, route.routeId))) {
-    blockedReasons.push("route id not allowed by transfer policy");
-  }
-  if (intent.minimumScore != null && assessment.score < intent.minimumScore) {
-    blockedReasons.push("route score below transfer policy minimum");
-  }
-  if (intent.maxFinalityBlocks != null && route.finalityBlocks > intent.maxFinalityBlocks) {
-    blockedReasons.push("route finality exceeds transfer policy maximum");
-  }
-  if (intent.maxCooldownSeconds != null && route.cooldownSeconds > intent.maxCooldownSeconds) {
-    blockedReasons.push("route cooldown exceeds transfer policy maximum");
-  }
-  if (decimalStringIsPositive(intent.amountAtomic) && decimalStringIsPositive(route.drainCapAtomic) && decimalStringGt(intent.amountAtomic, route.drainCapAtomic)) {
-    blockedReasons.push("transfer amount exceeds route drain cap");
-  }
-  if (decimalStringIsPositive(intent.amountAtomic) && decimalStringIsPositive(route.insuranceAtomic) && decimalStringGt(intent.amountAtomic, route.insuranceAtomic)) {
-    blockedReasons.push("transfer amount exceeds disclosed insurance coverage");
-  }
-  return {
-    route,
-    assessment,
-    eligible: blockedReasons.length === 0,
-    score: assessment.score,
-    blockedReasons,
-    warnings: [...assessment.warnings]
-  };
-}
-function validateBridgeTransferIntent(intent) {
-  const blockedReasons = [];
-  if (intent.asset.trim() === "") blockedReasons.push("transfer asset missing");
-  if (!decimalStringIsPositive(intent.amountAtomic)) {
-    blockedReasons.push("transfer amount missing or zero");
-  }
-  if (intent.sourceChain.trim() === "") blockedReasons.push("transfer source chain missing");
-  if (intent.destinationChain.trim() === "") {
-    blockedReasons.push("transfer destination chain missing");
-  }
-  if (intent.recipient.trim() === "") blockedReasons.push("transfer recipient missing");
-  if (intent.minimumScore != null && intent.minimumScore > 100) {
-    blockedReasons.push("minimum route score exceeds 100");
-  }
-  return blockedReasons;
-}
-function compareBridgeCandidates(left, right) {
-  if (left.eligible !== right.eligible) return left.eligible ? -1 : 1;
-  if (left.score !== right.score) return right.score - left.score;
-  if (left.route.cooldownSeconds !== right.route.cooldownSeconds) {
-    return left.route.cooldownSeconds - right.route.cooldownSeconds;
-  }
-  if (left.route.finalityBlocks !== right.route.finalityBlocks) {
-    return left.route.finalityBlocks - right.route.finalityBlocks;
-  }
-  return left.route.routeId.localeCompare(right.route.routeId);
-}
-function decimalStringIsPositive(value) {
-  const trimmed = value.trim();
-  return /^[0-9]+$/.test(trimmed) && /[1-9]/.test(trimmed);
-}
-function decimalStringGt(left, right) {
-  return decimalStringCompare(left, right) === 1;
-}
-function decimalStringCompare(left, right) {
-  const normalizedLeft = normalizedDecimalDigits(left);
-  const normalizedRight = normalizedDecimalDigits(right);
-  if (normalizedLeft == null || normalizedRight == null) return null;
-  if (normalizedLeft.length !== normalizedRight.length) {
-    return normalizedLeft.length > normalizedRight.length ? 1 : -1;
-  }
-  if (normalizedLeft === normalizedRight) return 0;
-  return normalizedLeft > normalizedRight ? 1 : -1;
-}
-function normalizedDecimalDigits(value) {
-  const trimmed = value.trim();
-  if (!/^[0-9]+$/.test(trimmed)) return null;
-  const normalized = trimmed.replace(/^0+/, "");
-  return normalized === "" ? "0" : normalized;
-}
-function trimmedEq(left, right) {
-  return left.trim() === right.trim();
-}
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function field(record, camel, snake) {
-  if (Object.prototype.hasOwnProperty.call(record, camel)) return record[camel];
-  if (snake != null && Object.prototype.hasOwnProperty.call(record, snake)) return record[snake];
-  return void 0;
-}
-function stringField(record, camel, snake) {
-  return field(record, camel, snake);
-}
-function numberField(record, camel, snake) {
-  return field(record, camel, snake);
-}
-function validateTextField(name, value, maxLen, blockedReasons) {
-  if (typeof value !== "string") {
-    blockedReasons.push(`${name} must be 1..=${maxLen} bytes`);
-    return null;
-  }
-  const trimmed = value.trim();
-  if (trimmed.length === 0 || utf8ByteLength(trimmed) > maxLen) {
-    blockedReasons.push(`${name} must be 1..=${maxLen} bytes`);
-    return null;
-  }
-  return trimmed;
-}
-function validateHexBytes(name, value, expectedBytes, blockedReasons) {
-  if (typeof value !== "string") {
-    blockedReasons.push(`${name} must be ${expectedBytes} bytes of hex`);
-    return null;
-  }
-  const trimmed = value.trim();
-  const body = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed;
-  if (body.length !== expectedBytes * 2 || !/^[0-9a-fA-F]+$/.test(body)) {
-    blockedReasons.push(`${name} must be ${expectedBytes} bytes of hex`);
-    return null;
-  }
-  return body.toLowerCase();
-}
-function isU16(value) {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 65535;
-}
-function isSafeIntegerAtLeast(value, minimum) {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= minimum;
-}
-function decimalStringIsPositiveU256(value) {
-  if (typeof value !== "string") return false;
-  const trimmed = value.trim();
-  if (!/^[0-9]+$/.test(trimmed)) return false;
-  const parsed = BigInt(trimmed);
-  return parsed > 0n && parsed <= MAX_U256;
-}
-function parseBridgeAdminControl(value) {
-  if (typeof value !== "string") return null;
-  switch (enumKey(value)) {
-    case "none":
-      return "none";
-    case "consensusonly":
-      return "consensusOnly";
-    case "operatorkey":
-      return "operatorKey";
-    case "unknown":
-      return "unknown";
-    default:
-      return null;
-  }
-}
-function parseBridgeCircuitBreaker(value) {
-  if (typeof value !== "string") return null;
-  switch (enumKey(value)) {
-    case "armed":
-      return "armed";
-    case "paused":
-      return "paused";
-    case "disabled":
-      return "disabled";
-    case "unknown":
-      return "unknown";
-    default:
-      return null;
-  }
-}
-function enumKey(value) {
-  return [...value].filter((c) => c !== "_" && c !== "-").join("").toLowerCase();
-}
-function incidentDateIsValid(value) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
-}
-function utf8ByteLength(value) {
-  return new TextEncoder().encode(value).length;
-}
-function expectLength(value, len, name) {
-  if (value.length !== len) {
-    throw new BridgePrecompileError(`${name} must be ${len} bytes, got ${value.length}`);
-  }
-  return value;
-}
-function uint64Word(value, name) {
-  const n = toBigint(value, name);
-  if (n < 0n || n > 0xffffffffffffffffn) {
-    throw new BridgePrecompileError(`${name} must fit uint64`);
-  }
-  const out = new Uint8Array(32);
-  let rest = n;
-  for (let i = 31; i >= 24; i--) {
-    out[i] = Number(rest & 0xffn);
-    rest >>= 8n;
-  }
-  return out;
-}
-function toBigint(value, name) {
-  if (typeof value === "bigint") return value;
-  if (typeof value === "number") {
-    if (!Number.isInteger(value) || !Number.isSafeInteger(value)) {
-      throw new BridgePrecompileError(`${name} must be a safe integer`);
-    }
-    return BigInt(value);
-  }
-  if (!/^(0x[0-9a-fA-F]+|[0-9]+)$/.test(value)) {
-    throw new BridgePrecompileError(`${name} must be an integer string`);
-  }
-  return BigInt(value);
-}
-function toBytes(value) {
-  if (typeof value === "string") {
-    return hexToBytes(value);
-  }
-  return value instanceof Uint8Array ? value : Uint8Array.from(value);
-}
-function hexToBytes(hex) {
-  const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
-  if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
-    throw new BridgePrecompileError("invalid hex bytes");
-  }
-  const out = new Uint8Array(body.length / 2);
-  for (let i = 0; i < out.length; i++) {
-    out[i] = Number.parseInt(body.slice(i * 2, i * 2 + 2), 16);
-  }
-  return out;
-}
-function bytesToHex(bytes) {
-  return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
-}
-function concatBytes(...parts) {
-  const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
-  let offset = 0;
-  for (const part of parts) {
-    out.set(part, offset);
-    offset += part.length;
-  }
-  return out;
-}
-
 // src/address.ts
 var ADDRESS_HRP = "mono";
 var ADDRESS_KIND_HRPS = {
@@ -1172,14 +65,14 @@ function hexToAddressBytes(address) {
   return out;
 }
 function addressBytesToHex(address) {
-  const bytes = expectLength2(address, 20, "address");
+  const bytes = expectLength(address, 20, "address");
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 function addressToBech32(address) {
   return addressToTypedBech32("user", address);
 }
 function addressToTypedBech32(kind, address) {
-  const bytes = typeof address === "string" ? hexToAddressBytes(address) : expectLength2(address, 20, "address");
+  const bytes = typeof address === "string" ? hexToAddressBytes(address) : expectLength(address, 20, "address");
   return encodeBech32m(ADDRESS_KIND_HRPS[kind], bytes);
 }
 function encodeBech32m(hrp, bytes) {
@@ -1312,12 +205,141 @@ function convertBits(data, fromBits, toBits, pad) {
   }
   return ret;
 }
-function expectLength2(value, len, name) {
+function expectLength(value, len, name) {
   if (value.length !== len) {
     throw new AddressError(`${name} must be ${len} bytes`);
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
+
+// src/native-events.ts
+var NATIVE_MARKET_EVENT_FAMILY = "market";
+function nativeMarketEventFilter(filter = {}) {
+  return { ...filter, family: NATIVE_MARKET_EVENT_FAMILY };
+}
+function isNativeDecodedEvent(value) {
+  const row = asRecord(value);
+  return row !== null && typeof row["block_height"] === "number" && typeof row["tx_index"] === "number" && typeof row["sequence"] === "number" && typeof row["family"] === "string" && typeof row["event_name"] === "string" && typeof row["payload_hash"] === "string";
+}
+function parseNativeDecodedEvent(event) {
+  if (isNativeDecodedEvent(event.decoded)) {
+    return event.decoded;
+  }
+  try {
+    const parsed = JSON.parse(event.decodedJson);
+    if (isNativeDecodedEvent(parsed)) {
+      return parsed;
+    }
+  } catch {
+  }
+  throw SdkError.malformed(
+    `native event ${event.eventTopic} at logIndex ${event.logIndex} is missing a typed decoded payload`
+  );
+}
+function nativeEventMatches(event, filter = {}) {
+  if (filter.address !== void 0 && event.address !== filter.address) return false;
+  if (filter.eventTopic !== void 0 && event.eventTopic !== filter.eventTopic) return false;
+  if (filter.family === void 0 && filter.eventName === void 0) return true;
+  let decoded;
+  try {
+    decoded = parseNativeDecodedEvent(event);
+  } catch {
+    return false;
+  }
+  if (filter.family !== void 0 && decoded.family !== filter.family) return false;
+  if (filter.eventName !== void 0 && decoded.event_name !== filter.eventName) return false;
+  return true;
+}
+function nativeEventsFromReceipt(receipt, filter = {}) {
+  return receipt.events.filter((event) => nativeEventMatches(event, filter)).map((event) => ({
+    ...event,
+    decoded: parseNativeDecodedEvent(event)
+  }));
+}
+function nativeMarketEventsFromReceipt(receipt, filter = {}) {
+  return nativeEventsFromReceipt(receipt, nativeMarketEventFilter(filter));
+}
+function nativeEventsFromHistory(response) {
+  return {
+    ...response,
+    events: response.events.map((event) => ({
+      ...event,
+      decoded: parseNativeDecodedEvent(event)
+    }))
+  };
+}
+function nativeMarketEventsFromHistory(response) {
+  return {
+    ...response,
+    filters: { ...response.filters, family: NATIVE_MARKET_EVENT_FAMILY },
+    events: response.events.filter((event) => nativeEventMatches(event, { family: NATIVE_MARKET_EVENT_FAMILY })).map((event) => ({
+      ...event,
+      decoded: parseNativeDecodedEvent(event)
+    }))
+  };
+}
+async function consumeNativeEvents(receipt, consumer, filter = {}) {
+  const events = nativeEventsFromReceipt(receipt, filter);
+  for (const event of events) {
+    await consumer(event);
+  }
+  return events.length;
+}
+function asRecord(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  return value;
+}
+
+// src/consts.ts
+var BURN_ADDR = "0x0000000000000000000000000000000000000000";
+var PRECOMPILE_ADDRESSES = {
+  /** Native fungible-token factory — non-gateable, foundational. */
+  TOKEN_FACTORY: "0x0000000000000000000000000000000000001000",
+  /** Native central-limit order book — gateable. */
+  CLOB: "0x0000000000000000000000000000000000001001",
+  /** Agent execution surface (zkML-gated, ADR-0011/ADR-0020) — gateable. */
+  AGENT: "0x0000000000000000000000000000000000001003",
+  /** Account privacy policy + stealth/confidential ops — gateable. */
+  PRIVACY: "0x0000000000000000000000000000000000001004",
+  /** Operator + RPC node registry — non-gateable consensus invariant. */
+  NODE_REGISTRY: "0x0000000000000000000000000000000000001005",
+  /** IBC light-client + packet routing — gateable. */
+  IBC: "0x0000000000000000000000000000000000001007",
+  /** Native zk-light-client bridge — gateable. */
+  BRIDGE: "0x0000000000000000000000000000000000001008",
+  /** Decentralized multi-signer oracle (OI-0036) — non-gateable. */
+  ORACLE: "0x0000000000000000000000000000000000001009",
+  /** Distributed delegation primitive (Stage E.5a, Law §7.6) — gateable. */
+  DELEGATION: "0x000000000000000000000000000000000000100A",
+  /** One-time emergency-key registry (Law §5.4 / §2.9) — non-gateable. */
+  EMERGENCY_KEY: "0x0000000000000000000000000000000000001100",
+  /** VRF precompile (Law §5.4 / §5.6). */
+  VRF: "0x0000000000000000000000000000000000001101",
+  /** Streaming-payments primitive (Law §5.4 / §5.7) — gateable. */
+  STREAMING_PAYMENTS: "0x0000000000000000000000000000000000001102",
+  /** Human-readable name registry (Law §5.4 / §5.8) — gateable. */
+  NAME_REGISTRY: "0x0000000000000000000000000000000000001103",
+  /** Cluster-name registry. */
+  CLUSTER_NAME_REGISTRY: "0x0000000000000000000000000000000000001104",
+  /** Agent-commerce attestation precompile. */
+  ATTESTATION: "0x0000000000000000000000000000000000001105",
+  /** Agent-commerce consent precompile. */
+  CONSENT: "0x0000000000000000000000000000000000001106",
+  /** Agent-commerce issuer registry. */
+  ISSUER_REGISTRY: "0x0000000000000000000000000000000000001107",
+  /** Agent-commerce discovery precompile. */
+  DISCOVERY: "0x0000000000000000000000000000000000001108",
+  /** Agent-commerce availability precompile. */
+  AVAILABILITY: "0x0000000000000000000000000000000000001109",
+  /** Agent-commerce escrow precompile. */
+  ESCROW: "0x000000000000000000000000000000000000110A",
+  /** Agent-commerce arbiter registry. */
+  ARBITER_REGISTRY: "0x000000000000000000000000000000000000110B",
+  /** Agent spending policy — gateable, activated by Stage 7 milestones. */
+  SPENDING_POLICY: "0x000000000000000000000000000000000000110C",
+  /** Primary ML-DSA-65 pubkey registry — gateable, ADR-0034. */
+  PUBKEY_REGISTRY: "0x000000000000000000000000000000000000110D"
+};
 
 // src/node-registry.ts
 var NODE_REGISTRY_CAPABILITIES = {
@@ -1386,14 +408,14 @@ function encodeReportServiceProbeCalldata(args) {
     throw new NodeRegistryError(`status ${args.status} is not a concrete service-probe outcome`);
   }
   const latencyMs = expectUint32(args.latencyMs, "latencyMs");
-  return bytesToHex2(
-    concatBytes2(
-      hexToBytes2(NODE_REGISTRY_SELECTORS.reportServiceProbe),
-      expectLength3(toBytes2(args.peerId), 32, "peerId"),
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.reportServiceProbe),
+      expectLength2(toBytes(args.peerId), 32, "peerId"),
       uint32Word(args.serviceMask),
       uint8Word(args.status),
       uint32Word(latencyMs),
-      expectLength3(toBytes2(args.probeDigest), 32, "probeDigest")
+      expectLength2(toBytes(args.probeDigest), 32, "probeDigest")
     )
   );
 }
@@ -1429,13 +451,13 @@ function uint8Word(value) {
   out[31] = value;
   return out;
 }
-function toBytes2(value) {
+function toBytes(value) {
   if (typeof value === "string") {
-    return hexToBytes2(value);
+    return hexToBytes(value);
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes2(hex) {
+function hexToBytes(hex) {
   const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
   if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
     throw new NodeRegistryError("invalid hex bytes");
@@ -1446,10 +468,10 @@ function hexToBytes2(hex) {
   }
   return out;
 }
-function bytesToHex2(bytes) {
+function bytesToHex(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function concatBytes2(...parts) {
+function concatBytes(...parts) {
   const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
   let offset = 0;
   for (const part of parts) {
@@ -1458,7 +480,7 @@ function concatBytes2(...parts) {
   }
   return out;
 }
-function expectLength3(value, len, name) {
+function expectLength2(value, len, name) {
   if (value.length !== len) {
     throw new NodeRegistryError(`${name} must be ${len} bytes, got ${value.length}`);
   }
@@ -1646,9 +668,16 @@ function parseTomlScalar(raw) {
   return value;
 }
 
+// src/types.ts
+function encodeBlockSelector(b) {
+  if (typeof b === "number") return `0x${b.toString(16)}`;
+  if (typeof b === "bigint") return `0x${b.toString(16)}`;
+  return b;
+}
+
 // src/client.ts
 var MAX_NATIVE_RECEIPT_EVENTS = 1e3;
-var SDK_VERSION2 = "0.1.0";
+var SDK_VERSION = "0.1.0";
 function resolveChainInfo(network, registry) {
   if (registry) {
     const info = registry[network];
@@ -1676,7 +705,7 @@ var RpcClient = class _RpcClient {
     this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.#headers = {
       "content-type": "application/json",
-      "user-agent": `monolythium-core-sdk/${SDK_VERSION2}`,
+      "user-agent": `monolythium-core-sdk/${SDK_VERSION}`,
       ...options.headers ?? {}
     };
     this.#nextId = 1;
@@ -1995,6 +1024,10 @@ var RpcClient = class _RpcClient {
       family: "market"
     });
     return nativeMarketEventsFromHistory(response);
+  }
+  /** `lyth_nativeMarketState` — current-state native spot and NFT market rows. */
+  async lythNativeMarketState(filter = {}) {
+    return this.call("lyth_nativeMarketState", [nativeMarketStateFilterParams(filter)]);
   }
   /** `lyth_gapRecords` — retained ingestion/indexing gaps for a block range. */
   async lythGapRecords(fromBlock, toBlock) {
@@ -2681,6 +1714,16 @@ function normalizeOperatorRisk(value) {
     reasons: reasons.map(String)
   };
 }
+function nativeMarketStateFilterParams(filter) {
+  const out = {};
+  if (filter.marketId != null) out.marketId = filter.marketId;
+  if (filter.orderId != null) out.orderId = filter.orderId;
+  if (filter.listingId != null) out.listingId = filter.listingId;
+  if (filter.collectionId != null) out.collectionId = filter.collectionId;
+  if (filter.includeSpotOrders != null) out.includeSpotOrders = filter.includeSpotOrders;
+  if (filter.limit != null) out.limit = encodeRpcU64Number(filter.limit, "limit");
+  return out;
+}
 function normalizeBlockHeader(value) {
   if (value === null || value === void 0) return null;
   if (!value || typeof value !== "object") {
@@ -2772,6 +1815,980 @@ function normalizeMempoolSnapshot(value) {
     mailbox_depth: parseRpcBigint(row["mailbox_depth"], "mempool mailbox_depth"),
     bytes_by_class: bytesByClass.map((v, i) => parseRpcBigint(v, `mempool bytes_by_class[${i}]`))
   };
+}
+
+// src/api.ts
+var SDK_VERSION2 = "0.1.0";
+function apiEndpointFromRpcEndpoint(endpoint) {
+  const raw = endpoint.trim();
+  if (raw.length === 0) {
+    throw SdkError.endpoint("endpoint cannot be empty");
+  }
+  const noTrailing = raw.replace(/\/+$/, "");
+  if (noTrailing.endsWith("/api/v1")) {
+    return noTrailing;
+  }
+  if (/^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(noTrailing)) {
+    const url = new URL(noTrailing);
+    const path = url.pathname.replace(/\/+$/, "");
+    if (path === "" || path === "/" || path === "/rpc") {
+      url.pathname = "/api/v1";
+    } else if (path.endsWith("/rpc")) {
+      url.pathname = `${path.slice(0, -"/rpc".length)}/api/v1`;
+    } else {
+      url.pathname = "/api/v1";
+    }
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/+$/, "");
+  }
+  return "/api/v1";
+}
+var ApiClient = class {
+  baseUrl;
+  #fetch;
+  #headers;
+  constructor(endpoint, options = {}) {
+    this.baseUrl = (options.apiBaseUrl ?? apiEndpointFromRpcEndpoint(endpoint)).replace(/\/+$/, "");
+    this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.#headers = {
+      accept: "application/json",
+      "user-agent": `monolythium-core-sdk/${SDK_VERSION2}`,
+      ...options.headers ?? {}
+    };
+  }
+  async get(path, query = {}) {
+    return this.#get(path, query, false);
+  }
+  async health() {
+    return this.#get("/health", {}, true);
+  }
+  async capabilities() {
+    return this.get("/capabilities");
+  }
+  async provenance() {
+    return this.get("/provenance");
+  }
+  async search(query, limit = 10) {
+    return this.get("/search", { q: query, limit });
+  }
+  async stats() {
+    return this.get("/stats");
+  }
+  async block(block = "latest") {
+    return this.get(`/blocks/${encodePathBlock(block)}`);
+  }
+  async blockTransactions(block = "latest", page = 0, limit = 25) {
+    return this.get(`/blocks/${encodePathBlock(block)}/transactions`, { page, limit });
+  }
+  async transactions(limit = 50, cursor) {
+    return this.get("/transactions", { limit, cursor });
+  }
+  async transaction(hash) {
+    return this.get(`/transactions/${encodePathSegment(hash)}`);
+  }
+  async transactionReceipt(hash) {
+    return this.get(`/transactions/${encodePathSegment(hash)}/receipt`);
+  }
+  async transactionNativeReceipt(hash) {
+    return this.get(`/transactions/${encodePathSegment(hash)}/native-receipt`);
+  }
+  /**
+   * Typed native event rows from `/transactions/{hash}/native-receipt`.
+   *
+   * This helper consumes the existing native receipt API route and returns
+   * its envelope metadata with `data` replaced by the filtered event rows.
+   */
+  async transactionNativeReceiptEvents(hash, filter = {}) {
+    const receipt = await this.transactionNativeReceipt(hash);
+    return {
+      ...receipt,
+      data: nativeEventsFromReceipt(receipt.data, filter)
+    };
+  }
+  async transactionNativeReceiptMarketEvents(hash, filter = {}) {
+    const receipt = await this.transactionNativeReceipt(hash);
+    return {
+      ...receipt,
+      data: nativeMarketEventsFromReceipt(receipt.data, filter)
+    };
+  }
+  async nativeEvents(filter) {
+    return this.get("/native-events", nativeEventsFilterQuery(filter));
+  }
+  async nativeEventsTyped(filter) {
+    const response = await this.nativeEvents(filter);
+    return {
+      ...response,
+      data: nativeEventsFromHistory(response.data)
+    };
+  }
+  async nativeMarketEvents(filter) {
+    return this.nativeEvents({
+      ...filter,
+      family: "market"
+    });
+  }
+  async nativeMarketEventsTyped(filter) {
+    const response = await this.nativeEvents({
+      ...filter,
+      family: "market"
+    });
+    return {
+      ...response,
+      data: nativeMarketEventsFromHistory(response.data)
+    };
+  }
+  async nativeMarketState(filter = {}) {
+    return this.get("/native-market-state", nativeMarketStateFilterParams(filter));
+  }
+  async addressProfile(address) {
+    return this.get(`/addresses/${encodePathSegment(address)}/profile`);
+  }
+  async addressFlow(address, limit = 250) {
+    return this.get(`/addresses/${encodePathSegment(address)}/flow`, { limit });
+  }
+  async addressActivity(address, limit = 50, cursor) {
+    return this.get(`/addresses/${encodePathSegment(address)}/activity`, {
+      limit,
+      cursor
+    });
+  }
+  async addressActivityKind(address) {
+    return this.get(`/addresses/${encodePathSegment(address)}/activity-kind`);
+  }
+  async addressPendingRewards(address, block) {
+    return this.get(`/addresses/${encodePathSegment(address)}/pending-rewards`, {
+      block: block == null ? void 0 : encodeBlockSelector(block)
+    });
+  }
+  async addressRedemptionQueue(address, block) {
+    return this.get(`/addresses/${encodePathSegment(address)}/redemption-queue`, {
+      block: block == null ? void 0 : encodeBlockSelector(block)
+    });
+  }
+  async assetMrcMetadata(assetId, mrcTokenId) {
+    return this.get(`/assets/${encodePathSegment(assetId)}/metadata`, {
+      mrcTokenId: mrcTokenId ?? void 0
+    });
+  }
+  async mrcAccount(account, limit) {
+    return this.get(`/mrc/accounts/${encodePathSegment(account)}`, {
+      limit: limit ?? void 0
+    });
+  }
+  async mrcHolders(standard, assetId, tokenId, limit) {
+    return this.get(
+      `/mrc/${encodePathSegment(standard)}/${encodePathSegment(assetId)}/${encodePathSegment(
+        tokenId
+      )}/holders`,
+      { limit: limit ?? void 0 }
+    );
+  }
+  /**
+   * Asset-scoped `/api/v1/mrc/{standard}/{assetId}/holders`.
+   *
+   * This is the REST form used by MRC-4626 vault share balances.
+   */
+  async mrcAssetHolders(standard, assetId, limit) {
+    return this.get(
+      `/mrc/${encodePathSegment(standard)}/${encodePathSegment(assetId)}/holders`,
+      { limit: limit ?? void 0 }
+    );
+  }
+  /** `/api/v1/mrc/mrc4626/{vaultId}/holders`. */
+  async mrc4626Holders(vaultId, limit) {
+    return this.mrcAssetHolders("mrc4626", vaultId, limit);
+  }
+  /**
+   * `/api/v1/bridge/routes`.
+   *
+   * The forthcoming route is read-only `GET`, so the typed request is encoded
+   * as a single JSON query value named `request`.
+   */
+  async bridgeRoutes(request) {
+    return this.get("/bridge/routes", {
+      request: JSON.stringify(request)
+    });
+  }
+  async clusters(page = 0, limit = 25) {
+    return this.get("/clusters", { page, limit });
+  }
+  async cluster(clusterId) {
+    return this.get(`/clusters/${encodePathSegment(clusterId)}`);
+  }
+  async operator(operatorId) {
+    return this.get(`/operators/${encodePathSegment(operatorId)}`);
+  }
+  async serviceProbe(peerId, serviceMask) {
+    return this.get(
+      `/service-probes/${encodePathSegment(peerId)}/${encodePathSegment(serviceMask)}`
+    );
+  }
+  async markets(limit = 50) {
+    return this.get("/markets", { limit });
+  }
+  async market(marketId) {
+    return this.get(`/markets/${encodePathSegment(marketId)}`);
+  }
+  async marketTrades(marketId, limit = 50, cursor) {
+    return this.get(`/markets/${encodePathSegment(marketId)}/trades`, { limit, cursor });
+  }
+  async marketOhlc(marketId, fromBlock, toBlock, bucketBlocks) {
+    return this.get(`/markets/${encodePathSegment(marketId)}/ohlc`, {
+      fromBlock,
+      toBlock,
+      bucketBlocks
+    });
+  }
+  async marketOrderBook(marketId, levels = 20) {
+    return this.get(`/markets/${encodePathSegment(marketId)}/orderbook`, { levels });
+  }
+  async upgradeStatus(height) {
+    return this.get("/upgrades/status", {
+      height: height == null ? void 0 : encodeBlockSelector(height)
+    });
+  }
+  async #get(path, query, allowUnavailableBody) {
+    const url = buildUrl(this.baseUrl, path, query);
+    let resp;
+    try {
+      resp = await this.#fetch(url, {
+        method: "GET",
+        headers: this.#headers
+      });
+    } catch (cause) {
+      throw SdkError.transport(
+        `transport failure calling ${url}: ${cause?.message ?? cause}`,
+        cause
+      );
+    }
+    let parsed;
+    try {
+      parsed = await resp.json();
+    } catch (cause) {
+      throw SdkError.malformed(
+        `non-JSON response (HTTP ${resp.status}): ${cause?.message ?? cause}`
+      );
+    }
+    const error = parseApiError(parsed);
+    if (error) {
+      throw SdkError.rpc(error.code, error.message, error.data);
+    }
+    if (!resp.ok && !(allowUnavailableBody && resp.status === 503)) {
+      throw SdkError.transport(`HTTP ${resp.status} calling ${url}`);
+    }
+    return parsed;
+  }
+};
+function parseApiError(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const error = value["error"];
+  if (!error || typeof error !== "object" || Array.isArray(error)) return null;
+  const row = error;
+  if (typeof row["code"] !== "number" || typeof row["message"] !== "string") {
+    return null;
+  }
+  return {
+    code: row["code"],
+    message: row["message"],
+    data: row["data"]
+  };
+}
+function buildUrl(baseUrl, path, query) {
+  const cleanBase = baseUrl.replace(/\/+$/, "");
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value === void 0 || value === null) continue;
+    params.set(key, typeof value === "bigint" ? value.toString() : String(value));
+  }
+  const qs = params.toString();
+  return qs.length === 0 ? `${cleanBase}${cleanPath}` : `${cleanBase}${cleanPath}?${qs}`;
+}
+function nativeEventsFilterQuery(filter) {
+  return {
+    fromBlock: filter.fromBlock,
+    toBlock: filter.toBlock,
+    limit: filter.limit,
+    txIndex: filter.txIndex,
+    logIndex: filter.logIndex,
+    address: filter.address,
+    eventTopic: filter.eventTopic,
+    family: filter.family,
+    eventName: filter.eventName,
+    primaryId: filter.primaryId,
+    relatedId: filter.relatedId,
+    tokenId: filter.tokenId,
+    account: filter.account,
+    counterparty: filter.counterparty
+  };
+}
+function encodePathBlock(block) {
+  return encodePathSegment(encodeBlockSelector(block));
+}
+function encodePathSegment(value) {
+  return encodeURIComponent(typeof value === "bigint" ? value.toString() : String(value));
+}
+
+// src/bridge.ts
+var BRIDGE_SELECTORS = {
+  lockBridgeConfig: "0x8956feb3",
+  setBridgeResumeCooldown: "0x1a3a0672",
+  setBridgeRouteFinality: "0x8a061e99"
+};
+var BRIDGE_REVERT_TAGS = {
+  bridgeAdminLocked: "0xf807",
+  bridgeResumeCooldownActive: "0xf808",
+  bridgeCooldownZero: "0xfd08",
+  bridgeFinalityZero: "0xfd09"
+};
+var BRIDGE_QUOTE_API_BLOCKED_REASON = "bridge quote requires a mono-core live quote API/runtime primitive";
+var BRIDGE_SUBMIT_API_BLOCKED_REASON = "bridge submit requires a mono-core live submit API/runtime primitive";
+var BridgePrecompileError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "BridgePrecompileError";
+  }
+};
+var BridgeRouteCatalogueError = class extends Error {
+  blockedReasons;
+  constructor(blockedReasons) {
+    super(`invalid bridge route catalogue: ${blockedReasons.join("; ")}`);
+    this.name = "BridgeRouteCatalogueError";
+    this.blockedReasons = [...blockedReasons];
+  }
+};
+function bridgeAddressHex() {
+  return PRECOMPILE_ADDRESSES.BRIDGE.toLowerCase();
+}
+function encodeLockBridgeConfigCalldata(bridgeId) {
+  return bytesToHex2(
+    concatBytes2(
+      hexToBytes2(BRIDGE_SELECTORS.lockBridgeConfig),
+      expectLength3(toBytes2(bridgeId), 32, "bridgeId")
+    )
+  );
+}
+function encodeSetBridgeResumeCooldownCalldata(bridgeId, cooldownBlocks) {
+  return bytesToHex2(
+    concatBytes2(
+      hexToBytes2(BRIDGE_SELECTORS.setBridgeResumeCooldown),
+      expectLength3(toBytes2(bridgeId), 32, "bridgeId"),
+      uint64Word(cooldownBlocks, "cooldownBlocks")
+    )
+  );
+}
+function encodeSetBridgeRouteFinalityCalldata(bridgeId, finalityBlocks) {
+  return bytesToHex2(
+    concatBytes2(
+      hexToBytes2(BRIDGE_SELECTORS.setBridgeRouteFinality),
+      expectLength3(toBytes2(bridgeId), 32, "bridgeId"),
+      uint64Word(finalityBlocks, "finalityBlocks")
+    )
+  );
+}
+function isBridgeAdminLockedRevert(data) {
+  return bytesToHex2(toBytes2(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeAdminLocked;
+}
+function isBridgeResumeCooldownActiveRevert(data) {
+  return bytesToHex2(toBytes2(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeResumeCooldownActive;
+}
+function isBridgeCooldownZeroRevert(data) {
+  return bytesToHex2(toBytes2(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeCooldownZero;
+}
+function isBridgeFinalityZeroRevert(data) {
+  return bytesToHex2(toBytes2(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeFinalityZero;
+}
+function assessBridgeRoute(route) {
+  const blockedReasons = [];
+  const warnings = [];
+  if (route.routeId.trim() === "") blockedReasons.push("route id missing");
+  if (route.bridge.trim() === "") blockedReasons.push("bridge name missing");
+  if (route.asset.trim() === "") blockedReasons.push("asset disclosure missing");
+  if (route.verifier.model.trim() === "") blockedReasons.push("verifier model missing");
+  if (route.verifier.threshold < 2 || route.verifier.participantCount < 2) {
+    blockedReasons.push("verifier set must not be 1-of-1");
+  }
+  if (route.verifier.threshold > route.verifier.participantCount) {
+    blockedReasons.push("verifier threshold exceeds participant count");
+  }
+  if (!decimalStringIsPositive(route.drainCapAtomic)) {
+    blockedReasons.push("per-asset drain cap missing or zero");
+  }
+  if (route.finalityBlocks === 0) blockedReasons.push("route finality delay missing");
+  if (route.cooldownSeconds === 0) blockedReasons.push("route cooldown missing");
+  if (route.adminControl !== "none" && route.adminControl !== "consensusOnly") {
+    blockedReasons.push("Mono-side admin control is not consensus-only");
+  }
+  if (route.circuitBreaker === "paused") {
+    blockedReasons.push("route circuit breaker is paused");
+  } else if (route.circuitBreaker === "disabled" || route.circuitBreaker === "unknown") {
+    blockedReasons.push("route circuit breaker missing");
+  }
+  if (!decimalStringIsPositive(route.insuranceAtomic)) {
+    blockedReasons.push("slashable insurance pool missing or zero");
+  }
+  if (route.lastIncidentDate != null) {
+    warnings.push("route reports a prior bridge incident");
+  }
+  if (blockedReasons.length > 0) {
+    return {
+      routeId: route.routeId,
+      accepted: false,
+      score: 0,
+      riskTier: "blocked",
+      blockedReasons,
+      warnings
+    };
+  }
+  let score = 100;
+  if (route.verifier.threshold * 3 <= route.verifier.participantCount) {
+    score -= 10;
+    warnings.push("verifier threshold is below one-third-plus quorum");
+  }
+  if (route.cooldownSeconds < 3600) {
+    score -= 10;
+    warnings.push("cooldown is under one hour");
+  }
+  if (route.finalityBlocks < 2) {
+    score -= 5;
+    warnings.push("finality delay is under two blocks");
+  }
+  return {
+    routeId: route.routeId,
+    accepted: true,
+    score,
+    riskTier: score >= 90 ? "low" : score >= 75 ? "medium" : "high",
+    blockedReasons,
+    warnings
+  };
+}
+function rankBridgeRoutes(routes) {
+  return routes.map((route) => ({ route, assessment: assessBridgeRoute(route) })).sort((left, right) => {
+    if (left.assessment.accepted !== right.assessment.accepted) {
+      return left.assessment.accepted ? -1 : 1;
+    }
+    if (left.assessment.score !== right.assessment.score) {
+      return right.assessment.score - left.assessment.score;
+    }
+    if (left.route.cooldownSeconds !== right.route.cooldownSeconds) {
+      return left.route.cooldownSeconds - right.route.cooldownSeconds;
+    }
+    if (left.route.finalityBlocks !== right.route.finalityBlocks) {
+      return left.route.finalityBlocks - right.route.finalityBlocks;
+    }
+    return left.assessment.routeId.localeCompare(right.assessment.routeId);
+  });
+}
+function bridgeTransferCandidates(intent, routes) {
+  const intentReasons = validateBridgeTransferIntent(intent);
+  return routes.map((route) => bridgeRouteCandidate(intent, intentReasons, route)).sort(compareBridgeCandidates);
+}
+function selectBridgeTransferRoute(intent, routes) {
+  const blockedReasons = validateBridgeTransferIntent(intent);
+  const candidates = bridgeTransferCandidates(intent, routes);
+  if (routes.length === 0) {
+    blockedReasons.push("no route disclosures supplied");
+  }
+  const selectedCandidate = blockedReasons.length === 0 ? candidates.find((candidate) => candidate.eligible) : void 0;
+  const selected = selectedCandidate == null ? null : {
+    intent,
+    route: selectedCandidate.route,
+    assessment: selectedCandidate.assessment
+  };
+  if (selected == null && blockedReasons.length === 0) {
+    blockedReasons.push("no eligible bridge route satisfies the transfer intent and v4.1 floor");
+  }
+  return { selected, candidates, blockedReasons };
+}
+function bridgeQuoteSubmitReadiness(intent, routes) {
+  const selection = selectBridgeTransferRoute(intent, routes);
+  const routeSelectionReady = selection.selected != null;
+  const blockedReasons = [...selection.blockedReasons];
+  if (routeSelectionReady) {
+    blockedReasons.push(BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_SUBMIT_API_BLOCKED_REASON);
+  }
+  return {
+    selection,
+    routeSelectionReady,
+    quoteReady: false,
+    submitReady: false,
+    blockedReasons,
+    warnings: selection.selected == null ? [] : [...selection.selected.assessment.warnings]
+  };
+}
+function bridgeRoutesReadiness(request) {
+  const routeDisclosures = request.routeDisclosures ?? [];
+  const source = {
+    address: request.address,
+    routeCount: routeDisclosures.length,
+    globalRouteIndexAvailable: false,
+    routeDisclosureSource: "request.routeDisclosures"
+  };
+  if (request.intent == null) {
+    const blockedReasons = ["bridge route selection requires transfer intent"];
+    if (routeDisclosures.length === 0) {
+      blockedReasons.push("no route disclosures supplied");
+    }
+    return {
+      selection: {
+        selected: null,
+        candidates: [],
+        blockedReasons: [...blockedReasons]
+      },
+      routeSelectionReady: false,
+      quoteReady: false,
+      submitReady: false,
+      blockedReasons,
+      warnings: [],
+      routes: [...routeDisclosures],
+      bridgeRouteDisclosures: [...routeDisclosures],
+      source
+    };
+  }
+  const readiness = bridgeQuoteSubmitReadiness(request.intent, routeDisclosures);
+  return {
+    ...readiness,
+    quoteReady: false,
+    submitReady: false,
+    routes: [...routeDisclosures],
+    bridgeRouteDisclosures: [...routeDisclosures],
+    source
+  };
+}
+function buildBridgeRouteCatalogue(routes) {
+  return { routes: routes.map(cloneBridgeRouteCatalogueRoute) };
+}
+function parseBridgeRouteCatalogueJson(json) {
+  const decoded = JSON.parse(json);
+  return normalizeBridgeRouteCatalogue(decoded);
+}
+function normalizeBridgeRouteCatalogue(payload) {
+  const validation = validateBridgeRouteCatalogue(payload);
+  if (!validation.accepted) {
+    throw new BridgeRouteCatalogueError(validation.blockedReasons);
+  }
+  const routes = routeArrayFromCataloguePayload(payload);
+  if (routes == null) {
+    throw new BridgeRouteCatalogueError(["route catalogue must be an array or { routes: [...] }"]);
+  }
+  return { routes: routes.map((route) => coerceBridgeRouteCatalogueRoute(route)) };
+}
+function validateBridgeRouteCatalogue(payload) {
+  const routes = routeArrayFromCataloguePayload(payload);
+  const blockedReasons = [];
+  if (routes == null) {
+    return {
+      accepted: false,
+      routeCount: 0,
+      blockedReasons: ["route catalogue must be an array or { routes: [...] }"]
+    };
+  }
+  if (routes.length === 0) {
+    blockedReasons.push("bridge route import must contain at least one route");
+  }
+  const seen = /* @__PURE__ */ new Set();
+  routes.forEach(
+    (route, idx) => validateBridgeRouteCatalogueRoute(idx, route, seen, blockedReasons)
+  );
+  return {
+    accepted: blockedReasons.length === 0,
+    routeCount: routes.length,
+    blockedReasons
+  };
+}
+function exportBridgeRouteCatalogueJson(payload, options = {}) {
+  const catalogue = normalizeBridgeRouteCatalogue(payload);
+  const value = options.envelope === false ? catalogue.routes : catalogue;
+  return JSON.stringify(value, null, options.space ?? 2);
+}
+var MAX_U256 = (1n << 256n) - 1n;
+function routeArrayFromCataloguePayload(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (isRecord(payload) && Array.isArray(payload.routes)) return payload.routes;
+  return null;
+}
+function validateBridgeRouteCatalogueRoute(idx, value, seen, blockedReasons) {
+  const prefix = `routes[${idx}]`;
+  if (!isRecord(value)) {
+    blockedReasons.push(`${prefix} must be an object`);
+    return;
+  }
+  const tokenId = validateHexBytes(
+    `${prefix}.tokenId`,
+    field(value, "tokenId", "token_id"),
+    32,
+    blockedReasons
+  );
+  const routeId = validateTextField(
+    `${prefix}.routeId`,
+    field(value, "routeId", "route_id"),
+    96,
+    blockedReasons
+  );
+  if (tokenId != null && routeId != null) {
+    const key = `${tokenId}:${routeId}`;
+    if (seen.has(key)) {
+      blockedReasons.push(`${prefix}.routeId duplicate (tokenId, routeId) in bridge route import`);
+    } else {
+      seen.add(key);
+    }
+  }
+  validateHexBytes(
+    `${prefix}.bridgeId`,
+    field(value, "bridgeId", "bridge_id"),
+    32,
+    blockedReasons
+  );
+  validateHexBytes(
+    `${prefix}.wrappedAsset`,
+    field(value, "wrappedAsset", "wrapped_asset"),
+    20,
+    blockedReasons
+  );
+  validateTextField(`${prefix}.bridge`, value.bridge, 64, blockedReasons);
+  validateTextField(`${prefix}.asset`, value.asset, 64, blockedReasons);
+  validateTextField(
+    `${prefix}.sourceChain`,
+    field(value, "sourceChain", "source_chain"),
+    64,
+    blockedReasons
+  );
+  validateTextField(
+    `${prefix}.destinationChain`,
+    field(value, "destinationChain", "destination_chain"),
+    64,
+    blockedReasons
+  );
+  const verifier = value.verifier;
+  if (!isRecord(verifier)) {
+    blockedReasons.push(`${prefix}.verifier must be an object`);
+  } else {
+    validateTextField(`${prefix}.verifier.model`, verifier.model, 64, blockedReasons);
+    const participantCount = field(verifier, "participantCount", "participant_count");
+    if (!isU16(participantCount) || participantCount === 0) {
+      blockedReasons.push(`${prefix}.verifier.participantCount must be non-zero`);
+    }
+    if (!isU16(verifier.threshold) || verifier.threshold === 0) {
+      blockedReasons.push(`${prefix}.verifier.threshold must be in 1..=participantCount`);
+    } else if (isU16(participantCount) && verifier.threshold > participantCount) {
+      blockedReasons.push(`${prefix}.verifier.threshold must be in 1..=participantCount`);
+    }
+  }
+  if (!decimalStringIsPositiveU256(field(value, "drainCapAtomic", "drain_cap_atomic"))) {
+    blockedReasons.push(`${prefix}.drainCapAtomic must be a non-zero decimal u256`);
+  }
+  if (!isSafeIntegerAtLeast(field(value, "finalityBlocks", "finality_blocks"), 1)) {
+    blockedReasons.push(`${prefix}.finalityBlocks must be non-zero`);
+  }
+  if (!isSafeIntegerAtLeast(field(value, "cooldownSeconds", "cooldown_seconds"), 1)) {
+    blockedReasons.push(`${prefix}.cooldownSeconds must be non-zero`);
+  }
+  if (parseBridgeAdminControl(field(value, "adminControl", "admin_control")) == null) {
+    blockedReasons.push(
+      `${prefix}.adminControl expected none, consensusOnly, operatorKey, or unknown`
+    );
+  }
+  if (parseBridgeCircuitBreaker(field(value, "circuitBreaker", "circuit_breaker")) == null) {
+    blockedReasons.push(`${prefix}.circuitBreaker expected armed, paused, disabled, or unknown`);
+  }
+  if (!decimalStringIsPositiveU256(field(value, "insuranceAtomic", "insurance_atomic"))) {
+    blockedReasons.push(`${prefix}.insuranceAtomic must be a non-zero decimal u256`);
+  }
+  if (!isSafeIntegerAtLeast(field(value, "updatedAtBlock", "updated_at_block"), 0)) {
+    blockedReasons.push(`${prefix}.updatedAtBlock must be a non-negative safe integer`);
+  }
+  const incident = field(value, "lastIncidentDate", "last_incident_date");
+  if (incident !== void 0 && incident !== null) {
+    if (typeof incident !== "string" || !incidentDateIsValid(incident)) {
+      blockedReasons.push(`${prefix}.lastIncidentDate must be YYYY-MM-DD`);
+    }
+  }
+}
+function coerceBridgeRouteCatalogueRoute(value) {
+  if (!isRecord(value) || !isRecord(value.verifier)) {
+    throw new BridgeRouteCatalogueError(["route catalogue validation did not normalize an object"]);
+  }
+  const lastIncidentDate = field(value, "lastIncidentDate", "last_incident_date");
+  const route = {
+    tokenId: stringField(value, "tokenId", "token_id"),
+    routeId: stringField(value, "routeId", "route_id").trim(),
+    bridgeId: stringField(value, "bridgeId", "bridge_id"),
+    wrappedAsset: stringField(value, "wrappedAsset", "wrapped_asset"),
+    bridge: stringField(value, "bridge").trim(),
+    asset: stringField(value, "asset").trim(),
+    sourceChain: stringField(value, "sourceChain", "source_chain").trim(),
+    destinationChain: stringField(value, "destinationChain", "destination_chain").trim(),
+    verifier: {
+      model: stringField(value.verifier, "model").trim(),
+      participantCount: numberField(value.verifier, "participantCount", "participant_count"),
+      threshold: numberField(value.verifier, "threshold")
+    },
+    drainCapAtomic: stringField(value, "drainCapAtomic", "drain_cap_atomic").trim(),
+    finalityBlocks: numberField(value, "finalityBlocks", "finality_blocks"),
+    cooldownSeconds: numberField(value, "cooldownSeconds", "cooldown_seconds"),
+    adminControl: parseBridgeAdminControl(field(value, "adminControl", "admin_control")),
+    circuitBreaker: parseBridgeCircuitBreaker(field(value, "circuitBreaker", "circuit_breaker")),
+    insuranceAtomic: stringField(value, "insuranceAtomic", "insurance_atomic").trim(),
+    updatedAtBlock: numberField(value, "updatedAtBlock", "updated_at_block")
+  };
+  if (typeof lastIncidentDate === "string") {
+    route.lastIncidentDate = lastIncidentDate.trim();
+  } else if (lastIncidentDate === null) {
+    route.lastIncidentDate = null;
+  }
+  return route;
+}
+function cloneBridgeRouteCatalogueRoute(route) {
+  return {
+    ...route,
+    verifier: { ...route.verifier }
+  };
+}
+function bridgeRouteCandidate(intent, intentReasons, route) {
+  const assessment = assessBridgeRoute(route);
+  const blockedReasons = [...intentReasons, ...assessment.blockedReasons];
+  if (!trimmedEq(route.asset, intent.asset)) {
+    blockedReasons.push("route asset does not match transfer intent");
+  }
+  if (!trimmedEq(route.sourceChain, intent.sourceChain)) {
+    blockedReasons.push("route source chain does not match transfer intent");
+  }
+  if (!trimmedEq(route.destinationChain, intent.destinationChain)) {
+    blockedReasons.push("route destination chain does not match transfer intent");
+  }
+  if (intent.allowedRouteIds != null && !intent.allowedRouteIds.some((routeId) => trimmedEq(routeId, route.routeId))) {
+    blockedReasons.push("route id not allowed by transfer policy");
+  }
+  if (intent.minimumScore != null && assessment.score < intent.minimumScore) {
+    blockedReasons.push("route score below transfer policy minimum");
+  }
+  if (intent.maxFinalityBlocks != null && route.finalityBlocks > intent.maxFinalityBlocks) {
+    blockedReasons.push("route finality exceeds transfer policy maximum");
+  }
+  if (intent.maxCooldownSeconds != null && route.cooldownSeconds > intent.maxCooldownSeconds) {
+    blockedReasons.push("route cooldown exceeds transfer policy maximum");
+  }
+  if (decimalStringIsPositive(intent.amountAtomic) && decimalStringIsPositive(route.drainCapAtomic) && decimalStringGt(intent.amountAtomic, route.drainCapAtomic)) {
+    blockedReasons.push("transfer amount exceeds route drain cap");
+  }
+  if (decimalStringIsPositive(intent.amountAtomic) && decimalStringIsPositive(route.insuranceAtomic) && decimalStringGt(intent.amountAtomic, route.insuranceAtomic)) {
+    blockedReasons.push("transfer amount exceeds disclosed insurance coverage");
+  }
+  return {
+    route,
+    assessment,
+    eligible: blockedReasons.length === 0,
+    score: assessment.score,
+    blockedReasons,
+    warnings: [...assessment.warnings]
+  };
+}
+function validateBridgeTransferIntent(intent) {
+  const blockedReasons = [];
+  if (intent.asset.trim() === "") blockedReasons.push("transfer asset missing");
+  if (!decimalStringIsPositive(intent.amountAtomic)) {
+    blockedReasons.push("transfer amount missing or zero");
+  }
+  if (intent.sourceChain.trim() === "") blockedReasons.push("transfer source chain missing");
+  if (intent.destinationChain.trim() === "") {
+    blockedReasons.push("transfer destination chain missing");
+  }
+  if (intent.recipient.trim() === "") blockedReasons.push("transfer recipient missing");
+  if (intent.minimumScore != null && intent.minimumScore > 100) {
+    blockedReasons.push("minimum route score exceeds 100");
+  }
+  return blockedReasons;
+}
+function compareBridgeCandidates(left, right) {
+  if (left.eligible !== right.eligible) return left.eligible ? -1 : 1;
+  if (left.score !== right.score) return right.score - left.score;
+  if (left.route.cooldownSeconds !== right.route.cooldownSeconds) {
+    return left.route.cooldownSeconds - right.route.cooldownSeconds;
+  }
+  if (left.route.finalityBlocks !== right.route.finalityBlocks) {
+    return left.route.finalityBlocks - right.route.finalityBlocks;
+  }
+  return left.route.routeId.localeCompare(right.route.routeId);
+}
+function decimalStringIsPositive(value) {
+  const trimmed = value.trim();
+  return /^[0-9]+$/.test(trimmed) && /[1-9]/.test(trimmed);
+}
+function decimalStringGt(left, right) {
+  return decimalStringCompare(left, right) === 1;
+}
+function decimalStringCompare(left, right) {
+  const normalizedLeft = normalizedDecimalDigits(left);
+  const normalizedRight = normalizedDecimalDigits(right);
+  if (normalizedLeft == null || normalizedRight == null) return null;
+  if (normalizedLeft.length !== normalizedRight.length) {
+    return normalizedLeft.length > normalizedRight.length ? 1 : -1;
+  }
+  if (normalizedLeft === normalizedRight) return 0;
+  return normalizedLeft > normalizedRight ? 1 : -1;
+}
+function normalizedDecimalDigits(value) {
+  const trimmed = value.trim();
+  if (!/^[0-9]+$/.test(trimmed)) return null;
+  const normalized = trimmed.replace(/^0+/, "");
+  return normalized === "" ? "0" : normalized;
+}
+function trimmedEq(left, right) {
+  return left.trim() === right.trim();
+}
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function field(record, camel, snake) {
+  if (Object.prototype.hasOwnProperty.call(record, camel)) return record[camel];
+  if (snake != null && Object.prototype.hasOwnProperty.call(record, snake)) return record[snake];
+  return void 0;
+}
+function stringField(record, camel, snake) {
+  return field(record, camel, snake);
+}
+function numberField(record, camel, snake) {
+  return field(record, camel, snake);
+}
+function validateTextField(name, value, maxLen, blockedReasons) {
+  if (typeof value !== "string") {
+    blockedReasons.push(`${name} must be 1..=${maxLen} bytes`);
+    return null;
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || utf8ByteLength(trimmed) > maxLen) {
+    blockedReasons.push(`${name} must be 1..=${maxLen} bytes`);
+    return null;
+  }
+  return trimmed;
+}
+function validateHexBytes(name, value, expectedBytes, blockedReasons) {
+  if (typeof value !== "string") {
+    blockedReasons.push(`${name} must be ${expectedBytes} bytes of hex`);
+    return null;
+  }
+  const trimmed = value.trim();
+  const body = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed;
+  if (body.length !== expectedBytes * 2 || !/^[0-9a-fA-F]+$/.test(body)) {
+    blockedReasons.push(`${name} must be ${expectedBytes} bytes of hex`);
+    return null;
+  }
+  return body.toLowerCase();
+}
+function isU16(value) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 65535;
+}
+function isSafeIntegerAtLeast(value, minimum) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= minimum;
+}
+function decimalStringIsPositiveU256(value) {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (!/^[0-9]+$/.test(trimmed)) return false;
+  const parsed = BigInt(trimmed);
+  return parsed > 0n && parsed <= MAX_U256;
+}
+function parseBridgeAdminControl(value) {
+  if (typeof value !== "string") return null;
+  switch (enumKey(value)) {
+    case "none":
+      return "none";
+    case "consensusonly":
+      return "consensusOnly";
+    case "operatorkey":
+      return "operatorKey";
+    case "unknown":
+      return "unknown";
+    default:
+      return null;
+  }
+}
+function parseBridgeCircuitBreaker(value) {
+  if (typeof value !== "string") return null;
+  switch (enumKey(value)) {
+    case "armed":
+      return "armed";
+    case "paused":
+      return "paused";
+    case "disabled":
+      return "disabled";
+    case "unknown":
+      return "unknown";
+    default:
+      return null;
+  }
+}
+function enumKey(value) {
+  return [...value].filter((c) => c !== "_" && c !== "-").join("").toLowerCase();
+}
+function incidentDateIsValid(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
+}
+function utf8ByteLength(value) {
+  return new TextEncoder().encode(value).length;
+}
+function expectLength3(value, len, name) {
+  if (value.length !== len) {
+    throw new BridgePrecompileError(`${name} must be ${len} bytes, got ${value.length}`);
+  }
+  return value;
+}
+function uint64Word(value, name) {
+  const n = toBigint(value, name);
+  if (n < 0n || n > 0xffffffffffffffffn) {
+    throw new BridgePrecompileError(`${name} must fit uint64`);
+  }
+  const out = new Uint8Array(32);
+  let rest = n;
+  for (let i = 31; i >= 24; i--) {
+    out[i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  return out;
+}
+function toBigint(value, name) {
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number") {
+    if (!Number.isInteger(value) || !Number.isSafeInteger(value)) {
+      throw new BridgePrecompileError(`${name} must be a safe integer`);
+    }
+    return BigInt(value);
+  }
+  if (!/^(0x[0-9a-fA-F]+|[0-9]+)$/.test(value)) {
+    throw new BridgePrecompileError(`${name} must be an integer string`);
+  }
+  return BigInt(value);
+}
+function toBytes2(value) {
+  if (typeof value === "string") {
+    return hexToBytes2(value);
+  }
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+function hexToBytes2(hex) {
+  const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
+  if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
+    throw new BridgePrecompileError("invalid hex bytes");
+  }
+  const out = new Uint8Array(body.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = Number.parseInt(body.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+function bytesToHex2(bytes) {
+  return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+function concatBytes2(...parts) {
+  const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
 }
 var NO_EVM_RECEIPT_PROOF_SCHEMA = "mono.no_evm_receipt_proof.v1";
 var NO_EVM_RECEIPT_PROOF_TYPE = "canonicalReceiptsTranscript";
@@ -4657,6 +4674,6 @@ function translateBlockOut(header) {
 // src/index.ts
 var version = "0.1.0";
 
-export { ADDRESS_HRP, ADDRESS_KIND_HRPS, AddressError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DelegationPrecompileError, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MonolythiumProvider, MonolythiumSigner, MrvValidationError, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NoEvmReceiptProofError, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bridgeAddressHex, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildBridgeRouteCatalogue, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, checkMrvFeeDisplayConformance, composeClaimBoundMessage, computeNoEvmReceiptsRoot, computeNoEvmTargetReceiptHash, consumeNativeEvents, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNoEvmReceiptTranscript, delegationAddressHex, deriveMrvContractAddress, encodeBlockSelector, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, getChainInfo, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseLythToLythoshi, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, rankBridgeRoutes, selectBridgeTransferRoute, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, verifyNoEvmReceiptProof, version };
+export { ADDRESS_HRP, ADDRESS_KIND_HRPS, AddressError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DelegationPrecompileError, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MonolythiumProvider, MonolythiumSigner, MrvValidationError, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NoEvmReceiptProofError, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bridgeAddressHex, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildBridgeRouteCatalogue, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, checkMrvFeeDisplayConformance, composeClaimBoundMessage, computeNoEvmReceiptsRoot, computeNoEvmTargetReceiptHash, consumeNativeEvents, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNoEvmReceiptTranscript, delegationAddressHex, deriveMrvContractAddress, encodeBlockSelector, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, getChainInfo, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nativeMarketStateFilterParams, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseLythToLythoshi, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, rankBridgeRoutes, selectBridgeTransferRoute, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, verifyNoEvmReceiptProof, version };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

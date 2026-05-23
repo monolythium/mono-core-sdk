@@ -709,6 +709,110 @@ describe("ApiClient", () => {
     ]);
   });
 
+  it("nativeMarketState sends query params and decodes spot, listing, and royalty rows", async () => {
+    const marketId = `0x${"aa".repeat(32)}`;
+    const orderId = `0x${"bb".repeat(32)}`;
+    const listingId = `0x${"cc".repeat(32)}`;
+    const collectionId = `0x${"dd".repeat(32)}`;
+    const owner = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+    const { fetch, calls } = mockGet(
+      apiEnvelope({
+        schemaVersion: 1,
+        limit: 5,
+        filters: {
+          marketId,
+          orderId: null,
+          listingId: null,
+          collectionId: null,
+          includeSpotOrders: true,
+        },
+        spotMarkets: [
+          {
+            marketId,
+            owner,
+            baseAssetId: `0x${"11".repeat(32)}`,
+            quoteAssetId: `0x${"22".repeat(32)}`,
+            tickSize: "10",
+            lotSize: "5",
+            minQuantity: "25",
+            minNotional: "1000",
+            tradeCount: "2",
+            totalVolumeBase: "40",
+            lastPrice: null,
+            lastBlockHeight: null,
+            createdAtBlock: 40,
+            updatedAtBlock: 45,
+          },
+        ],
+        spotOrders: [
+          {
+            orderId,
+            marketId,
+            owner,
+            side: "ask",
+            price: "8",
+            quantity: "30",
+            remaining: "10",
+            status: "partially_filled",
+            expiresAtBlock: 99,
+            updatedAtBlock: 45,
+          },
+        ],
+        nftListings: [
+          {
+            listingId,
+            seller: "mono1seller0000000000000000000000000000000000",
+            standard: "mrc721",
+            collectionId,
+            tokenId: `0x${"33".repeat(32)}`,
+            quantity: "1",
+            paymentAssetId: `0x${"44".repeat(32)}`,
+            price: "700",
+            listingKind: { auction: { reserve: "650" } },
+            status: "open",
+            expiresAtBlock: 120,
+            highestBidder: null,
+            highestBid: null,
+            updatedAtBlock: 46,
+          },
+        ],
+        collectionRoyalties: [
+          {
+            collectionId,
+            creator: owner,
+            recipient: "mono1royalty00000000000000000000000000000000",
+            bps: 250,
+            updatedAtBlock: 47,
+          },
+        ],
+        source: {
+          indexerProvider: "native_market_state",
+          projection: "native_market_state",
+        },
+      }),
+    );
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    const response = await client.nativeMarketState({
+      marketId,
+      includeSpotOrders: true,
+      limit: 5,
+    });
+
+    expect(response.data.spotMarkets[0].tradeCount).toBe("2");
+    expect(response.data.spotOrders[0].remaining).toBe("10");
+    expect(response.data.nftListings[0].listingKind).toEqual({
+      auction: { reserve: "650" },
+    });
+    expect(response.data.collectionRoyalties[0].creator).toBe(owner);
+    expect(calls).toEqual([
+      {
+        url: `https://rpc.example/api/v1/native-market-state?marketId=${marketId}&includeSpotOrders=true&limit=5`,
+        method: "GET",
+      },
+    ]);
+  });
+
   it("wraps search, transaction-feed, address aggregate, stats, and market routes", async () => {
     const { fetch, calls } = mockGet(apiEnvelope({ schemaVersion: 1 }));
     const client = new ApiClient("https://rpc.example", { fetch });

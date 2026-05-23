@@ -20,8 +20,9 @@ use crate::types::{
     ChainStatsResponse, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse,
     ClobOrderBookResponse, ClobTradesResponse, MrcAccountResponse, MrcHoldersResponse,
     MrcMetadataResponse, NativeEventFilter, NativeEventsFilter, NativeEventsResponse,
-    NativeReceiptFee, NativeReceiptResponse, PendingRewardsResponse, RedemptionQueueResponse,
-    SearchResponse, TxFeedResponse, TypedNativeEventsResponse, TypedNativeReceiptEvent,
+    NativeMarketStateFilter, NativeMarketStateResponse, NativeReceiptFee, NativeReceiptResponse,
+    PendingRewardsResponse, RedemptionQueueResponse, SearchResponse, TxFeedResponse,
+    TypedNativeEventsResponse, TypedNativeReceiptEvent,
 };
 
 /// Typed HTTP API client for `/api/v1`.
@@ -267,6 +268,15 @@ impl ApiClient {
             latest: response.latest,
             data: typed_native_events_from_response::<TDecoded>(&response.data)?,
         })
+    }
+
+    /// `/api/v1/native-market-state`.
+    pub async fn native_market_state(
+        &self,
+        filter: NativeMarketStateFilter<'_>,
+    ) -> Result<ApiEnvelope<NativeMarketStateResponse>, SdkError> {
+        self.get("native-market-state", &filter.to_query_pairs())
+            .await
     }
 
     /// `/api/v1/addresses/{address}/profile`.
@@ -943,7 +953,7 @@ pub struct ApiUpgradeStatusData {
 #[cfg(test)]
 mod tests {
     use super::{api_endpoint_from_rpc_endpoint, build_url, ApiClient};
-    use crate::types::NativeEventsFilter;
+    use crate::types::{NativeEventsFilter, NativeMarketStateFilter};
     use serde_json::{json, Value};
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -1310,6 +1320,146 @@ mod tests {
             url.as_str(),
             format!(
                 "https://rpc.example/api/v1/native-events?fromBlock=100&toBlock=105&limit=10&txIndex=0&logIndex=1&address=monos1nativeeventemitter&eventTopic={event_topic}&family=agent&eventName=agent.escrow.created&primaryId={primary_id}&account=mono1agentconsumer&counterparty=mono1agentcounterparty"
+            )
+        );
+    }
+
+    #[test]
+    fn build_url_encodes_native_market_state_query() {
+        let market_id = format!("0x{}", "aa".repeat(32));
+        let url = build_url(
+            "https://rpc.example/api/v1",
+            "native-market-state",
+            &NativeMarketStateFilter::new()
+                .market_id(&market_id)
+                .include_spot_orders(true)
+                .limit(5)
+                .to_query_pairs(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            format!(
+                "https://rpc.example/api/v1/native-market-state?marketId={market_id}&includeSpotOrders=true&limit=5"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn native_market_state_gets_rest_route_and_decodes_rows() {
+        let market_id = format!("0x{}", "aa".repeat(32));
+        let order_id = format!("0x{}", "bb".repeat(32));
+        let listing_id = format!("0x{}", "cc".repeat(32));
+        let collection_id = format!("0x{}", "dd".repeat(32));
+        let owner = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+        let seller = "mono1seller0000000000000000000000000000000000";
+        let royalty_recipient = "mono1royalty00000000000000000000000000000000";
+        let (endpoint, server) = spawn_api_server(json!({
+            "schemaVersion": 1,
+            "chainId": 69420,
+            "genesisHash": format!("0x{}", "00".repeat(32)),
+            "latest": {
+                "available": true,
+                "height": 100,
+                "blockHash": format!("0x{}", "11".repeat(32)),
+                "stateRoot": format!("0x{}", "22".repeat(32)),
+                "timestamp": 123
+            },
+            "data": {
+                "schemaVersion": 1,
+                "limit": 5,
+                "filters": {
+                    "marketId": market_id,
+                    "orderId": null,
+                    "listingId": null,
+                    "collectionId": null,
+                    "includeSpotOrders": true
+                },
+                "spotMarkets": [{
+                    "marketId": market_id,
+                    "owner": owner,
+                    "baseAssetId": format!("0x{}", "33".repeat(32)),
+                    "quoteAssetId": format!("0x{}", "44".repeat(32)),
+                    "tickSize": "10",
+                    "lotSize": "5",
+                    "minQuantity": "25",
+                    "minNotional": "1000",
+                    "tradeCount": "2",
+                    "totalVolumeBase": "40",
+                    "lastPrice": null,
+                    "lastBlockHeight": null,
+                    "createdAtBlock": 40,
+                    "updatedAtBlock": 45
+                }],
+                "spotOrders": [{
+                    "orderId": order_id,
+                    "marketId": market_id,
+                    "owner": owner,
+                    "side": "ask",
+                    "price": "8",
+                    "quantity": "30",
+                    "remaining": "10",
+                    "status": "partially_filled",
+                    "expiresAtBlock": 99,
+                    "updatedAtBlock": 45
+                }],
+                "nftListings": [{
+                    "listingId": listing_id,
+                    "seller": seller,
+                    "standard": "mrc721",
+                    "collectionId": collection_id,
+                    "tokenId": format!("0x{}", "55".repeat(32)),
+                    "quantity": "1",
+                    "paymentAssetId": format!("0x{}", "66".repeat(32)),
+                    "price": "700",
+                    "listingKind": { "auction": { "reserve": "650" } },
+                    "status": "open",
+                    "expiresAtBlock": 120,
+                    "highestBidder": null,
+                    "highestBid": null,
+                    "updatedAtBlock": 46
+                }],
+                "collectionRoyalties": [{
+                    "collectionId": collection_id,
+                    "creator": owner,
+                    "recipient": royalty_recipient,
+                    "bps": 250,
+                    "updatedAtBlock": 47
+                }],
+                "source": {
+                    "indexerProvider": "native_market_state",
+                    "projection": "native_market_state"
+                }
+            }
+        }));
+        let client = ApiClient::new(endpoint).unwrap();
+
+        let response = client
+            .native_market_state(
+                NativeMarketStateFilter::new()
+                    .market_id(&market_id)
+                    .include_spot_orders(true)
+                    .limit(5),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.data.spot_markets[0].owner, owner);
+        assert_eq!(response.data.spot_orders[0].side, "ask");
+        assert_eq!(
+            response.data.nft_listings[0].listing_kind["auction"]["reserve"],
+            "650"
+        );
+        assert_eq!(
+            response.data.collection_royalties[0].recipient,
+            royalty_recipient
+        );
+        let request_line = server.join().unwrap();
+        assert_eq!(
+            request_line,
+            format!(
+                "GET /api/v1/native-market-state?marketId={market_id}&includeSpotOrders=true&limit=5 HTTP/1.1"
             )
         );
     }

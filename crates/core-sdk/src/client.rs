@@ -34,12 +34,13 @@ use crate::types::{
     MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse,
     MetricsRangeResponse, MrcAccountRequest, MrcAccountResponse, MrcHoldersRequest,
     MrcHoldersResponse, MrcMetadataResponse, NativeEventFilter, NativeEventsFilter,
-    NativeEventsResponse, NativeReceiptResponse, OperatorCapabilitiesResponse, PeerSummary,
-    PeerSummaryAggregate, PendingRewardsResponse, PendingTxSummary, PrecompileDescriptor,
-    RedemptionQueueResponse, RegistryRecord, RichListResponse, RoundInfo, SearchResponse,
-    StorageProofBatch, SyncStatus, TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt,
-    TransactionView, TxFeedResponse, TxStatusResponse, TypedNativeEventsResponse,
-    TypedNativeReceiptEvent, VerticesAtRoundResponse,
+    NativeEventsResponse, NativeMarketStateFilter, NativeMarketStateResponse,
+    NativeReceiptResponse, OperatorCapabilitiesResponse, PeerSummary, PeerSummaryAggregate,
+    PendingRewardsResponse, PendingTxSummary, PrecompileDescriptor, RedemptionQueueResponse,
+    RegistryRecord, RichListResponse, RoundInfo, SearchResponse, StorageProofBatch, SyncStatus,
+    TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt, TransactionView,
+    TxFeedResponse, TxStatusResponse, TypedNativeEventsResponse, TypedNativeReceiptEvent,
+    VerticesAtRoundResponse,
 };
 
 /// Result from building and submitting an encrypted MRV deploy envelope.
@@ -731,6 +732,14 @@ impl RpcClient {
     {
         let response = self.lyth_native_market_events(filter).await?;
         Ok(typed_native_events_from_response::<TDecoded>(&response)?)
+    }
+
+    /// `lyth_nativeMarketState` — current-state native spot and NFT market rows.
+    pub async fn lyth_native_market_state(
+        &self,
+        filter: NativeMarketStateFilter<'_>,
+    ) -> Result<NativeMarketStateResponse, SdkError> {
+        self.call("lyth_nativeMarketState", json!([filter])).await
     }
 
     /// `lyth_gapRecords` — retained ingestion/indexing gaps for a block range.
@@ -2135,6 +2144,118 @@ mod tests {
                 "eventName": "agent.escrow.created",
                 "primaryId": primary_id,
                 "account": "mono1agentconsumer"
+            }])
+        );
+    }
+
+    #[tokio::test]
+    async fn lyth_native_market_state_serializes_filter_and_decodes_rows() {
+        let market_id = format!("0x{}", "aa".repeat(32));
+        let order_id = format!("0x{}", "bb".repeat(32));
+        let listing_id = format!("0x{}", "cc".repeat(32));
+        let collection_id = format!("0x{}", "dd".repeat(32));
+        let owner = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+        let seller = "mono1seller0000000000000000000000000000000000";
+        let bidder = "mono1bidder0000000000000000000000000000000000";
+        let royalty_recipient = "mono1royalty00000000000000000000000000000000";
+        let (endpoint, server) = spawn_rpc_server(vec![json!({
+            "schemaVersion": 1,
+            "limit": 5,
+            "filters": {
+                "marketId": market_id,
+                "orderId": null,
+                "listingId": null,
+                "collectionId": null,
+                "includeSpotOrders": true
+            },
+            "spotMarkets": [{
+                "marketId": market_id,
+                "owner": owner,
+                "baseAssetId": format!("0x{}", "11".repeat(32)),
+                "quoteAssetId": format!("0x{}", "22".repeat(32)),
+                "tickSize": "10",
+                "lotSize": "5",
+                "minQuantity": "25",
+                "minNotional": "1000",
+                "tradeCount": "2",
+                "totalVolumeBase": "40",
+                "lastPrice": "7",
+                "lastBlockHeight": 45,
+                "createdAtBlock": 40,
+                "updatedAtBlock": 45
+            }],
+            "spotOrders": [{
+                "orderId": order_id,
+                "marketId": market_id,
+                "owner": owner,
+                "side": "bid",
+                "price": "7",
+                "quantity": "30",
+                "remaining": "20",
+                "status": "open",
+                "expiresAtBlock": 99,
+                "updatedAtBlock": 45
+            }],
+            "nftListings": [{
+                "listingId": listing_id,
+                "seller": seller,
+                "standard": "mrc721",
+                "collectionId": collection_id,
+                "tokenId": format!("0x{}", "33".repeat(32)),
+                "quantity": "1",
+                "paymentAssetId": format!("0x{}", "44".repeat(32)),
+                "price": "700",
+                "listingKind": { "fixedPrice": true },
+                "status": "open",
+                "expiresAtBlock": 120,
+                "highestBidder": bidder,
+                "highestBid": "650",
+                "updatedAtBlock": 46
+            }],
+            "collectionRoyalties": [{
+                "collectionId": collection_id,
+                "creator": null,
+                "recipient": royalty_recipient,
+                "bps": 250,
+                "updatedAtBlock": 47
+            }],
+            "source": {
+                "indexerProvider": "native_market_state",
+                "projection": "native_market_state"
+            }
+        })]);
+
+        let client = RpcClient::new(endpoint).unwrap();
+        let response = client
+            .lyth_native_market_state(
+                NativeMarketStateFilter::new()
+                    .market_id(&market_id)
+                    .include_spot_orders(true)
+                    .limit(5),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.schema_version, 1);
+        assert_eq!(response.spot_markets[0].trade_count, "2");
+        assert_eq!(response.spot_orders[0].remaining, "20");
+        assert_eq!(response.nft_listings[0].listing_kind["fixedPrice"], true);
+        assert_eq!(
+            response.nft_listings[0].highest_bidder.as_deref(),
+            Some(bidder)
+        );
+        assert_eq!(response.collection_royalties[0].bps, 250);
+        assert_eq!(response.source.indexer_provider, "native_market_state");
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["method"], "lyth_nativeMarketState");
+        assert_eq!(
+            requests[0]["params"],
+            json!([{
+                "marketId": market_id,
+                "includeSpotOrders": true,
+                "limit": 5
             }])
         );
     }
