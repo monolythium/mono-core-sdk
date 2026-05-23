@@ -22,6 +22,14 @@ pub const SIGHASH_SET_BRIDGE_RESUME_COOLDOWN: &str = "setBridgeResumeCooldown(by
 /// `setBridgeRouteFinality(bytes32,uint64)`.
 pub const SIGHASH_SET_BRIDGE_ROUTE_FINALITY: &str = "setBridgeRouteFinality(bytes32,uint64)";
 
+/// Blocker returned when callers ask the SDK to prepare a live bridge quote.
+pub const BRIDGE_QUOTE_API_BLOCKED_REASON: &str =
+    "bridge quote requires a mono-core live quote API/runtime primitive";
+
+/// Blocker returned when callers ask the SDK to prepare a live bridge submit.
+pub const BRIDGE_SUBMIT_API_BLOCKED_REASON: &str =
+    "bridge submit requires a mono-core live submit API/runtime primitive";
+
 /// Bridge-config revert namespace byte.
 pub const BRIDGE_CONFIG_REVERT_NAMESPACE: u8 = 0xF8;
 
@@ -405,6 +413,34 @@ pub struct BridgeRouteSelection {
     pub blocked_reasons: Vec<String>,
 }
 
+/// SDK-only readiness report for the quote/submit boundary.
+///
+/// The SDK can deterministically verify route-selection readiness from
+/// caller-supplied disclosures. It cannot produce a live third-party bridge
+/// quote or submit payload until `mono-core` exposes the corresponding
+/// API/runtime primitive.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "BridgeQuoteSubmitReadiness.ts")
+)]
+pub struct BridgeQuoteSubmitReadiness {
+    /// Closed route-selection result used as the readiness input.
+    pub selection: BridgeRouteSelection,
+    /// True when a route was selected from the supplied disclosures.
+    pub route_selection_ready: bool,
+    /// True only once a live quote API/runtime primitive is available.
+    pub quote_ready: bool,
+    /// True only once a live submit API/runtime primitive is available.
+    pub submit_ready: bool,
+    /// Hard failures for quote/submit readiness.
+    pub blocked_reasons: Vec<String>,
+    /// Non-blocking warnings copied from the selected route, when present.
+    pub warnings: Vec<String>,
+}
+
 /// Assess one third-party bridge route disclosure.
 #[must_use]
 pub fn assess_bridge_route(route: &BridgeRouteDisclosure) -> BridgeRouteAssessment {
@@ -594,6 +630,41 @@ pub fn select_bridge_transfer_route(
         selected,
         candidates,
         blocked_reasons,
+    }
+}
+
+/// Evaluate SDK-side bridge quote/submit readiness for an intent.
+///
+/// This is intentionally a blocked-boundary primitive: it can prove that a
+/// caller-supplied route disclosure satisfies the local transfer policy, but
+/// it does not fake live quote or submit support without `mono-core` API and
+/// runtime support.
+#[must_use]
+pub fn bridge_quote_submit_readiness(
+    intent: &BridgeTransferIntent,
+    routes: &[BridgeRouteDisclosure],
+) -> BridgeQuoteSubmitReadiness {
+    let selection = select_bridge_transfer_route(intent, routes);
+    let route_selection_ready = selection.selected.is_some();
+    let warnings = selection
+        .selected
+        .as_ref()
+        .map(|request| request.assessment.warnings.clone())
+        .unwrap_or_default();
+    let mut blocked_reasons = selection.blocked_reasons.clone();
+
+    if route_selection_ready {
+        blocked_reasons.push(BRIDGE_QUOTE_API_BLOCKED_REASON.to_owned());
+        blocked_reasons.push(BRIDGE_SUBMIT_API_BLOCKED_REASON.to_owned());
+    }
+
+    BridgeQuoteSubmitReadiness {
+        selection,
+        route_selection_ready,
+        quote_ready: false,
+        submit_ready: false,
+        blocked_reasons,
+        warnings,
     }
 }
 
@@ -1019,5 +1090,46 @@ mod tests {
             .blocked_reasons
             .iter()
             .any(|reason| reason.contains("no route disclosures")));
+    }
+
+    #[test]
+    fn bridge_quote_submit_readiness_reports_live_boundary_after_route_selection() {
+        let readiness = bridge_quote_submit_readiness(&transfer_intent(), &[route("healthy")]);
+
+        assert!(readiness.route_selection_ready);
+        assert!(!readiness.quote_ready);
+        assert!(!readiness.submit_ready);
+        assert_eq!(
+            readiness
+                .selection
+                .selected
+                .as_ref()
+                .map(|request| request.route.route_id.as_str()),
+            Some("healthy")
+        );
+        assert_eq!(
+            readiness.blocked_reasons,
+            vec![
+                BRIDGE_QUOTE_API_BLOCKED_REASON.to_owned(),
+                BRIDGE_SUBMIT_API_BLOCKED_REASON.to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn bridge_quote_submit_readiness_preserves_selection_blockers() {
+        let readiness = bridge_quote_submit_readiness(&transfer_intent(), &[]);
+
+        assert!(!readiness.route_selection_ready);
+        assert!(!readiness.quote_ready);
+        assert!(!readiness.submit_ready);
+        assert!(readiness
+            .blocked_reasons
+            .iter()
+            .any(|reason| reason.contains("no route disclosures")));
+        assert!(!readiness
+            .blocked_reasons
+            .iter()
+            .any(|reason| reason == BRIDGE_QUOTE_API_BLOCKED_REASON));
     }
 }

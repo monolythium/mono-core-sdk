@@ -17,6 +17,7 @@ export type { BlockTag } from "./BlockTag.js";
 export type { BlsCertificateResponse } from "./BlsCertificateResponse.js";
 export type { BridgeAdminControl } from "./BridgeAdminControl.js";
 export type { BridgeCircuitBreakerState } from "./BridgeCircuitBreakerState.js";
+export type { BridgeQuoteSubmitReadiness } from "./BridgeQuoteSubmitReadiness.js";
 export type { BridgeRiskTier } from "./BridgeRiskTier.js";
 export type { BridgeRouteAssessment } from "./BridgeRouteAssessment.js";
 export type { BridgeRouteCandidate } from "./BridgeRouteCandidate.js";

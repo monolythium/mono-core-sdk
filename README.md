@@ -37,6 +37,9 @@ The SDK tracks the live `mono-core` RPC and precompile surface. Wire types under
   `setPolicyClaim`, `setPolicy`, `enable`, and `disable`.
 - Pubkey-registry calldata helpers for `registerPubkey`, `lookupPubkey`, and
   `hasPubkey`, plus return decoders for the view calls.
+- Bridge route disclosure helpers for deterministic route selection plus an
+  explicit quote/submit readiness boundary. Live bridge quote and submit remain
+  blocked until `mono-core` exposes API/runtime primitives for them.
 - TypeScript ethers v6 provider/signer adapters.
 - TypeScript PQM-1 + ML-DSA-65 helpers for mnemonic payloads, deterministic
   seed derivation, address derivation, and signing backends.

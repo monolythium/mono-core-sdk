@@ -194,6 +194,19 @@ const lookup = encodeLookupPubkeyCalldata("0x123456789abcdef0112233445566778899a
 const decoded = decodeLookupPubkeyReturn(returnData);
 ```
 
+### Bridge route readiness
+
+Bridge helpers assess explicit route disclosures and fail closed. The SDK can
+select a route for an intent, but it cannot produce a live quote or submit
+payload until `mono-core` exposes those API/runtime primitives.
+
+```ts
+import { bridgeQuoteSubmitReadiness } from "@monolythium/core-sdk";
+
+const readiness = bridgeQuoteSubmitReadiness(intent, routeDisclosures);
+console.log(readiness.routeSelectionReady, readiness.quoteReady, readiness.blockedReasons);
+```
+
 ### PQM-1 + ML-DSA-65 helpers
 
 Wallets and faucets can derive deterministic ML-DSA-65 backends directly in
