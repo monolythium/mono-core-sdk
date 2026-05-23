@@ -33,14 +33,14 @@ use crate::types::{
     FeeHistoryResponse, GapRecordsResponse, IndexerStatus, LythUpgradeStatusResponse,
     MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse,
     MetricsRangeResponse, MrcAccountRequest, MrcAccountResponse, MrcHoldersRequest,
-    MrcHoldersResponse, MrcMetadataResponse, NativeEventFilter, NativeEventsFilter,
-    NativeEventsResponse, NativeMarketStateFilter, NativeMarketStateResponse,
-    NativeReceiptResponse, OperatorCapabilitiesResponse, PeerSummary, PeerSummaryAggregate,
-    PendingRewardsResponse, PendingTxSummary, PrecompileDescriptor, RedemptionQueueResponse,
-    RegistryRecord, RichListResponse, RoundInfo, SearchResponse, StorageProofBatch, SyncStatus,
-    TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt, TransactionView,
-    TxFeedResponse, TxStatusResponse, TypedNativeEventsResponse, TypedNativeReceiptEvent,
-    VerticesAtRoundResponse,
+    MrcHoldersResponse, MrcMetadataResponse, NativeAgentStateFilter, NativeAgentStateResponse,
+    NativeEventFilter, NativeEventsFilter, NativeEventsResponse, NativeMarketStateFilter,
+    NativeMarketStateResponse, NativeReceiptResponse, OperatorCapabilitiesResponse, PeerSummary,
+    PeerSummaryAggregate, PendingRewardsResponse, PendingTxSummary, PrecompileDescriptor,
+    RedemptionQueueResponse, RegistryRecord, RichListResponse, RoundInfo, SearchResponse,
+    StorageProofBatch, SyncStatus, TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt,
+    TransactionView, TxFeedResponse, TxStatusResponse, TypedNativeEventsResponse,
+    TypedNativeReceiptEvent, VerticesAtRoundResponse,
 };
 
 /// Result from building and submitting an encrypted MRV deploy envelope.
@@ -732,6 +732,14 @@ impl RpcClient {
     {
         let response = self.lyth_native_market_events(filter).await?;
         Ok(typed_native_events_from_response::<TDecoded>(&response)?)
+    }
+
+    /// `lyth_nativeAgentState` — current-state native agent policy and escrow rows.
+    pub async fn lyth_native_agent_state(
+        &self,
+        filter: NativeAgentStateFilter<'_>,
+    ) -> Result<NativeAgentStateResponse, SdkError> {
+        self.call("lyth_nativeAgentState", json!([filter])).await
     }
 
     /// `lyth_nativeMarketState` — current-state native spot and NFT market rows.
@@ -2154,6 +2162,106 @@ mod tests {
                 "eventName": "agent.escrow.created",
                 "primaryId": primary_id,
                 "account": "mono1agentconsumer"
+            }])
+        );
+    }
+
+    #[tokio::test]
+    async fn lyth_native_agent_state_serializes_filter_and_decodes_rows() {
+        let policy_id = format!("0x{}", "aa".repeat(32));
+        let escrow_id = format!("0x{}", "bb".repeat(32));
+        let asset_id = format!("0x{}", "cc".repeat(32));
+        let terms_hash = format!("0x{}", "dd".repeat(32));
+        let payload_hash = format!("0x{}", "ee".repeat(32));
+        let owner = "mono1agentowner000000000000000000000000000000";
+        let controller = "mono1agentcontroller000000000000000000000000";
+        let provider = "mono1agentprovider0000000000000000000000000";
+        let arbiter = "mono1agentarbiter00000000000000000000000000";
+        let (endpoint, server) = spawn_rpc_server(vec![json!({
+            "schemaVersion": 1,
+            "limit": 5,
+            "filters": {
+                "policyId": null,
+                "escrowId": null,
+                "account": owner,
+                "includePolicySpends": true
+            },
+            "spendingPolicies": [{
+                "policyId": policy_id,
+                "owner": owner,
+                "controller": controller,
+                "assetId": asset_id,
+                "enabled": true,
+                "perActionLimit": "100",
+                "windowLimit": "500",
+                "windowSecs": 60,
+                "updatedAtBlock": 42
+            }],
+            "policySpends": [{
+                "policyId": policy_id,
+                "controller": controller,
+                "assetId": asset_id,
+                "window": 7,
+                "amount": "25",
+                "spent": "125",
+                "updatedAtBlock": 43
+            }],
+            "escrows": [{
+                "escrowId": escrow_id,
+                "buyer": owner,
+                "provider": provider,
+                "arbiter": arbiter,
+                "assetId": asset_id,
+                "amount": "1000",
+                "termsHash": terms_hash,
+                "round": 2,
+                "buyerAccepted": true,
+                "providerAccepted": false,
+                "submittedPayloadHash": payload_hash,
+                "status": "submitted",
+                "resolution": null,
+                "lastActor": provider,
+                "createdAtBlock": 40,
+                "updatedAtBlock": 44
+            }],
+            "source": {
+                "indexerProvider": "native_agent_state",
+                "projection": "native_agent_state"
+            }
+        })]);
+
+        let client = RpcClient::new(endpoint).unwrap();
+        let response = client
+            .lyth_native_agent_state(
+                NativeAgentStateFilter::new()
+                    .account(owner)
+                    .include_policy_spends(true)
+                    .limit(5),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.schema_version, 1);
+        assert_eq!(response.spending_policies[0].per_action_limit, "100");
+        assert_eq!(response.policy_spends[0].window, 7);
+        assert_eq!(response.policy_spends[0].spent, "125");
+        assert_eq!(
+            response.escrows[0].submitted_payload_hash.as_deref(),
+            Some(payload_hash.as_str())
+        );
+        assert_eq!(response.escrows[0].last_actor.as_deref(), Some(provider));
+        assert_eq!(response.filters.account.as_deref(), Some(owner));
+        assert_eq!(response.source.indexer_provider, "native_agent_state");
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["method"], "lyth_nativeAgentState");
+        assert_eq!(
+            requests[0]["params"],
+            json!([{
+                "account": owner,
+                "includePolicySpends": true,
+                "limit": 5
             }])
         );
     }

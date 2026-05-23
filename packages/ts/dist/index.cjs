@@ -1027,6 +1027,10 @@ var RpcClient = class _RpcClient {
     });
     return nativeMarketEventsFromHistory(response);
   }
+  /** `lyth_nativeAgentState` — current-state native agent policy and escrow rows. */
+  async lythNativeAgentState(filter = {}) {
+    return this.call("lyth_nativeAgentState", [nativeAgentStateFilterParams(filter)]);
+  }
   /** `lyth_nativeMarketState` — current-state native spot and NFT market rows. */
   async lythNativeMarketState(filter = {}) {
     return this.call("lyth_nativeMarketState", [nativeMarketStateFilterParams(filter)]);
@@ -1718,6 +1722,15 @@ function normalizeOperatorRisk(value) {
     reasons: reasons.map(String)
   };
 }
+function nativeAgentStateFilterParams(filter) {
+  const out = {};
+  if (filter.policyId != null) out.policyId = filter.policyId;
+  if (filter.escrowId != null) out.escrowId = filter.escrowId;
+  if (filter.account != null) out.account = filter.account;
+  if (filter.includePolicySpends != null) out.includePolicySpends = filter.includePolicySpends;
+  if (filter.limit != null) out.limit = encodeRpcU64Number(filter.limit, "limit");
+  return out;
+}
 function nativeMarketStateFilterParams(filter) {
   const out = {};
   if (filter.marketId != null) out.marketId = filter.marketId;
@@ -1949,6 +1962,9 @@ var ApiClient = class {
       ...response,
       data: nativeMarketEventsFromHistory(response.data)
     };
+  }
+  async nativeAgentState(filter = {}) {
+    return this.get("/native-agent-state", nativeAgentStateFilterParams(filter));
   }
   async nativeMarketState(filter = {}) {
     return this.get("/native-market-state", nativeMarketStateFilterParams(filter));
@@ -5415,6 +5431,7 @@ exports.mrvAddressToBech32 = mrvAddressToBech32;
 exports.mrvBech32ToAddress = mrvBech32ToAddress;
 exports.mrvCodeHashHex = mrvCodeHashHex;
 exports.mrvV1TransactionExtension = mrvV1TransactionExtension;
+exports.nativeAgentStateFilterParams = nativeAgentStateFilterParams;
 exports.nativeEventMatches = nativeEventMatches;
 exports.nativeEventsFilterParams = nativeEventsFilterParams;
 exports.nativeEventsFromHistory = nativeEventsFromHistory;

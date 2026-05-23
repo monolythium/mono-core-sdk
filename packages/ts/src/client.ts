@@ -248,6 +248,80 @@ export interface NativeEventsResponse<TDecoded = unknown> {
   source: NativeEventsSource;
 }
 
+/** Filter object passed to `lyth_nativeAgentState` and `/api/v1/native-agent-state`. */
+export interface NativeAgentStateFilter {
+  policyId?: string | null;
+  escrowId?: string | null;
+  account?: string | null;
+  includePolicySpends?: boolean | null;
+  limit?: number | bigint | string | null;
+}
+
+export interface NativeAgentStateResponseFilters {
+  policyId?: string | null;
+  escrowId?: string | null;
+  account?: string | null;
+  includePolicySpends: boolean;
+}
+
+export interface NativeAgentStateSource {
+  indexerProvider: string;
+  projection: string;
+}
+
+export interface NativeAgentPolicyStateRecord {
+  policyId: string;
+  owner: string;
+  controller: string;
+  assetId: string;
+  enabled: boolean;
+  perActionLimit: string;
+  windowLimit: string;
+  windowSecs: number;
+  updatedAtBlock: number;
+}
+
+export interface NativeAgentPolicySpendStateRecord {
+  policyId: string;
+  controller: string;
+  assetId: string;
+  window: number;
+  amount: string;
+  spent: string;
+  updatedAtBlock: number;
+}
+
+export interface NativeAgentEscrowStateRecord {
+  escrowId: string;
+  buyer: string;
+  provider: string;
+  arbiter: string;
+  assetId: string;
+  amount: string;
+  termsHash: string;
+  round: number;
+  buyerAccepted: boolean;
+  providerAccepted: boolean;
+  submittedPayloadHash?: string | null;
+  status: string;
+  resolution?: string | null;
+  lastActor?: string | null;
+  createdAtBlock: number;
+  updatedAtBlock: number;
+}
+
+export interface NativeAgentStateResponse {
+  schemaVersion: number;
+  limit: number;
+  filters: NativeAgentStateResponseFilters;
+  spendingPolicies: NativeAgentPolicyStateRecord[];
+  policySpends: NativeAgentPolicySpendStateRecord[];
+  escrows: NativeAgentEscrowStateRecord[];
+  source: NativeAgentStateSource;
+}
+
+export type NativeAgentStateFilterParamValue = string | number | boolean;
+
 /** Filter object passed to `lyth_nativeMarketState` and `/api/v1/native-market-state`. */
 export interface NativeMarketStateFilter {
   marketId?: string | null;
@@ -1340,6 +1414,13 @@ export class RpcClient {
     return nativeMarketEventsFromHistory<TDecoded>(response);
   }
 
+  /** `lyth_nativeAgentState` — current-state native agent policy and escrow rows. */
+  async lythNativeAgentState(
+    filter: NativeAgentStateFilter = {},
+  ): Promise<NativeAgentStateResponse> {
+    return this.call("lyth_nativeAgentState", [nativeAgentStateFilterParams(filter)]);
+  }
+
   /** `lyth_nativeMarketState` — current-state native spot and NFT market rows. */
   async lythNativeMarketState(
     filter: NativeMarketStateFilter = {},
@@ -2256,6 +2337,18 @@ function normalizeOperatorRisk(value: unknown): OperatorRiskResponse {
     jailStatus: normalizeJailStatus(row["jailStatus"]),
     reasons: reasons.map(String),
   };
+}
+
+export function nativeAgentStateFilterParams(
+  filter: NativeAgentStateFilter,
+): Record<string, NativeAgentStateFilterParamValue> {
+  const out: Record<string, NativeAgentStateFilterParamValue> = {};
+  if (filter.policyId != null) out.policyId = filter.policyId;
+  if (filter.escrowId != null) out.escrowId = filter.escrowId;
+  if (filter.account != null) out.account = filter.account;
+  if (filter.includePolicySpends != null) out.includePolicySpends = filter.includePolicySpends;
+  if (filter.limit != null) out.limit = encodeRpcU64Number(filter.limit, "limit");
+  return out;
 }
 
 export function nativeMarketStateFilterParams(

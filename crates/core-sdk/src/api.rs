@@ -19,10 +19,10 @@ use crate::types::{
     typed_native_events_from_response, AddressFlowResponse, AddressProfileResponse, BlockSelector,
     ChainStatsResponse, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse,
     ClobOrderBookResponse, ClobTradesResponse, MrcAccountResponse, MrcHoldersResponse,
-    MrcMetadataResponse, NativeEventFilter, NativeEventsFilter, NativeEventsResponse,
-    NativeMarketStateFilter, NativeMarketStateResponse, NativeReceiptFee, NativeReceiptResponse,
-    PendingRewardsResponse, RedemptionQueueResponse, SearchResponse, TxFeedResponse,
-    TypedNativeEventsResponse, TypedNativeReceiptEvent,
+    MrcMetadataResponse, NativeAgentStateFilter, NativeAgentStateResponse, NativeEventFilter,
+    NativeEventsFilter, NativeEventsResponse, NativeMarketStateFilter, NativeMarketStateResponse,
+    NativeReceiptFee, NativeReceiptResponse, PendingRewardsResponse, RedemptionQueueResponse,
+    SearchResponse, TxFeedResponse, TypedNativeEventsResponse, TypedNativeReceiptEvent,
 };
 
 /// Typed HTTP API client for `/api/v1`.
@@ -268,6 +268,15 @@ impl ApiClient {
             latest: response.latest,
             data: typed_native_events_from_response::<TDecoded>(&response.data)?,
         })
+    }
+
+    /// `/api/v1/native-agent-state`.
+    pub async fn native_agent_state(
+        &self,
+        filter: NativeAgentStateFilter<'_>,
+    ) -> Result<ApiEnvelope<NativeAgentStateResponse>, SdkError> {
+        self.get("native-agent-state", &filter.to_query_pairs())
+            .await
     }
 
     /// `/api/v1/native-market-state`.
@@ -953,7 +962,7 @@ pub struct ApiUpgradeStatusData {
 #[cfg(test)]
 mod tests {
     use super::{api_endpoint_from_rpc_endpoint, build_url, ApiClient};
-    use crate::types::{NativeEventsFilter, NativeMarketStateFilter};
+    use crate::types::{NativeAgentStateFilter, NativeEventsFilter, NativeMarketStateFilter};
     use serde_json::{json, Value};
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -1335,6 +1344,27 @@ mod tests {
     }
 
     #[test]
+    fn build_url_encodes_native_agent_state_query() {
+        let url = build_url(
+            "https://rpc.example/api/v1",
+            "native-agent-state",
+            &NativeAgentStateFilter::new()
+                .account("mono1agentconsumer")
+                .include_policy_spends(true)
+                .limit(5)
+                .to_query_pairs(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            format!(
+                "https://rpc.example/api/v1/native-agent-state?account=mono1agentconsumer&includePolicySpends=true&limit=5"
+            )
+        );
+    }
+
+    #[test]
     fn build_url_encodes_native_market_state_query() {
         let market_id = format!("0x{}", "aa".repeat(32));
         let url = build_url(
@@ -1353,6 +1383,105 @@ mod tests {
             url.as_str(),
             format!(
                 "https://rpc.example/api/v1/native-market-state?marketId={market_id}&account=mono1agentconsumer&includeSpotOrders=true&limit=5"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn native_agent_state_gets_rest_route_and_decodes_rows() {
+        let policy_id = format!("0x{}", "aa".repeat(32));
+        let escrow_id = format!("0x{}", "bb".repeat(32));
+        let asset_id = format!("0x{}", "cc".repeat(32));
+        let terms_hash = format!("0x{}", "dd".repeat(32));
+        let owner = "mono1agentowner000000000000000000000000000000";
+        let controller = "mono1agentcontroller000000000000000000000000";
+        let provider = "mono1agentprovider0000000000000000000000000";
+        let arbiter = "mono1agentarbiter00000000000000000000000000";
+        let (endpoint, server) = spawn_api_server(json!({
+            "schemaVersion": 1,
+            "chainId": 69420,
+            "genesisHash": format!("0x{}", "00".repeat(32)),
+            "latest": {
+                "available": true,
+                "height": 100,
+                "blockHash": format!("0x{}", "11".repeat(32)),
+                "stateRoot": format!("0x{}", "22".repeat(32)),
+                "timestamp": 123
+            },
+            "data": {
+                "schemaVersion": 1,
+                "limit": 5,
+                "filters": {
+                    "policyId": null,
+                    "escrowId": null,
+                    "account": owner,
+                    "includePolicySpends": true
+                },
+                "spendingPolicies": [{
+                    "policyId": policy_id,
+                    "owner": owner,
+                    "controller": controller,
+                    "assetId": asset_id,
+                    "enabled": true,
+                    "perActionLimit": "100",
+                    "windowLimit": "500",
+                    "windowSecs": 60,
+                    "updatedAtBlock": 42
+                }],
+                "policySpends": [{
+                    "policyId": policy_id,
+                    "controller": controller,
+                    "assetId": asset_id,
+                    "window": 7,
+                    "amount": "25",
+                    "spent": "125",
+                    "updatedAtBlock": 43
+                }],
+                "escrows": [{
+                    "escrowId": escrow_id,
+                    "buyer": owner,
+                    "provider": provider,
+                    "arbiter": arbiter,
+                    "assetId": asset_id,
+                    "amount": "1000",
+                    "termsHash": terms_hash,
+                    "round": 2,
+                    "buyerAccepted": true,
+                    "providerAccepted": false,
+                    "submittedPayloadHash": null,
+                    "status": "accepted",
+                    "resolution": null,
+                    "lastActor": owner,
+                    "createdAtBlock": 40,
+                    "updatedAtBlock": 44
+                }],
+                "source": {
+                    "indexerProvider": "native_agent_state",
+                    "projection": "native_agent_state"
+                }
+            }
+        }));
+        let client = ApiClient::new(endpoint).unwrap();
+
+        let response = client
+            .native_agent_state(
+                NativeAgentStateFilter::new()
+                    .account(owner)
+                    .include_policy_spends(true)
+                    .limit(5),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.data.spending_policies[0].controller, controller);
+        assert_eq!(response.data.policy_spends[0].amount, "25");
+        assert_eq!(response.data.escrows[0].status, "accepted");
+        assert_eq!(response.data.filters.account.as_deref(), Some(owner));
+        let request_line = server.join().unwrap();
+        assert_eq!(
+            request_line,
+            format!(
+                "GET /api/v1/native-agent-state?account={owner}&includePolicySpends=true&limit=5 HTTP/1.1"
             )
         );
     }
