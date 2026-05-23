@@ -79,6 +79,7 @@ export type { MrcHoldersRequest } from "./MrcHoldersRequest.js";
 export type { MrcHoldersResponse } from "./MrcHoldersResponse.js";
 export type { MrcMetadataRecord } from "./MrcMetadataRecord.js";
 export type { MrcMetadataResponse } from "./MrcMetadataResponse.js";
+export type { MrcPolicyRecord } from "./MrcPolicyRecord.js";
 export type { MrcPolicySpendRecord } from "./MrcPolicySpendRecord.js";
 export type { MrvAbiManifest } from "./MrvAbiManifest.js";
 export type { MrvAbiParam } from "./MrvAbiParam.js";

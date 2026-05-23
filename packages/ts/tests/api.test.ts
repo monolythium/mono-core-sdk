@@ -902,6 +902,7 @@ describe("ApiClient", () => {
           controller,
           recovery,
           policyHash: null,
+          policy: null,
           nonce: "7",
           updatedAtBlock: 91,
         },
@@ -911,6 +912,12 @@ describe("ApiClient", () => {
           controller,
           recovery: null,
           policyHash,
+          policy: {
+            enabled: true,
+            perActionLimit: "20",
+            windowLimit: "100",
+            allowedAssets: [assetId],
+          },
           nonce: null,
           updatedAtBlock: 90,
         },
@@ -933,8 +940,15 @@ describe("ApiClient", () => {
     expect(response.data.smartAccount?.controller).toBe(controller);
     expect(response.data.smartAccount?.recovery).toBe(recovery);
     expect(response.data.smartAccount?.policyHash).toBeNull();
+    expect(response.data.smartAccount?.policy).toBeNull();
     expect(response.data.smartAccount?.nonce).toBe("7");
     expect(response.data.policyAccount?.policyHash).toBe(policyHash);
+    expect(response.data.policyAccount?.policy).toMatchObject({
+      enabled: true,
+      perActionLimit: "20",
+      windowLimit: "100",
+      allowedAssets: [assetId],
+    });
     expect(response.data.policySpends[0]).toMatchObject({ assetId, spent: "250" });
     expect(calls).toEqual([
       {

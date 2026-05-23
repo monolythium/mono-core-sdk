@@ -38,7 +38,7 @@ use monolythium_core_sdk::types::{
     EntityRatchetResponse, FeeHistoryResponse, GapRange, GapRecord, GapRecordsResponse,
     IndexerStatus, MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent,
     MeshUnsignedTxResponse, MrcAccountRecord, MrcAccountRequest, MrcAccountResponse,
-    MrcHoldersRequest, MrcHoldersResponse, MrcMetadataRecord, MrcMetadataResponse,
+    MrcHoldersRequest, MrcHoldersResponse, MrcMetadataRecord, MrcMetadataResponse, MrcPolicyRecord,
     MrcPolicySpendRecord, NativeCollectionRoyaltyStateRecord, NativeMarketStateFilter,
     NativeMarketStateResponse, NativeMarketStateResponseFilters, NativeMarketStateSource,
     NativeNftListingStateRecord, NativeReceiptFee, NativeSpotMarketStateRecord,
@@ -129,6 +129,7 @@ fn export_bindings() {
     MrcHoldersResponse::export_all_to(&out).expect("MrcHoldersResponse");
     MrcMetadataRecord::export_all_to(&out).expect("MrcMetadataRecord");
     MrcMetadataResponse::export_all_to(&out).expect("MrcMetadataResponse");
+    MrcPolicyRecord::export_all_to(&out).expect("MrcPolicyRecord");
     MrcPolicySpendRecord::export_all_to(&out).expect("MrcPolicySpendRecord");
     NativeCollectionRoyaltyStateRecord::export_all_to(&out)
         .expect("NativeCollectionRoyaltyStateRecord");

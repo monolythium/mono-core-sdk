@@ -29,6 +29,7 @@ export interface NativeDecodedEvent {
   status?: string | null;
   nft_standard?: string | null;
   nftStandard?: string | null;
+  policy?: NativeMrcPolicyProjection | null;
   royalty_bps?: number | null;
   royaltyBps?: number | null;
   listing_kind?: unknown;
@@ -45,6 +46,14 @@ export interface NativeDecodedEvent {
   minNotional?: string | null;
   payload_hash: string;
   [field: string]: unknown;
+}
+
+/** Canonical policy body projected from native MRC policy-account events. */
+export interface NativeMrcPolicyProjection {
+  enabled: boolean;
+  per_action_limit: string | number;
+  window_limit: string | number;
+  allowed_assets: Array<string | Array<number>>;
 }
 
 export type NativeEventProjection = NativeDecodedEvent;
