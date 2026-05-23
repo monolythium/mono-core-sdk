@@ -7,6 +7,7 @@
  */
 
 import { SdkError } from "./error.js";
+import type { BridgeRoutesRequest, BridgeRoutesResponse } from "./bridge.js";
 import {
   nativeEventsFromHistory,
   nativeEventsFromReceipt,
@@ -608,6 +609,20 @@ export class ApiClient {
   ): Promise<ApiEnvelope<MrcMetadataResponse>> {
     return this.get(`/assets/${encodePathSegment(assetId)}/metadata`, {
       mrcTokenId: mrcTokenId ?? undefined,
+    });
+  }
+
+  /**
+   * `/api/v1/bridge/routes`.
+   *
+   * The forthcoming route is read-only `GET`, so the typed request is encoded
+   * as a single JSON query value named `request`.
+   */
+  async bridgeRoutes(
+    request: BridgeRoutesRequest,
+  ): Promise<ApiEnvelope<BridgeRoutesResponse>> {
+    return this.get("/bridge/routes", {
+      request: JSON.stringify(request),
     });
   }
 

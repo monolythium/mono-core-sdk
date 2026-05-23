@@ -441,6 +441,58 @@ pub struct BridgeQuoteSubmitReadiness {
     pub warnings: Vec<String>,
 }
 
+/// Request body for route-selection/readiness over supplied live disclosures.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "BridgeRoutesRequest.ts")
+)]
+pub struct BridgeRoutesRequest {
+    /// Transfer intent to evaluate.
+    pub intent: BridgeTransferIntent,
+    /// Live route disclosures supplied by the node/API/caller.
+    #[serde(alias = "routes")]
+    pub route_disclosures: Vec<BridgeRouteDisclosure>,
+}
+
+/// Response for `lyth_bridgeRoutes` and `/api/v1/bridge/routes`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "BridgeRoutesResponse.ts")
+)]
+pub struct BridgeRoutesResponse {
+    /// Closed route-selection result used as the readiness input.
+    pub selection: BridgeRouteSelection,
+    /// True when a route was selected from the supplied disclosures.
+    pub route_selection_ready: bool,
+    /// True only if the API returns real quote fields.
+    pub quote_ready: bool,
+    /// True only if the API returns real submit fields.
+    pub submit_ready: bool,
+    /// Hard failures for route, quote, or submit readiness.
+    pub blocked_reasons: Vec<String>,
+    /// Non-blocking warnings copied from the selected route, when present.
+    pub warnings: Vec<String>,
+}
+
+impl From<BridgeQuoteSubmitReadiness> for BridgeRoutesResponse {
+    fn from(value: BridgeQuoteSubmitReadiness) -> Self {
+        Self {
+            selection: value.selection,
+            route_selection_ready: value.route_selection_ready,
+            quote_ready: value.quote_ready,
+            submit_ready: value.submit_ready,
+            blocked_reasons: value.blocked_reasons,
+            warnings: value.warnings,
+        }
+    }
+}
+
 /// Assess one third-party bridge route disclosure.
 #[must_use]
 pub fn assess_bridge_route(route: &BridgeRouteDisclosure) -> BridgeRouteAssessment {
@@ -666,6 +718,16 @@ pub fn bridge_quote_submit_readiness(
         blocked_reasons,
         warnings,
     }
+}
+
+/// Evaluate route-selection/readiness from a typed bridge-routes request.
+///
+/// This mirrors the shape expected by the forthcoming read-only node API and
+/// still keeps quote/submit blocked unless a live API response supplies real
+/// fields.
+#[must_use]
+pub fn bridge_routes_readiness(request: &BridgeRoutesRequest) -> BridgeRoutesResponse {
+    bridge_quote_submit_readiness(&request.intent, &request.route_disclosures).into()
 }
 
 fn bridge_route_candidate(
@@ -1109,6 +1171,33 @@ mod tests {
         );
         assert_eq!(
             readiness.blocked_reasons,
+            vec![
+                BRIDGE_QUOTE_API_BLOCKED_REASON.to_owned(),
+                BRIDGE_SUBMIT_API_BLOCKED_REASON.to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn bridge_routes_readiness_uses_request_shape_and_keeps_quote_submit_blocked() {
+        let response = bridge_routes_readiness(&BridgeRoutesRequest {
+            intent: transfer_intent(),
+            route_disclosures: vec![route("healthy")],
+        });
+
+        assert!(response.route_selection_ready);
+        assert!(!response.quote_ready);
+        assert!(!response.submit_ready);
+        assert_eq!(
+            response
+                .selection
+                .selected
+                .as_ref()
+                .map(|request| request.route.route_id.as_str()),
+            Some("healthy")
+        );
+        assert_eq!(
+            response.blocked_reasons,
             vec![
                 BRIDGE_QUOTE_API_BLOCKED_REASON.to_owned(),
                 BRIDGE_SUBMIT_API_BLOCKED_REASON.to_owned()

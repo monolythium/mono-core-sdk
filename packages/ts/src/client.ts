@@ -9,7 +9,7 @@
 
 import { addressToBech32, parseAddress } from "./address.js";
 import { SdkError } from "./error.js";
-import type { BridgeRouteDisclosure } from "./bridge.js";
+import type { BridgeRouteDisclosure, BridgeRoutesRequest, BridgeRoutesResponse } from "./bridge.js";
 import {
   nativeEventsFromHistory,
   nativeEventsFromReceipt,
@@ -1042,6 +1042,11 @@ export class RpcClient {
   /** `lyth_getTokenBalances` — indexed per-asset balances for one address. */
   async lythGetTokenBalances(address: string): Promise<TokenBalanceRecord[]> {
     return this.call("lyth_getTokenBalances", [address]);
+  }
+
+  /** `lyth_bridgeRoutes` — read-only bridge route-selection/readiness. */
+  async lythBridgeRoutes(request: BridgeRoutesRequest): Promise<BridgeRoutesResponse> {
+    return this.call("lyth_bridgeRoutes", [request]);
   }
 
   /** `lyth_mrcMetadata` — exact current-state native MRC metadata lookup. */

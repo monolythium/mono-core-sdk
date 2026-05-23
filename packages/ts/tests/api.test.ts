@@ -240,6 +240,42 @@ describe("ApiClient", () => {
     expect(assessBridgeRoute(profile.data.bridgeRouteDisclosures![0]).accepted).toBe(true);
   });
 
+  it("calls bridge routes readiness with an encoded request query", async () => {
+    const request = {
+      intent: {
+        asset: "USDC",
+        amountAtomic: "1000000",
+        sourceChain: "Ethereum",
+        destinationChain: "Mono",
+        recipient: "mono1recipient",
+      },
+      routeDisclosures: [bridgeRoute("healthy")],
+    };
+    const { fetch, calls } = mockGet(
+      apiEnvelope({
+        selection: {
+          selected: null,
+          candidates: [],
+          blockedReasons: [],
+        },
+        routeSelectionReady: false,
+        quoteReady: false,
+        submitReady: false,
+        blockedReasons: [],
+        warnings: [],
+      }),
+    );
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    const response = await client.bridgeRoutes(request);
+
+    expect(response.data.quoteReady).toBe(false);
+    expect(response.data.submitReady).toBe(false);
+    expect(calls[0].method).toBe("GET");
+    expect(calls[0].url).toContain("https://rpc.example/api/v1/bridge/routes?request=");
+    expect(calls[0].url).toContain("%22routeDisclosures%22%3A%5B");
+  });
+
   it("reads native receipt envelopes from /api/v1/transactions/{hash}/native-receipt", async () => {
     const txHash = `0x${"22".repeat(32)}`;
     const decoded = {

@@ -9,8 +9,10 @@ use std::sync::Arc;
 use reqwest::Url;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde_json::to_string;
 use serde_json::Value;
 
+use crate::bridge::{BridgeRoutesRequest, BridgeRoutesResponse};
 use crate::error::SdkError;
 use crate::types::{
     native_events_from_receipt, native_market_events_filter, native_market_events_from_receipt,
@@ -345,6 +347,21 @@ impl ApiClient {
         });
         self.get(&format!("assets/{asset_id}/metadata"), &query)
             .await
+    }
+
+    /// `/api/v1/bridge/routes`.
+    ///
+    /// The forthcoming route is read-only `GET`, so the typed request is
+    /// encoded as a single JSON query value named `request`.
+    pub async fn bridge_routes(
+        &self,
+        request: &BridgeRoutesRequest,
+    ) -> Result<ApiEnvelope<BridgeRoutesResponse>, SdkError> {
+        self.get(
+            "bridge/routes",
+            &[("request", to_string(request).map_err(SdkError::Serde)?)],
+        )
+        .await
     }
 
     /// `/api/v1/clusters`.
@@ -955,6 +972,32 @@ mod tests {
             url.as_str(),
             format!("https://rpc.example/api/v1/assets/{asset_id}/metadata?mrcTokenId={token_id}")
         );
+    }
+
+    #[test]
+    fn build_url_encodes_bridge_routes_request_query() {
+        let request = serde_json::json!({
+            "intent": {
+                "asset": "USDC",
+                "amountAtomic": "1000000",
+                "sourceChain": "Ethereum",
+                "destinationChain": "Mono",
+                "recipient": "mono1recipient"
+            },
+            "routeDisclosures": []
+        })
+        .to_string();
+        let url = build_url(
+            "https://rpc.example/api/v1",
+            "bridge/routes",
+            &[("request", request)],
+        )
+        .unwrap();
+
+        assert!(url
+            .as_str()
+            .starts_with("https://rpc.example/api/v1/bridge/routes?request="));
+        assert!(url.as_str().contains("%22routeDisclosures%22%3A%5B%5D"));
     }
 
     #[test]

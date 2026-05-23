@@ -336,6 +336,47 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(balances[2].bridgeRouteDisclosures).toBeUndefined();
   });
 
+  it("lyth_bridgeRoutes forwards the typed readiness request", async () => {
+    const request = {
+      intent: {
+        asset: "USDC",
+        amountAtomic: "1000000",
+        sourceChain: "Ethereum",
+        destinationChain: "Mono",
+        recipient: "mono1recipient",
+      },
+      routeDisclosures: [bridgeRoute("healthy")],
+    };
+    const { fetch, calls } = mockFetch({
+      selection: {
+        selected: {
+          intent: request.intent,
+          route: request.routeDisclosures[0],
+          assessment: assessBridgeRoute(request.routeDisclosures[0]),
+        },
+        candidates: [],
+        blockedReasons: [],
+      },
+      routeSelectionReady: true,
+      quoteReady: false,
+      submitReady: false,
+      blockedReasons: [
+        "bridge quote requires a mono-core live quote API/runtime primitive",
+        "bridge submit requires a mono-core live submit API/runtime primitive",
+      ],
+      warnings: [],
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const response = await client.lythBridgeRoutes(request);
+
+    expect(calls[0].method).toBe("lyth_bridgeRoutes");
+    expect(calls[0].params).toEqual([request]);
+    expect(response.routeSelectionReady).toBe(true);
+    expect(response.quoteReady).toBe(false);
+    expect(response.submitReady).toBe(false);
+  });
+
   it("lyth_mrcMetadata reads asset and token metadata rows", async () => {
     const assetId = `0x${"bb".repeat(32)}`;
     const tokenId = `0x${"cc".repeat(32)}`;

@@ -180,6 +180,20 @@ export interface BridgeQuoteSubmitReadiness {
   warnings: string[];
 }
 
+export interface BridgeRoutesRequest {
+  intent: BridgeTransferIntent;
+  routeDisclosures: BridgeRouteDisclosure[];
+}
+
+export interface BridgeRoutesResponse {
+  selection: BridgeRouteSelection;
+  routeSelectionReady: boolean;
+  quoteReady: boolean;
+  submitReady: boolean;
+  blockedReasons: string[];
+  warnings: string[];
+}
+
 export function assessBridgeRoute(route: BridgeRouteDisclosure): BridgeRouteAssessment {
   const blockedReasons: string[] = [];
   const warnings: string[] = [];
@@ -328,6 +342,10 @@ export function bridgeQuoteSubmitReadiness(
     blockedReasons,
     warnings: selection.selected == null ? [] : [...selection.selected.assessment.warnings],
   };
+}
+
+export function bridgeRoutesReadiness(request: BridgeRoutesRequest): BridgeRoutesResponse {
+  return bridgeQuoteSubmitReadiness(request.intent, request.routeDisclosures);
 }
 
 function bridgeRouteCandidate(

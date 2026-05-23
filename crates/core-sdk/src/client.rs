@@ -12,6 +12,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::address::{address_to_bech32, parse_address};
+use crate::bridge::{BridgeRoutesRequest, BridgeRoutesResponse};
 use crate::error::SdkError;
 use crate::mrv::{
     build_mrv_call_native_encrypted_submission, build_mrv_deploy_native_encrypted_submission,
@@ -488,6 +489,14 @@ impl RpcClient {
         address: &str,
     ) -> Result<Vec<TokenBalanceRecord>, SdkError> {
         self.call("lyth_getTokenBalances", json!([address])).await
+    }
+
+    /// `lyth_bridgeRoutes` — read-only bridge route-selection/readiness.
+    pub async fn lyth_bridge_routes(
+        &self,
+        request: &BridgeRoutesRequest,
+    ) -> Result<BridgeRoutesResponse, SdkError> {
+        self.call("lyth_bridgeRoutes", json!([request])).await
     }
 
     /// `lyth_mrcMetadata` — exact current-state native MRC metadata lookup.
@@ -1415,6 +1424,57 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0]["method"], "lyth_getTokenBalances");
         assert_eq!(requests[0]["params"], json!([address]));
+    }
+
+    #[tokio::test]
+    async fn lyth_bridge_routes_sends_typed_request_and_decodes_readiness() {
+        let request = BridgeRoutesRequest {
+            intent: crate::bridge::BridgeTransferIntent {
+                asset: "USDC".to_owned(),
+                amount_atomic: "1000000".to_owned(),
+                source_chain: "Ethereum".to_owned(),
+                destination_chain: "Mono".to_owned(),
+                recipient: "mono1recipient".to_owned(),
+                sender: None,
+                allowed_route_ids: None,
+                minimum_score: None,
+                max_finality_blocks: None,
+                max_cooldown_seconds: None,
+            },
+            route_disclosures: vec![crate::bridge::BridgeRouteDisclosure {
+                route_id: "healthy".to_owned(),
+                bridge: "CCIP".to_owned(),
+                asset: "USDC".to_owned(),
+                source_chain: "Ethereum".to_owned(),
+                destination_chain: "Mono".to_owned(),
+                verifier: crate::bridge::BridgeVerifierDisclosure {
+                    model: "DON".to_owned(),
+                    participant_count: 7,
+                    threshold: 5,
+                },
+                drain_cap_atomic: "100000000000".to_owned(),
+                finality_blocks: 64,
+                cooldown_seconds: 86_400,
+                admin_control: crate::bridge::BridgeAdminControl::ConsensusOnly,
+                circuit_breaker: crate::bridge::BridgeCircuitBreakerState::Armed,
+                insurance_atomic: "50000000000".to_owned(),
+                last_incident_date: None,
+            }],
+        };
+        let reply = crate::bridge::bridge_routes_readiness(&request);
+        let (endpoint, server) = spawn_rpc_server(vec![serde_json::to_value(&reply).unwrap()]);
+
+        let client = RpcClient::new(endpoint).unwrap();
+        let response = client.lyth_bridge_routes(&request).await.unwrap();
+
+        assert!(response.route_selection_ready);
+        assert!(!response.quote_ready);
+        assert!(!response.submit_ready);
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["method"], "lyth_bridgeRoutes");
+        assert_eq!(requests[0]["params"], json!([request]));
     }
 
     #[tokio::test]
