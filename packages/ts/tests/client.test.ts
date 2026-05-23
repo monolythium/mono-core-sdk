@@ -111,14 +111,74 @@ describe("eth_* methods", () => {
       parent_hash: "0xdef",
       state_root: "0x000",
       timestamp: 1700000000,
-      gas_used: 0,
-      gas_limit: 30000000,
+      executionUnitsUsed: 0,
+      executionUnitLimit: 30000000,
     };
     const { fetch, calls } = mockFetch(reply);
     const client = new RpcClient("http://x", { fetch });
-    await client.ethGetBlockByNumber(256);
+    const header = await client.ethGetBlockByNumber(256);
+    expect(header?.executionUnitsUsed).toBe(0n);
+    expect(header?.executionUnitLimit).toBe(30000000n);
     expect(calls[0].method).toBe("eth_getBlockByNumber");
     expect(calls[0].params).toEqual(["0x100"]);
+  });
+
+  it("eth_getBlockByNumber accepts legacy gas field aliases", async () => {
+    const reply = {
+      number: 256,
+      hash: "0xabc",
+      parent_hash: "0xdef",
+      state_root: "0x000",
+      timestamp: 1700000000,
+      gas_used: 7,
+      gas_limit: 30000000,
+    };
+    const { fetch } = mockFetch(reply);
+    const client = new RpcClient("http://x", { fetch });
+    const header = await client.ethGetBlockByNumber(256);
+    expect(header?.executionUnitsUsed).toBe(7n);
+    expect(header?.executionUnitLimit).toBe(30000000n);
+    expect("gas_used" in header!).toBe(false);
+    expect("gas_limit" in header!).toBe(false);
+  });
+
+  it("eth_getTransactionReceipt returns execution-unit receipt fields", async () => {
+    const txHash = `0x${"11".repeat(32)}`;
+    const reply = {
+      txHash,
+      blockHash: `0x${"22".repeat(32)}`,
+      blockNumber: 12,
+      txIndex: 1,
+      status: 1,
+      executionUnitsUsed: 21_000,
+    };
+    const { fetch, calls } = mockFetch(reply);
+    const client = new RpcClient("http://x", { fetch });
+    const receipt = await client.ethGetTransactionReceipt(txHash);
+    expect(receipt?.tx_hash).toBe(txHash);
+    expect(receipt?.block_number).toBe(12n);
+    expect(receipt?.tx_index).toBe(1);
+    expect(receipt?.executionUnitsUsed).toBe(21_000n);
+    expect("gas_used" in receipt!).toBe(false);
+    expect(calls[0].method).toBe("eth_getTransactionReceipt");
+    expect(calls[0].params).toEqual([txHash]);
+  });
+
+  it("eth_getTransactionReceipt accepts legacy gas field aliases", async () => {
+    const txHash = `0x${"11".repeat(32)}`;
+    const reply = {
+      tx_hash: txHash,
+      block_hash: `0x${"22".repeat(32)}`,
+      block_number: 12,
+      tx_index: 1,
+      status: 1,
+      gas_used: 21_000,
+    };
+    const { fetch } = mockFetch(reply);
+    const client = new RpcClient("http://x", { fetch });
+    const receipt = await client.ethGetTransactionReceipt(txHash);
+    expect(receipt?.executionUnitsUsed).toBe(21_000n);
+    expect("gas_used" in receipt!).toBe(false);
   });
 });
 

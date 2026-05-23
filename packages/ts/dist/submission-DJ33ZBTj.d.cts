@@ -303,9 +303,10 @@ type AssetPolicy = {
 /**
  * Block header surfaced via `eth_getBlockByNumber` / `eth_getBlockByHash`.
  *
- * Field naming mirrors the on-wire shape — fields use snake_case in
- * the v0.0.1 server. A future server version may upgrade to camelCase;
- * when that happens we add a serde alias.
+ * The v4.1 SDK shape exposes execution-unit terminology. Legacy node
+ * payloads that still return `gas_used` / `gas_limit` decode through
+ * serde aliases so callers can upgrade the SDK before every node RPC
+ * response has been regenerated.
  */
 type BlockHeader = {
     /**
@@ -329,13 +330,13 @@ type BlockHeader = {
      */
     timestamp: bigint;
     /**
-     * Total gas consumed.
+     * Total execution units consumed.
      */
-    gas_used: bigint;
+    executionUnitsUsed: bigint;
     /**
-     * Block gas limit.
+     * Block execution-unit limit.
      */
-    gas_limit: bigint;
+    executionUnitLimit: bigint;
 };
 
 /**
@@ -1425,9 +1426,9 @@ type TransactionReceipt = {
      */
     status: number;
     /**
-     * Gas consumed by this transaction.
+     * Execution units consumed by this transaction.
      */
-    gas_used: bigint;
+    executionUnitsUsed: bigint;
 };
 
 /**
