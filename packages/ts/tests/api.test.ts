@@ -713,6 +713,7 @@ describe("ApiClient", () => {
     const marketId = `0x${"aa".repeat(32)}`;
     const orderId = `0x${"bb".repeat(32)}`;
     const listingId = `0x${"cc".repeat(32)}`;
+    const legacyListingId = `0x${"cd".repeat(32)}`;
     const collectionId = `0x${"dd".repeat(32)}`;
     const owner = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
     const { fetch, calls } = mockGet(
@@ -763,6 +764,7 @@ describe("ApiClient", () => {
           {
             listingId,
             seller: "mono1seller0000000000000000000000000000000000",
+            nonce: 12,
             standard: "mrc721",
             collectionId,
             tokenId: `0x${"33".repeat(32)}`,
@@ -775,6 +777,22 @@ describe("ApiClient", () => {
             highestBidder: null,
             highestBid: null,
             updatedAtBlock: 46,
+          },
+          {
+            listingId: legacyListingId,
+            seller: "mono1seller0000000000000000000000000000000000",
+            standard: "mrc721",
+            collectionId,
+            tokenId: `0x${"34".repeat(32)}`,
+            quantity: "1",
+            paymentAssetId: `0x${"44".repeat(32)}`,
+            price: "701",
+            listingKind: { auction: { reserve: "651" } },
+            status: "open",
+            expiresAtBlock: 121,
+            highestBidder: null,
+            highestBid: null,
+            updatedAtBlock: 47,
           },
         ],
         collectionRoyalties: [
@@ -803,6 +821,8 @@ describe("ApiClient", () => {
     expect(response.data.spotMarkets[0].tradeCount).toBe("2");
     expect(response.data.spotOrders[0].nonce).toBe(9);
     expect(response.data.spotOrders[0].remaining).toBe("10");
+    expect(response.data.nftListings[0].nonce).toBe(12);
+    expect(response.data.nftListings[1].nonce).toBeUndefined();
     expect(response.data.nftListings[0].listingKind).toEqual({
       auction: { reserve: "650" },
     });

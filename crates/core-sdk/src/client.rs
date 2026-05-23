@@ -2153,6 +2153,7 @@ mod tests {
         let market_id = format!("0x{}", "aa".repeat(32));
         let order_id = format!("0x{}", "bb".repeat(32));
         let listing_id = format!("0x{}", "cc".repeat(32));
+        let legacy_listing_id = format!("0x{}", "cd".repeat(32));
         let collection_id = format!("0x{}", "dd".repeat(32));
         let owner = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
         let seller = "mono1seller0000000000000000000000000000000000";
@@ -2197,22 +2198,41 @@ mod tests {
                 "expiresAtBlock": 99,
                 "updatedAtBlock": 45
             }],
-            "nftListings": [{
-                "listingId": listing_id,
-                "seller": seller,
-                "standard": "mrc721",
-                "collectionId": collection_id,
-                "tokenId": format!("0x{}", "33".repeat(32)),
-                "quantity": "1",
-                "paymentAssetId": format!("0x{}", "44".repeat(32)),
-                "price": "700",
-                "listingKind": { "fixedPrice": true },
-                "status": "open",
-                "expiresAtBlock": 120,
-                "highestBidder": bidder,
-                "highestBid": "650",
-                "updatedAtBlock": 46
-            }],
+            "nftListings": [
+                {
+                    "listingId": listing_id,
+                    "seller": seller,
+                    "nonce": 11,
+                    "standard": "mrc721",
+                    "collectionId": collection_id,
+                    "tokenId": format!("0x{}", "33".repeat(32)),
+                    "quantity": "1",
+                    "paymentAssetId": format!("0x{}", "44".repeat(32)),
+                    "price": "700",
+                    "listingKind": { "fixedPrice": true },
+                    "status": "open",
+                    "expiresAtBlock": 120,
+                    "highestBidder": bidder,
+                    "highestBid": "650",
+                    "updatedAtBlock": 46
+                },
+                {
+                    "listingId": legacy_listing_id,
+                    "seller": seller,
+                    "standard": "mrc721",
+                    "collectionId": collection_id,
+                    "tokenId": format!("0x{}", "34".repeat(32)),
+                    "quantity": "1",
+                    "paymentAssetId": format!("0x{}", "44".repeat(32)),
+                    "price": "701",
+                    "listingKind": { "fixedPrice": true },
+                    "status": "open",
+                    "expiresAtBlock": 121,
+                    "highestBidder": null,
+                    "highestBid": null,
+                    "updatedAtBlock": 47
+                }
+            ],
             "collectionRoyalties": [{
                 "collectionId": collection_id,
                 "creator": null,
@@ -2241,6 +2261,8 @@ mod tests {
         assert_eq!(response.spot_markets[0].trade_count, "2");
         assert_eq!(response.spot_orders[0].nonce, Some(7));
         assert_eq!(response.spot_orders[0].remaining, "20");
+        assert_eq!(response.nft_listings[0].nonce, Some(11));
+        assert_eq!(response.nft_listings[1].nonce, None);
         assert_eq!(response.nft_listings[0].listing_kind["fixedPrice"], true);
         assert_eq!(
             response.nft_listings[0].highest_bidder.as_deref(),

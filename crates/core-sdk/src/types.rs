@@ -1285,6 +1285,10 @@ pub struct NativeSpotOrderStateRecord {
 pub struct NativeNftListingStateRecord {
     pub listing_id: Hash,
     pub seller: Address,
+    /// Seller-local NFT listing nonce captured from listing creation.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number | null", optional))]
+    pub nonce: Option<u64>,
     pub standard: String,
     pub collection_id: Hash,
     pub token_id: Hash,

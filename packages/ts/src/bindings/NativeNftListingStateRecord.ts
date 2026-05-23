@@ -3,4 +3,8 @@
 /**
  * Current-state native NFT listing aggregate.
  */
-export type NativeNftListingStateRecord = { listingId: string, seller: string, standard: string, collectionId: string, tokenId: string, quantity: string, paymentAssetId: string, price: string, listingKind: unknown, status: string, expiresAtBlock: bigint, highestBidder: string | null, highestBid: string | null, updatedAtBlock: bigint, };
+export type NativeNftListingStateRecord = { listingId: string, seller: string,
+/**
+ * Seller-local NFT listing nonce captured from listing creation.
+ */
+nonce?: number | null, standard: string, collectionId: string, tokenId: string, quantity: string, paymentAssetId: string, price: string, listingKind: unknown, status: string, expiresAtBlock: bigint, highestBidder: string | null, highestBid: string | null, updatedAtBlock: bigint, };
