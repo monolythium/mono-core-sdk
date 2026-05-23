@@ -39,14 +39,16 @@ use monolythium_core_sdk::types::{
     IndexerStatus, MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent,
     MeshUnsignedTxResponse, MrcAccountRecord, MrcAccountRequest, MrcAccountResponse,
     MrcHoldersRequest, MrcHoldersResponse, MrcMetadataRecord, MrcMetadataResponse, MrcPolicyRecord,
-    MrcPolicySpendRecord, NativeCollectionRoyaltyStateRecord, NativeMarketStateFilter,
-    NativeMarketStateResponse, NativeMarketStateResponseFilters, NativeMarketStateSource,
-    NativeModuleForwarderDescriptor, NativeNftListingStateRecord, NativeReceiptFee,
-    NativeSpotMarketStateRecord, NativeSpotOrderStateRecord, PeerSummary, PendingRewardsResponse,
-    PendingRewardsRow, PendingTxSummary, PrecompileDescriptor, RedemptionQueueResponse,
-    RedemptionQueueTicket, RegistryRecord, RichListHolder, RichListResponse, RoundInfo,
-    StorageProofBatch, SyncStatus, TokenBalanceMrcIdentity, TokenBalanceRecord,
-    TpmAttestationResponse, TransactionReceipt, TransactionView,
+    MrcPolicySpendRecord, NativeAgentEscrowStateRecord, NativeAgentPolicySpendStateRecord,
+    NativeAgentPolicyStateRecord, NativeAgentStateFilter, NativeAgentStateResponse,
+    NativeAgentStateResponseFilters, NativeAgentStateSource, NativeCollectionRoyaltyStateRecord,
+    NativeMarketStateFilter, NativeMarketStateResponse, NativeMarketStateResponseFilters,
+    NativeMarketStateSource, NativeModuleForwarderDescriptor, NativeNftListingStateRecord,
+    NativeReceiptFee, NativeSpotMarketStateRecord, NativeSpotOrderStateRecord, PeerSummary,
+    PendingRewardsResponse, PendingRewardsRow, PendingTxSummary, PrecompileDescriptor,
+    RedemptionQueueResponse, RedemptionQueueTicket, RegistryRecord, RichListHolder,
+    RichListResponse, RoundInfo, StorageProofBatch, SyncStatus, TokenBalanceMrcIdentity,
+    TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt, TransactionView,
 };
 use ts_rs::TS;
 
@@ -131,6 +133,14 @@ fn export_bindings() {
     MrcMetadataResponse::export_all_to(&out).expect("MrcMetadataResponse");
     MrcPolicyRecord::export_all_to(&out).expect("MrcPolicyRecord");
     MrcPolicySpendRecord::export_all_to(&out).expect("MrcPolicySpendRecord");
+    NativeAgentEscrowStateRecord::export_all_to(&out).expect("NativeAgentEscrowStateRecord");
+    NativeAgentPolicySpendStateRecord::export_all_to(&out)
+        .expect("NativeAgentPolicySpendStateRecord");
+    NativeAgentPolicyStateRecord::export_all_to(&out).expect("NativeAgentPolicyStateRecord");
+    NativeAgentStateFilter::export_all_to(&out).expect("NativeAgentStateFilter");
+    NativeAgentStateResponse::export_all_to(&out).expect("NativeAgentStateResponse");
+    NativeAgentStateResponseFilters::export_all_to(&out).expect("NativeAgentStateResponseFilters");
+    NativeAgentStateSource::export_all_to(&out).expect("NativeAgentStateSource");
     NativeCollectionRoyaltyStateRecord::export_all_to(&out)
         .expect("NativeCollectionRoyaltyStateRecord");
     NativeMarketStateFilter::export_all_to(&out).expect("NativeMarketStateFilter");

@@ -1378,6 +1378,98 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(response.events[0].decoded.min_notional).toBe("50");
   });
 
+  it("lythNativeAgentState forwards filter and decodes policy, spend, and escrow rows", async () => {
+    const policyId = `0x${"aa".repeat(32)}`;
+    const escrowId = `0x${"bb".repeat(32)}`;
+    const assetId = `0x${"cc".repeat(32)}`;
+    const termsHash = `0x${"dd".repeat(32)}`;
+    const submittedPayloadHash = `0x${"ee".repeat(32)}`;
+    const owner = "mono1agentowner000000000000000000000000000000";
+    const controller = "mono1agentcontroller000000000000000000000000";
+    const provider = "mono1agentprovider0000000000000000000000000";
+    const arbiter = "mono1agentarbiter00000000000000000000000000";
+    const { fetch, calls } = mockFetch({
+      schemaVersion: 1,
+      limit: 5,
+      filters: {
+        policyId: null,
+        escrowId: null,
+        account: owner,
+        includePolicySpends: true,
+      },
+      spendingPolicies: [
+        {
+          policyId,
+          owner,
+          controller,
+          assetId,
+          enabled: true,
+          perActionLimit: "100",
+          windowLimit: "500",
+          windowSecs: 60,
+          updatedAtBlock: 42,
+        },
+      ],
+      policySpends: [
+        {
+          policyId,
+          controller,
+          assetId,
+          window: 7,
+          amount: "25",
+          spent: "125",
+          updatedAtBlock: 43,
+        },
+      ],
+      escrows: [
+        {
+          escrowId,
+          buyer: owner,
+          provider,
+          arbiter,
+          assetId,
+          amount: "1000",
+          termsHash,
+          round: 2,
+          buyerAccepted: true,
+          providerAccepted: false,
+          submittedPayloadHash,
+          status: "submitted",
+          resolution: null,
+          lastActor: provider,
+          createdAtBlock: 40,
+          updatedAtBlock: 44,
+        },
+      ],
+      source: {
+        indexerProvider: "native_agent_state",
+        projection: "native_agent_state",
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const response = await client.lythNativeAgentState({
+      account: owner,
+      includePolicySpends: true,
+      limit: 5,
+    });
+
+    expect(response.spendingPolicies[0].perActionLimit).toBe("100");
+    expect(response.policySpends[0].window).toBe(7);
+    expect(response.policySpends[0].spent).toBe("125");
+    expect(response.escrows[0].submittedPayloadHash).toBe(submittedPayloadHash);
+    expect(response.escrows[0].lastActor).toBe(provider);
+    expect(response.filters.account).toBe(owner);
+    expect(calls[0].method).toBe("lyth_nativeAgentState");
+    expect(calls[0].params).toEqual([
+      {
+        account: owner,
+        includePolicySpends: true,
+        limit: 5,
+      },
+    ]);
+  });
+
   it("lythNativeMarketState forwards filter and decodes spot, listing, and royalty rows", async () => {
     const marketId = `0x${"aa".repeat(32)}`;
     const orderId = `0x${"bb".repeat(32)}`;

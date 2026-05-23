@@ -1156,6 +1156,219 @@ pub struct NativeEventsResponse {
     pub source: NativeEventsSource,
 }
 
+/// Filter object passed to `lyth_nativeAgentState` and
+/// `/api/v1/native-agent-state`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeAgentStateFilter.ts")
+)]
+pub struct NativeAgentStateFilter<'a> {
+    /// Optional exact spending-policy lookup.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_id: Option<&'a str>,
+    /// Optional exact escrow lookup.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub escrow_id: Option<&'a str>,
+    /// Optional account scope for owner/controller/buyer/provider/arbiter rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<&'a str>,
+    /// Include bounded policy spend rows for policy/account lookups.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_policy_spends: Option<bool>,
+    /// Maximum rows per list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+impl<'a> NativeAgentStateFilter<'a> {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            policy_id: None,
+            escrow_id: None,
+            account: None,
+            include_policy_spends: None,
+            limit: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn policy_id(mut self, policy_id: &'a str) -> Self {
+        self.policy_id = Some(policy_id);
+        self
+    }
+
+    #[must_use]
+    pub const fn escrow_id(mut self, escrow_id: &'a str) -> Self {
+        self.escrow_id = Some(escrow_id);
+        self
+    }
+
+    #[must_use]
+    pub const fn account(mut self, account: &'a str) -> Self {
+        self.account = Some(account);
+        self
+    }
+
+    #[must_use]
+    pub const fn include_policy_spends(mut self, include_policy_spends: bool) -> Self {
+        self.include_policy_spends = Some(include_policy_spends);
+        self
+    }
+
+    #[must_use]
+    pub const fn limit(mut self, limit: u32) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    /// Encode this filter as API query pairs for `/api/v1/native-agent-state`.
+    #[must_use]
+    pub fn to_query_pairs(&self) -> Vec<(&'static str, String)> {
+        let mut query = Vec::new();
+        if let Some(policy_id) = self.policy_id {
+            query.push(("policyId", policy_id.to_owned()));
+        }
+        if let Some(escrow_id) = self.escrow_id {
+            query.push(("escrowId", escrow_id.to_owned()));
+        }
+        if let Some(account) = self.account {
+            query.push(("account", account.to_owned()));
+        }
+        if let Some(include_policy_spends) = self.include_policy_spends {
+            query.push(("includePolicySpends", include_policy_spends.to_string()));
+        }
+        if let Some(limit) = self.limit {
+            query.push(("limit", limit.to_string()));
+        }
+        query
+    }
+}
+
+/// Echoed optional predicates for a native agent state response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeAgentStateResponseFilters.ts")
+)]
+pub struct NativeAgentStateResponseFilters {
+    #[serde(default)]
+    pub policy_id: Option<Hash>,
+    #[serde(default)]
+    pub escrow_id: Option<Hash>,
+    #[serde(default)]
+    pub account: Option<Address>,
+    pub include_policy_spends: bool,
+}
+
+/// Source metadata attached to a native agent current-state response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeAgentStateSource.ts")
+)]
+pub struct NativeAgentStateSource {
+    pub indexer_provider: String,
+    pub projection: String,
+}
+
+/// Current-state native agent spending-policy aggregate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeAgentPolicyStateRecord.ts")
+)]
+pub struct NativeAgentPolicyStateRecord {
+    pub policy_id: Hash,
+    pub owner: Address,
+    pub controller: Address,
+    pub asset_id: Hash,
+    pub enabled: bool,
+    pub per_action_limit: String,
+    pub window_limit: String,
+    pub window_secs: u64,
+    pub updated_at_block: u64,
+}
+
+/// Current-state native agent policy spend usage row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeAgentPolicySpendStateRecord.ts")
+)]
+pub struct NativeAgentPolicySpendStateRecord {
+    pub policy_id: Hash,
+    pub controller: Address,
+    pub asset_id: Hash,
+    pub window: u64,
+    pub amount: String,
+    pub spent: String,
+    pub updated_at_block: u64,
+}
+
+/// Current-state native agent escrow aggregate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeAgentEscrowStateRecord.ts")
+)]
+pub struct NativeAgentEscrowStateRecord {
+    pub escrow_id: Hash,
+    pub buyer: Address,
+    pub provider: Address,
+    pub arbiter: Address,
+    pub asset_id: Hash,
+    pub amount: String,
+    pub terms_hash: Hash,
+    pub round: u8,
+    pub buyer_accepted: bool,
+    pub provider_accepted: bool,
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "string | null", optional))]
+    pub submitted_payload_hash: Option<Hash>,
+    pub status: String,
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "string | null", optional))]
+    pub resolution: Option<String>,
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "string | null", optional))]
+    pub last_actor: Option<Address>,
+    pub created_at_block: u64,
+    pub updated_at_block: u64,
+}
+
+/// Typed response returned by `lyth_nativeAgentState` and
+/// `/api/v1/native-agent-state`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeAgentStateResponse.ts")
+)]
+pub struct NativeAgentStateResponse {
+    pub schema_version: u32,
+    pub limit: u32,
+    pub filters: NativeAgentStateResponseFilters,
+    pub spending_policies: Vec<NativeAgentPolicyStateRecord>,
+    pub policy_spends: Vec<NativeAgentPolicySpendStateRecord>,
+    pub escrows: Vec<NativeAgentEscrowStateRecord>,
+    pub source: NativeAgentStateSource,
+}
+
 /// Filter object passed to `lyth_nativeMarketState` and
 /// `/api/v1/native-market-state`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
