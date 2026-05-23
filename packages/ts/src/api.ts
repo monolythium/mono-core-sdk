@@ -16,6 +16,7 @@ import {
 import type { ClobMarketResponse } from "./bindings/ClobMarketResponse.js";
 import type { MrcMetadataResponse } from "./bindings/MrcMetadataResponse.js";
 import type { PendingRewardsResponse } from "./bindings/PendingRewardsResponse.js";
+import type { RedemptionQueueResponse } from "./bindings/RedemptionQueueResponse.js";
 import type { BlockSelector } from "./types.js";
 import { encodeBlockSelector } from "./types.js";
 import type {
@@ -588,6 +589,15 @@ export class ApiClient {
     block?: BlockSelector | null,
   ): Promise<ApiEnvelope<PendingRewardsResponse>> {
     return this.get(`/addresses/${encodePathSegment(address)}/pending-rewards`, {
+      block: block == null ? undefined : encodeBlockSelector(block),
+    });
+  }
+
+  async addressRedemptionQueue(
+    address: string,
+    block?: BlockSelector | null,
+  ): Promise<ApiEnvelope<RedemptionQueueResponse>> {
+    return this.get(`/addresses/${encodePathSegment(address)}/redemption-queue`, {
       block: block == null ? undefined : encodeBlockSelector(block),
     });
   }

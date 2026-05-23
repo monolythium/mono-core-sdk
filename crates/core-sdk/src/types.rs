@@ -1430,6 +1430,53 @@ pub struct PendingRewardsResponse {
     pub block: serde_json::Value,
 }
 
+/// One ticket in `lyth_redemptionQueue`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "RedemptionQueueTicket.ts")
+)]
+pub struct RedemptionQueueTicket {
+    /// Stable queue index for this wallet.
+    pub index: u64,
+    /// Cluster id whose delegation weight is redeeming.
+    pub cluster: u32,
+    /// Redeeming delegation weight in basis points.
+    #[serde(rename = "weightBps")]
+    pub weight_bps: u16,
+    /// Block height where the ticket was queued.
+    #[serde(rename = "createdHeight")]
+    pub created_height: u64,
+    /// Block height where the cooldown matures.
+    #[serde(rename = "maturityHeight")]
+    pub maturity_height: u64,
+    /// Whether the ticket is mature at the queried block, or `null`
+    /// when the selector does not resolve to a height.
+    pub mature: Option<bool>,
+}
+
+/// `lyth_redemptionQueue` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "RedemptionQueueResponse.ts")
+)]
+pub struct RedemptionQueueResponse {
+    /// Queried wallet address.
+    pub wallet: Address,
+    /// Bounded wallet redemption tickets returned by the node.
+    pub tickets: Vec<RedemptionQueueTicket>,
+    /// Total ticket count stored for the wallet.
+    pub count: u64,
+    /// Number of decoded tickets returned.
+    pub returned: usize,
+    /// Block selector echoed by the node.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "unknown"))]
+    pub block: serde_json::Value,
+}
+
 /// `lyth_getClusterDelegators` response.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
@@ -3465,5 +3512,47 @@ mod tests {
         assert_eq!(record.sample_count, 5);
         assert_eq!(record.avg_speed_x10, 92);
         assert_eq!(record.avg_accuracy_x10, 86);
+    }
+
+    #[test]
+    fn redemption_queue_response_decodes_node_wire_shape() {
+        let wallet = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+        let response: RedemptionQueueResponse = serde_json::from_value(serde_json::json!({
+            "wallet": wallet,
+            "tickets": [
+                {
+                    "index": 0,
+                    "cluster": 7,
+                    "weightBps": 2500,
+                    "createdHeight": 20,
+                    "maturityHeight": 120,
+                    "mature": false
+                },
+                {
+                    "index": 1,
+                    "cluster": 8,
+                    "weightBps": 500,
+                    "createdHeight": 21,
+                    "maturityHeight": 121,
+                    "mature": null
+                }
+            ],
+            "count": 2,
+            "returned": 2,
+            "block": "latest"
+        }))
+        .unwrap();
+
+        assert_eq!(response.wallet, wallet);
+        assert_eq!(response.count, 2);
+        assert_eq!(response.returned, 2);
+        assert_eq!(response.tickets[0].index, 0);
+        assert_eq!(response.tickets[0].cluster, 7);
+        assert_eq!(response.tickets[0].weight_bps, 2_500);
+        assert_eq!(response.tickets[0].created_height, 20);
+        assert_eq!(response.tickets[0].maturity_height, 120);
+        assert_eq!(response.tickets[0].mature, Some(false));
+        assert_eq!(response.tickets[1].mature, None);
+        assert_eq!(response.block, serde_json::json!("latest"));
     }
 }

@@ -18,8 +18,8 @@ use crate::types::{
     ChainStatsResponse, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse,
     ClobOrderBookResponse, ClobTradesResponse, MrcMetadataResponse, NativeEventFilter,
     NativeEventsFilter, NativeEventsResponse, NativeReceiptFee, NativeReceiptResponse,
-    PendingRewardsResponse, SearchResponse, TxFeedResponse, TypedNativeEventsResponse,
-    TypedNativeReceiptEvent,
+    PendingRewardsResponse, RedemptionQueueResponse, SearchResponse, TxFeedResponse,
+    TypedNativeEventsResponse, TypedNativeReceiptEvent,
 };
 
 /// Typed HTTP API client for `/api/v1`.
@@ -320,6 +320,17 @@ impl ApiClient {
     ) -> Result<ApiEnvelope<PendingRewardsResponse>, SdkError> {
         let query = block.map_or_else(Vec::new, |block| vec![("block", block_path(block))]);
         self.get(&format!("addresses/{address}/pending-rewards"), &query)
+            .await
+    }
+
+    /// `/api/v1/addresses/{address}/redemption-queue`.
+    pub async fn address_redemption_queue(
+        &self,
+        address: &str,
+        block: Option<BlockSelector>,
+    ) -> Result<ApiEnvelope<RedemptionQueueResponse>, SdkError> {
+        let query = block.map_or_else(Vec::new, |block| vec![("block", block_path(block))]);
+        self.get(&format!("addresses/{address}/redemption-queue"), &query)
             .await
     }
 
@@ -913,6 +924,20 @@ mod tests {
         assert_eq!(
             url.as_str(),
             "https://rpc.example/api/v1/addresses/mono1wallet/pending-rewards?block=0x63"
+        );
+    }
+
+    #[test]
+    fn build_url_encodes_redemption_queue_block_query() {
+        let url = build_url(
+            "https://rpc.example/api/v1",
+            "addresses/mono1wallet/redemption-queue",
+            &[("block", "0x63".to_owned())],
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://rpc.example/api/v1/addresses/mono1wallet/redemption-queue?block=0x63"
         );
     }
 
