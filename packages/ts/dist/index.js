@@ -1296,6 +1296,11 @@ var RpcClient = class _RpcClient {
     const params = block === void 0 ? [wallet] : [wallet, encodeBlockSelector(block)];
     return this.call("lyth_getDelegations", params);
   }
+  /** `lyth_pendingRewards` — wallet pending rewards at a block. */
+  async lythPendingRewards(wallet, block) {
+    const params = block === void 0 ? [wallet] : [wallet, encodeBlockSelector(block)];
+    return this.call("lyth_pendingRewards", params);
+  }
   /** `lyth_getDelegationHistory` — indexed per-wallet delegation event timeline. */
   async lythGetDelegationHistory(wallet, limit = 50, cursor) {
     const params = cursor === void 0 ? [wallet, limit] : [wallet, limit, cursor];

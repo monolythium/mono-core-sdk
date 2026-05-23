@@ -1281,6 +1281,53 @@ pub struct DelegationsResponse {
     pub block: serde_json::Value,
 }
 
+/// One row in `lyth_pendingRewards`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "PendingRewardsRow.ts")
+)]
+pub struct PendingRewardsRow {
+    /// Cluster id receiving the delegated weight.
+    pub cluster: u32,
+    /// Delegated weight in basis points.
+    #[serde(rename = "weightBps")]
+    pub weight_bps: u16,
+    /// Unsettled reward-index delta for this cluster, as a hex quantity.
+    #[serde(rename = "unsettledAmountLythoshi")]
+    pub unsettled_amount_lythoshi: Quantity,
+}
+
+/// `lyth_pendingRewards` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "PendingRewardsResponse.ts")
+)]
+pub struct PendingRewardsResponse {
+    /// Queried wallet address.
+    pub wallet: Address,
+    /// Settled plus unsettled claimable rewards, as a hex quantity.
+    #[serde(rename = "totalAmountLythoshi")]
+    pub total_amount_lythoshi: Quantity,
+    /// Wallet-level pending reward already settled in storage.
+    #[serde(rename = "settledPendingLythoshi")]
+    pub settled_pending_lythoshi: Quantity,
+    /// Sum of per-cluster unsettled reward-index deltas.
+    #[serde(rename = "unsettledAmountLythoshi")]
+    pub unsettled_amount_lythoshi: Quantity,
+    /// Whether this wallet has auto-compounding enabled.
+    #[serde(rename = "autoCompound")]
+    pub auto_compound: bool,
+    /// Per-cluster unsettled rows.
+    pub rows: Vec<PendingRewardsRow>,
+    /// Block selector echoed by the node.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "unknown"))]
+    pub block: serde_json::Value,
+}
+
 /// `lyth_getClusterDelegators` response.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]

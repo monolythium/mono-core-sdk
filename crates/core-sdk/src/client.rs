@@ -32,10 +32,11 @@ use crate::types::{
     LythUpgradeStatusResponse, MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent,
     MeshUnsignedTxResponse, MetricsRangeResponse, NativeEventFilter, NativeEventsFilter,
     NativeEventsResponse, NativeReceiptResponse, OperatorCapabilitiesResponse, PeerSummary,
-    PeerSummaryAggregate, PendingTxSummary, PrecompileDescriptor, RegistryRecord, RichListResponse,
-    RoundInfo, SearchResponse, StorageProofBatch, SyncStatus, TokenBalanceRecord,
-    TpmAttestationResponse, TransactionReceipt, TransactionView, TxFeedResponse, TxStatusResponse,
-    TypedNativeEventsResponse, TypedNativeReceiptEvent, VerticesAtRoundResponse,
+    PeerSummaryAggregate, PendingRewardsResponse, PendingTxSummary, PrecompileDescriptor,
+    RegistryRecord, RichListResponse, RoundInfo, SearchResponse, StorageProofBatch, SyncStatus,
+    TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt, TransactionView,
+    TxFeedResponse, TxStatusResponse, TypedNativeEventsResponse, TypedNativeReceiptEvent,
+    VerticesAtRoundResponse,
 };
 
 /// Result from building and submitting an encrypted MRV deploy envelope.
@@ -759,6 +760,19 @@ impl RpcClient {
         self.call("lyth_getDelegations", params).await
     }
 
+    /// `lyth_pendingRewards` — wallet pending rewards at `block`.
+    pub async fn lyth_pending_rewards(
+        &self,
+        wallet: &str,
+        block: Option<BlockSelector>,
+    ) -> Result<PendingRewardsResponse, SdkError> {
+        let params = match block {
+            Some(block) => json!([wallet, block.to_param()]),
+            None => json!([wallet]),
+        };
+        self.call("lyth_pendingRewards", params).await
+    }
+
     /// `lyth_getDelegationHistory` — indexed per-wallet delegation event timeline.
     pub async fn lyth_get_delegation_history(
         &self,
@@ -1347,6 +1361,46 @@ mod tests {
             requests[1]["params"],
             json!([result.encrypted.submission.envelope_wire_hex])
         );
+    }
+
+    #[tokio::test]
+    async fn lyth_pending_rewards_serializes_block_and_decodes_quantities() {
+        let wallet = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+        let (endpoint, server) = spawn_rpc_server(vec![json!({
+            "wallet": wallet,
+            "totalAmountLythoshi": "0x271f",
+            "settledPendingLythoshi": "0xf",
+            "unsettledAmountLythoshi": "0x2710",
+            "autoCompound": true,
+            "rows": [{
+                "cluster": 7,
+                "weightBps": 2_500,
+                "unsettledAmountLythoshi": "0x2710"
+            }],
+            "block": 99
+        })]);
+
+        let client = RpcClient::new(endpoint).unwrap();
+        let response = client
+            .lyth_pending_rewards(wallet, Some(BlockSelector::Number(99)))
+            .await
+            .unwrap();
+
+        assert_eq!(response.wallet, wallet);
+        assert_eq!(response.total_amount_lythoshi, "0x271f");
+        assert_eq!(response.settled_pending_lythoshi, "0xf");
+        assert_eq!(response.unsettled_amount_lythoshi, "0x2710");
+        assert!(response.auto_compound);
+        assert_eq!(response.rows.len(), 1);
+        assert_eq!(response.rows[0].cluster, 7);
+        assert_eq!(response.rows[0].weight_bps, 2_500);
+        assert_eq!(response.rows[0].unsettled_amount_lythoshi, "0x2710");
+        assert_eq!(response.block, json!(99));
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["method"], "lyth_pendingRewards");
+        assert_eq!(requests[0]["params"], json!([wallet, "0x63"]));
     }
 
     #[tokio::test]

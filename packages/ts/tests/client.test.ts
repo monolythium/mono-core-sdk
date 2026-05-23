@@ -271,6 +271,33 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(calls[0].params).toEqual(["0x1111111111111111111111111111111111111111", 25, "0x00"]);
   });
 
+  it("lyth_pendingRewards reads settled and unsettled reward quantities", async () => {
+    const wallet = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+    const { fetch, calls } = mockFetch({
+      wallet,
+      totalAmountLythoshi: "0x271f",
+      settledPendingLythoshi: "0xf",
+      unsettledAmountLythoshi: "0x2710",
+      autoCompound: true,
+      rows: [{ cluster: 7, weightBps: 2500, unsettledAmountLythoshi: "0x2710" }],
+      block: 99,
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const rewards = await client.lythPendingRewards(wallet, 99);
+
+    expect(rewards.totalAmountLythoshi).toBe("0x271f");
+    expect(rewards.settledPendingLythoshi).toBe("0xf");
+    expect(rewards.unsettledAmountLythoshi).toBe("0x2710");
+    expect(rewards.autoCompound).toBe(true);
+    expect(rewards.rows).toEqual([
+      { cluster: 7, weightBps: 2500, unsettledAmountLythoshi: "0x2710" },
+    ]);
+    expect(rewards.block).toBe(99);
+    expect(calls[0].method).toBe("lyth_pendingRewards");
+    expect(calls[0].params).toEqual([wallet, "0x63"]);
+  });
+
   it("lyth_getAddressActivity forwards limit and cursor", async () => {
     const { fetch, calls } = mockFetch([]);
     const client = new RpcClient("http://x", { fetch });
