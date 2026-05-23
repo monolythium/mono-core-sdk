@@ -120,6 +120,16 @@ export interface NativeReceiptCounters {
   stateIoUnits: number;
 }
 
+export interface NativeReceiptFee {
+  total_lythoshi: string;
+  total_lyth: string;
+  cycles_used: number;
+  base_price_per_cycle_lythoshi: string;
+  state_io_units: number;
+  state_io_price_per_unit_lythoshi: string;
+  priority_tip_lythoshi: string;
+}
+
 export interface NativeReceiptEvent {
   blockHeight: number;
   txIndex: number;
@@ -144,6 +154,7 @@ export interface NativeReceiptResponse {
   schema: string;
   artifactHash: string;
   counters: NativeReceiptCounters;
+  fee: NativeReceiptFee;
   reverted: boolean;
   nativeDeltaCount: number;
   eventCount: number;
