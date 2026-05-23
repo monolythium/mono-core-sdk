@@ -1308,6 +1308,107 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn lyth_get_token_balances_decodes_optional_mrc_identity() {
+        let address = "0x1111111111111111111111111111111111111111";
+        let (endpoint, server) = spawn_rpc_server(vec![json!([
+            {
+                "tokenId": format!("0x{}", "aa".repeat(32)),
+                "balance": "1000",
+                "updatedAtBlock": 88,
+                "mrc": {
+                    "standard": "mrc1155",
+                    "assetId": format!("0x{}", "bb".repeat(32)),
+                    "tokenId": format!("0x{}", "cc".repeat(32))
+                }
+            },
+            {
+                "tokenId": format!("0x{}", "dd".repeat(32)),
+                "balance": "0",
+                "updatedAtBlock": 89
+            },
+            {
+                "tokenId": format!("0x{}", "ee".repeat(32)),
+                "balance": "25",
+                "updatedAtBlock": 90,
+                "mrc": null
+            }
+        ])]);
+
+        let client = RpcClient::new(endpoint).unwrap();
+        let balances = client.lyth_get_token_balances(address).await.unwrap();
+
+        assert_eq!(balances.len(), 3);
+        let mrc = balances[0].mrc.as_ref().expect("mrc identity");
+        assert_eq!(mrc.standard, "mrc1155");
+        assert_eq!(mrc.asset_id, format!("0x{}", "bb".repeat(32)));
+        assert_eq!(
+            mrc.token_id.as_ref().unwrap(),
+            &format!("0x{}", "cc".repeat(32))
+        );
+        assert_eq!(balances[1].mrc, None);
+        assert_eq!(balances[2].mrc, None);
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["method"], "lyth_getTokenBalances");
+        assert_eq!(requests[0]["params"], json!([address]));
+    }
+
+    #[tokio::test]
+    async fn lyth_address_profile_decodes_token_balance_mrc_identity() {
+        let address = "0x1111111111111111111111111111111111111111";
+        let (endpoint, server) = spawn_rpc_server(vec![json!({
+            "schemaVersion": 1,
+            "address": address,
+            "account": {
+                "nativeBalance": "100000000",
+                "nonce": 1,
+                "codeHash": format!("0x{}", "00".repeat(32)),
+                "isContract": false
+            },
+            "label": null,
+            "activity": {
+                "kind": "found",
+                "retention": null,
+                "latest": null
+            },
+            "tokenBalances": [
+                {
+                    "tokenId": format!("0x{}", "aa".repeat(32)),
+                    "balance": "1000",
+                    "updatedAtBlock": 88,
+                    "mrc": {
+                        "standard": "mrc721",
+                        "assetId": format!("0x{}", "bb".repeat(32)),
+                        "tokenId": format!("0x{}", "cc".repeat(32))
+                    }
+                },
+                {
+                    "tokenId": format!("0x{}", "dd".repeat(32)),
+                    "balance": "0",
+                    "updatedAtBlock": 89
+                }
+            ]
+        })]);
+
+        let client = RpcClient::new(endpoint).unwrap();
+        let profile = client.lyth_address_profile(address).await.unwrap();
+
+        let mrc = profile.token_balances[0]
+            .mrc
+            .as_ref()
+            .expect("profile mrc identity");
+        assert_eq!(mrc.standard, "mrc721");
+        assert_eq!(mrc.asset_id, format!("0x{}", "bb".repeat(32)));
+        assert_eq!(profile.token_balances[1].mrc, None);
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["method"], "lyth_addressProfile");
+        assert_eq!(requests[0]["params"], json!([address]));
+    }
+
+    #[tokio::test]
     async fn mrv_encrypted_submit_fetches_key_and_submits_envelope() {
         use ml_kem::{kem::KeyExport, DecapsulationKey, MlKem768};
 

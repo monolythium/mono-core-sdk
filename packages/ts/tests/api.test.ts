@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiClient, SdkError, apiEndpointFromRpcEndpoint } from "../src/index.js";
-import type { NativeDecodedEvent } from "../src/index.js";
+import type { AddressProfileResponse, NativeDecodedEvent } from "../src/index.js";
 
 interface AgentEscrowCreatedEvent extends NativeDecodedEvent {
   family: "agent";
@@ -118,6 +118,61 @@ describe("ApiClient", () => {
 
     expect(calls[0]).toEqual({
       url: "/api/v1/addresses/0x1111111111111111111111111111111111111111/activity?limit=75&cursor=0x1234",
+      method: "GET",
+    });
+  });
+
+  it("reads address profile token balances with optional MRC identity", async () => {
+    const address = "0x1111111111111111111111111111111111111111";
+    const assetId = `0x${"bb".repeat(32)}`;
+    const mrcTokenId = `0x${"cc".repeat(32)}`;
+    const profileData: AddressProfileResponse = {
+      schemaVersion: 1,
+      address,
+      account: {
+        nativeBalance: "100000000",
+        nonce: 1,
+        codeHash: `0x${"00".repeat(32)}`,
+        isContract: false,
+      },
+      label: null,
+      activity: { kind: "found", retention: null, latest: null },
+      tokenBalances: [
+        {
+          tokenId: `0x${"aa".repeat(32)}`,
+          balance: "1000",
+          updatedAtBlock: 88,
+          mrc: {
+            standard: "mrc721",
+            assetId,
+            tokenId: mrcTokenId,
+          },
+        },
+        {
+          tokenId: `0x${"dd".repeat(32)}`,
+          balance: "25",
+          updatedAtBlock: 89,
+          mrc: null,
+        },
+        {
+          tokenId: `0x${"ee".repeat(32)}`,
+          balance: "0",
+          updatedAtBlock: 90,
+        },
+      ],
+    };
+    const { fetch, calls } = mockGet(apiEnvelope(profileData));
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    const profile = await client.addressProfile(address);
+
+    expect(profile.data.tokenBalances[0].mrc?.standard).toBe("mrc721");
+    expect(profile.data.tokenBalances[0].mrc?.assetId).toBe(assetId);
+    expect(profile.data.tokenBalances[0].mrc?.tokenId).toBe(mrcTokenId);
+    expect(profile.data.tokenBalances[1].mrc).toBeNull();
+    expect(profile.data.tokenBalances[2].mrc).toBeUndefined();
+    expect(calls[0]).toEqual({
+      url: `https://rpc.example/api/v1/addresses/${address}/profile`,
       method: "GET",
     });
   });
