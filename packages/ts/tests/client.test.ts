@@ -1307,6 +1307,7 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
         orderId: null,
         listingId: null,
         collectionId: null,
+        account: owner,
         includeSpotOrders: true,
       },
       spotMarkets: [
@@ -1395,6 +1396,7 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
 
     const response = await client.lythNativeMarketState({
       marketId,
+      account: owner,
       includeSpotOrders: true,
       limit: 5,
     });
@@ -1406,10 +1408,12 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(response.nftListings[1].nonce).toBeUndefined();
     expect(response.nftListings[0].listingKind).toEqual({ fixedPrice: true });
     expect(response.collectionRoyalties[0].bps).toBe(250);
+    expect(response.filters.account).toBe(owner);
     expect(calls[0].method).toBe("lyth_nativeMarketState");
     expect(calls[0].params).toEqual([
       {
         marketId,
+        account: owner,
         includeSpotOrders: true,
         limit: 5,
       },

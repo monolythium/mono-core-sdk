@@ -2279,6 +2279,7 @@ interface NativeMarketStateFilter {
     orderId?: string | null;
     listingId?: string | null;
     collectionId?: string | null;
+    account?: string | null;
     includeSpotOrders?: boolean | null;
     limit?: number | bigint | string | null;
 }
@@ -2287,6 +2288,7 @@ interface NativeMarketStateResponseFilters {
     orderId?: string | null;
     listingId?: string | null;
     collectionId?: string | null;
+    account?: string | null;
     includeSpotOrders: boolean;
 }
 interface NativeMarketStateSource {

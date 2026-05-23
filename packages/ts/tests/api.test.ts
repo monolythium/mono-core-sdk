@@ -725,6 +725,7 @@ describe("ApiClient", () => {
           orderId: null,
           listingId: null,
           collectionId: null,
+          account: owner,
           includeSpotOrders: true,
         },
         spotMarkets: [
@@ -814,6 +815,7 @@ describe("ApiClient", () => {
 
     const response = await client.nativeMarketState({
       marketId,
+      account: owner,
       includeSpotOrders: true,
       limit: 5,
     });
@@ -827,9 +829,10 @@ describe("ApiClient", () => {
       auction: { reserve: "650" },
     });
     expect(response.data.collectionRoyalties[0].creator).toBe(owner);
+    expect(response.data.filters.account).toBe(owner);
     expect(calls).toEqual([
       {
-        url: `https://rpc.example/api/v1/native-market-state?marketId=${marketId}&includeSpotOrders=true&limit=5`,
+        url: `https://rpc.example/api/v1/native-market-state?marketId=${marketId}&account=${owner}&includeSpotOrders=true&limit=5`,
         method: "GET",
       },
     ]);

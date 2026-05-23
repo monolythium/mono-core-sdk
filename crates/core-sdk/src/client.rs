@@ -2167,6 +2167,7 @@ mod tests {
                 "orderId": null,
                 "listingId": null,
                 "collectionId": null,
+                "account": owner,
                 "includeSpotOrders": true
             },
             "spotMarkets": [{
@@ -2251,6 +2252,7 @@ mod tests {
             .lyth_native_market_state(
                 NativeMarketStateFilter::new()
                     .market_id(&market_id)
+                    .account(owner)
                     .include_spot_orders(true)
                     .limit(5),
             )
@@ -2269,6 +2271,7 @@ mod tests {
             Some(bidder)
         );
         assert_eq!(response.collection_royalties[0].bps, 250);
+        assert_eq!(response.filters.account.as_deref(), Some(owner));
         assert_eq!(response.source.indexer_provider, "native_market_state");
 
         let requests = server.join().unwrap();
@@ -2278,6 +2281,7 @@ mod tests {
             requests[0]["params"],
             json!([{
                 "marketId": market_id,
+                "account": owner,
                 "includeSpotOrders": true,
                 "limit": 5
             }])

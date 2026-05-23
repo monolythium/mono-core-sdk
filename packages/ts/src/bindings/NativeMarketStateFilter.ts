@@ -22,6 +22,10 @@ listingId: string | null,
  */
 collectionId: string | null,
 /**
+ * Optional user account filter. Scopes spot orders by owner and NFT listings by seller.
+ */
+account: string | null,
+/**
  * Include bounded spot orders for a requested market/order.
  */
 includeSpotOrders: boolean | null,
