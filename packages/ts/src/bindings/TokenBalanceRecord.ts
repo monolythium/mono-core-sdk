@@ -20,4 +20,12 @@ updatedAtBlock: bigint,
 /**
  * Native MRC identity, when the balance came from a native MRC row.
  */
-mrc?: TokenBalanceMrcIdentity | null, };
+mrc?: TokenBalanceMrcIdentity | null,
+/**
+ * Optional single bridge route disclosure associated with this asset row.
+ */
+bridgeRouteDisclosure?: import("../bridge.js").BridgeRouteDisclosure | null,
+/**
+ * Optional bridge route disclosures associated with this asset row.
+ */
+bridgeRouteDisclosures?: import("../bridge.js").BridgeRouteDisclosure[] | null, };

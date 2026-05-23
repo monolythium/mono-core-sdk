@@ -11,10 +11,15 @@ import {
   RpcClient,
   SdkError,
   addressToTypedBech32,
+  assessBridgeRoute,
   parseQuantity,
   parseQuantityBig,
 } from "../src/index.js";
-import type { NativeDecodedEvent, TokenBalanceRecord } from "../src/index.js";
+import type {
+  BridgeRouteDisclosure,
+  NativeDecodedEvent,
+  TokenBalanceRecord,
+} from "../src/index.js";
 
 interface AgentEscrowCreatedEvent extends NativeDecodedEvent {
   family: "agent";
@@ -29,6 +34,27 @@ interface NativeMarketSaleEvent extends NativeDecodedEvent {
   event_name: "market.nft.sale_settled";
   listing_id: string;
   price: string;
+}
+
+function bridgeRoute(routeId: string): BridgeRouteDisclosure {
+  return {
+    routeId,
+    bridge: "CCIP",
+    asset: "USDC",
+    sourceChain: "Ethereum",
+    destinationChain: "Mono",
+    verifier: {
+      model: "DON",
+      participantCount: 7,
+      threshold: 5,
+    },
+    drainCapAtomic: "100000000",
+    finalityBlocks: 12,
+    cooldownSeconds: 3_600,
+    adminControl: "consensusOnly",
+    circuitBreaker: "armed",
+    insuranceAtomic: "500000000",
+  };
 }
 
 interface CapturedCall {
@@ -260,12 +286,16 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     const tokenId = `0x${"aa".repeat(32)}`;
     const assetId = `0x${"bb".repeat(32)}`;
     const childTokenId = `0x${"cc".repeat(32)}`;
+    const directRoute = bridgeRoute("ccip-usdc-eth");
+    const listedRoute = bridgeRoute("layerzero-usdc-eth");
     const legacyBalance: TokenBalanceRecord = {
       tokenId: `0x${"dd".repeat(32)}`,
       balance: "0",
       updatedAtBlock: 89n,
     };
     expect(legacyBalance.mrc).toBeUndefined();
+    expect(legacyBalance.bridgeRouteDisclosure).toBeUndefined();
+    expect(legacyBalance.bridgeRouteDisclosures).toBeUndefined();
     const { fetch, calls } = mockFetch([
       {
         tokenId,
@@ -276,12 +306,14 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
           assetId,
           tokenId: childTokenId,
         },
+        bridgeRouteDisclosure: directRoute,
       },
       {
         tokenId: `0x${"ee".repeat(32)}`,
         balance: "25",
         updatedAtBlock: 90,
         mrc: null,
+        bridgeRouteDisclosures: [listedRoute],
       },
       {
         tokenId: legacyBalance.tokenId,
@@ -296,8 +328,12 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(balances[0].mrc?.standard).toBe("mrc1155");
     expect(balances[0].mrc?.assetId).toBe(assetId);
     expect(balances[0].mrc?.tokenId).toBe(childTokenId);
+    expect(assessBridgeRoute(balances[0].bridgeRouteDisclosure!).accepted).toBe(true);
     expect(balances[1].mrc).toBeNull();
+    expect(assessBridgeRoute(balances[1].bridgeRouteDisclosures![0]).accepted).toBe(true);
     expect(balances[2].mrc).toBeUndefined();
+    expect(balances[2].bridgeRouteDisclosure).toBeUndefined();
+    expect(balances[2].bridgeRouteDisclosures).toBeUndefined();
   });
 
   it("lyth_mrcMetadata reads asset and token metadata rows", async () => {

@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { ApiClient, SdkError, apiEndpointFromRpcEndpoint } from "../src/index.js";
-import type { AddressProfileResponse, NativeDecodedEvent } from "../src/index.js";
+import {
+  ApiClient,
+  SdkError,
+  apiEndpointFromRpcEndpoint,
+  assessBridgeRoute,
+} from "../src/index.js";
+import type {
+  AddressProfileResponse,
+  BridgeRouteDisclosure,
+  NativeDecodedEvent,
+} from "../src/index.js";
 
 interface AgentEscrowCreatedEvent extends NativeDecodedEvent {
   family: "agent";
@@ -15,6 +24,27 @@ interface NativeMarketSaleEvent extends NativeDecodedEvent {
   event_name: "market.nft.sale_settled";
   listing_id: string;
   price: string;
+}
+
+function bridgeRoute(routeId: string): BridgeRouteDisclosure {
+  return {
+    routeId,
+    bridge: "CCIP",
+    asset: "USDC",
+    sourceChain: "Ethereum",
+    destinationChain: "Mono",
+    verifier: {
+      model: "DON",
+      participantCount: 7,
+      threshold: 5,
+    },
+    drainCapAtomic: "100000000",
+    finalityBlocks: 12,
+    cooldownSeconds: 3_600,
+    adminControl: "consensusOnly",
+    circuitBreaker: "armed",
+    insuranceAtomic: "500000000",
+  };
 }
 
 interface CapturedGet {
@@ -178,10 +208,36 @@ describe("ApiClient", () => {
     expect(profile.data.tokenBalances[0].mrc?.tokenId).toBe(mrcTokenId);
     expect(profile.data.tokenBalances[1].mrc).toBeNull();
     expect(profile.data.tokenBalances[2].mrc).toBeUndefined();
+    expect(profile.data.bridgeRouteDisclosures).toBeUndefined();
     expect(calls[0]).toEqual({
       url: `https://rpc.example/api/v1/addresses/${address}/profile`,
       method: "GET",
     });
+  });
+
+  it("reads address profile bridge route disclosures", async () => {
+    const address = "0x1111111111111111111111111111111111111111";
+    const profileData: AddressProfileResponse = {
+      schemaVersion: 1,
+      address,
+      account: {
+        nativeBalance: "100000000",
+        nonce: 1,
+        codeHash: `0x${"00".repeat(32)}`,
+        isContract: false,
+      },
+      label: null,
+      activity: { kind: "found", retention: null, latest: null },
+      tokenBalances: [],
+      bridgeRouteDisclosures: [bridgeRoute("ccip-usdc-eth")],
+    };
+    const { fetch } = mockGet(apiEnvelope(profileData));
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    const profile = await client.addressProfile(address);
+
+    expect(profile.data.bridgeRouteDisclosures).toHaveLength(1);
+    expect(assessBridgeRoute(profile.data.bridgeRouteDisclosures![0]).accepted).toBe(true);
   });
 
   it("reads native receipt envelopes from /api/v1/transactions/{hash}/native-receipt", async () => {
