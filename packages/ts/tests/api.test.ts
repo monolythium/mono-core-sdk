@@ -651,6 +651,34 @@ describe("ApiClient", () => {
     expect(calls.every((c) => c.method === "GET")).toBe(true);
   });
 
+  it("wraps REST MRC holder route and decodes rich-list holder rows", async () => {
+    const assetId = `0x${"bb".repeat(32)}`;
+    const tokenId = `0x${"cc".repeat(32)}`;
+    const address = "0x1111111111111111111111111111111111111111";
+    const { fetch, calls } = mockGet(
+      apiEnvelope({
+        schemaVersion: 1,
+        standard: "mrc1155",
+        assetId,
+        tokenId,
+        limit: 5,
+        holders: [{ rank: 1, address, balance: "42", updatedAtBlock: 91 }],
+      }),
+    );
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    const response = await client.mrcHolders("mrc1155", assetId, tokenId, 5);
+
+    expect(response.data.standard).toBe("mrc1155");
+    expect(response.data.holders[0]).toMatchObject({ rank: 1, address, balance: "42" });
+    expect(calls).toEqual([
+      {
+        url: `https://rpc.example/api/v1/mrc/mrc1155/${assetId}/${tokenId}/holders?limit=5`,
+        method: "GET",
+      },
+    ]);
+  });
+
   it("reads runtime provenance from /api/v1/provenance", async () => {
     const { fetch, calls } = mockGet(
       apiEnvelope({

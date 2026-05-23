@@ -15,6 +15,7 @@ import {
   nativeMarketEventsFromReceipt,
 } from "./native-events.js";
 import type { ClobMarketResponse } from "./bindings/ClobMarketResponse.js";
+import type { MrcHoldersResponse } from "./bindings/MrcHoldersResponse.js";
 import type { MrcMetadataResponse } from "./bindings/MrcMetadataResponse.js";
 import type { PendingRewardsResponse } from "./bindings/PendingRewardsResponse.js";
 import type { RedemptionQueueResponse } from "./bindings/RedemptionQueueResponse.js";
@@ -610,6 +611,20 @@ export class ApiClient {
     return this.get(`/assets/${encodePathSegment(assetId)}/metadata`, {
       mrcTokenId: mrcTokenId ?? undefined,
     });
+  }
+
+  async mrcHolders(
+    standard: string,
+    assetId: string,
+    tokenId: string,
+    limit?: number | null,
+  ): Promise<ApiEnvelope<MrcHoldersResponse>> {
+    return this.get(
+      `/mrc/${encodePathSegment(standard)}/${encodePathSegment(assetId)}/${encodePathSegment(
+        tokenId,
+      )}/holders`,
+      { limit: limit ?? undefined },
+    );
   }
 
   /**

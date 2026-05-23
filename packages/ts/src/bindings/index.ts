@@ -72,6 +72,8 @@ export type { MeshUnsignedTxResponse } from "./MeshUnsignedTxResponse.js";
 export type { MetricsRangeResponse } from "./MetricsRangeResponse.js";
 export type { MetricsRangeSample } from "./MetricsRangeSample.js";
 export type { MetricsRangeSeries } from "./MetricsRangeSeries.js";
+export type { MrcHoldersRequest } from "./MrcHoldersRequest.js";
+export type { MrcHoldersResponse } from "./MrcHoldersResponse.js";
 export type { MrcMetadataRecord } from "./MrcMetadataRecord.js";
 export type { MrcMetadataResponse } from "./MrcMetadataResponse.js";
 export type { MrvAbiManifest } from "./MrvAbiManifest.js";

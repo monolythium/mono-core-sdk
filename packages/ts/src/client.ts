@@ -54,6 +54,8 @@ import type {
   MeshSignedTxResponse,
   MeshTxIntent,
   MeshUnsignedTxResponse,
+  MrcHoldersRequest,
+  MrcHoldersResponse,
   MrcMetadataResponse,
   PeerSummary,
   PendingRewardsResponse,
@@ -1057,6 +1059,26 @@ export class RpcClient {
   ): Promise<MrcMetadataResponse> {
     const params = tokenId == null ? [assetId] : [assetId, tokenId];
     return this.call("lyth_mrcMetadata", params);
+  }
+
+  /** `lyth_mrcHolders` — top holders for a native MRC asset/token key. */
+  async lythMrcHolders(
+    standard: string,
+    assetId: string,
+    tokenId: string,
+    limit?: number | null,
+  ): Promise<MrcHoldersResponse> {
+    const request: MrcHoldersRequest = {
+      standard,
+      assetId,
+      tokenId,
+    };
+    if (limit != null) request.limit = limit;
+    const params =
+      request.limit == null
+        ? [request.standard, request.assetId, request.tokenId]
+        : [request.standard, request.assetId, request.tokenId, request.limit];
+    return this.call("lyth_mrcHolders", params);
   }
 
   /** `lyth_getAddressLabel` — indexed display/category label for one address. */

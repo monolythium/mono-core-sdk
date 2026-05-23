@@ -18,10 +18,10 @@ use crate::types::{
     native_events_from_receipt, native_market_events_filter, native_market_events_from_receipt,
     typed_native_events_from_response, AddressFlowResponse, AddressProfileResponse, BlockSelector,
     ChainStatsResponse, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse,
-    ClobOrderBookResponse, ClobTradesResponse, MrcMetadataResponse, NativeEventFilter,
-    NativeEventsFilter, NativeEventsResponse, NativeReceiptFee, NativeReceiptResponse,
-    PendingRewardsResponse, RedemptionQueueResponse, SearchResponse, TxFeedResponse,
-    TypedNativeEventsResponse, TypedNativeReceiptEvent,
+    ClobOrderBookResponse, ClobTradesResponse, MrcHoldersResponse, MrcMetadataResponse,
+    NativeEventFilter, NativeEventsFilter, NativeEventsResponse, NativeReceiptFee,
+    NativeReceiptResponse, PendingRewardsResponse, RedemptionQueueResponse, SearchResponse,
+    TxFeedResponse, TypedNativeEventsResponse, TypedNativeReceiptEvent,
 };
 
 /// Typed HTTP API client for `/api/v1`.
@@ -347,6 +347,22 @@ impl ApiClient {
         });
         self.get(&format!("assets/{asset_id}/metadata"), &query)
             .await
+    }
+
+    /// `/api/v1/mrc/{standard}/{asset_id}/{token_id}/holders`.
+    pub async fn mrc_holders(
+        &self,
+        standard: &str,
+        asset_id: &str,
+        token_id: &str,
+        limit: Option<u32>,
+    ) -> Result<ApiEnvelope<MrcHoldersResponse>, SdkError> {
+        let query = limit.map_or_else(Vec::new, |limit| vec![("limit", limit.to_string())]);
+        self.get(
+            &format!("mrc/{standard}/{asset_id}/{token_id}/holders"),
+            &query,
+        )
+        .await
     }
 
     /// `/api/v1/bridge/routes`.
@@ -893,8 +909,32 @@ pub struct ApiUpgradeStatusData {
 
 #[cfg(test)]
 mod tests {
-    use super::{api_endpoint_from_rpc_endpoint, build_url};
+    use super::{api_endpoint_from_rpc_endpoint, build_url, ApiClient};
     use crate::types::NativeEventsFilter;
+    use serde_json::{json, Value};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread::{self, JoinHandle};
+
+    fn spawn_api_server(body: Value) -> (String, JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/api/v1", listener.local_addr().unwrap());
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 8192];
+            let n = stream.read(&mut buf).unwrap();
+            let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let body = body.to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            request.lines().next().unwrap_or_default().to_owned()
+        });
+        (endpoint, handle)
+    }
 
     #[test]
     fn derives_api_endpoint_from_rpc_endpoint() {
@@ -971,6 +1011,70 @@ mod tests {
         assert_eq!(
             url.as_str(),
             format!("https://rpc.example/api/v1/assets/{asset_id}/metadata?mrcTokenId={token_id}")
+        );
+    }
+
+    #[test]
+    fn build_url_encodes_mrc_holders_limit_query() {
+        let asset_id = format!("0x{}", "bb".repeat(32));
+        let token_id = format!("0x{}", "cc".repeat(32));
+        let url = build_url(
+            "https://rpc.example/api/v1",
+            &format!("mrc/mrc1155/{asset_id}/{token_id}/holders"),
+            &[("limit", "5".to_owned())],
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            format!("https://rpc.example/api/v1/mrc/mrc1155/{asset_id}/{token_id}/holders?limit=5")
+        );
+    }
+
+    #[tokio::test]
+    async fn mrc_holders_gets_rest_route_and_decodes_response() {
+        let asset_id = format!("0x{}", "bb".repeat(32));
+        let token_id = format!("0x{}", "cc".repeat(32));
+        let address = "0x1111111111111111111111111111111111111111";
+        let (endpoint, server) = spawn_api_server(json!({
+            "schemaVersion": 1,
+            "chainId": 69420,
+            "genesisHash": format!("0x{}", "00".repeat(32)),
+            "latest": {
+                "available": true,
+                "height": 100,
+                "blockHash": format!("0x{}", "11".repeat(32)),
+                "stateRoot": format!("0x{}", "22".repeat(32)),
+                "timestamp": 123
+            },
+            "data": {
+                "schemaVersion": 1,
+                "standard": "mrc1155",
+                "assetId": asset_id,
+                "tokenId": token_id,
+                "limit": 5,
+                "holders": [
+                    {
+                        "rank": 1,
+                        "address": address,
+                        "balance": "42",
+                        "updatedAtBlock": 91
+                    }
+                ]
+            }
+        }));
+        let client = ApiClient::new(endpoint).unwrap();
+
+        let response = client
+            .mrc_holders("mrc1155", &asset_id, &token_id, Some(5))
+            .await
+            .unwrap();
+
+        assert_eq!(response.data.standard, "mrc1155");
+        assert_eq!(response.data.holders[0].balance, "42");
+        let request_line = server.join().unwrap();
+        assert_eq!(
+            request_line,
+            format!("GET /api/v1/mrc/mrc1155/{asset_id}/{token_id}/holders?limit=5 HTTP/1.1")
         );
     }
 
