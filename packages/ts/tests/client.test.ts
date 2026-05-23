@@ -468,6 +468,44 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(calls[1].params).toEqual([assetId]);
   });
 
+  it("lyth_mrcHolders reads MRC holder rows and omits optional limit", async () => {
+    const assetId = `0x${"bb".repeat(32)}`;
+    const tokenId = `0x${"cc".repeat(32)}`;
+    const address = "0x1111111111111111111111111111111111111111";
+    const { fetch, calls } = mockFetchSequence([
+      {
+        schemaVersion: 1,
+        standard: "mrc1155",
+        assetId,
+        tokenId,
+        limit: 5,
+        holders: [{ rank: 1, address, balance: "42", updatedAtBlock: 91 }],
+      },
+      {
+        schemaVersion: 1,
+        standard: "mrc1155",
+        assetId,
+        tokenId,
+        limit: 50,
+        holders: [],
+      },
+    ]);
+    const client = new RpcClient("http://x", { fetch });
+
+    const limited = await client.lythMrcHolders("mrc1155", assetId, tokenId, 5);
+    const defaulted = await client.lythMrcHolders("mrc1155", assetId, tokenId);
+
+    expect(limited.holders[0]).toMatchObject({ rank: 1, address, balance: "42" });
+    expect(limited.holders[0].updatedAtBlock).toBe(91);
+    expect(defaulted.limit).toBe(50);
+    expect(defaulted.holders).toEqual([]);
+    expect(calls.map((c) => c.method)).toEqual(["lyth_mrcHolders", "lyth_mrcHolders"]);
+    expect(calls.map((c) => c.params)).toEqual([
+      ["mrc1155", assetId, tokenId, 5],
+      ["mrc1155", assetId, tokenId],
+    ]);
+  });
+
   it("lyth_getAddressLabel returns null for unlabeled addresses", async () => {
     const { fetch } = mockFetch(null);
     const client = new RpcClient("http://x", { fetch });

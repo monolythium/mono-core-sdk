@@ -32,13 +32,13 @@ use crate::types::{
     DelegationHistoryRecord, DelegationsResponse, EncryptionKeyResponse, EntityRatchetResponse,
     FeeHistoryResponse, GapRecordsResponse, IndexerStatus, LythUpgradeStatusResponse,
     MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse,
-    MetricsRangeResponse, MrcMetadataResponse, NativeEventFilter, NativeEventsFilter,
-    NativeEventsResponse, NativeReceiptResponse, OperatorCapabilitiesResponse, PeerSummary,
-    PeerSummaryAggregate, PendingRewardsResponse, PendingTxSummary, PrecompileDescriptor,
-    RedemptionQueueResponse, RegistryRecord, RichListResponse, RoundInfo, SearchResponse,
-    StorageProofBatch, SyncStatus, TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt,
-    TransactionView, TxFeedResponse, TxStatusResponse, TypedNativeEventsResponse,
-    TypedNativeReceiptEvent, VerticesAtRoundResponse,
+    MetricsRangeResponse, MrcHoldersRequest, MrcHoldersResponse, MrcMetadataResponse,
+    NativeEventFilter, NativeEventsFilter, NativeEventsResponse, NativeReceiptResponse,
+    OperatorCapabilitiesResponse, PeerSummary, PeerSummaryAggregate, PendingRewardsResponse,
+    PendingTxSummary, PrecompileDescriptor, RedemptionQueueResponse, RegistryRecord,
+    RichListResponse, RoundInfo, SearchResponse, StorageProofBatch, SyncStatus, TokenBalanceRecord,
+    TpmAttestationResponse, TransactionReceipt, TransactionView, TxFeedResponse, TxStatusResponse,
+    TypedNativeEventsResponse, TypedNativeReceiptEvent, VerticesAtRoundResponse,
 };
 
 /// Result from building and submitting an encrypted MRV deploy envelope.
@@ -510,6 +510,27 @@ impl RpcClient {
             None => json!([asset_id]),
         };
         self.call("lyth_mrcMetadata", params).await
+    }
+
+    /// `lyth_mrcHolders` — top holders for a native MRC asset/token key.
+    pub async fn lyth_mrc_holders(
+        &self,
+        standard: &str,
+        asset_id: &str,
+        token_id: &str,
+        limit: Option<u32>,
+    ) -> Result<MrcHoldersResponse, SdkError> {
+        let request = MrcHoldersRequest {
+            standard: standard.to_owned(),
+            asset_id: asset_id.to_owned(),
+            token_id: token_id.to_owned(),
+            limit,
+        };
+        let params = match request.limit {
+            Some(limit) => json!([request.standard, request.asset_id, request.token_id, limit]),
+            None => json!([request.standard, request.asset_id, request.token_id]),
+        };
+        self.call("lyth_mrcHolders", params).await
     }
 
     /// `lyth_getAddressLabel` — indexed display/category label for one address.
@@ -1581,6 +1602,69 @@ mod tests {
         assert_eq!(requests[0]["params"], json!([asset_id, token_id]));
         assert_eq!(requests[1]["method"], "lyth_mrcMetadata");
         assert_eq!(requests[1]["params"], json!([asset_id]));
+    }
+
+    #[tokio::test]
+    async fn lyth_mrc_holders_decodes_holder_rows_and_params() {
+        let asset_id = format!("0x{}", "bb".repeat(32));
+        let token_id = format!("0x{}", "cc".repeat(32));
+        let address = "0x1111111111111111111111111111111111111111";
+        let (endpoint, server) = spawn_rpc_server(vec![
+            json!({
+                "schemaVersion": 1,
+                "standard": "mrc1155",
+                "assetId": asset_id,
+                "tokenId": token_id,
+                "limit": 5,
+                "holders": [
+                    {
+                        "rank": 1,
+                        "address": address,
+                        "balance": "42",
+                        "updatedAtBlock": 91
+                    }
+                ]
+            }),
+            json!({
+                "schemaVersion": 1,
+                "standard": "mrc1155",
+                "assetId": asset_id,
+                "tokenId": token_id,
+                "limit": 50,
+                "holders": []
+            }),
+        ]);
+
+        let client = RpcClient::new(endpoint).unwrap();
+        let limited = client
+            .lyth_mrc_holders("mrc1155", &asset_id, &token_id, Some(5))
+            .await
+            .unwrap();
+        assert_eq!(limited.standard, "mrc1155");
+        assert_eq!(limited.asset_id, asset_id);
+        assert_eq!(limited.token_id, token_id);
+        assert_eq!(limited.holders[0].address, address);
+        assert_eq!(limited.holders[0].updated_at_block, 91);
+
+        let defaulted = client
+            .lyth_mrc_holders("mrc1155", &asset_id, &token_id, None)
+            .await
+            .unwrap();
+        assert_eq!(defaulted.limit, 50);
+        assert!(defaulted.holders.is_empty());
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0]["method"], "lyth_mrcHolders");
+        assert_eq!(
+            requests[0]["params"],
+            json!(["mrc1155", asset_id, token_id, 5])
+        );
+        assert_eq!(requests[1]["method"], "lyth_mrcHolders");
+        assert_eq!(
+            requests[1]["params"],
+            json!(["mrc1155", asset_id, token_id])
+        );
     }
 
     #[tokio::test]

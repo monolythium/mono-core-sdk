@@ -2348,6 +2348,52 @@ pub struct RichListResponse {
     pub holders: Vec<RichListHolder>,
 }
 
+/// Request parameters for `lyth_mrcHolders` and `/api/v1/mrc/.../holders`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "MrcHoldersRequest.ts")
+)]
+#[serde(rename_all = "camelCase")]
+pub struct MrcHoldersRequest {
+    /// MRC standard, for example `mrc20`, `mrc721`, or `mrc1155`.
+    pub standard: String,
+    /// MRC asset id, or collection id for token-specific standards.
+    pub asset_id: Hash,
+    /// Token id inside the MRC holder namespace.
+    pub token_id: Hash,
+    /// Optional result limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub limit: Option<u32>,
+}
+
+/// `lyth_mrcHolders` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "MrcHoldersResponse.ts")
+)]
+pub struct MrcHoldersResponse {
+    /// Response schema version.
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    /// Queried MRC standard.
+    pub standard: String,
+    /// Queried MRC asset or collection id.
+    #[serde(rename = "assetId")]
+    pub asset_id: Hash,
+    /// Queried token id.
+    #[serde(rename = "tokenId")]
+    pub token_id: Hash,
+    /// Result limit applied by the node.
+    pub limit: u32,
+    /// Holder rows. The row shape is shared with `lyth_richList`.
+    pub holders: Vec<RichListHolder>,
+}
+
 /// Market metadata returned inside `lyth_clobMarket`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
@@ -3011,6 +3057,49 @@ mod tests {
         .unwrap();
         assert_eq!(missing_metadata.token_id, None);
         assert_eq!(missing_metadata.metadata, None);
+    }
+
+    #[test]
+    fn mrc_holders_models_share_rich_list_holder_shape() {
+        let asset_id = format!("0x{}", "bb".repeat(32));
+        let token_id = format!("0x{}", "cc".repeat(32));
+        let request = MrcHoldersRequest {
+            standard: "mrc1155".to_owned(),
+            asset_id: asset_id.clone(),
+            token_id: token_id.clone(),
+            limit: Some(5),
+        };
+        let wire = serde_json::to_value(&request).unwrap();
+        assert_eq!(wire["assetId"], asset_id);
+        assert_eq!(wire["tokenId"], token_id);
+        assert_eq!(wire["limit"], 5);
+        let without_limit = serde_json::to_value(MrcHoldersRequest {
+            limit: None,
+            ..request
+        })
+        .unwrap();
+        assert!(without_limit.get("limit").is_none());
+
+        let response: MrcHoldersResponse = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "standard": "mrc1155",
+            "assetId": asset_id,
+            "tokenId": token_id,
+            "limit": 5,
+            "holders": [
+                {
+                    "rank": 1,
+                    "address": "0x1111111111111111111111111111111111111111",
+                    "balance": "42",
+                    "updatedAtBlock": 91
+                }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(response.standard, "mrc1155");
+        assert_eq!(response.holders[0].rank, 1);
+        assert_eq!(response.holders[0].balance, "42");
+        assert_eq!(response.holders[0].updated_at_block, 91);
     }
 
     #[test]
