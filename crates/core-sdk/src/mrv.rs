@@ -1249,6 +1249,76 @@ pub struct MrvCallNativeTxPlan {
     pub tx: MrvNativeTxFields,
 }
 
+/// Signed inner native transaction material for an MRV deploy/call plan.
+///
+/// The standalone Rust SDK deliberately keeps ML-DSA-65 key management and
+/// encrypted-envelope sealing outside this module. Callers sign
+/// [`mrv_native_tx_sighash`] with their wallet/backend, then pass the raw
+/// signature and public key here to obtain the canonical inner wire bytes and
+/// inner transaction hash that the encrypted mempool will reveal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvNativeSignedSubmission {
+    /// Keccak-256 digest that the external ML-DSA-65 signer signed.
+    #[serde(rename = "innerSighashHex")]
+    pub inner_sighash_hex: String,
+    /// Canonical signed inner transaction hash.
+    #[serde(rename = "innerTxHashHex")]
+    pub inner_tx_hash_hex: String,
+    /// `0x`-hex bincode signed native transaction bytes.
+    #[serde(rename = "signedInnerTxWireHex")]
+    pub signed_inner_tx_wire_hex: String,
+    /// Byte length of the signed inner transaction wire payload.
+    #[serde(rename = "signedInnerTxWireBytes")]
+    pub signed_inner_tx_wire_bytes: usize,
+}
+
+/// Fully-built MRV deploy plan plus signed inner transaction material.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvDeployNativeSignedSubmission {
+    /// Validated native deploy request.
+    pub request: MrvDeployRequest,
+    /// MRV v1 transaction extension descriptor.
+    pub extension: MrvTransactionExtension,
+    /// Deterministic contract address when artifact hash, signer, and nonce are known.
+    #[serde(
+        rename = "expectedContractAddress",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub expected_contract_address: Option<String>,
+    /// Application-facing native transaction summary with v4.1 names.
+    #[serde(rename = "nativeTx")]
+    pub native_tx: MrvNativeTxFacade,
+    /// Application-facing native fee preview with v4.1 names.
+    #[serde(rename = "feePreview")]
+    pub fee_preview: MrvNativeFeePreview,
+    /// Sign-ready transaction fields for the current native transaction adapter.
+    pub tx: MrvNativeTxFields,
+    /// Signed inner transaction material.
+    pub submission: MrvNativeSignedSubmission,
+}
+
+/// Fully-built MRV call plan plus signed inner transaction material.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvCallNativeSignedSubmission {
+    /// Validated native call request.
+    pub request: MrvCallRequest,
+    /// MRV v1 transaction extension descriptor.
+    pub extension: MrvTransactionExtension,
+    /// Application-facing native transaction summary with v4.1 names.
+    #[serde(rename = "nativeTx")]
+    pub native_tx: MrvNativeTxFacade,
+    /// Application-facing native fee preview with v4.1 names.
+    #[serde(rename = "feePreview")]
+    pub fee_preview: MrvNativeFeePreview,
+    /// Sign-ready transaction fields for the current native transaction adapter.
+    pub tx: MrvNativeTxFields,
+    /// Signed inner transaction material.
+    pub submission: MrvNativeSignedSubmission,
+}
+
 /// Errors returned by MRV SDK validation helpers.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum MrvValidationError {
@@ -1865,6 +1935,77 @@ pub fn assert_mrv_call_native_submission_plan(
         ));
     }
     Ok(())
+}
+
+/// Build signed inner transaction material from an MRV native transaction.
+///
+/// This does not encrypt or submit the transaction. It validates the current
+/// native transaction adapter fields, verifies ML-DSA-65 byte lengths, encodes
+/// the canonical signed inner wire payload, and returns the inner hashes needed
+/// by the encrypted-envelope layer.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the transaction, signature, or public
+/// key fields are malformed.
+pub fn build_mrv_native_signed_submission(
+    tx: &MrvNativeTxFields,
+    signature: &[u8],
+    public_key: &[u8],
+) -> Result<MrvNativeSignedSubmission, MrvValidationError> {
+    let inner_sighash_hex = hex_encode(&mrv_native_tx_sighash(tx)?);
+    let inner_tx_hash_hex = hex_encode(&mrv_native_tx_hash(tx, signature, public_key)?);
+    let signed_inner_tx_wire = encode_mrv_signed_native_tx_bincode(tx, signature, public_key)?;
+    Ok(MrvNativeSignedSubmission {
+        inner_sighash_hex,
+        inner_tx_hash_hex,
+        signed_inner_tx_wire_hex: hex_encode(&signed_inner_tx_wire),
+        signed_inner_tx_wire_bytes: signed_inner_tx_wire.len(),
+    })
+}
+
+/// Validate an MRV deploy plan and attach signed inner transaction material.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the plan guardrails fail or when the
+/// signature/public key cannot produce canonical signed inner bytes.
+pub fn build_mrv_deploy_native_signed_submission(
+    plan: &MrvDeployNativeTxPlan,
+    signature: &[u8],
+    public_key: &[u8],
+) -> Result<MrvDeployNativeSignedSubmission, MrvValidationError> {
+    assert_mrv_deploy_native_submission_plan(plan)?;
+    let submission = build_mrv_native_signed_submission(&plan.tx, signature, public_key)?;
+    Ok(MrvDeployNativeSignedSubmission {
+        request: plan.request.clone(),
+        extension: plan.extension.clone(),
+        expected_contract_address: plan.expected_contract_address.clone(),
+        native_tx: plan.native_tx.clone(),
+        fee_preview: plan.fee_preview.clone(),
+        tx: plan.tx.clone(),
+        submission,
+    })
+}
+
+/// Validate an MRV call plan and attach signed inner transaction material.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the plan guardrails fail or when the
+/// signature/public key cannot produce canonical signed inner bytes.
+pub fn build_mrv_call_native_signed_submission(
+    plan: &MrvCallNativeTxPlan,
+    signature: &[u8],
+    public_key: &[u8],
+) -> Result<MrvCallNativeSignedSubmission, MrvValidationError> {
+    assert_mrv_call_native_submission_plan(plan)?;
+    let submission = build_mrv_native_signed_submission(&plan.tx, signature, public_key)?;
+    Ok(MrvCallNativeSignedSubmission {
+        request: plan.request.clone(),
+        extension: plan.extension.clone(),
+        native_tx: plan.native_tx.clone(),
+        fee_preview: plan.fee_preview.clone(),
+        tx: plan.tx.clone(),
+        submission,
+    })
 }
 
 /// Encode the canonical transaction preimage that native transaction signers
@@ -3222,6 +3363,83 @@ mod tests {
             Err(MrvValidationError::InvalidDecimal {
                 field: "maxExecutionFeeLythoshi"
             })
+        ));
+    }
+
+    #[test]
+    fn native_signed_submission_wraps_guarded_plan_material() {
+        let user = mrv_address_to_bech32(MrvAddressKind::User, [0x11; 20]);
+        let contract = mrv_address_to_bech32(MrvAddressKind::Contract, [0x22; 20]);
+        let sig = vec![0x55; ML_DSA_65_SIGNATURE_LEN];
+        let public_key = vec![0x66; ML_DSA_65_PUBLIC_KEY_LEN];
+        let deploy = build_mrv_deploy_native_tx_plan(
+            &[0x13, 0x00, 0x00, 0x00],
+            None,
+            MrvNativeTxBuildOptions::new(69_420, 7, 100_000, 25)
+                .from(user)
+                .priority_tip_lythoshi(1),
+        )
+        .unwrap();
+        let call = build_mrv_call_native_tx_plan(
+            &contract,
+            &[0x01, 0x02],
+            MrvNativeTxBuildOptions::new(69_420, 8, 50_000, 10),
+        )
+        .unwrap();
+
+        let deploy_submission =
+            build_mrv_deploy_native_signed_submission(&deploy, &sig, &public_key).unwrap();
+        assert_eq!(deploy_submission.request.artifact_bytes, "0x13000000");
+        assert_eq!(deploy_submission.native_tx.max_execution_fee_lythoshi, "25");
+        assert_eq!(
+            deploy_submission.submission.inner_sighash_hex,
+            "0xb680eb3b3e67b441d22c4ac441c9355809cac860dc2c0773ed47e49f273725c3"
+        );
+        assert_eq!(
+            deploy_submission.submission.inner_tx_hash_hex,
+            "0x0f826159573ebe870876d03e9b54541fbbb652de4642552abc9a65a481781789"
+        );
+        assert_eq!(
+            deploy_submission.submission.signed_inner_tx_wire_bytes,
+            5_448
+        );
+        assert!(deploy_submission
+            .submission
+            .signed_inner_tx_wire_hex
+            .starts_with("0x2c0f010000000000070000000000000001"));
+
+        let call_submission =
+            build_mrv_call_native_signed_submission(&call, &sig, &public_key).unwrap();
+        assert_eq!(call_submission.request.contract_address, contract);
+        assert_eq!(call_submission.native_tx.execution_unit_limit, 50_000);
+        assert_eq!(
+            call_submission.submission.signed_inner_tx_wire_bytes,
+            call_submission.submission.signed_inner_tx_wire_hex.len() / 2 - 1
+        );
+
+        let mut app_facing = serde_json::to_value(&deploy_submission).unwrap();
+        let signing_adapter = app_facing.as_object_mut().unwrap().remove("tx").unwrap();
+        let app_wire = serde_json::to_string(&app_facing).unwrap().to_lowercase();
+        assert!(!app_wire.contains("gas"));
+        assert!(!app_wire.contains("wei"));
+        assert!(serde_json::to_string(&signing_adapter)
+            .unwrap()
+            .contains("maxFeePerGas"));
+
+        assert!(matches!(
+            build_mrv_deploy_native_signed_submission(&deploy, &sig[..10], &public_key),
+            Err(MrvValidationError::InvalidNativeTxBytes {
+                field: "signature",
+                ..
+            })
+        ));
+        let mut bad_deploy = deploy;
+        bad_deploy.tx.extensions.clear();
+        assert!(matches!(
+            build_mrv_deploy_native_signed_submission(&bad_deploy, &sig, &public_key),
+            Err(MrvValidationError::InvalidNativeSubmission(
+                "native submission must carry exactly one transaction extension"
+            ))
         ));
     }
 
