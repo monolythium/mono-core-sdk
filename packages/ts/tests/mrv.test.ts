@@ -2,16 +2,19 @@ import { describe, expect, it } from "vitest";
 import {
   MRV_FORMAT_VERSION,
   MRV_PROFILE_MONO_RV32IM_V1,
+  MRV_STRUCTURED_FEE_FIELDS,
   MRV_TX_EXTENSION_KIND,
   NATIVE_LYTH_DECIMALS,
   RpcClient,
   addressToTypedBech32,
+  assertMrvFeeDisplayConformance,
   buildMrvCallNativeTxPlan,
   buildMrvCallPlan,
   buildMrvCallRequest,
   buildMrvDeployNativeTxPlan,
   buildMrvDeployPlan,
   buildMrvDeployRequest,
+  checkMrvFeeDisplayConformance,
   deriveMrvContractAddress,
   formatLyth,
   formatLythoshi,
@@ -125,6 +128,61 @@ describe("MRV/RISC-V SDK helpers", () => {
     expect(() => parseLythToLythoshi("1.")).toThrow(/canonical LYTH decimal/);
     expect(() => parseLythToLythoshi("1.000000001")).toThrow(/8 decimal/);
     expect(() => parseLythToLythoshi("12,34 LYTH")).toThrow(/canonical LYTH decimal/);
+  });
+
+  it("checks fee display conformance for default and structured fee surfaces", () => {
+    const fee = {
+      total_lythoshi: "50000",
+      total_lyth: "0.0005",
+      cycles_used: 42,
+      base_price_per_cycle_lythoshi: "1000",
+      state_io_units: 8,
+      state_io_price_per_unit_lythoshi: "250",
+      priority_tip_lythoshi: "0",
+    };
+    expect(Object.keys(fee)).toEqual([...MRV_STRUCTURED_FEE_FIELDS]);
+
+    const report = checkMrvFeeDisplayConformance({
+      expectedTotalLythoshi: "50000",
+      defaultFeeText: "Network fee: 0.0005 LYTH",
+      detailTexts: ["cycles 42, state I/O 8, total 50000 lythoshi"],
+      structuredFee: fee,
+      customFeeInputVisible: false,
+      speedUpCancelVisible: false,
+    });
+    expect(report).toEqual({
+      passed: true,
+      failures: [],
+      expectedDefaultFeeText: "0.0005 LYTH",
+    });
+    expect(() =>
+      assertMrvFeeDisplayConformance({
+        expectedTotalLythoshi: 50_000n,
+        defaultFeeText: "Network fee: 0.0005 LYTH",
+        structuredFee: fee,
+      }),
+    ).not.toThrow();
+
+    const failed = checkMrvFeeDisplayConformance({
+      expectedTotalLythoshi: "50000",
+      defaultFeeText: "50000 lythoshi / 42 cycles / gas price 0.00050000 LYTH",
+      detailTexts: ["gas price 10 gwei"],
+      structuredFee: { ...fee, gas_price: "1", total_lyth: "0.00050000" },
+      customFeeInputVisible: true,
+      speedUpCancelVisible: true,
+    });
+    expect(failed.passed).toBe(false);
+    expect(failed.failures).toEqual(
+      expect.arrayContaining([
+        "defaultFeeText fee must be 0.0005 LYTH",
+        "defaultFeeText exposes detail-only fee term 'gas'",
+        "detailTexts[0] exposes inherited fee term 'gas'",
+        "structuredFee has unexpected field 'gas_price'",
+        "structuredFee.total_lyth must be 0.0005",
+        "default surface must not expose custom fee inputs",
+        "default surface must not expose speed-up or cancel controls",
+      ]),
+    );
   });
 
   it("validates artifact metadata and resolves syscalls", () => {

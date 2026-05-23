@@ -2044,6 +2044,15 @@ var MrvValidationError = class extends Error {
     this.name = "MrvValidationError";
   }
 };
+var MRV_STRUCTURED_FEE_FIELDS = [
+  "total_lythoshi",
+  "total_lyth",
+  "cycles_used",
+  "base_price_per_cycle_lythoshi",
+  "state_io_units",
+  "state_io_price_per_unit_lythoshi",
+  "priority_tip_lythoshi"
+];
 function formatLyth(lythoshi, options = {}) {
   const amount = BigInt(normalizeDecimalLike("lythoshi", lythoshi));
   const whole = amount / LYTHOSHI_PER_LYTH;
@@ -2079,6 +2088,58 @@ function parseLythToLythoshi(input) {
   const whole = BigInt(wholeRaw.replaceAll(",", ""));
   const fraction = fractionRaw === "" ? 0n : BigInt(fractionRaw.padEnd(NATIVE_LYTH_DECIMALS, "0"));
   return whole * LYTHOSHI_PER_LYTH + fraction;
+}
+function checkMrvFeeDisplayConformance(input) {
+  const expectedTotalLythoshi = normalizeDecimalLike("expectedTotalLythoshi", input.expectedTotalLythoshi);
+  const expectedDefaultFeeText = formatLyth(expectedTotalLythoshi);
+  const failures = [];
+  const amountCandidates = extractLythAmountCandidates(input.defaultFeeText);
+  if (amountCandidates.length !== 1) {
+    failures.push("defaultFeeText must contain exactly one LYTH-denominated fee amount");
+  } else {
+    const renderedCandidate = `${amountCandidates[0]} LYTH`;
+    if (renderedCandidate !== expectedDefaultFeeText) {
+      failures.push(`defaultFeeText fee must be ${expectedDefaultFeeText}`);
+    }
+    try {
+      const parsed = parseLythToLythoshi(renderedCandidate);
+      if (parsed.toString() !== expectedTotalLythoshi) {
+        failures.push(`defaultFeeText fee must total ${expectedTotalLythoshi} lythoshi`);
+      }
+    } catch {
+      failures.push("defaultFeeText fee must be a canonical 8-decimal LYTH amount");
+    }
+  }
+  const defaultForbidden = firstForbiddenDefaultFeeTerm(input.defaultFeeText);
+  if (defaultForbidden !== void 0) {
+    failures.push(`defaultFeeText exposes detail-only fee term '${defaultForbidden}'`);
+  }
+  for (const [index, detailText] of (input.detailTexts ?? []).entries()) {
+    const detailForbidden = firstForbiddenDetailFeeTerm(detailText);
+    if (detailForbidden !== void 0) {
+      failures.push(`detailTexts[${index}] exposes inherited fee term '${detailForbidden}'`);
+    }
+  }
+  if (input.structuredFee !== void 0) {
+    checkStructuredFeeObject(input.structuredFee, expectedTotalLythoshi, failures);
+  }
+  if (input.customFeeInputVisible === true) {
+    failures.push("default surface must not expose custom fee inputs");
+  }
+  if (input.speedUpCancelVisible === true) {
+    failures.push("default surface must not expose speed-up or cancel controls");
+  }
+  return {
+    passed: failures.length === 0,
+    failures,
+    expectedDefaultFeeText
+  };
+}
+function assertMrvFeeDisplayConformance(input) {
+  const report = checkMrvFeeDisplayConformance(input);
+  if (!report.passed) {
+    throw new MrvValidationError(`fee display conformance failed: ${report.failures.join("; ")}`);
+  }
 }
 function mrvCodeHashHex(code) {
   const codeBytes = bytesFrom(code, "code");
@@ -2433,6 +2494,108 @@ function isCanonicalWholeLyth(value) {
     return true;
   }
   return /^[1-9][0-9]{0,2}(,[0-9]{3})+$/.test(value);
+}
+function extractLythAmountCandidates(text) {
+  return [...text.matchAll(/(?:^|[^A-Za-z0-9_])([0-9][0-9,]*(?:\.[0-9]+)?)\s+LYTH\b/g)].map(
+    (match) => match[1]
+  );
+}
+function firstForbiddenDefaultFeeTerm(text) {
+  const tokens = feeTermTokens(text);
+  for (const forbidden of ["gas", "gwei", "wei", "cycle", "cycles", "lythoshi"]) {
+    if (tokens.includes(forbidden)) return forbidden;
+  }
+  if (hasAdjacentTerms(tokens, "state", "io") || hasStateIOTerms(tokens)) return "state I/O";
+  return void 0;
+}
+function firstForbiddenDetailFeeTerm(text) {
+  const tokens = feeTermTokens(text);
+  for (const forbidden of ["gas", "gwei", "wei"]) {
+    if (tokens.includes(forbidden)) return forbidden;
+  }
+  return void 0;
+}
+function feeTermTokens(text) {
+  return text.toLowerCase().match(/[a-z]+/g) ?? [];
+}
+function hasAdjacentTerms(tokens, first, second) {
+  return tokens.some((token, index) => token === first && tokens[index + 1] === second);
+}
+function hasStateIOTerms(tokens) {
+  return tokens.some((token, index) => token === "state" && tokens[index + 1] === "i" && tokens[index + 2] === "o");
+}
+function checkStructuredFeeObject(value, expectedTotalLythoshi, failures) {
+  if (!isRecord(value)) {
+    failures.push("structuredFee must be an object");
+    return;
+  }
+  const expectedFields = new Set(MRV_STRUCTURED_FEE_FIELDS);
+  const actualFields = Object.keys(value);
+  for (const field of MRV_STRUCTURED_FEE_FIELDS) {
+    if (!(field in value)) failures.push(`structuredFee is missing '${field}'`);
+  }
+  for (const field of actualFields) {
+    if (!expectedFields.has(field)) failures.push(`structuredFee has unexpected field '${field}'`);
+  }
+  const totalLythoshi = stringField(value, "total_lythoshi", failures);
+  if (totalLythoshi !== void 0 && totalLythoshi !== expectedTotalLythoshi) {
+    failures.push(`structuredFee.total_lythoshi must be ${expectedTotalLythoshi}`);
+  }
+  const totalLyth = lythDecimalField(value, "total_lyth", failures);
+  const expectedTotalLyth = formatLyth(expectedTotalLythoshi, { includeUnit: false });
+  if (totalLyth !== void 0 && totalLyth !== expectedTotalLyth) {
+    failures.push(`structuredFee.total_lyth must be ${expectedTotalLyth}`);
+  }
+  for (const field of [
+    "base_price_per_cycle_lythoshi",
+    "state_io_price_per_unit_lythoshi",
+    "priority_tip_lythoshi"
+  ]) {
+    stringField(value, field, failures);
+  }
+  for (const field of ["cycles_used", "state_io_units"]) {
+    integerField(value, field, failures);
+  }
+}
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function stringField(value, field, failures) {
+  const fieldValue = value[field];
+  if (typeof fieldValue !== "string" || !isCanonicalUnsignedDecimalString(fieldValue)) {
+    failures.push(`structuredFee.${field} must be a canonical unsigned decimal string`);
+    return void 0;
+  }
+  return fieldValue;
+}
+function lythDecimalField(value, field, failures) {
+  const fieldValue = value[field];
+  if (typeof fieldValue !== "string") {
+    failures.push(`structuredFee.${field} must be a canonical LYTH decimal string`);
+    return void 0;
+  }
+  try {
+    parseLythToLythoshi(`${fieldValue} LYTH`);
+  } catch {
+    failures.push(`structuredFee.${field} must be a canonical LYTH decimal string`);
+    return void 0;
+  }
+  return fieldValue;
+}
+function integerField(value, field, failures) {
+  const fieldValue = value[field];
+  if (typeof fieldValue !== "number" || !Number.isSafeInteger(fieldValue) || fieldValue < 0) {
+    failures.push(`structuredFee.${field} must be a non-negative safe integer`);
+  }
+}
+function isCanonicalUnsignedDecimalString(value) {
+  if (!/^(0|[1-9][0-9]*)$/.test(value)) return false;
+  try {
+    BigInt(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 function normalizeDecimalLike(field, value, defaultValue) {
   if (value === void 0) {
@@ -3049,6 +3212,7 @@ exports.MRV_MAX_MEMORY_PAGES = MRV_MAX_MEMORY_PAGES;
 exports.MRV_MAX_STORAGE_NAMESPACE_BYTES = MRV_MAX_STORAGE_NAMESPACE_BYTES;
 exports.MRV_MEMORY_PAGE_BYTES = MRV_MEMORY_PAGE_BYTES;
 exports.MRV_PROFILE_MONO_RV32IM_V1 = MRV_PROFILE_MONO_RV32IM_V1;
+exports.MRV_STRUCTURED_FEE_FIELDS = MRV_STRUCTURED_FEE_FIELDS;
 exports.MRV_TX_EXTENSION_KIND = MRV_TX_EXTENSION_KIND;
 exports.MRV_TX_EXTENSION_V1 = MRV_TX_EXTENSION_V1;
 exports.MonolythiumProvider = MonolythiumProvider;
@@ -3076,6 +3240,7 @@ exports.addressBytesToHex = addressBytesToHex;
 exports.addressToBech32 = addressToBech32;
 exports.addressToTypedBech32 = addressToTypedBech32;
 exports.apiEndpointFromRpcEndpoint = apiEndpointFromRpcEndpoint;
+exports.assertMrvFeeDisplayConformance = assertMrvFeeDisplayConformance;
 exports.bech32ToAddress = bech32ToAddress;
 exports.bech32ToAddressBytes = bech32ToAddressBytes;
 exports.buildMrvCallNativeTxPlan = buildMrvCallNativeTxPlan;
@@ -3084,6 +3249,7 @@ exports.buildMrvCallRequest = buildMrvCallRequest;
 exports.buildMrvDeployNativeTxPlan = buildMrvDeployNativeTxPlan;
 exports.buildMrvDeployPlan = buildMrvDeployPlan;
 exports.buildMrvDeployRequest = buildMrvDeployRequest;
+exports.checkMrvFeeDisplayConformance = checkMrvFeeDisplayConformance;
 exports.composeClaimBoundMessage = composeClaimBoundMessage;
 exports.decodeHasPubkeyReturn = decodeHasPubkeyReturn;
 exports.decodeLookupPubkeyReturn = decodeLookupPubkeyReturn;

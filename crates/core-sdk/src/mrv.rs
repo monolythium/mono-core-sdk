@@ -43,6 +43,16 @@ pub const LYTHOSHI_PER_LYTH: u128 = 100_000_000;
 pub const MRV_TX_EXTENSION_KIND: u8 = 0x30;
 /// Body byte for the first MRV extension version.
 pub const MRV_TX_EXTENSION_V1: u8 = 0x01;
+/// Required ADR-0039 structured native fee object fields.
+pub const MRV_STRUCTURED_FEE_FIELDS: [&str; 7] = [
+    "total_lythoshi",
+    "total_lyth",
+    "cycles_used",
+    "base_price_per_cycle_lythoshi",
+    "state_io_units",
+    "state_io_price_per_unit_lythoshi",
+    "priority_tip_lythoshi",
+];
 /// ML-DSA-65 public key byte length for native transaction envelopes.
 pub const ML_DSA_65_PUBLIC_KEY_LEN: usize = 1_952;
 /// ML-DSA-65 signature byte length for native transaction envelopes.
@@ -138,6 +148,159 @@ pub fn parse_lyth_to_lythoshi(input: &str) -> Result<u128, MrvValidationError> {
         .checked_mul(LYTHOSHI_PER_LYTH)
         .and_then(|scaled| scaled.checked_add(fraction))
         .ok_or(MrvValidationError::InvalidDecimal { field: "lyth" })
+}
+
+/// Input captured from a wallet, explorer, CLI, or SDK fee display surface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MrvFeeDisplayConformanceInput<'a> {
+    /// Expected total fee in lythoshi.
+    pub expected_total_lythoshi: u128,
+    /// Default user-visible fee text.
+    pub default_fee_text: &'a str,
+    /// Optional explicit detail-surface text snippets.
+    pub detail_texts: &'a [&'a str],
+    /// Optional structured ADR-0039 fee object as JSON.
+    pub structured_fee: Option<&'a serde_json::Value>,
+    /// True when a default flow exposes raw custom fee controls.
+    pub custom_fee_input_visible: bool,
+    /// True when a default flow exposes speed-up or cancel controls.
+    pub speed_up_or_cancel_visible: bool,
+}
+
+impl<'a> MrvFeeDisplayConformanceInput<'a> {
+    /// Create a conformance input with no optional detail surfaces.
+    #[must_use]
+    pub const fn new(expected_total_lythoshi: u128, default_fee_text: &'a str) -> Self {
+        Self {
+            expected_total_lythoshi,
+            default_fee_text,
+            detail_texts: &[],
+            structured_fee: None,
+            custom_fee_input_visible: false,
+            speed_up_or_cancel_visible: false,
+        }
+    }
+
+    /// Attach explicit detail-surface text snippets.
+    #[must_use]
+    pub const fn detail_texts(mut self, detail_texts: &'a [&'a str]) -> Self {
+        self.detail_texts = detail_texts;
+        self
+    }
+
+    /// Attach a structured ADR-0039 fee object.
+    #[must_use]
+    pub const fn structured_fee(mut self, structured_fee: &'a serde_json::Value) -> Self {
+        self.structured_fee = Some(structured_fee);
+        self
+    }
+
+    /// Mark whether the default surface exposes raw custom fee inputs.
+    #[must_use]
+    pub const fn custom_fee_input_visible(mut self, visible: bool) -> Self {
+        self.custom_fee_input_visible = visible;
+        self
+    }
+
+    /// Mark whether the default surface exposes speed-up or cancel controls.
+    #[must_use]
+    pub const fn speed_up_or_cancel_visible(mut self, visible: bool) -> Self {
+        self.speed_up_or_cancel_visible = visible;
+        self
+    }
+}
+
+/// Fee-display conformance result for app integrations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MrvFeeDisplayConformanceReport {
+    /// True when no failures were found.
+    pub passed: bool,
+    /// Human-readable failure list.
+    pub failures: Vec<String>,
+    /// Canonical default fee text expected for this total.
+    pub expected_default_fee_text: String,
+}
+
+/// Check the v4.1 fee-display posture for an app-facing surface.
+#[must_use]
+pub fn check_mrv_fee_display_conformance(
+    input: &MrvFeeDisplayConformanceInput<'_>,
+) -> MrvFeeDisplayConformanceReport {
+    let expected_default_fee_text =
+        format_lyth(input.expected_total_lythoshi, LythFormatOptions::DEFAULT);
+    let mut failures = Vec::new();
+    let amount_candidates = extract_lyth_amount_candidates(input.default_fee_text);
+
+    if amount_candidates.len() != 1 {
+        failures.push(
+            "default_fee_text must contain exactly one LYTH-denominated fee amount".to_owned(),
+        );
+    } else {
+        let rendered_candidate = format!("{} LYTH", amount_candidates[0]);
+        if rendered_candidate != expected_default_fee_text {
+            failures.push(format!(
+                "default_fee_text fee must be {expected_default_fee_text}"
+            ));
+        }
+        match parse_lyth_to_lythoshi(&rendered_candidate) {
+            Ok(parsed) if parsed == input.expected_total_lythoshi => {}
+            Ok(_) => failures.push(format!(
+                "default_fee_text fee must total {} lythoshi",
+                input.expected_total_lythoshi
+            )),
+            Err(_) => failures
+                .push("default_fee_text fee must be a canonical 8-decimal LYTH amount".to_owned()),
+        }
+    }
+
+    if let Some(term) = first_forbidden_default_fee_term(input.default_fee_text) {
+        failures.push(format!(
+            "default_fee_text exposes detail-only fee term '{term}'"
+        ));
+    }
+
+    for (index, detail_text) in input.detail_texts.iter().enumerate() {
+        if let Some(term) = first_forbidden_detail_fee_term(detail_text) {
+            failures.push(format!(
+                "detail_texts[{index}] exposes inherited fee term '{term}'"
+            ));
+        }
+    }
+
+    if let Some(structured_fee) = input.structured_fee {
+        check_structured_fee_object(structured_fee, input.expected_total_lythoshi, &mut failures);
+    }
+
+    if input.custom_fee_input_visible {
+        failures.push("default surface must not expose custom fee inputs".to_owned());
+    }
+    if input.speed_up_or_cancel_visible {
+        failures.push("default surface must not expose speed-up or cancel controls".to_owned());
+    }
+
+    MrvFeeDisplayConformanceReport {
+        passed: failures.is_empty(),
+        failures,
+        expected_default_fee_text,
+    }
+}
+
+/// Return an error when [`check_mrv_fee_display_conformance`] would fail.
+///
+/// # Errors
+/// Returns [`MrvValidationError::FeeDisplayConformance`] with every discovered
+/// failure when the input does not match the v4.1 posture.
+pub fn assert_mrv_fee_display_conformance(
+    input: &MrvFeeDisplayConformanceInput<'_>,
+) -> Result<(), MrvValidationError> {
+    let report = check_mrv_fee_display_conformance(input);
+    if report.failures.is_empty() {
+        Ok(())
+    } else {
+        Err(MrvValidationError::FeeDisplayConformance {
+            failures: report.failures,
+        })
+    }
 }
 
 /// Approved MRV RISC-V profile.
@@ -1112,6 +1275,13 @@ pub enum MrvValidationError {
         field: &'static str,
     },
 
+    /// Fee-display conformance harness found failures.
+    #[error("fee display conformance failed: {failures:?}")]
+    FeeDisplayConformance {
+        /// Human-readable conformance failures.
+        failures: Vec<String>,
+    },
+
     /// MRV format version was unsupported.
     #[error("unsupported MRV format version {found}, expected {expected}")]
     UnsupportedFormatVersion {
@@ -1880,6 +2050,169 @@ fn is_canonical_whole_lyth(value: &str) -> bool {
     groups.all(|group| group.len() == 3 && group.bytes().all(|b| b.is_ascii_digit()))
 }
 
+fn extract_lyth_amount_candidates(text: &str) -> Vec<String> {
+    let tokens = text.split_whitespace().collect::<Vec<_>>();
+    let mut candidates = Vec::new();
+    for pair in tokens.windows(2) {
+        if trim_unit_token(pair[1]) == "LYTH" {
+            let amount = trim_amount_token(pair[0]);
+            if !amount.is_empty() {
+                candidates.push(amount.to_owned());
+            }
+        }
+    }
+    candidates
+}
+
+fn trim_unit_token(token: &str) -> &str {
+    token.trim_matches(|ch: char| {
+        matches!(
+            ch,
+            ':' | ';' | ',' | '.' | '!' | '?' | '(' | ')' | '[' | ']'
+        )
+    })
+}
+
+fn trim_amount_token(token: &str) -> &str {
+    token.trim_matches(|ch: char| !ch.is_ascii_digit() && ch != ',' && ch != '.')
+}
+
+fn first_forbidden_default_fee_term(text: &str) -> Option<&'static str> {
+    let tokens = fee_term_tokens(text);
+    for forbidden in ["gas", "gwei", "wei", "cycle", "cycles", "lythoshi"] {
+        if tokens.iter().any(|token| token == forbidden) {
+            return Some(forbidden);
+        }
+    }
+    if has_adjacent_terms(&tokens, "state", "io") || has_state_i_o_terms(&tokens) {
+        return Some("state I/O");
+    }
+    None
+}
+
+fn first_forbidden_detail_fee_term(text: &str) -> Option<&'static str> {
+    let tokens = fee_term_tokens(text);
+    ["gas", "gwei", "wei"]
+        .into_iter()
+        .find(|forbidden| tokens.iter().any(|token| token == forbidden))
+}
+
+fn fee_term_tokens(text: &str) -> Vec<String> {
+    text.to_ascii_lowercase()
+        .split(|ch: char| !ch.is_ascii_alphabetic())
+        .filter(|token| !token.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn has_adjacent_terms(tokens: &[String], first: &str, second: &str) -> bool {
+    tokens
+        .windows(2)
+        .any(|window| window[0] == first && window[1] == second)
+}
+
+fn has_state_i_o_terms(tokens: &[String]) -> bool {
+    tokens
+        .windows(3)
+        .any(|window| window[0] == "state" && window[1] == "i" && window[2] == "o")
+}
+
+fn check_structured_fee_object(
+    value: &serde_json::Value,
+    expected_total_lythoshi: u128,
+    failures: &mut Vec<String>,
+) {
+    let Some(object) = value.as_object() else {
+        failures.push("structured_fee must be an object".to_owned());
+        return;
+    };
+    let expected_fields = MRV_STRUCTURED_FEE_FIELDS
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let actual_fields = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    for field in expected_fields.difference(&actual_fields) {
+        failures.push(format!("structured_fee is missing '{field}'"));
+    }
+    for field in actual_fields.difference(&expected_fields) {
+        failures.push(format!("structured_fee has unexpected field '{field}'"));
+    }
+
+    if let Some(total_lythoshi) = json_decimal_string(object, "total_lythoshi", failures) {
+        if total_lythoshi != expected_total_lythoshi.to_string() {
+            failures.push(format!(
+                "structured_fee.total_lythoshi must be {expected_total_lythoshi}"
+            ));
+        }
+    }
+    let expected_total_lyth = format_lyth(expected_total_lythoshi, LythFormatOptions::NUMERIC_ONLY);
+    if let Some(total_lyth) = json_lyth_decimal_string(object, "total_lyth", failures) {
+        if total_lyth != expected_total_lyth {
+            failures.push(format!(
+                "structured_fee.total_lyth must be {expected_total_lyth}"
+            ));
+        }
+    }
+    for field in [
+        "base_price_per_cycle_lythoshi",
+        "state_io_price_per_unit_lythoshi",
+        "priority_tip_lythoshi",
+    ] {
+        json_decimal_string(object, field, failures);
+    }
+    for field in ["cycles_used", "state_io_units"] {
+        json_nonnegative_integer(object, field, failures);
+    }
+}
+
+fn json_decimal_string<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    field: &'static str,
+    failures: &mut Vec<String>,
+) -> Option<&'a str> {
+    match object.get(field).and_then(serde_json::Value::as_str) {
+        Some(value) if validate_decimal(field, value).is_ok() => Some(value),
+        _ => {
+            failures.push(format!(
+                "structured_fee.{field} must be a canonical unsigned decimal string"
+            ));
+            None
+        }
+    }
+}
+
+fn json_lyth_decimal_string<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    field: &'static str,
+    failures: &mut Vec<String>,
+) -> Option<&'a str> {
+    match object.get(field).and_then(serde_json::Value::as_str) {
+        Some(value) if parse_lyth_to_lythoshi(&format!("{value} LYTH")).is_ok() => Some(value),
+        _ => {
+            failures.push(format!(
+                "structured_fee.{field} must be a canonical LYTH decimal string"
+            ));
+            None
+        }
+    }
+}
+
+fn json_nonnegative_integer(
+    object: &serde_json::Map<String, serde_json::Value>,
+    field: &'static str,
+    failures: &mut Vec<String>,
+) {
+    if object
+        .get(field)
+        .and_then(serde_json::Value::as_u64)
+        .is_none()
+    {
+        failures.push(format!(
+            "structured_fee.{field} must be a non-negative integer"
+        ));
+    }
+}
+
 fn push_u256_be(out: &mut Vec<u8>, value: u128) {
     out.extend_from_slice(&[0u8; 16]);
     out.extend_from_slice(&value.to_be_bytes());
@@ -2265,6 +2598,90 @@ mod tests {
         assert!(parse_lyth_to_lythoshi("1.").is_err());
         assert!(parse_lyth_to_lythoshi("1.000000001").is_err());
         assert!(parse_lyth_to_lythoshi("12,34 LYTH").is_err());
+    }
+
+    #[test]
+    fn fee_display_conformance_checks_default_and_structured_surfaces() {
+        let fee = serde_json::json!({
+            "total_lythoshi": "50000",
+            "total_lyth": "0.0005",
+            "cycles_used": 42,
+            "base_price_per_cycle_lythoshi": "1000",
+            "state_io_units": 8,
+            "state_io_price_per_unit_lythoshi": "250",
+            "priority_tip_lythoshi": "0",
+        });
+        assert_eq!(
+            fee.as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            MRV_STRUCTURED_FEE_FIELDS
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+        );
+
+        let detail_texts = ["cycles 42, state I/O 8, total 50000 lythoshi"];
+        let input = MrvFeeDisplayConformanceInput::new(50_000, "Network fee: 0.0005 LYTH")
+            .detail_texts(&detail_texts)
+            .structured_fee(&fee);
+        let report = check_mrv_fee_display_conformance(&input);
+        assert_eq!(
+            report,
+            MrvFeeDisplayConformanceReport {
+                passed: true,
+                failures: vec![],
+                expected_default_fee_text: "0.0005 LYTH".to_owned(),
+            }
+        );
+        assert_mrv_fee_display_conformance(&input).unwrap();
+
+        let failed_fee = serde_json::json!({
+            "total_lythoshi": "50000",
+            "total_lyth": "0.00050000",
+            "cycles_used": 42,
+            "base_price_per_cycle_lythoshi": "1000",
+            "state_io_units": 8,
+            "state_io_price_per_unit_lythoshi": "250",
+            "priority_tip_lythoshi": "0",
+            "gas_price": "1",
+        });
+        let failed_details = ["gas price 10 gwei"];
+        let failed = check_mrv_fee_display_conformance(
+            &MrvFeeDisplayConformanceInput::new(
+                50_000,
+                "50000 lythoshi / 42 cycles / gas price 0.00050000 LYTH",
+            )
+            .detail_texts(&failed_details)
+            .structured_fee(&failed_fee)
+            .custom_fee_input_visible(true)
+            .speed_up_or_cancel_visible(true),
+        );
+        assert!(!failed.passed);
+        assert!(failed
+            .failures
+            .contains(&"default_fee_text fee must be 0.0005 LYTH".to_owned()));
+        assert!(failed
+            .failures
+            .contains(&"default_fee_text exposes detail-only fee term 'gas'".to_owned()));
+        assert!(failed
+            .failures
+            .contains(&"detail_texts[0] exposes inherited fee term 'gas'".to_owned()));
+        assert!(failed
+            .failures
+            .contains(&"structured_fee has unexpected field 'gas_price'".to_owned()));
+        assert!(failed
+            .failures
+            .contains(&"structured_fee.total_lyth must be 0.0005".to_owned()));
+        assert!(matches!(
+            assert_mrv_fee_display_conformance(&MrvFeeDisplayConformanceInput::new(
+                50_000,
+                "42 cycles 0.0005 LYTH"
+            )),
+            Err(MrvValidationError::FeeDisplayConformance { .. })
+        ));
     }
 
     fn valid_metadata() -> MrvArtifactMetadata {
