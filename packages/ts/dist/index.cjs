@@ -2221,6 +2221,19 @@ function assertMrvFeeDisplayConformance(input) {
     throw new MrvValidationError(`fee display conformance failed: ${report.failures.join("; ")}`);
   }
 }
+function formatNativeReceiptFeeDisplay(fee) {
+  const totalLythoshi = normalizeDecimalLike("fee.total_lythoshi", fee.total_lythoshi);
+  const totalLyth = formatLyth(totalLythoshi, { includeUnit: false });
+  return {
+    defaultFeeText: `Network fee: ${totalLyth} LYTH`,
+    detailTexts: [
+      `cycles ${fee.cycles_used}, state I/O ${fee.state_io_units}, total ${totalLythoshi} lythoshi`,
+      `cycle price ${fee.base_price_per_cycle_lythoshi} lythoshi, state I/O price ${fee.state_io_price_per_unit_lythoshi} lythoshi, priority tip ${fee.priority_tip_lythoshi} lythoshi`
+    ],
+    totalLythoshi,
+    totalLyth
+  };
+}
 function mrvCodeHashHex(code) {
   const codeBytes = bytesFrom(code, "code");
   const len = new Uint8Array(8);
@@ -3433,6 +3446,7 @@ exports.fetchChainInfoLatest = fetchChainInfoLatest;
 exports.fetchChainRegistryLatest = fetchChainRegistryLatest;
 exports.formatLyth = formatLyth;
 exports.formatLythoshi = formatLythoshi;
+exports.formatNativeReceiptFeeDisplay = formatNativeReceiptFeeDisplay;
 exports.getChainInfo = getChainInfo;
 exports.getP2pSeeds = getP2pSeeds;
 exports.getRpcEndpoints = getRpcEndpoints;
