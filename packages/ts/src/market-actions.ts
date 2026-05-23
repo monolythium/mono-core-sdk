@@ -129,6 +129,43 @@ export interface EncodeNativeSpotCancelOrderArgs {
   caller: NativeMarketAddressInput;
 }
 
+export type NativeNftAssetStandard = "mrc721" | "mrc1155";
+export type NativeNftListingKind =
+  | "fixed-price"
+  | {
+      english: {
+        /** Minimum starting bid encoded as native MrcAmount/u128. */
+        reserve: string;
+        /** Auction end block encoded as uint64. */
+        endBlock: string | number | bigint;
+        /** Minimum bid bump in basis points; must be less than 10,000. */
+        minBidIncrementBps: string | number | bigint;
+      };
+    };
+
+export interface EncodeNativeNftCreateListingArgs {
+  /** Seller MonoAddress; 0x addresses and raw 20-byte inputs default to user kind. */
+  seller: NativeMarketAddressInput;
+  /** Seller-local listing nonce encoded as uint64. */
+  nonce: string | number | bigint;
+  /** Native NFT asset standard. */
+  standard: NativeNftAssetStandard;
+  /** 32-byte collection id. */
+  collectionId: string;
+  /** 32-byte token id. */
+  tokenId: string;
+  /** Positive integer decimal string encoded as native MrcAmount/u128. */
+  quantity: string;
+  /** 32-byte payment asset id. */
+  paymentAsset: string;
+  /** Positive integer decimal string encoded as native MrcAmount/u128. */
+  price: string;
+  /** Fixed-price or English-auction sale model. */
+  kind: NativeNftListingKind;
+  /** uint64 expiry block encoded as `expires_at_block`; 0 means never. */
+  expiresAtBlock: string | number | bigint;
+}
+
 export interface EncodeNativeNftBuyListingArgs {
   /** 32-byte native NFT listing id. */
   listingId: string;
@@ -136,6 +173,13 @@ export interface EncodeNativeNftBuyListingArgs {
   buyer: NativeMarketAddressInput;
   /** Current block attached to the native buy call. */
   currentBlock: string | number | bigint;
+}
+
+export interface EncodeNativeNftCancelListingArgs {
+  /** 32-byte native NFT listing id. */
+  listingId: string;
+  /** Caller MonoAddress; 0x addresses and raw 20-byte inputs default to user kind. */
+  caller: NativeMarketAddressInput;
 }
 
 export interface NativeMarketModuleContractCall {
@@ -266,6 +310,23 @@ export function encodeNativeSpotCancelOrderCall(args: EncodeNativeSpotCancelOrde
   return bytesToHex(w.toBytes());
 }
 
+export function encodeNativeNftCreateListingCall(args: EncodeNativeNftCreateListingArgs): string {
+  const w = new BincodeWriter();
+  w.enumVariant(1); // NativeMarketCall::Nft
+  w.enumVariant(0); // NftMarketCall::CreateListing
+  monoAddressInto(w, args.seller, "seller");
+  w.u64(uint64(args.nonce, "nonce"));
+  w.enumVariant(normalizeNftAssetStandard(args.standard));
+  w.rawBytes(bytes32FromHex(args.collectionId, "collectionId"));
+  w.rawBytes(bytes32FromHex(args.tokenId, "tokenId"));
+  w.u128(positiveU128Decimal(args.quantity, "quantity"));
+  w.rawBytes(bytes32FromHex(args.paymentAsset, "paymentAsset"));
+  w.u128(positiveU128Decimal(args.price, "price"));
+  listingKindInto(w, args.kind);
+  w.u64(uint64(args.expiresAtBlock, "expiresAtBlock"));
+  return bytesToHex(w.toBytes());
+}
+
 export function encodeNativeNftBuyListingCall(args: EncodeNativeNftBuyListingArgs): string {
   const w = new BincodeWriter();
   w.enumVariant(1); // NativeMarketCall::Nft
@@ -273,6 +334,15 @@ export function encodeNativeNftBuyListingCall(args: EncodeNativeNftBuyListingArg
   w.rawBytes(bytes32FromHex(args.listingId, "listingId"));
   monoAddressInto(w, args.buyer, "buyer");
   w.u64(uint64(args.currentBlock, "currentBlock"));
+  return bytesToHex(w.toBytes());
+}
+
+export function encodeNativeNftCancelListingCall(args: EncodeNativeNftCancelListingArgs): string {
+  const w = new BincodeWriter();
+  w.enumVariant(1); // NativeMarketCall::Nft
+  w.enumVariant(2); // NftMarketCall::CancelListing
+  w.rawBytes(bytes32FromHex(args.listingId, "listingId"));
+  monoAddressInto(w, args.caller, "caller");
   return bytesToHex(w.toBytes());
 }
 
@@ -330,11 +400,25 @@ export function buildNativeSpotCancelOrderForwarderInput(
   return encodeNativeMarketModuleForwarderInput(buildNativeSpotCancelOrderModuleCall(args, maxCycles));
 }
 
+export function buildNativeNftCreateListingForwarderInput(
+  args: EncodeNativeNftCreateListingArgs,
+  maxCycles: string | number | bigint,
+): NativeMarketForwarderInput {
+  return encodeNativeMarketModuleForwarderInput(buildNativeNftCreateListingModuleCall(args, maxCycles));
+}
+
 export function buildNativeNftBuyListingForwarderInput(
   args: EncodeNativeNftBuyListingArgs,
   maxCycles: string | number | bigint,
 ): NativeMarketForwarderInput {
   return encodeNativeMarketModuleForwarderInput(buildNativeNftBuyListingModuleCall(args, maxCycles));
+}
+
+export function buildNativeNftCancelListingForwarderInput(
+  args: EncodeNativeNftCancelListingArgs,
+  maxCycles: string | number | bigint,
+): NativeMarketForwarderInput {
+  return encodeNativeMarketModuleForwarderInput(buildNativeNftCancelListingModuleCall(args, maxCycles));
 }
 
 export function buildNativeSpotLimitOrderModuleCall(
@@ -351,11 +435,25 @@ export function buildNativeSpotCancelOrderModuleCall(
   return buildNativeMarketModuleCallEnvelope(encodeNativeSpotCancelOrderCall(args), maxCycles);
 }
 
+export function buildNativeNftCreateListingModuleCall(
+  args: EncodeNativeNftCreateListingArgs,
+  maxCycles: string | number | bigint,
+): NativeMarketModuleCallEnvelope {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeNftCreateListingCall(args), maxCycles);
+}
+
 export function buildNativeNftBuyListingModuleCall(
   args: EncodeNativeNftBuyListingArgs,
   maxCycles: string | number | bigint,
 ): NativeMarketModuleCallEnvelope {
   return buildNativeMarketModuleCallEnvelope(encodeNativeNftBuyListingCall(args), maxCycles);
+}
+
+export function buildNativeNftCancelListingModuleCall(
+  args: EncodeNativeNftCancelListingArgs,
+  maxCycles: string | number | bigint,
+): NativeMarketModuleCallEnvelope {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeNftCancelListingCall(args), maxCycles);
 }
 
 export function buildPlaceSpotLimitOrderPlan(args: PlaceSpotLimitOrderArgs): MarketTransactionPlan {
@@ -513,6 +611,31 @@ function normalizeMarketOrderMode(mode: SpotMarketOrderMode): 0 | 1 {
   if (mode === "fill-or-refund") return 0;
   if (mode === "fill-or-rest-at-cap") return 1;
   throw new MarketActionError("mode must be 'fill-or-refund' or 'fill-or-rest-at-cap'");
+}
+
+function normalizeNftAssetStandard(standard: NativeNftAssetStandard): 0 | 1 {
+  if (standard === "mrc721") return 0;
+  if (standard === "mrc1155") return 1;
+  throw new MarketActionError("standard must be 'mrc721' or 'mrc1155'");
+}
+
+function listingKindInto(w: BincodeWriter, kind: NativeNftListingKind): void {
+  if (kind === "fixed-price") {
+    w.enumVariant(0); // ListingKind::FixedPrice
+    return;
+  }
+  if (typeof kind === "object" && kind !== null && "english" in kind) {
+    const english = kind.english;
+    if (typeof english !== "object" || english === null) {
+      throw new MarketActionError("kind.english must be an object");
+    }
+    w.enumVariant(1); // ListingKind::English
+    w.u128(positiveU128Decimal(english.reserve, "kind.english.reserve"));
+    w.u64(uint64(english.endBlock, "kind.english.endBlock"));
+    w.u16(Number(uint16Bps(english.minBidIncrementBps, "kind.english.minBidIncrementBps")));
+    return;
+  }
+  throw new MarketActionError("kind must be 'fixed-price' or an english auction");
 }
 
 function positiveDecimal(value: string, name: string): bigint {

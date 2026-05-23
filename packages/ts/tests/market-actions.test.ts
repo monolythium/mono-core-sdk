@@ -11,6 +11,10 @@ import {
   buildNativeNftBuyListingForwarderInput,
   buildNativeMarketModuleCallEnvelope,
   buildNativeNftBuyListingModuleCall,
+  buildNativeNftCancelListingForwarderInput,
+  buildNativeNftCancelListingModuleCall,
+  buildNativeNftCreateListingForwarderInput,
+  buildNativeNftCreateListingModuleCall,
   buildNativeSpotCancelOrderForwarderInput,
   buildNativeSpotCancelOrderModuleCall,
   buildNativeSpotLimitOrderForwarderInput,
@@ -23,6 +27,8 @@ import {
   encodeCancelOrderCalldata,
   encodeNativeMarketModuleForwarderInput,
   encodeNativeNftBuyListingCall,
+  encodeNativeNftCancelListingCall,
+  encodeNativeNftCreateListingCall,
   encodeNativeSpotCancelOrderCall,
   encodeNativeSpotLimitOrderCall,
   encodePlaceLimitOrderCalldata,
@@ -44,8 +50,20 @@ const rustNativeLimitOrderGolden =
   "32000000000000000000000000000000" +
   "e703000000000000";
 const rustNativeCancelOrderGolden = `0x0000000004000000${"33".repeat(32)}00000000${"44".repeat(20)}`;
+const rustNativeCreateListingGolden =
+  `0x010000000000000000000000${"11".repeat(20)}` +
+  "0700000000000000" +
+  "00000000" +
+  `${"22".repeat(32)}` +
+  `${"33".repeat(32)}` +
+  "01000000000000000000000000000000" +
+  `${"44".repeat(32)}` +
+  "7b000000000000000000000000000000" +
+  "00000000" +
+  "e703000000000000";
 const rustNativeBuyListingGolden =
   `0x0100000001000000${"55".repeat(32)}00000000${"66".repeat(20)}0903000000000000`;
+const rustNativeCancelListingGolden = `0x0100000002000000${"55".repeat(32)}00000000${"66".repeat(20)}`;
 
 const args: PlaceSpotLimitOrderArgs = {
   marketId,
@@ -203,12 +221,49 @@ describe("native market action builders", () => {
     ).toBe(rustNativeCancelOrderGolden);
 
     expect(
+      encodeNativeNftCreateListingCall({
+        seller: `0x${"11".repeat(20)}`,
+        nonce: 7,
+        standard: "mrc721",
+        collectionId: `0x${"22".repeat(32)}`,
+        tokenId: `0x${"33".repeat(32)}`,
+        quantity: "1",
+        paymentAsset: `0x${"44".repeat(32)}`,
+        price: "123",
+        kind: "fixed-price",
+        expiresAtBlock: 999,
+      }),
+    ).toBe(rustNativeCreateListingGolden);
+
+    expect(
       encodeNativeNftBuyListingCall({
         listingId: `0x${"55".repeat(32)}`,
         buyer: { kind: "user", address: new Uint8Array(20).fill(0x66) },
         currentBlock: 777,
       }),
     ).toBe(rustNativeBuyListingGolden);
+
+    expect(
+      encodeNativeNftCancelListingCall({
+        listingId: `0x${"55".repeat(32)}`,
+        caller: `0x${"66".repeat(20)}`,
+      }),
+    ).toBe(rustNativeCancelListingGolden);
+
+    expect(
+      encodeNativeNftCreateListingCall({
+        seller: `0x${"11".repeat(20)}`,
+        nonce: 7,
+        standard: "mrc1155",
+        collectionId: `0x${"22".repeat(32)}`,
+        tokenId: `0x${"33".repeat(32)}`,
+        quantity: "25",
+        paymentAsset: `0x${"44".repeat(32)}`,
+        price: "123",
+        kind: { english: { reserve: "100", endBlock: 555, minBidIncrementBps: 250 } },
+        expiresAtBlock: 999,
+      }).slice(0, 34),
+    ).toBe("0x01000000000000000000000011111111");
   });
 
   it("builds native market module call envelopes for RISC-V call_contract", () => {
@@ -256,6 +311,23 @@ describe("native market action builders", () => {
       ).call.input,
     ).toBe(rustNativeCancelOrderGolden);
     expect(
+      buildNativeNftCreateListingModuleCall(
+        {
+          seller: `0x${"11".repeat(20)}`,
+          nonce: 7,
+          standard: "mrc721",
+          collectionId: `0x${"22".repeat(32)}`,
+          tokenId: `0x${"33".repeat(32)}`,
+          quantity: "1",
+          paymentAsset: `0x${"44".repeat(32)}`,
+          price: "123",
+          kind: "fixed-price",
+          expiresAtBlock: 999,
+        },
+        22_000,
+      ).call.input,
+    ).toBe(rustNativeCreateListingGolden);
+    expect(
       buildNativeNftBuyListingModuleCall(
         {
           listingId: `0x${"55".repeat(32)}`,
@@ -265,6 +337,15 @@ describe("native market action builders", () => {
         22_000,
       ).call.input,
     ).toBe(rustNativeBuyListingGolden);
+    expect(
+      buildNativeNftCancelListingModuleCall(
+        {
+          listingId: `0x${"55".repeat(32)}`,
+          caller: `0x${"66".repeat(20)}`,
+        },
+        22_000,
+      ).call.input,
+    ).toBe(rustNativeCancelListingGolden);
   });
 
   it("encodes native market module calls as MRV forwarder input", () => {
@@ -314,6 +395,23 @@ describe("native market action builders", () => {
       ).requestBytes,
     ).toBe(124);
     expect(
+      buildNativeNftCreateListingForwarderInput(
+        {
+          seller: `0x${"11".repeat(20)}`,
+          nonce: 7,
+          standard: "mrc721",
+          collectionId: `0x${"22".repeat(32)}`,
+          tokenId: `0x${"33".repeat(32)}`,
+          quantity: "1",
+          paymentAsset: `0x${"44".repeat(32)}`,
+          price: "123",
+          kind: "fixed-price",
+          expiresAtBlock: 999,
+        },
+        22_000,
+      ).requestBytes,
+    ).toBe(244);
+    expect(
       buildNativeNftBuyListingForwarderInput(
         {
           listingId: `0x${"55".repeat(32)}`,
@@ -323,6 +421,15 @@ describe("native market action builders", () => {
         22_000,
       ).input,
     ).toBe(forwarded.input);
+    expect(
+      buildNativeNftCancelListingForwarderInput(
+        {
+          listingId: `0x${"55".repeat(32)}`,
+          caller: `0x${"66".repeat(20)}`,
+        },
+        22_000,
+      ).requestBytes,
+    ).toBe(124);
   });
 
   it("rejects malformed market action inputs", () => {
@@ -384,12 +491,60 @@ describe("native market action builders", () => {
       }),
     ).toThrow(/caller/);
     expect(() =>
+      encodeNativeNftCreateListingCall({
+        seller: `0x${"11".repeat(20)}`,
+        nonce: 7,
+        standard: "erc721" as "mrc721",
+        collectionId: `0x${"22".repeat(32)}`,
+        tokenId: `0x${"33".repeat(32)}`,
+        quantity: "1",
+        paymentAsset: `0x${"44".repeat(32)}`,
+        price: "123",
+        kind: "fixed-price",
+        expiresAtBlock: 999,
+      }),
+    ).toThrow(/standard/);
+    expect(() =>
+      encodeNativeNftCreateListingCall({
+        seller: `0x${"11".repeat(20)}`,
+        nonce: 7,
+        standard: "mrc721",
+        collectionId: `0x${"22".repeat(32)}`,
+        tokenId: `0x${"33".repeat(32)}`,
+        quantity: "0",
+        paymentAsset: `0x${"44".repeat(32)}`,
+        price: "123",
+        kind: "fixed-price",
+        expiresAtBlock: 999,
+      }),
+    ).toThrow(/quantity/);
+    expect(() =>
+      encodeNativeNftCreateListingCall({
+        seller: `0x${"11".repeat(20)}`,
+        nonce: 7,
+        standard: "mrc721",
+        collectionId: `0x${"22".repeat(32)}`,
+        tokenId: `0x${"33".repeat(32)}`,
+        quantity: "1",
+        paymentAsset: `0x${"44".repeat(32)}`,
+        price: "123",
+        kind: { english: { reserve: "100", endBlock: 555, minBidIncrementBps: 10_000 } },
+        expiresAtBlock: 999,
+      }),
+    ).toThrow(/minBidIncrementBps/);
+    expect(() =>
       encodeNativeNftBuyListingCall({
         listingId: `0x${"55".repeat(32)}`,
         buyer: `0x${"66".repeat(20)}`,
         currentBlock: -1,
       }),
     ).toThrow(/currentBlock/);
+    expect(() =>
+      encodeNativeNftCancelListingCall({
+        listingId: "0x1234",
+        caller: `0x${"66".repeat(20)}`,
+      }),
+    ).toThrow(/listingId/);
     expect(() => buildNativeMarketModuleCallEnvelope("0xabc", 1)).toThrow(/input/);
     expect(() => buildNativeMarketModuleCallEnvelope("0x", -1)).toThrow(/maxCycles/);
     expect(() =>
