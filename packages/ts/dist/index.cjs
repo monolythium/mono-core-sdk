@@ -473,9 +473,118 @@ function rankBridgeRoutes(routes) {
     return left.assessment.routeId.localeCompare(right.assessment.routeId);
   });
 }
+function bridgeTransferCandidates(intent, routes) {
+  const intentReasons = validateBridgeTransferIntent(intent);
+  return routes.map((route) => bridgeRouteCandidate(intent, intentReasons, route)).sort(compareBridgeCandidates);
+}
+function selectBridgeTransferRoute(intent, routes) {
+  const blockedReasons = validateBridgeTransferIntent(intent);
+  const candidates = bridgeTransferCandidates(intent, routes);
+  if (routes.length === 0) {
+    blockedReasons.push("no route disclosures supplied");
+  }
+  const selectedCandidate = blockedReasons.length === 0 ? candidates.find((candidate) => candidate.eligible) : void 0;
+  const selected = selectedCandidate == null ? null : {
+    intent,
+    route: selectedCandidate.route,
+    assessment: selectedCandidate.assessment
+  };
+  if (selected == null && blockedReasons.length === 0) {
+    blockedReasons.push("no eligible bridge route satisfies the transfer intent and v4.1 floor");
+  }
+  return { selected, candidates, blockedReasons };
+}
+function bridgeRouteCandidate(intent, intentReasons, route) {
+  const assessment = assessBridgeRoute(route);
+  const blockedReasons = [...intentReasons, ...assessment.blockedReasons];
+  if (!trimmedEq(route.asset, intent.asset)) {
+    blockedReasons.push("route asset does not match transfer intent");
+  }
+  if (!trimmedEq(route.sourceChain, intent.sourceChain)) {
+    blockedReasons.push("route source chain does not match transfer intent");
+  }
+  if (!trimmedEq(route.destinationChain, intent.destinationChain)) {
+    blockedReasons.push("route destination chain does not match transfer intent");
+  }
+  if (intent.allowedRouteIds != null && !intent.allowedRouteIds.some((routeId) => trimmedEq(routeId, route.routeId))) {
+    blockedReasons.push("route id not allowed by transfer policy");
+  }
+  if (intent.minimumScore != null && assessment.score < intent.minimumScore) {
+    blockedReasons.push("route score below transfer policy minimum");
+  }
+  if (intent.maxFinalityBlocks != null && route.finalityBlocks > intent.maxFinalityBlocks) {
+    blockedReasons.push("route finality exceeds transfer policy maximum");
+  }
+  if (intent.maxCooldownSeconds != null && route.cooldownSeconds > intent.maxCooldownSeconds) {
+    blockedReasons.push("route cooldown exceeds transfer policy maximum");
+  }
+  if (decimalStringIsPositive(intent.amountAtomic) && decimalStringIsPositive(route.drainCapAtomic) && decimalStringGt(intent.amountAtomic, route.drainCapAtomic)) {
+    blockedReasons.push("transfer amount exceeds route drain cap");
+  }
+  if (decimalStringIsPositive(intent.amountAtomic) && decimalStringIsPositive(route.insuranceAtomic) && decimalStringGt(intent.amountAtomic, route.insuranceAtomic)) {
+    blockedReasons.push("transfer amount exceeds disclosed insurance coverage");
+  }
+  return {
+    route,
+    assessment,
+    eligible: blockedReasons.length === 0,
+    score: assessment.score,
+    blockedReasons,
+    warnings: [...assessment.warnings]
+  };
+}
+function validateBridgeTransferIntent(intent) {
+  const blockedReasons = [];
+  if (intent.asset.trim() === "") blockedReasons.push("transfer asset missing");
+  if (!decimalStringIsPositive(intent.amountAtomic)) {
+    blockedReasons.push("transfer amount missing or zero");
+  }
+  if (intent.sourceChain.trim() === "") blockedReasons.push("transfer source chain missing");
+  if (intent.destinationChain.trim() === "") {
+    blockedReasons.push("transfer destination chain missing");
+  }
+  if (intent.recipient.trim() === "") blockedReasons.push("transfer recipient missing");
+  if (intent.minimumScore != null && intent.minimumScore > 100) {
+    blockedReasons.push("minimum route score exceeds 100");
+  }
+  return blockedReasons;
+}
+function compareBridgeCandidates(left, right) {
+  if (left.eligible !== right.eligible) return left.eligible ? -1 : 1;
+  if (left.score !== right.score) return right.score - left.score;
+  if (left.route.cooldownSeconds !== right.route.cooldownSeconds) {
+    return left.route.cooldownSeconds - right.route.cooldownSeconds;
+  }
+  if (left.route.finalityBlocks !== right.route.finalityBlocks) {
+    return left.route.finalityBlocks - right.route.finalityBlocks;
+  }
+  return left.route.routeId.localeCompare(right.route.routeId);
+}
 function decimalStringIsPositive(value) {
   const trimmed = value.trim();
   return /^[0-9]+$/.test(trimmed) && /[1-9]/.test(trimmed);
+}
+function decimalStringGt(left, right) {
+  return decimalStringCompare(left, right) === 1;
+}
+function decimalStringCompare(left, right) {
+  const normalizedLeft = normalizedDecimalDigits(left);
+  const normalizedRight = normalizedDecimalDigits(right);
+  if (normalizedLeft == null || normalizedRight == null) return null;
+  if (normalizedLeft.length !== normalizedRight.length) {
+    return normalizedLeft.length > normalizedRight.length ? 1 : -1;
+  }
+  if (normalizedLeft === normalizedRight) return 0;
+  return normalizedLeft > normalizedRight ? 1 : -1;
+}
+function normalizedDecimalDigits(value) {
+  const trimmed = value.trim();
+  if (!/^[0-9]+$/.test(trimmed)) return null;
+  const normalized = trimmed.replace(/^0+/, "");
+  return normalized === "" ? "0" : normalized;
+}
+function trimmedEq(left, right) {
+  return left.trim() === right.trim();
 }
 
 // src/address.ts
@@ -3807,6 +3916,7 @@ exports.assertMrvFeeDisplayConformance = assertMrvFeeDisplayConformance;
 exports.assessBridgeRoute = assessBridgeRoute;
 exports.bech32ToAddress = bech32ToAddress;
 exports.bech32ToAddressBytes = bech32ToAddressBytes;
+exports.bridgeTransferCandidates = bridgeTransferCandidates;
 exports.buildMrvCallNativeTxPlan = buildMrvCallNativeTxPlan;
 exports.buildMrvCallPlan = buildMrvCallPlan;
 exports.buildMrvCallRequest = buildMrvCallRequest;
@@ -3867,6 +3977,7 @@ exports.parseQuantity = parseQuantity;
 exports.parseQuantityBig = parseQuantityBig;
 exports.pubkeyRegistryAddressHex = pubkeyRegistryAddressHex;
 exports.rankBridgeRoutes = rankBridgeRoutes;
+exports.selectBridgeTransferRoute = selectBridgeTransferRoute;
 exports.serviceProbeStatusLabel = serviceProbeStatusLabel;
 exports.spendingPolicyAddressHex = spendingPolicyAddressHex;
 exports.submitMrvCallNativeTx = submitMrvCallNativeTx;

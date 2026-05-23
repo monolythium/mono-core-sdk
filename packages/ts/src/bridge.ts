@@ -45,6 +45,40 @@ export interface RankedBridgeRoute {
   assessment: BridgeRouteAssessment;
 }
 
+export interface BridgeTransferIntent {
+  asset: string;
+  amountAtomic: string;
+  sourceChain: string;
+  destinationChain: string;
+  recipient: string;
+  sender?: string | null;
+  allowedRouteIds?: string[] | null;
+  minimumScore?: number | null;
+  maxFinalityBlocks?: number | null;
+  maxCooldownSeconds?: number | null;
+}
+
+export interface BridgeRouteCandidate {
+  route: BridgeRouteDisclosure;
+  assessment: BridgeRouteAssessment;
+  eligible: boolean;
+  score: number;
+  blockedReasons: string[];
+  warnings: string[];
+}
+
+export interface BridgeTransferRequest {
+  intent: BridgeTransferIntent;
+  route: BridgeRouteDisclosure;
+  assessment: BridgeRouteAssessment;
+}
+
+export interface BridgeRouteSelection {
+  selected: BridgeTransferRequest | null;
+  candidates: BridgeRouteCandidate[];
+  blockedReasons: string[];
+}
+
 export function assessBridgeRoute(route: BridgeRouteDisclosure): BridgeRouteAssessment {
   const blockedReasons: string[] = [];
   const warnings: string[] = [];
@@ -134,7 +168,158 @@ export function rankBridgeRoutes(routes: readonly BridgeRouteDisclosure[]): Rank
     });
 }
 
+export function bridgeTransferCandidates(
+  intent: BridgeTransferIntent,
+  routes: readonly BridgeRouteDisclosure[],
+): BridgeRouteCandidate[] {
+  const intentReasons = validateBridgeTransferIntent(intent);
+  return routes
+    .map((route) => bridgeRouteCandidate(intent, intentReasons, route))
+    .sort(compareBridgeCandidates);
+}
+
+export function selectBridgeTransferRoute(
+  intent: BridgeTransferIntent,
+  routes: readonly BridgeRouteDisclosure[],
+): BridgeRouteSelection {
+  const blockedReasons = validateBridgeTransferIntent(intent);
+  const candidates = bridgeTransferCandidates(intent, routes);
+
+  if (routes.length === 0) {
+    blockedReasons.push("no route disclosures supplied");
+  }
+
+  const selectedCandidate =
+    blockedReasons.length === 0 ? candidates.find((candidate) => candidate.eligible) : undefined;
+  const selected =
+    selectedCandidate == null
+      ? null
+      : {
+          intent,
+          route: selectedCandidate.route,
+          assessment: selectedCandidate.assessment,
+        };
+
+  if (selected == null && blockedReasons.length === 0) {
+    blockedReasons.push("no eligible bridge route satisfies the transfer intent and v4.1 floor");
+  }
+
+  return { selected, candidates, blockedReasons };
+}
+
+function bridgeRouteCandidate(
+  intent: BridgeTransferIntent,
+  intentReasons: readonly string[],
+  route: BridgeRouteDisclosure,
+): BridgeRouteCandidate {
+  const assessment = assessBridgeRoute(route);
+  const blockedReasons = [...intentReasons, ...assessment.blockedReasons];
+
+  if (!trimmedEq(route.asset, intent.asset)) {
+    blockedReasons.push("route asset does not match transfer intent");
+  }
+  if (!trimmedEq(route.sourceChain, intent.sourceChain)) {
+    blockedReasons.push("route source chain does not match transfer intent");
+  }
+  if (!trimmedEq(route.destinationChain, intent.destinationChain)) {
+    blockedReasons.push("route destination chain does not match transfer intent");
+  }
+  if (
+    intent.allowedRouteIds != null &&
+    !intent.allowedRouteIds.some((routeId) => trimmedEq(routeId, route.routeId))
+  ) {
+    blockedReasons.push("route id not allowed by transfer policy");
+  }
+  if (intent.minimumScore != null && assessment.score < intent.minimumScore) {
+    blockedReasons.push("route score below transfer policy minimum");
+  }
+  if (intent.maxFinalityBlocks != null && route.finalityBlocks > intent.maxFinalityBlocks) {
+    blockedReasons.push("route finality exceeds transfer policy maximum");
+  }
+  if (intent.maxCooldownSeconds != null && route.cooldownSeconds > intent.maxCooldownSeconds) {
+    blockedReasons.push("route cooldown exceeds transfer policy maximum");
+  }
+  if (
+    decimalStringIsPositive(intent.amountAtomic) &&
+    decimalStringIsPositive(route.drainCapAtomic) &&
+    decimalStringGt(intent.amountAtomic, route.drainCapAtomic)
+  ) {
+    blockedReasons.push("transfer amount exceeds route drain cap");
+  }
+  if (
+    decimalStringIsPositive(intent.amountAtomic) &&
+    decimalStringIsPositive(route.insuranceAtomic) &&
+    decimalStringGt(intent.amountAtomic, route.insuranceAtomic)
+  ) {
+    blockedReasons.push("transfer amount exceeds disclosed insurance coverage");
+  }
+
+  return {
+    route,
+    assessment,
+    eligible: blockedReasons.length === 0,
+    score: assessment.score,
+    blockedReasons,
+    warnings: [...assessment.warnings],
+  };
+}
+
+function validateBridgeTransferIntent(intent: BridgeTransferIntent): string[] {
+  const blockedReasons: string[] = [];
+  if (intent.asset.trim() === "") blockedReasons.push("transfer asset missing");
+  if (!decimalStringIsPositive(intent.amountAtomic)) {
+    blockedReasons.push("transfer amount missing or zero");
+  }
+  if (intent.sourceChain.trim() === "") blockedReasons.push("transfer source chain missing");
+  if (intent.destinationChain.trim() === "") {
+    blockedReasons.push("transfer destination chain missing");
+  }
+  if (intent.recipient.trim() === "") blockedReasons.push("transfer recipient missing");
+  if (intent.minimumScore != null && intent.minimumScore > 100) {
+    blockedReasons.push("minimum route score exceeds 100");
+  }
+  return blockedReasons;
+}
+
+function compareBridgeCandidates(left: BridgeRouteCandidate, right: BridgeRouteCandidate): number {
+  if (left.eligible !== right.eligible) return left.eligible ? -1 : 1;
+  if (left.score !== right.score) return right.score - left.score;
+  if (left.route.cooldownSeconds !== right.route.cooldownSeconds) {
+    return left.route.cooldownSeconds - right.route.cooldownSeconds;
+  }
+  if (left.route.finalityBlocks !== right.route.finalityBlocks) {
+    return left.route.finalityBlocks - right.route.finalityBlocks;
+  }
+  return left.route.routeId.localeCompare(right.route.routeId);
+}
+
 function decimalStringIsPositive(value: string): boolean {
   const trimmed = value.trim();
   return /^[0-9]+$/.test(trimmed) && /[1-9]/.test(trimmed);
+}
+
+function decimalStringGt(left: string, right: string): boolean {
+  return decimalStringCompare(left, right) === 1;
+}
+
+function decimalStringCompare(left: string, right: string): -1 | 0 | 1 | null {
+  const normalizedLeft = normalizedDecimalDigits(left);
+  const normalizedRight = normalizedDecimalDigits(right);
+  if (normalizedLeft == null || normalizedRight == null) return null;
+  if (normalizedLeft.length !== normalizedRight.length) {
+    return normalizedLeft.length > normalizedRight.length ? 1 : -1;
+  }
+  if (normalizedLeft === normalizedRight) return 0;
+  return normalizedLeft > normalizedRight ? 1 : -1;
+}
+
+function normalizedDecimalDigits(value: string): string | null {
+  const trimmed = value.trim();
+  if (!/^[0-9]+$/.test(trimmed)) return null;
+  const normalized = trimmed.replace(/^0+/, "");
+  return normalized === "" ? "0" : normalized;
+}
+
+function trimmedEq(left: string, right: string): boolean {
+  return left.trim() === right.trim();
 }

@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   assessBridgeRoute,
+  bridgeTransferCandidates,
   rankBridgeRoutes,
+  selectBridgeTransferRoute,
   type BridgeRouteDisclosure,
+  type BridgeTransferIntent,
 } from "../src/index.js";
 
 function route(routeId: string): BridgeRouteDisclosure {
@@ -24,6 +27,16 @@ function route(routeId: string): BridgeRouteDisclosure {
     circuitBreaker: "armed",
     insuranceAtomic: "50000000000",
     lastIncidentDate: null,
+  };
+}
+
+function transferIntent(): BridgeTransferIntent {
+  return {
+    asset: "USDC",
+    amountAtomic: "1000000",
+    sourceChain: "Ethereum",
+    destinationChain: "Mono",
+    recipient: "mono1recipient",
   };
 }
 
@@ -66,5 +79,75 @@ describe("bridge route disclosure helpers", () => {
       "paused",
     ]);
     expect(ranked[2].assessment.accepted).toBe(false);
+  });
+
+  it("selects the best matching route for a transfer intent", () => {
+    const shortCooldown = route("short-cooldown");
+    shortCooldown.cooldownSeconds = 60;
+    const wrongAsset = route("wrong-asset");
+    wrongAsset.asset = "ETH";
+
+    const selection = selectBridgeTransferRoute(transferIntent(), [
+      wrongAsset,
+      shortCooldown,
+      route("healthy"),
+    ]);
+
+    expect(selection.blockedReasons).toEqual([]);
+    expect(selection.selected?.route.routeId).toBe("healthy");
+    expect(selection.candidates[0].route.routeId).toBe("healthy");
+    const blocked = selection.candidates.find((candidate) => candidate.route.routeId === "wrong-asset");
+    expect(blocked?.eligible).toBe(false);
+    expect(blocked?.blockedReasons.some((reason) => reason.includes("asset"))).toBe(true);
+  });
+
+  it("fails closed when required floor disclosure is absent", () => {
+    const underDisclosed = route("under-disclosed");
+    underDisclosed.insuranceAtomic = "0";
+
+    const selection = selectBridgeTransferRoute(transferIntent(), [underDisclosed]);
+
+    expect(selection.selected).toBeNull();
+    expect(selection.blockedReasons.some((reason) => reason.includes("no eligible bridge route"))).toBe(true);
+    expect(selection.candidates[0].blockedReasons.some((reason) => reason.includes("insurance"))).toBe(true);
+  });
+
+  it("blocks transfer amounts over disclosed caps", () => {
+    const capped = route("capped");
+    capped.drainCapAtomic = "1000";
+    capped.insuranceAtomic = "999";
+    const intent = transferIntent();
+    intent.amountAtomic = "1001";
+
+    const selection = selectBridgeTransferRoute(intent, [capped]);
+
+    expect(selection.selected).toBeNull();
+    expect(selection.candidates[0].blockedReasons.some((reason) => reason.includes("drain cap"))).toBe(true);
+    expect(selection.candidates[0].blockedReasons.some((reason) => reason.includes("insurance coverage"))).toBe(
+      true,
+    );
+  });
+
+  it("applies route allow-list and minimum-score policy", () => {
+    const lowScore = route("healthy");
+    lowScore.cooldownSeconds = 60;
+    const intent = transferIntent();
+    intent.allowedRouteIds = ["healthy"];
+    intent.minimumScore = 95;
+
+    const candidates = bridgeTransferCandidates(intent, [lowScore]);
+    const selection = selectBridgeTransferRoute(intent, [lowScore]);
+
+    expect(candidates[0].eligible).toBe(false);
+    expect(selection.selected).toBeNull();
+    expect(candidates[0].blockedReasons.some((reason) => reason.includes("minimum"))).toBe(true);
+  });
+
+  it("reports missing route disclosures", () => {
+    const selection = selectBridgeTransferRoute(transferIntent(), []);
+
+    expect(selection.selected).toBeNull();
+    expect(selection.candidates).toEqual([]);
+    expect(selection.blockedReasons.some((reason) => reason.includes("no route disclosures"))).toBe(true);
   });
 });

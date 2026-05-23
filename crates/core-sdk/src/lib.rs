@@ -38,8 +38,10 @@ pub use address::{
 };
 pub use api::ApiClient;
 pub use bridge::{
-    assess_bridge_route, rank_bridge_routes, BridgeAdminControl, BridgeCircuitBreakerState,
-    BridgeRiskTier, BridgeRouteAssessment, BridgeRouteDisclosure, BridgeVerifierDisclosure,
+    assess_bridge_route, bridge_transfer_candidates, rank_bridge_routes,
+    select_bridge_transfer_route, BridgeAdminControl, BridgeCircuitBreakerState, BridgeRiskTier,
+    BridgeRouteAssessment, BridgeRouteCandidate, BridgeRouteDisclosure, BridgeRouteSelection,
+    BridgeTransferIntent, BridgeTransferRequest, BridgeVerifierDisclosure,
 };
 pub use client::{
     MrvCallNativeEncryptedSubmitResult, MrvDeployNativeEncryptedSubmitResult, RpcClient,

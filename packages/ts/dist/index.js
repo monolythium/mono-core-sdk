@@ -471,9 +471,118 @@ function rankBridgeRoutes(routes) {
     return left.assessment.routeId.localeCompare(right.assessment.routeId);
   });
 }
+function bridgeTransferCandidates(intent, routes) {
+  const intentReasons = validateBridgeTransferIntent(intent);
+  return routes.map((route) => bridgeRouteCandidate(intent, intentReasons, route)).sort(compareBridgeCandidates);
+}
+function selectBridgeTransferRoute(intent, routes) {
+  const blockedReasons = validateBridgeTransferIntent(intent);
+  const candidates = bridgeTransferCandidates(intent, routes);
+  if (routes.length === 0) {
+    blockedReasons.push("no route disclosures supplied");
+  }
+  const selectedCandidate = blockedReasons.length === 0 ? candidates.find((candidate) => candidate.eligible) : void 0;
+  const selected = selectedCandidate == null ? null : {
+    intent,
+    route: selectedCandidate.route,
+    assessment: selectedCandidate.assessment
+  };
+  if (selected == null && blockedReasons.length === 0) {
+    blockedReasons.push("no eligible bridge route satisfies the transfer intent and v4.1 floor");
+  }
+  return { selected, candidates, blockedReasons };
+}
+function bridgeRouteCandidate(intent, intentReasons, route) {
+  const assessment = assessBridgeRoute(route);
+  const blockedReasons = [...intentReasons, ...assessment.blockedReasons];
+  if (!trimmedEq(route.asset, intent.asset)) {
+    blockedReasons.push("route asset does not match transfer intent");
+  }
+  if (!trimmedEq(route.sourceChain, intent.sourceChain)) {
+    blockedReasons.push("route source chain does not match transfer intent");
+  }
+  if (!trimmedEq(route.destinationChain, intent.destinationChain)) {
+    blockedReasons.push("route destination chain does not match transfer intent");
+  }
+  if (intent.allowedRouteIds != null && !intent.allowedRouteIds.some((routeId) => trimmedEq(routeId, route.routeId))) {
+    blockedReasons.push("route id not allowed by transfer policy");
+  }
+  if (intent.minimumScore != null && assessment.score < intent.minimumScore) {
+    blockedReasons.push("route score below transfer policy minimum");
+  }
+  if (intent.maxFinalityBlocks != null && route.finalityBlocks > intent.maxFinalityBlocks) {
+    blockedReasons.push("route finality exceeds transfer policy maximum");
+  }
+  if (intent.maxCooldownSeconds != null && route.cooldownSeconds > intent.maxCooldownSeconds) {
+    blockedReasons.push("route cooldown exceeds transfer policy maximum");
+  }
+  if (decimalStringIsPositive(intent.amountAtomic) && decimalStringIsPositive(route.drainCapAtomic) && decimalStringGt(intent.amountAtomic, route.drainCapAtomic)) {
+    blockedReasons.push("transfer amount exceeds route drain cap");
+  }
+  if (decimalStringIsPositive(intent.amountAtomic) && decimalStringIsPositive(route.insuranceAtomic) && decimalStringGt(intent.amountAtomic, route.insuranceAtomic)) {
+    blockedReasons.push("transfer amount exceeds disclosed insurance coverage");
+  }
+  return {
+    route,
+    assessment,
+    eligible: blockedReasons.length === 0,
+    score: assessment.score,
+    blockedReasons,
+    warnings: [...assessment.warnings]
+  };
+}
+function validateBridgeTransferIntent(intent) {
+  const blockedReasons = [];
+  if (intent.asset.trim() === "") blockedReasons.push("transfer asset missing");
+  if (!decimalStringIsPositive(intent.amountAtomic)) {
+    blockedReasons.push("transfer amount missing or zero");
+  }
+  if (intent.sourceChain.trim() === "") blockedReasons.push("transfer source chain missing");
+  if (intent.destinationChain.trim() === "") {
+    blockedReasons.push("transfer destination chain missing");
+  }
+  if (intent.recipient.trim() === "") blockedReasons.push("transfer recipient missing");
+  if (intent.minimumScore != null && intent.minimumScore > 100) {
+    blockedReasons.push("minimum route score exceeds 100");
+  }
+  return blockedReasons;
+}
+function compareBridgeCandidates(left, right) {
+  if (left.eligible !== right.eligible) return left.eligible ? -1 : 1;
+  if (left.score !== right.score) return right.score - left.score;
+  if (left.route.cooldownSeconds !== right.route.cooldownSeconds) {
+    return left.route.cooldownSeconds - right.route.cooldownSeconds;
+  }
+  if (left.route.finalityBlocks !== right.route.finalityBlocks) {
+    return left.route.finalityBlocks - right.route.finalityBlocks;
+  }
+  return left.route.routeId.localeCompare(right.route.routeId);
+}
 function decimalStringIsPositive(value) {
   const trimmed = value.trim();
   return /^[0-9]+$/.test(trimmed) && /[1-9]/.test(trimmed);
+}
+function decimalStringGt(left, right) {
+  return decimalStringCompare(left, right) === 1;
+}
+function decimalStringCompare(left, right) {
+  const normalizedLeft = normalizedDecimalDigits(left);
+  const normalizedRight = normalizedDecimalDigits(right);
+  if (normalizedLeft == null || normalizedRight == null) return null;
+  if (normalizedLeft.length !== normalizedRight.length) {
+    return normalizedLeft.length > normalizedRight.length ? 1 : -1;
+  }
+  if (normalizedLeft === normalizedRight) return 0;
+  return normalizedLeft > normalizedRight ? 1 : -1;
+}
+function normalizedDecimalDigits(value) {
+  const trimmed = value.trim();
+  if (!/^[0-9]+$/.test(trimmed)) return null;
+  const normalized = trimmed.replace(/^0+/, "");
+  return normalized === "" ? "0" : normalized;
+}
+function trimmedEq(left, right) {
+  return left.trim() === right.trim();
 }
 
 // src/address.ts
@@ -3744,6 +3853,6 @@ function translateBlockOut(header) {
 // src/index.ts
 var version = "0.1.0";
 
-export { ADDRESS_HRP, ADDRESS_KIND_HRPS, AddressError, ApiClient, BURN_ADDR, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DelegationPrecompileError, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MonolythiumProvider, MonolythiumSigner, MrvValidationError, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPlan, buildMrvDeployRequest, checkMrvFeeDisplayConformance, composeClaimBoundMessage, consumeNativeEvents, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, delegationAddressHex, deriveMrvContractAddress, encodeBlockSelector, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLookupPubkeyCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, getChainInfo, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isConcreteServiceProbeStatus, isNativeDecodedEvent, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nodeRegistryAddressHex, normalizeAddressHex, parseAddress, parseChainRegistryToml, parseLythToLythoshi, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, rankBridgeRoutes, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, version };
+export { ADDRESS_HRP, ADDRESS_KIND_HRPS, AddressError, ApiClient, BURN_ADDR, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DelegationPrecompileError, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MonolythiumProvider, MonolythiumSigner, MrvValidationError, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bridgeTransferCandidates, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPlan, buildMrvDeployRequest, checkMrvFeeDisplayConformance, composeClaimBoundMessage, consumeNativeEvents, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, delegationAddressHex, deriveMrvContractAddress, encodeBlockSelector, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLookupPubkeyCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, getChainInfo, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isConcreteServiceProbeStatus, isNativeDecodedEvent, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nodeRegistryAddressHex, normalizeAddressHex, parseAddress, parseChainRegistryToml, parseLythToLythoshi, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, rankBridgeRoutes, selectBridgeTransferRoute, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, version };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map
