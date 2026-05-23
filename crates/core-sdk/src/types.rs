@@ -1106,6 +1106,9 @@ pub struct NativeMarketStateFilter<'a> {
     /// Optional exact collection royalty lookup.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub collection_id: Option<&'a str>,
+    /// Optional user account filter. Scopes spot orders by owner and NFT listings by seller.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<&'a str>,
     /// Include bounded spot orders for a requested market/order.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_spot_orders: Option<bool>,
@@ -1122,6 +1125,7 @@ impl<'a> NativeMarketStateFilter<'a> {
             order_id: None,
             listing_id: None,
             collection_id: None,
+            account: None,
             include_spot_orders: None,
             limit: None,
         }
@@ -1148,6 +1152,12 @@ impl<'a> NativeMarketStateFilter<'a> {
     #[must_use]
     pub const fn collection_id(mut self, collection_id: &'a str) -> Self {
         self.collection_id = Some(collection_id);
+        self
+    }
+
+    #[must_use]
+    pub const fn account(mut self, account: &'a str) -> Self {
+        self.account = Some(account);
         self
     }
 
@@ -1179,6 +1189,9 @@ impl<'a> NativeMarketStateFilter<'a> {
         if let Some(collection_id) = self.collection_id {
             query.push(("collectionId", collection_id.to_owned()));
         }
+        if let Some(account) = self.account {
+            query.push(("account", account.to_owned()));
+        }
         if let Some(include_spot_orders) = self.include_spot_orders {
             query.push(("includeSpotOrders", include_spot_orders.to_string()));
         }
@@ -1206,6 +1219,8 @@ pub struct NativeMarketStateResponseFilters {
     pub listing_id: Option<Hash>,
     #[serde(default)]
     pub collection_id: Option<Hash>,
+    #[serde(default)]
+    pub account: Option<Address>,
     pub include_spot_orders: bool,
 }
 

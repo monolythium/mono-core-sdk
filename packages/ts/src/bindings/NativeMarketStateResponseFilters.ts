@@ -3,4 +3,4 @@
 /**
  * Echoed optional predicates for a native market state response.
  */
-export type NativeMarketStateResponseFilters = { marketId: string | null, orderId: string | null, listingId: string | null, collectionId: string | null, includeSpotOrders: boolean, };
+export type NativeMarketStateResponseFilters = { marketId: string | null, orderId: string | null, listingId: string | null, collectionId: string | null, account: string | null, includeSpotOrders: boolean, };

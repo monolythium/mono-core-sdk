@@ -1332,6 +1332,7 @@ mod tests {
             "native-market-state",
             &NativeMarketStateFilter::new()
                 .market_id(&market_id)
+                .account("mono1agentconsumer")
                 .include_spot_orders(true)
                 .limit(5)
                 .to_query_pairs(),
@@ -1341,7 +1342,7 @@ mod tests {
         assert_eq!(
             url.as_str(),
             format!(
-                "https://rpc.example/api/v1/native-market-state?marketId={market_id}&includeSpotOrders=true&limit=5"
+                "https://rpc.example/api/v1/native-market-state?marketId={market_id}&account=mono1agentconsumer&includeSpotOrders=true&limit=5"
             )
         );
     }
@@ -1375,6 +1376,7 @@ mod tests {
                     "orderId": null,
                     "listingId": null,
                     "collectionId": null,
+                    "account": owner,
                     "includeSpotOrders": true
                 },
                 "spotMarkets": [{
@@ -1460,6 +1462,7 @@ mod tests {
             .native_market_state(
                 NativeMarketStateFilter::new()
                     .market_id(&market_id)
+                    .account(owner)
                     .include_spot_orders(true)
                     .limit(5),
             )
@@ -1479,11 +1482,12 @@ mod tests {
             response.data.collection_royalties[0].recipient,
             royalty_recipient
         );
+        assert_eq!(response.data.filters.account.as_deref(), Some(owner));
         let request_line = server.join().unwrap();
         assert_eq!(
             request_line,
             format!(
-                "GET /api/v1/native-market-state?marketId={market_id}&includeSpotOrders=true&limit=5 HTTP/1.1"
+                "GET /api/v1/native-market-state?marketId={market_id}&account={owner}&includeSpotOrders=true&limit=5 HTTP/1.1"
             )
         );
     }

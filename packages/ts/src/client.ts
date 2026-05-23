@@ -254,6 +254,7 @@ export interface NativeMarketStateFilter {
   orderId?: string | null;
   listingId?: string | null;
   collectionId?: string | null;
+  account?: string | null;
   includeSpotOrders?: boolean | null;
   limit?: number | bigint | string | null;
 }
@@ -263,6 +264,7 @@ export interface NativeMarketStateResponseFilters {
   orderId?: string | null;
   listingId?: string | null;
   collectionId?: string | null;
+  account?: string | null;
   includeSpotOrders: boolean;
 }
 
@@ -2262,6 +2264,7 @@ export function nativeMarketStateFilterParams(
   if (filter.orderId != null) out.orderId = filter.orderId;
   if (filter.listingId != null) out.listingId = filter.listingId;
   if (filter.collectionId != null) out.collectionId = filter.collectionId;
+  if (filter.account != null) out.account = filter.account;
   if (filter.includeSpotOrders != null) out.includeSpotOrders = filter.includeSpotOrders;
   if (filter.limit != null) out.limit = encodeRpcU64Number(filter.limit, "limit");
   return out;
