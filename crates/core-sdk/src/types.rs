@@ -261,6 +261,39 @@ pub struct NativeReceiptSource {
     pub metadata_log_index: u32,
 }
 
+/// Bounded no-EVM receipt transcript attached to a native receipt.
+///
+/// This is a local transcript of full receipt bytes, not a compact finality
+/// proof. Clients can use it to recompute the canonical receipts root.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoEvmReceiptProof {
+    /// Proof schema, currently `mono.no_evm_receipt_proof.v1`.
+    pub schema: String,
+    /// Proof type, currently `canonicalReceiptsTranscript`.
+    pub proof_type: String,
+    /// Receipts-root algorithm label used by the node.
+    pub root_algorithm: String,
+    /// Receipt byte codec label used in `receiptTranscript`.
+    pub receipt_codec: String,
+    /// Inclusion block hash.
+    pub block_hash: Hash,
+    /// Target transaction hash.
+    pub tx_hash: Hash,
+    /// Canonical receipts root recomputed from the transcript.
+    pub receipts_root: Hash,
+    /// Hash of the target receipt bytes.
+    pub target_receipt_hash: Hash,
+    /// Inclusion block height.
+    pub block_height: u64,
+    /// Target transaction index within the block.
+    pub tx_index: u32,
+    /// Number of receipts carried by the transcript.
+    pub receipt_count: u32,
+    /// Bounded full receipt bytes in transaction order.
+    pub receipt_transcript: Vec<Hex>,
+}
+
 /// Typed response returned by `lyth_nativeReceipt` and
 /// `/api/v1/transactions/{hash}/native-receipt`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -280,10 +313,11 @@ pub struct NativeReceiptResponse {
     pub artifact_hash: Hash,
     /// Deterministic commitment to the native receipt payload.
     pub receipt_commitment: String,
-    /// Opaque no-EVM proof payload. Current v4.1 nodes return `null`
-    /// while proof sourcing is pending; older nodes may omit this field.
+    /// Bounded local no-EVM receipt proof transcript. Current nodes may
+    /// return `null` while proof sourcing is pending; older nodes may omit
+    /// this field.
     #[serde(default)]
-    pub no_evm_proof: Option<serde_json::Value>,
+    pub no_evm_proof: Option<NoEvmReceiptProof>,
     /// Execution counters reported by the RISC-V runner.
     pub counters: NativeReceiptCounters,
     /// Structured native fee object derived from receipt counters.
@@ -3335,7 +3369,7 @@ mod tests {
     }
 
     #[test]
-    fn native_receipt_response_accepts_missing_and_opaque_no_evm_proof() {
+    fn native_receipt_response_accepts_missing_null_and_typed_no_evm_proof() {
         let mut wire = serde_json::json!({
             "txHash": format!("0x{}", "11".repeat(32)),
             "blockHash": format!("0x{}", "22".repeat(32)),
@@ -3373,21 +3407,57 @@ mod tests {
         assert_eq!(legacy.receipt_commitment, format!("0x{}", "bb".repeat(32)));
         assert_eq!(legacy.no_evm_proof, None);
 
-        wire.as_object_mut().unwrap().insert(
-            "noEvmProof".to_owned(),
-            serde_json::json!({
-                "proofKind": "future",
-                "payload": { "opaque": true }
-            }),
-        );
+        let proof_wire = serde_json::json!({
+            "schema": "mono.no_evm_receipt_proof.v1",
+            "proofType": "canonicalReceiptsTranscript",
+            "rootAlgorithm": "keccak256(monolythium/v2/receipts_root/1 || len || indexed bincode receipts)",
+            "receiptCodec": "bincode(protocore_evm::Receipt)",
+            "blockHash": format!("0x{}", "22".repeat(32)),
+            "txHash": format!("0x{}", "11".repeat(32)),
+            "receiptsRoot": format!("0x{}", "33".repeat(32)),
+            "targetReceiptHash": format!("0x{}", "44".repeat(32)),
+            "blockHeight": 100,
+            "txIndex": 0,
+            "receiptCount": 2,
+            "receiptTranscript": [
+                "0x010203",
+                "0x040506"
+            ]
+        });
+        wire.as_object_mut()
+            .unwrap()
+            .insert("noEvmProof".to_owned(), proof_wire.clone());
         let with_proof: NativeReceiptResponse = serde_json::from_value(wire.clone()).unwrap();
+        let parsed_proof = with_proof
+            .no_evm_proof
+            .as_ref()
+            .expect("typed no-EVM proof");
+        assert_eq!(parsed_proof.schema, "mono.no_evm_receipt_proof.v1");
+        assert_eq!(parsed_proof.proof_type, "canonicalReceiptsTranscript");
         assert_eq!(
-            with_proof.no_evm_proof,
-            Some(serde_json::json!({
-                "proofKind": "future",
-                "payload": { "opaque": true }
-            }))
+            parsed_proof.root_algorithm,
+            "keccak256(monolythium/v2/receipts_root/1 || len || indexed bincode receipts)"
         );
+        assert_eq!(
+            parsed_proof.receipt_codec,
+            "bincode(protocore_evm::Receipt)"
+        );
+        assert_eq!(parsed_proof.block_hash, format!("0x{}", "22".repeat(32)));
+        assert_eq!(parsed_proof.tx_hash, format!("0x{}", "11".repeat(32)));
+        assert_eq!(parsed_proof.receipts_root, format!("0x{}", "33".repeat(32)));
+        assert_eq!(
+            parsed_proof.target_receipt_hash,
+            format!("0x{}", "44".repeat(32))
+        );
+        assert_eq!(parsed_proof.block_height, 100);
+        assert_eq!(parsed_proof.tx_index, 0);
+        assert_eq!(parsed_proof.receipt_count, 2);
+        assert_eq!(
+            parsed_proof.receipt_transcript.as_slice(),
+            ["0x010203", "0x040506"]
+        );
+        let typed_wire = serde_json::to_value(&with_proof).unwrap();
+        assert_eq!(typed_wire["noEvmProof"], proof_wire);
 
         wire.as_object_mut()
             .unwrap()
