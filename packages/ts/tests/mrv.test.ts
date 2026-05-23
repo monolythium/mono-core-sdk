@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MRV_FORMAT_VERSION,
+  MRV_DEPLOY_PAYLOAD_VERSION,
   MRV_PROFILE_MONO_RV32IM_V1,
   MRV_STRUCTURED_FEE_FIELDS,
   MRV_TX_EXTENSION_KIND,
@@ -14,10 +15,14 @@ import {
   buildMrvCallPlan,
   buildMrvCallRequest,
   buildMrvDeployNativeTxPlan,
+  buildMrvDeployPayloadNativeTxPlan,
+  buildMrvDeployPayloadPlan,
+  buildMrvDeployPayloadRequest,
   buildMrvDeployPlan,
   buildMrvDeployRequest,
   checkMrvFeeDisplayConformance,
   deriveMrvContractAddress,
+  encodeMrvDeployPayload,
   formatNativeReceiptFeeDisplay,
   formatLyth,
   formatLythoshi,
@@ -28,6 +33,7 @@ import {
   parseLythToLythoshi,
   submitMrvCallNativeTx,
   submitMrvDeployNativeTx,
+  submitMrvDeployPayloadNativeTx,
   validateMrvArtifactMetadata,
   validateMrvCallRequest,
   validateMrvDeployRequest,
@@ -360,6 +366,41 @@ describe("MRV/RISC-V SDK helpers", () => {
     expect(wire).not.toMatch(/\b(gas|gwei|wei)\b/i);
   });
 
+  it("builds MRV deploy payload envelopes with optional constructor input", () => {
+    const user = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
+    const artifactHash = "0x598501b99b388ca564905b49040c6d315a55fb13bf34a6f002aa04960a27895d";
+    const encoded = encodeMrvDeployPayload([0xaa, 0xbb], [0x01, 0x02]);
+
+    expect(MRV_DEPLOY_PAYLOAD_VERSION).toBe(1);
+    expect(encoded).toBe("0x01000200000000000000aabb0102000000000000000102");
+    expect(encodeMrvDeployPayload("0xaabb")).toBe("0x01000200000000000000aabb00");
+
+    const request = buildMrvDeployPayloadRequest([0xaa, 0xbb], {
+      from: user,
+      constructorInput: [0x01, 0x02],
+      valueLythoshi: 5n,
+    });
+    expect(request.artifactBytes).toBe(encoded);
+    expect(request.valueLythoshi).toBe("5");
+
+    const payloadPlan = buildMrvDeployPayloadPlan([0xaa, 0xbb], {
+      from: user,
+      nonce: 7n,
+      artifactHash,
+      constructorInput: "0x0102",
+    });
+    expect(payloadPlan.request.artifactBytes).toBe(encoded);
+    expect(payloadPlan.expectedContractAddress).toBe(deriveMrvContractAddress(user, 7n, artifactHash));
+
+    const rawPlan = buildMrvDeployPlan([0xaa, 0xbb], {
+      from: user,
+      nonce: 7n,
+      artifactHash,
+    });
+    expect(rawPlan.request.artifactBytes).toBe("0xaabb");
+    expect(rawPlan.expectedContractAddress).toBe(payloadPlan.expectedContractAddress);
+  });
+
   it("rejects invalid builder options before apps send a request", () => {
     const contract = addressToTypedBech32("contract", "0x2222222222222222222222222222222222222222");
     expect(() => buildMrvDeployRequest([0x13], { valueLythoshi: "01" })).toThrow(/valueLythoshi/);
@@ -409,6 +450,20 @@ describe("MRV/RISC-V SDK helpers", () => {
       input: "0x13000000",
       extensions: [{ kind: MRV_TX_EXTENSION_KIND, bodyHex: "0x01" }],
     });
+
+    const deployPayload = buildMrvDeployPayloadNativeTxPlan("0x13000000", {
+      from: user,
+      chainId: 69_420n,
+      nonce: 7n,
+      executionUnitLimit: 100_000n,
+      maxExecutionFeeLythoshi: "25",
+      constructorInput: [0x01, 0x02],
+      artifactHash,
+    });
+    expect(deployPayload.expectedContractAddress).toBe(deploy.expectedContractAddress);
+    expect(deployPayload.tx.to).toBeNull();
+    expect(deployPayload.tx.input).toBe("0x01000400000000000000130000000102000000000000000102");
+    expect(deployPayload.request.artifactBytes).toBe(deployPayload.tx.input);
 
     const call = buildMrvCallNativeTxPlan(contract, [0x01, 0x02], {
       from: user,
@@ -519,6 +574,7 @@ describe("MRV/RISC-V SDK helpers", () => {
         encapsulationKey: bytesToHex(encryptionKey.encapsulationKey),
       },
       `0x${"aa".repeat(32)}`,
+      `0x${"cc".repeat(32)}`,
       `0x${"bb".repeat(32)}`,
     ]);
     const client = new RpcClient("http://node", { fetch });
@@ -541,6 +597,19 @@ describe("MRV/RISC-V SDK helpers", () => {
     expect(deploy.envelopeWireHex.startsWith("0x")).toBe(true);
     expect(deploy.innerWireBytes).toBeGreaterThan(0);
 
+    const payloadDeploy = await submitMrvDeployPayloadNativeTx(client, backend, "0x13000000", {
+      from: user,
+      chainId: 69_420n,
+      nonce: 9n,
+      executionUnitLimit: 100_000n,
+      maxExecutionFeeLythoshi: "25",
+      constructorInput: [0x01, 0x02],
+      encryptionKey,
+    });
+    expect(payloadDeploy.txHash).toBe(`0x${"cc".repeat(32)}`);
+    expect(payloadDeploy.request.artifactBytes).toBe("0x01000400000000000000130000000102000000000000000102");
+    expect(payloadDeploy.tx.input).toBe(payloadDeploy.request.artifactBytes);
+
     const call = await submitMrvCallNativeTx(client, backend, contract, [0x01, 0x02], {
       from: user,
       chainId: 69_420n,
@@ -559,14 +628,17 @@ describe("MRV/RISC-V SDK helpers", () => {
       "lyth_getEncryptionKey",
       "lyth_submitEncrypted",
       "lyth_submitEncrypted",
+      "lyth_submitEncrypted",
     ]);
     expect(calls[0].params).toEqual([]);
     expect(calls[1].params).toEqual([deploy.envelopeWireHex]);
-    expect(calls[2].params).toEqual([call.envelopeWireHex]);
+    expect(calls[2].params).toEqual([payloadDeploy.envelopeWireHex]);
+    expect(calls[3].params).toEqual([call.envelopeWireHex]);
     const { tx: _deploySigningAdapter, ...deployAppFacing } = deploy;
+    const { tx: _payloadDeploySigningAdapter, ...payloadDeployAppFacing } = payloadDeploy;
     const { tx: _callSigningAdapter, ...callAppFacing } = call;
     const appWire = JSON.stringify(
-      [deployAppFacing, callAppFacing],
+      [deployAppFacing, payloadDeployAppFacing, callAppFacing],
       (_key, value) => (typeof value === "bigint" ? value.toString() : value),
     );
     expect(appWire).not.toMatch(/gas|gwei|wei/i);

@@ -6,6 +6,7 @@ import {
   submitEncryptedEnvelope,
   type EncryptionKey,
 } from "./crypto/submission.js";
+import { BincodeWriter } from "./crypto/bincode.js";
 
 export type { MrvAbiManifest } from "./bindings/MrvAbiManifest.js";
 export type { MrvAbiParam } from "./bindings/MrvAbiParam.js";
@@ -18,6 +19,7 @@ export type { MrvBuildMetadata } from "./bindings/MrvBuildMetadata.js";
 export type { MrvCallRequest } from "./bindings/MrvCallRequest.js";
 export type { MrvCallResponse } from "./bindings/MrvCallResponse.js";
 export type { MrvCallStatus } from "./bindings/MrvCallStatus.js";
+export type { MrvDeployPayload } from "./bindings/MrvDeployPayload.js";
 export type { MrvDeployRequest } from "./bindings/MrvDeployRequest.js";
 export type { MrvDeployResponse } from "./bindings/MrvDeployResponse.js";
 export type { MrvEventRecord } from "./bindings/MrvEventRecord.js";
@@ -66,6 +68,14 @@ export interface MrvDeployPlanOptions extends MrvRequestBuildOptions {
   artifactHash?: string;
 }
 
+export interface MrvDeployPayloadRequestOptions extends MrvRequestBuildOptions {
+  constructorInput?: MrvBytesLike | null;
+}
+
+export interface MrvDeployPayloadPlanOptions extends MrvDeployPayloadRequestOptions {
+  artifactHash?: string;
+}
+
 export interface MrvDeployPlan {
   request: MrvDeployRequest;
   extension: MrvTransactionExtension;
@@ -79,6 +89,16 @@ export interface MrvCallPlan {
 
 export type MrvDeployNativeTxOptions = Omit<
   MrvDeployPlanOptions,
+  "executionUnitLimit" | "maxExecutionFeeLythoshi" | "nonce"
+> & {
+  chainId: number | bigint;
+  nonce: number | bigint;
+  executionUnitLimit: number | bigint;
+  maxExecutionFeeLythoshi: MrvDecimalLike;
+};
+
+export type MrvDeployPayloadNativeTxOptions = Omit<
+  MrvDeployPayloadPlanOptions,
   "executionUnitLimit" | "maxExecutionFeeLythoshi" | "nonce"
 > & {
   chainId: number | bigint;
@@ -140,15 +160,22 @@ export type MrvDeploySubmitOptions = MrvDeployNativeTxOptions & {
   class?: MempoolClass;
 };
 
+export type MrvDeployPayloadSubmitOptions = MrvDeployPayloadNativeTxOptions & {
+  encryptionKey?: EncryptionKey;
+  class?: MempoolClass;
+};
+
 export type MrvCallSubmitOptions = MrvCallNativeTxOptions & {
   encryptionKey?: EncryptionKey;
   class?: MempoolClass;
 };
 
 export type MrvDeploySubmission = MrvDeployNativeTxPlan & MrvEncryptedSubmissionResult;
+export type MrvDeployPayloadSubmission = MrvDeployNativeTxPlan & MrvEncryptedSubmissionResult;
 export type MrvCallSubmission = MrvCallNativeTxPlan & MrvEncryptedSubmissionResult;
 
 export const MRV_FORMAT_VERSION = 1 as const;
+export const MRV_DEPLOY_PAYLOAD_VERSION = 1 as const;
 export const MRV_PROFILE_MONO_RV32IM_V1 = "mono_rv32im_v1" as const;
 export const MRV_MEMORY_PAGE_BYTES = 65_536 as const;
 export const MRV_MAX_CODE_BYTES = 16 * 1024 * 1024;
@@ -364,6 +391,24 @@ export function mrvV1TransactionExtension(): MrvTransactionExtension {
   return { kind: MRV_TX_EXTENSION_KIND, bodyHex: "0x01" };
 }
 
+export function encodeMrvDeployPayload(
+  artifactBytes: MrvBytesLike,
+  constructorInput?: MrvBytesLike | null,
+): string {
+  const artifact = bytesFrom(artifactBytes, "artifactBytes");
+  const w = new BincodeWriter();
+  w.u16(MRV_DEPLOY_PAYLOAD_VERSION);
+  w.bytes(artifact);
+  if (constructorInput === undefined || constructorInput === null) {
+    w.u8(0);
+  } else {
+    const constructor = bytesFrom(constructorInput, "constructorInput");
+    w.u8(1);
+    w.bytes(constructor);
+  }
+  return bytesToHex(w.toBytes());
+}
+
 export function mrvAddressToBech32(kind: MrvAddressKind, bytes: MrvBytesLike): string {
   return addressToTypedBech32(kind as AddressKind, bytesFrom(bytes, "address"));
 }
@@ -476,6 +521,17 @@ export function buildMrvDeployRequest(
   return request;
 }
 
+export function buildMrvDeployPayloadRequest(
+  artifactBytes: MrvBytesLike,
+  options: MrvDeployPayloadRequestOptions = {},
+): MrvDeployRequest {
+  const request = buildMrvDeployRequest(
+    encodeMrvDeployPayload(artifactBytes, options.constructorInput),
+    options,
+  );
+  return request;
+}
+
 export function buildMrvCallRequest(
   contractAddress: string,
   input: MrvBytesLike = "0x",
@@ -496,6 +552,23 @@ export function buildMrvDeployPlan(
   options: MrvDeployPlanOptions = {},
 ): MrvDeployPlan {
   const request = buildMrvDeployRequest(artifactBytes, options);
+  const plan: MrvDeployPlan = {
+    request,
+    extension: mrvV1TransactionExtension(),
+  };
+  if (options.artifactHash !== undefined && request.from !== undefined && request.nonce !== undefined) {
+    plan.expectedContractAddress = deriveMrvContractAddress(request.from, request.nonce, options.artifactHash);
+  } else if (options.artifactHash !== undefined) {
+    validateHexLength("artifactHash", options.artifactHash, 32);
+  }
+  return plan;
+}
+
+export function buildMrvDeployPayloadPlan(
+  artifactBytes: MrvBytesLike,
+  options: MrvDeployPayloadPlanOptions = {},
+): MrvDeployPlan {
+  const request = buildMrvDeployPayloadRequest(artifactBytes, options);
   const plan: MrvDeployPlan = {
     request,
     extension: mrvV1TransactionExtension(),
@@ -532,6 +605,50 @@ export function buildMrvDeployNativeTxPlan(
       ? undefined
       : normalizeDecimalLike("priorityTipLythoshi", options.priorityTipLythoshi);
   const plan = buildMrvDeployPlan(artifactBytes, {
+    ...options,
+    nonce,
+    executionUnitLimit,
+    maxExecutionFeeLythoshi: maxExecutionFee,
+    priorityTipLythoshi: priorityTip,
+  });
+  return {
+    ...plan,
+    nativeTx: {
+      chainId,
+      nonce,
+      valueLythoshi: plan.request.valueLythoshi,
+      executionUnitLimit,
+      maxExecutionFeeLythoshi: maxExecutionFee,
+      priorityTipLythoshi: priorityTip ?? "0",
+    },
+    feePreview: buildMrvNativeFeePreview(executionUnitLimit, maxExecutionFee, priorityTip ?? "0"),
+    tx: {
+      chainId,
+      nonce,
+      maxPriorityFeePerGas: priorityTip ?? "0",
+      maxFeePerGas: maxExecutionFee,
+      gasLimit: executionUnitLimit,
+      to: null,
+      value: plan.request.valueLythoshi,
+      input: plan.request.artifactBytes,
+      extensions: [plan.extension],
+    },
+  };
+}
+
+export function buildMrvDeployPayloadNativeTxPlan(
+  artifactBytes: MrvBytesLike,
+  options: MrvDeployPayloadNativeTxOptions,
+): MrvDeployNativeTxPlan {
+  const chainId = normalizeU64(options.chainId, "chainId");
+  const nonce = normalizeU64(options.nonce, "nonce");
+  const executionUnitLimit = normalizeU64(options.executionUnitLimit, "executionUnitLimit");
+  const maxExecutionFee = normalizeDecimalLike("maxExecutionFeeLythoshi", options.maxExecutionFeeLythoshi);
+  const priorityTip =
+    options.priorityTipLythoshi === undefined
+      ? undefined
+      : normalizeDecimalLike("priorityTipLythoshi", options.priorityTipLythoshi);
+  const plan = buildMrvDeployPayloadPlan(artifactBytes, {
     ...options,
     nonce,
     executionUnitLimit,
@@ -658,6 +775,27 @@ export async function submitMrvDeployNativeTx(
   options: MrvDeploySubmitOptions,
 ): Promise<MrvDeploySubmission> {
   const plan = buildMrvDeployNativeTxPlan(artifactBytes, options);
+  assertMrvDeployNativeSubmissionPlan(plan);
+  const submission = await buildEncryptedSubmission({
+    backend,
+    tx: plan.tx,
+    encryptionKey: options.encryptionKey ?? (await fetchEncryptionKey(client)),
+    class: options.class,
+  });
+  return {
+    ...plan,
+    ...submission,
+    txHash: await submitEncryptedEnvelope(client, submission.envelopeWireHex),
+  };
+}
+
+export async function submitMrvDeployPayloadNativeTx(
+  client: RpcClient,
+  backend: MlDsa65Backend,
+  artifactBytes: MrvBytesLike,
+  options: MrvDeployPayloadSubmitOptions,
+): Promise<MrvDeployPayloadSubmission> {
+  const plan = buildMrvDeployPayloadNativeTxPlan(artifactBytes, options);
   assertMrvDeployNativeSubmissionPlan(plan);
   const submission = await buildEncryptedSubmission({
     backend,

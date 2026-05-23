@@ -26,6 +26,8 @@ use ts_rs::TS;
 
 /// Current MRV artifact format version.
 pub const MRV_FORMAT_VERSION: u16 = 1;
+/// Current version for the MRV deploy payload envelope.
+pub const MRV_DEPLOY_PAYLOAD_VERSION: u16 = 1;
 /// Approved RISC-V profile name.
 pub const MRV_PROFILE_MONO_RV32IM_V1: &str = "mono_rv32im_v1";
 /// RISC-V memory page size.
@@ -720,6 +722,24 @@ pub struct MrvTransactionExtension {
     pub body_hex: String,
 }
 
+/// Versioned MRV deploy payload envelope.
+///
+/// Raw artifact deploys remain valid. This envelope is only needed when a
+/// deploy carries optional constructor input alongside the canonical artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrvDeployPayload.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct MrvDeployPayload {
+    /// Payload schema version.
+    pub version: u16,
+    /// Canonical MRV artifact bytes.
+    pub artifact: Vec<u8>,
+    /// Optional constructor input already encoded with the artifact ABI.
+    #[serde(default)]
+    pub constructor: Option<Vec<u8>>,
+}
+
 /// Native MRV deploy request model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
@@ -730,7 +750,11 @@ pub struct MrvDeployRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-bindings", ts(optional))]
     pub from: Option<String>,
-    /// Raw bincode MRV artifact bytes as `0x`-hex.
+    /// Deploy input bytes as `0x`-hex.
+    ///
+    /// Raw bincode MRV artifact bytes remain accepted. Constructor-bearing
+    /// deploys use [`encode_mrv_deploy_payload`] to place a versioned payload
+    /// envelope in this field.
     #[serde(rename = "artifactBytes")]
     #[cfg_attr(feature = "ts-bindings", ts(rename = "artifactBytes"))]
     pub artifact_bytes: String,
@@ -1765,6 +1789,10 @@ pub enum MrvValidationError {
         field: &'static str,
     },
 
+    /// Deploy payload envelope bytes failed bincode-shape decoding.
+    #[error("invalid MRV deploy payload: {0}")]
+    InvalidDeployPayload(&'static str),
+
     /// Native submission plan failed MRV-specific guardrails.
     #[error("invalid MRV native submission plan: {0}")]
     InvalidNativeSubmission(&'static str),
@@ -1812,6 +1840,44 @@ pub fn mrv_v1_transaction_extension() -> MrvTransactionExtension {
         kind: MRV_TX_EXTENSION_KIND,
         body_hex: "0x01".to_owned(),
     }
+}
+
+/// Encode an MRV deploy payload envelope with the SDK-supported version.
+///
+/// `constructor_input` must already be encoded with the artifact ABI. Passing
+/// `None` emits an envelope without constructor input; callers that need legacy
+/// raw artifact deploy bytes should continue using [`build_mrv_deploy_request`],
+/// [`build_mrv_deploy_plan`], or [`build_mrv_deploy_native_tx_plan`].
+///
+/// # Errors
+/// Returns [`MrvValidationError`] only if a byte vector length cannot fit the
+/// bincode length field.
+pub fn encode_mrv_deploy_payload(
+    artifact_bytes: &[u8],
+    constructor_input: Option<&[u8]>,
+) -> Result<Vec<u8>, MrvValidationError> {
+    encode_mrv_deploy_payload_struct(&MrvDeployPayload {
+        version: MRV_DEPLOY_PAYLOAD_VERSION,
+        artifact: artifact_bytes.to_vec(),
+        constructor: constructor_input.map(<[u8]>::to_vec),
+    })
+}
+
+/// Decode an MRV deploy payload envelope without validating the artifact or
+/// constructor ABI.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the envelope is truncated, has trailing
+/// bytes, or uses an unsupported option tag.
+pub fn decode_mrv_deploy_payload(bytes: &[u8]) -> Result<MrvDeployPayload, MrvValidationError> {
+    let mut reader = BincodeReader::new(bytes);
+    let payload = MrvDeployPayload {
+        version: reader.u16()?,
+        artifact: reader.bytes("artifact")?,
+        constructor: reader.option_bytes("constructor")?,
+    };
+    reader.finish()?;
+    Ok(payload)
 }
 
 /// Encode a typed ADR-0038 address.
@@ -2031,6 +2097,24 @@ pub fn build_mrv_deploy_request(
     Ok(request)
 }
 
+/// Build and validate an MRV deploy request from a versioned deploy payload.
+///
+/// The returned request places the encoded [`MrvDeployPayload`] envelope in
+/// `artifactBytes`. Use [`build_mrv_deploy_request`] for legacy raw-artifact
+/// deploys.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when options contain malformed typed
+/// addresses or invalid execution-unit fields.
+pub fn build_mrv_deploy_payload_request(
+    artifact_bytes: &[u8],
+    constructor_input: Option<&[u8]>,
+    options: MrvRequestBuildOptions,
+) -> Result<MrvDeployRequest, MrvValidationError> {
+    let payload_bytes = encode_mrv_deploy_payload(artifact_bytes, constructor_input)?;
+    build_mrv_deploy_request(&payload_bytes, options)
+}
+
 /// Build and validate an MRV call request from raw input bytes.
 ///
 /// # Errors
@@ -2090,6 +2174,41 @@ pub fn build_mrv_deploy_plan(
     })
 }
 
+/// Build an MRV deploy plan whose transaction input is a deploy payload
+/// envelope.
+///
+/// Expected contract address derivation still uses the raw artifact hash, not
+/// the envelope bytes.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when request validation fails or when a
+/// supplied artifact hash is not a 32-byte `0x` hash.
+pub fn build_mrv_deploy_payload_plan(
+    artifact_bytes: &[u8],
+    artifact_hash_hex: Option<&str>,
+    constructor_input: Option<&[u8]>,
+    options: MrvRequestBuildOptions,
+) -> Result<MrvDeployPlan, MrvValidationError> {
+    let from = options.from.clone();
+    let nonce = options.nonce;
+    let request = build_mrv_deploy_payload_request(artifact_bytes, constructor_input, options)?;
+    let expected_contract_address = match (artifact_hash_hex, from.as_deref(), nonce) {
+        (Some(artifact_hash), Some(from), Some(nonce)) => {
+            Some(derive_mrv_contract_address(from, nonce, artifact_hash)?)
+        }
+        (Some(artifact_hash), _, _) => {
+            validate_hex_length("artifactHash", artifact_hash, 32)?;
+            None
+        }
+        (None, _, _) => None,
+    };
+    Ok(MrvDeployPlan {
+        request,
+        extension: mrv_v1_transaction_extension(),
+        expected_contract_address,
+    })
+}
+
 /// Build an MRV call plan with the v1 extension descriptor attached.
 ///
 /// # Errors
@@ -2117,6 +2236,48 @@ pub fn build_mrv_deploy_native_tx_plan(
     options: MrvNativeTxBuildOptions,
 ) -> Result<MrvDeployNativeTxPlan, MrvValidationError> {
     let plan = build_mrv_deploy_plan(artifact_bytes, artifact_hash_hex, options.request_options())?;
+    let tx = MrvNativeTxFields::from_parts(
+        &options,
+        None,
+        plan.request.artifact_bytes.clone(),
+        &plan.request.value_lythoshi,
+        plan.extension.clone(),
+    );
+    let native_tx = MrvNativeTxFacade::from_options(&options, &plan.request.value_lythoshi);
+    let fee_preview = MrvNativeFeePreview::from_options(&options);
+    Ok(MrvDeployNativeTxPlan {
+        request: plan.request,
+        extension: plan.extension,
+        expected_contract_address: plan.expected_contract_address,
+        native_tx,
+        fee_preview,
+        tx,
+    })
+}
+
+/// Build an MRV deploy payload plan plus current sign-ready native transaction
+/// fields.
+///
+/// The raw deploy helper remains [`build_mrv_deploy_native_tx_plan`]. This
+/// variant places a versioned deploy payload envelope in the transaction input
+/// so deployments can include optional constructor input.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when request validation fails, a supplied
+/// artifact hash is malformed, or the optional signer address is not a typed
+/// user address.
+pub fn build_mrv_deploy_payload_native_tx_plan(
+    artifact_bytes: &[u8],
+    artifact_hash_hex: Option<&str>,
+    constructor_input: Option<&[u8]>,
+    options: MrvNativeTxBuildOptions,
+) -> Result<MrvDeployNativeTxPlan, MrvValidationError> {
+    let plan = build_mrv_deploy_payload_plan(
+        artifact_bytes,
+        artifact_hash_hex,
+        constructor_input,
+        options.request_options(),
+    )?;
     let tx = MrvNativeTxFields::from_parts(
         &options,
         None,
@@ -3113,6 +3274,109 @@ fn encode_mrv_encrypted_envelope_bincode(
     Ok(out)
 }
 
+fn encode_mrv_deploy_payload_struct(
+    payload: &MrvDeployPayload,
+) -> Result<Vec<u8>, MrvValidationError> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&payload.version.to_le_bytes());
+    push_deploy_payload_bytes(&mut out, &payload.artifact)?;
+    match &payload.constructor {
+        Some(constructor) => {
+            out.push(1);
+            push_deploy_payload_bytes(&mut out, constructor)?;
+        }
+        None => out.push(0),
+    }
+    Ok(out)
+}
+
+fn push_deploy_payload_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), MrvValidationError> {
+    let len = u64::try_from(bytes.len())
+        .map_err(|_| MrvValidationError::InvalidDeployPayload("length overflow"))?;
+    push_u64_le(out, len);
+    out.extend_from_slice(bytes);
+    Ok(())
+}
+
+struct BincodeReader<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> BincodeReader<'a> {
+    const fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn u8(&mut self) -> Result<u8, MrvValidationError> {
+        let value = self
+            .bytes
+            .get(self.offset)
+            .copied()
+            .ok_or(MrvValidationError::InvalidDeployPayload("truncated"))?;
+        self.offset += 1;
+        Ok(value)
+    }
+
+    fn u16(&mut self) -> Result<u16, MrvValidationError> {
+        let bytes = self.take_array::<2>()?;
+        Ok(u16::from_le_bytes(bytes))
+    }
+
+    fn u64(&mut self) -> Result<u64, MrvValidationError> {
+        let bytes = self.take_array::<8>()?;
+        Ok(u64::from_le_bytes(bytes))
+    }
+
+    fn bytes(&mut self, _field: &'static str) -> Result<Vec<u8>, MrvValidationError> {
+        let len = usize::try_from(self.u64()?)
+            .map_err(|_| MrvValidationError::InvalidDeployPayload("length overflow"))?;
+        let end = self
+            .offset
+            .checked_add(len)
+            .ok_or(MrvValidationError::InvalidDeployPayload("length overflow"))?;
+        let bytes = self
+            .bytes
+            .get(self.offset..end)
+            .ok_or(MrvValidationError::InvalidDeployPayload("truncated"))?;
+        self.offset = end;
+        Ok(bytes.to_vec())
+    }
+
+    fn option_bytes(&mut self, field: &'static str) -> Result<Option<Vec<u8>>, MrvValidationError> {
+        match self.u8()? {
+            0 => Ok(None),
+            1 => self.bytes(field).map(Some),
+            _ => Err(MrvValidationError::InvalidDeployPayload(
+                "invalid option tag",
+            )),
+        }
+    }
+
+    fn finish(&self) -> Result<(), MrvValidationError> {
+        if self.offset == self.bytes.len() {
+            Ok(())
+        } else {
+            Err(MrvValidationError::InvalidDeployPayload("trailing bytes"))
+        }
+    }
+
+    fn take_array<const N: usize>(&mut self) -> Result<[u8; N], MrvValidationError> {
+        let end = self
+            .offset
+            .checked_add(N)
+            .ok_or(MrvValidationError::InvalidDeployPayload("length overflow"))?;
+        let bytes = self
+            .bytes
+            .get(self.offset..end)
+            .ok_or(MrvValidationError::InvalidDeployPayload("truncated"))?;
+        self.offset = end;
+        let mut out = [0u8; N];
+        out.copy_from_slice(bytes);
+        Ok(out)
+    }
+}
+
 fn push_u256_be(out: &mut Vec<u8>, value: u128) {
     out.extend_from_slice(&[0u8; 16]);
     out.extend_from_slice(&value.to_be_bytes());
@@ -3864,6 +4128,69 @@ mod tests {
             MrvRequestBuildOptions::new().execution_unit_limit(0)
         )
         .is_err());
+    }
+
+    #[test]
+    fn deploy_payload_envelope_encodes_constructor_input() {
+        let encoded = encode_mrv_deploy_payload(&[0xaa, 0xbb], Some(&[0x01, 0x02])).unwrap();
+        assert_eq!(
+            hex_encode(&encoded),
+            "0x01000200000000000000aabb0102000000000000000102"
+        );
+
+        let decoded = decode_mrv_deploy_payload(&encoded).unwrap();
+        assert_eq!(decoded.version, MRV_DEPLOY_PAYLOAD_VERSION);
+        assert_eq!(decoded.artifact, vec![0xaa, 0xbb]);
+        assert_eq!(decoded.constructor, Some(vec![0x01, 0x02]));
+
+        let no_constructor = encode_mrv_deploy_payload(&[0xaa, 0xbb], None).unwrap();
+        assert_eq!(hex_encode(&no_constructor), "0x01000200000000000000aabb00");
+        assert_eq!(
+            decode_mrv_deploy_payload(&no_constructor)
+                .unwrap()
+                .constructor,
+            None
+        );
+        assert!(decode_mrv_deploy_payload(&encoded[..encoded.len() - 1]).is_err());
+    }
+
+    #[test]
+    fn deploy_payload_builders_preserve_raw_deploy_compatibility() {
+        let user = mrv_address_to_bech32(MrvAddressKind::User, [0x11; 20]);
+        let artifact_hash = "0x598501b99b388ca564905b49040c6d315a55fb13bf34a6f002aa04960a27895d";
+        let raw = build_mrv_deploy_native_tx_plan(
+            &[0xaa, 0xbb],
+            Some(artifact_hash),
+            MrvNativeTxBuildOptions::new(69_420, 7, 100_000, 25).from(user.clone()),
+        )
+        .unwrap();
+        assert_eq!(raw.request.artifact_bytes, "0xaabb");
+        assert_eq!(raw.tx.input, "0xaabb");
+
+        let payload = build_mrv_deploy_payload_native_tx_plan(
+            &[0xaa, 0xbb],
+            Some(artifact_hash),
+            Some(&[0x01, 0x02]),
+            MrvNativeTxBuildOptions::new(69_420, 7, 100_000, 25).from(user.clone()),
+        )
+        .unwrap();
+        assert_eq!(
+            payload.request.artifact_bytes,
+            "0x01000200000000000000aabb0102000000000000000102"
+        );
+        assert_eq!(payload.tx.input, payload.request.artifact_bytes);
+        assert_eq!(
+            payload.expected_contract_address,
+            raw.expected_contract_address
+        );
+
+        let request = build_mrv_deploy_payload_request(
+            &[0xaa, 0xbb],
+            None,
+            MrvRequestBuildOptions::new().from(user),
+        )
+        .unwrap();
+        assert_eq!(request.artifact_bytes, "0x01000200000000000000aabb00");
     }
 
     #[test]

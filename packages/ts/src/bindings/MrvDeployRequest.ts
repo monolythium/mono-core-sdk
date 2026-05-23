@@ -9,7 +9,11 @@ export type MrvDeployRequest = {
  */
 from?: string,
 /**
- * Raw bincode MRV artifact bytes as `0x`-hex.
+ * Deploy input bytes as `0x`-hex.
+ *
+ * Raw bincode MRV artifact bytes remain accepted. Constructor-bearing
+ * deploys use [`encode_mrv_deploy_payload`] to place a versioned payload
+ * envelope in this field.
  */
 artifactBytes: string,
 /**
