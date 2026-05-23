@@ -520,15 +520,57 @@ impl RpcClient {
         token_id: &str,
         limit: Option<u32>,
     ) -> Result<MrcHoldersResponse, SdkError> {
+        self.lyth_mrc_holders_scoped(standard, asset_id, Some(token_id), limit)
+            .await
+    }
+
+    /// `lyth_mrcHolders` — top holders for a native MRC asset/vault key.
+    ///
+    /// This is the asset-scoped form used by MRC-4626 vault share balances.
+    pub async fn lyth_mrc_asset_holders(
+        &self,
+        standard: &str,
+        asset_id: &str,
+        limit: Option<u32>,
+    ) -> Result<MrcHoldersResponse, SdkError> {
+        self.lyth_mrc_holders_scoped(standard, asset_id, None, limit)
+            .await
+    }
+
+    /// `lyth_mrcHolders` — top holders for MRC-4626 vault shares.
+    pub async fn lyth_mrc4626_holders(
+        &self,
+        vault_id: &str,
+        limit: Option<u32>,
+    ) -> Result<MrcHoldersResponse, SdkError> {
+        self.lyth_mrc_asset_holders("mrc4626", vault_id, limit)
+            .await
+    }
+
+    async fn lyth_mrc_holders_scoped(
+        &self,
+        standard: &str,
+        asset_id: &str,
+        token_id: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<MrcHoldersResponse, SdkError> {
         let request = MrcHoldersRequest {
             standard: standard.to_owned(),
             asset_id: asset_id.to_owned(),
-            token_id: token_id.to_owned(),
+            token_id: token_id.map(str::to_owned),
             limit,
         };
-        let params = match request.limit {
-            Some(limit) => json!([request.standard, request.asset_id, request.token_id, limit]),
-            None => json!([request.standard, request.asset_id, request.token_id]),
+        let MrcHoldersRequest {
+            standard,
+            asset_id,
+            token_id,
+            limit,
+        } = request;
+        let params = match (token_id, limit) {
+            (Some(token_id), Some(limit)) => json!([standard, asset_id, token_id, limit]),
+            (Some(token_id), None) => json!([standard, asset_id, token_id]),
+            (None, Some(limit)) => json!([standard, asset_id, Value::Null, limit]),
+            (None, None) => json!([standard, asset_id, Value::Null]),
         };
         self.call("lyth_mrcHolders", params).await
     }
@@ -1424,13 +1466,23 @@ mod tests {
                 "balance": "25",
                 "updatedAtBlock": 90,
                 "mrc": null
+            },
+            {
+                "tokenId": format!("0x{}", "ff".repeat(32)),
+                "balance": "700",
+                "updatedAtBlock": 92,
+                "mrc": {
+                    "standard": "mrc4626",
+                    "assetId": format!("0x{}", "ff".repeat(32)),
+                    "tokenId": null
+                }
             }
         ])]);
 
         let client = RpcClient::new(endpoint).unwrap();
         let balances = client.lyth_get_token_balances(address).await.unwrap();
 
-        assert_eq!(balances.len(), 3);
+        assert_eq!(balances.len(), 4);
         let mrc = balances[0].mrc.as_ref().expect("mrc identity");
         assert_eq!(mrc.standard, "mrc1155");
         assert_eq!(mrc.asset_id, format!("0x{}", "bb".repeat(32)));
@@ -1440,6 +1492,11 @@ mod tests {
         );
         assert_eq!(balances[1].mrc, None);
         assert_eq!(balances[2].mrc, None);
+        let vault_mrc = balances[3].mrc.as_ref().expect("mrc4626 identity");
+        assert_eq!(balances[3].token_id, format!("0x{}", "ff".repeat(32)));
+        assert_eq!(vault_mrc.standard, "mrc4626");
+        assert_eq!(vault_mrc.asset_id, format!("0x{}", "ff".repeat(32)));
+        assert_eq!(vault_mrc.token_id, None);
 
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 1);
@@ -1633,6 +1690,21 @@ mod tests {
                 "limit": 50,
                 "holders": []
             }),
+            json!({
+                "schemaVersion": 1,
+                "standard": "mrc4626",
+                "assetId": asset_id,
+                "tokenId": null,
+                "limit": 10,
+                "holders": [
+                    {
+                        "rank": 1,
+                        "address": address,
+                        "balance": "700",
+                        "updatedAtBlock": 92
+                    }
+                ]
+            }),
         ]);
 
         let client = RpcClient::new(endpoint).unwrap();
@@ -1642,7 +1714,7 @@ mod tests {
             .unwrap();
         assert_eq!(limited.standard, "mrc1155");
         assert_eq!(limited.asset_id, asset_id);
-        assert_eq!(limited.token_id, token_id);
+        assert_eq!(limited.token_id.as_deref(), Some(token_id.as_str()));
         assert_eq!(limited.holders[0].address, address);
         assert_eq!(limited.holders[0].updated_at_block, 91);
 
@@ -1653,8 +1725,17 @@ mod tests {
         assert_eq!(defaulted.limit, 50);
         assert!(defaulted.holders.is_empty());
 
+        let vault_holders = client
+            .lyth_mrc4626_holders(&asset_id, Some(10))
+            .await
+            .unwrap();
+        assert_eq!(vault_holders.standard, "mrc4626");
+        assert_eq!(vault_holders.asset_id, asset_id);
+        assert_eq!(vault_holders.token_id, None);
+        assert_eq!(vault_holders.holders[0].balance, "700");
+
         let requests = server.join().unwrap();
-        assert_eq!(requests.len(), 2);
+        assert_eq!(requests.len(), 3);
         assert_eq!(requests[0]["method"], "lyth_mrcHolders");
         assert_eq!(
             requests[0]["params"],
@@ -1664,6 +1745,11 @@ mod tests {
         assert_eq!(
             requests[1]["params"],
             json!(["mrc1155", asset_id, token_id])
+        );
+        assert_eq!(requests[2]["method"], "lyth_mrcHolders");
+        assert_eq!(
+            requests[2]["params"],
+            json!(["mrc4626", asset_id, null, 10])
         );
     }
 

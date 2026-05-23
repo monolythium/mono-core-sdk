@@ -164,6 +164,7 @@ describe("ApiClient", () => {
     const address = "0x1111111111111111111111111111111111111111";
     const assetId = `0x${"bb".repeat(32)}`;
     const mrcTokenId = `0x${"cc".repeat(32)}`;
+    const vaultId = `0x${"ff".repeat(32)}`;
     const profileData: AddressProfileResponse = {
       schemaVersion: 1,
       address,
@@ -193,6 +194,16 @@ describe("ApiClient", () => {
           mrc: null,
         },
         {
+          tokenId: vaultId,
+          balance: "700",
+          updatedAtBlock: 92,
+          mrc: {
+            standard: "mrc4626",
+            assetId: vaultId,
+            tokenId: null,
+          },
+        },
+        {
           tokenId: `0x${"ee".repeat(32)}`,
           balance: "0",
           updatedAtBlock: 90,
@@ -208,7 +219,11 @@ describe("ApiClient", () => {
     expect(profile.data.tokenBalances[0].mrc?.assetId).toBe(assetId);
     expect(profile.data.tokenBalances[0].mrc?.tokenId).toBe(mrcTokenId);
     expect(profile.data.tokenBalances[1].mrc).toBeNull();
-    expect(profile.data.tokenBalances[2].mrc).toBeUndefined();
+    expect(profile.data.tokenBalances[2].tokenId).toBe(vaultId);
+    expect(profile.data.tokenBalances[2].mrc?.standard).toBe("mrc4626");
+    expect(profile.data.tokenBalances[2].mrc?.assetId).toBe(vaultId);
+    expect(profile.data.tokenBalances[2].mrc?.tokenId).toBeNull();
+    expect(profile.data.tokenBalances[3].mrc).toBeUndefined();
     expect(profile.data.bridgeRouteDisclosures).toBeUndefined();
     expect(calls[0]).toEqual({
       url: `https://rpc.example/api/v1/addresses/${address}/profile`,
@@ -682,6 +697,7 @@ describe("ApiClient", () => {
     await client.addressPendingRewards("mono1wallet", 99);
     await client.assetMrcMetadata(assetId, mrcTokenId);
     await client.assetMrcMetadata(assetId);
+    await client.mrcAssetHolders("mrc4626", assetId, 10);
     await client.markets(10);
     await client.market(marketId);
     await client.marketTrades(marketId, 15, "0xabcd");
@@ -698,6 +714,7 @@ describe("ApiClient", () => {
       "https://rpc.example/api/v1/addresses/mono1wallet/pending-rewards?block=0x63",
       `https://rpc.example/api/v1/assets/${assetId}/metadata?mrcTokenId=${mrcTokenId}`,
       `https://rpc.example/api/v1/assets/${assetId}/metadata`,
+      `https://rpc.example/api/v1/mrc/mrc4626/${assetId}/holders?limit=10`,
       "https://rpc.example/api/v1/markets?limit=10",
       `https://rpc.example/api/v1/markets/${marketId}`,
       `https://rpc.example/api/v1/markets/${marketId}/trades?limit=15&cursor=0xabcd`,
@@ -731,6 +748,34 @@ describe("ApiClient", () => {
     expect(calls).toEqual([
       {
         url: `https://rpc.example/api/v1/mrc/mrc1155/${assetId}/${tokenId}/holders?limit=5`,
+        method: "GET",
+      },
+    ]);
+  });
+
+  it("wraps asset-scoped REST MRC-4626 holder route", async () => {
+    const vaultId = `0x${"bb".repeat(32)}`;
+    const address = "0x1111111111111111111111111111111111111111";
+    const { fetch, calls } = mockGet(
+      apiEnvelope({
+        schemaVersion: 1,
+        standard: "mrc4626",
+        assetId: vaultId,
+        tokenId: null,
+        limit: 10,
+        holders: [{ rank: 1, address, balance: "700", updatedAtBlock: 92 }],
+      }),
+    );
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    const response = await client.mrc4626Holders(vaultId, 10);
+
+    expect(response.data.standard).toBe("mrc4626");
+    expect(response.data.tokenId).toBeNull();
+    expect(response.data.holders[0]).toMatchObject({ rank: 1, address, balance: "700" });
+    expect(calls).toEqual([
+      {
+        url: `https://rpc.example/api/v1/mrc/mrc4626/${vaultId}/holders?limit=10`,
         method: "GET",
       },
     ]);

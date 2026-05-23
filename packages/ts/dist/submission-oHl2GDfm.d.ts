@@ -297,9 +297,9 @@ type MrcHoldersResponse = {
      */
     assetId: string;
     /**
-     * Queried token id.
+     * Queried token id, or `null` for MRC-4626 vault scope.
      */
-    tokenId: string;
+    tokenId: string | null;
     /**
      * Result limit applied by the node.
      */
@@ -1779,15 +1779,15 @@ type SyncStatus = {
  */
 type TokenBalanceMrcIdentity = {
     /**
-     * MRC standard, currently `mrc20`, `mrc721`, or `mrc1155`.
+     * MRC standard, currently `mrc20`, `mrc721`, `mrc1155`, or `mrc4626`.
      */
     standard: string;
     /**
-     * MRC asset id, or collection id for token-specific standards.
+     * MRC asset id, collection id, or MRC-4626 vault id.
      */
     assetId: string;
     /**
-     * Token id inside the collection for MRC-721/MRC-1155 rows.
+     * Token id inside the collection for MRC-721/MRC-1155 rows; `null` for MRC-20/MRC-4626.
      */
     tokenId?: string | null;
 };
@@ -2694,6 +2694,15 @@ declare class RpcClient {
     lythMrcMetadata(assetId: string, tokenId?: string | null): Promise<MrcMetadataResponse>;
     /** `lyth_mrcHolders` — top holders for a native MRC asset/token key. */
     lythMrcHolders(standard: string, assetId: string, tokenId: string, limit?: number | null): Promise<MrcHoldersResponse>;
+    /**
+     * `lyth_mrcHolders` — top holders for a native MRC asset/vault key.
+     *
+     * This is the asset-scoped form used by MRC-4626 vault share balances.
+     */
+    lythMrcAssetHolders(standard: string, assetId: string, limit?: number | null): Promise<MrcHoldersResponse>;
+    /** `lyth_mrcHolders` — top holders for MRC-4626 vault shares. */
+    lythMrc4626Holders(vaultId: string, limit?: number | null): Promise<MrcHoldersResponse>;
+    private lythMrcHoldersScoped;
     /** `lyth_getAddressLabel` — indexed display/category label for one address. */
     lythGetAddressLabel(address: string): Promise<AddressLabelRecord | null>;
     /** `lyth_getAddressActivity` — indexed per-address activity timeline. */

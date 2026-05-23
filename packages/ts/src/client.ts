@@ -1083,6 +1083,36 @@ export class RpcClient {
     tokenId: string,
     limit?: number | null,
   ): Promise<MrcHoldersResponse> {
+    return this.lythMrcHoldersScoped(standard, assetId, tokenId, limit);
+  }
+
+  /**
+   * `lyth_mrcHolders` — top holders for a native MRC asset/vault key.
+   *
+   * This is the asset-scoped form used by MRC-4626 vault share balances.
+   */
+  async lythMrcAssetHolders(
+    standard: string,
+    assetId: string,
+    limit?: number | null,
+  ): Promise<MrcHoldersResponse> {
+    return this.lythMrcHoldersScoped(standard, assetId, null, limit);
+  }
+
+  /** `lyth_mrcHolders` — top holders for MRC-4626 vault shares. */
+  async lythMrc4626Holders(
+    vaultId: string,
+    limit?: number | null,
+  ): Promise<MrcHoldersResponse> {
+    return this.lythMrcAssetHolders("mrc4626", vaultId, limit);
+  }
+
+  private async lythMrcHoldersScoped(
+    standard: string,
+    assetId: string,
+    tokenId: string | null,
+    limit?: number | null,
+  ): Promise<MrcHoldersResponse> {
     const request: MrcHoldersRequest = {
       standard,
       assetId,

@@ -122,6 +122,26 @@ if (markets.markets[0]) {
 }
 ```
 
+## Native MRC-4626 Vaults
+
+MRC-4626 vault shares are indexed as token-balance rows. The row's top-level
+`tokenId` is the vault id, and the attached `mrc` identity uses
+`standard: "mrc4626"`, `assetId: <vaultId>`, and `tokenId: null`.
+
+Holder lookups are asset/vault scoped:
+
+```ts
+const vaultHolders = await client.lythMrc4626Holders("0x...", 25);
+const restVaultHolders = await api.mrc4626Holders("0x...", 25);
+```
+
+The lower-level helpers are `lythMrcAssetHolders("mrc4626", vaultId, limit)`
+and `mrcAssetHolders("mrc4626", vaultId, limit)`. Native decoded MRC events
+use `family: "mrc"`; `mrc4626.deposit` and `mrc4626.withdraw` may include
+`share_amount` while `amount` remains the underlying asset amount. The vault id
+is carried as `primary_id`, alongside the existing `account` and `counterparty`
+fields.
+
 ## Node API Client
 
 `ApiClient` targets the REST-shaped `/api/v1` routes served by `mono-core`.

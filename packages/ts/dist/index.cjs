@@ -280,6 +280,21 @@ var ApiClient = class {
     );
   }
   /**
+   * Asset-scoped `/api/v1/mrc/{standard}/{assetId}/holders`.
+   *
+   * This is the REST form used by MRC-4626 vault share balances.
+   */
+  async mrcAssetHolders(standard, assetId, limit) {
+    return this.get(
+      `/mrc/${encodePathSegment(standard)}/${encodePathSegment(assetId)}/holders`,
+      { limit: limit ?? void 0 }
+    );
+  }
+  /** `/api/v1/mrc/mrc4626/{vaultId}/holders`. */
+  async mrc4626Holders(vaultId, limit) {
+    return this.mrcAssetHolders("mrc4626", vaultId, limit);
+  }
+  /**
    * `/api/v1/bridge/routes`.
    *
    * The forthcoming route is read-only `GET`, so the typed request is encoded
@@ -1881,6 +1896,21 @@ var RpcClient = class _RpcClient {
   }
   /** `lyth_mrcHolders` — top holders for a native MRC asset/token key. */
   async lythMrcHolders(standard, assetId, tokenId, limit) {
+    return this.lythMrcHoldersScoped(standard, assetId, tokenId, limit);
+  }
+  /**
+   * `lyth_mrcHolders` — top holders for a native MRC asset/vault key.
+   *
+   * This is the asset-scoped form used by MRC-4626 vault share balances.
+   */
+  async lythMrcAssetHolders(standard, assetId, limit) {
+    return this.lythMrcHoldersScoped(standard, assetId, null, limit);
+  }
+  /** `lyth_mrcHolders` — top holders for MRC-4626 vault shares. */
+  async lythMrc4626Holders(vaultId, limit) {
+    return this.lythMrcAssetHolders("mrc4626", vaultId, limit);
+  }
+  async lythMrcHoldersScoped(standard, assetId, tokenId, limit) {
     const request = {
       standard,
       assetId,
