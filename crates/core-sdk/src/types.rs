@@ -667,6 +667,8 @@ pub struct NativeDecodedEvent {
     pub sequence: u32,
     pub family: String,
     pub event_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<u64>,
     #[serde(
         default,
         alias = "marketSurface",
@@ -1290,6 +1292,10 @@ pub struct NativeAgentStateSource {
 pub struct NativeAgentIssuerStateRecord {
     pub issuer_id: Hash,
     pub issuer: Address,
+    /// Issuer-local nonce captured by the native agent module.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number | null", optional))]
+    pub nonce: Option<u64>,
     #[serde(default)]
     #[cfg_attr(feature = "ts-bindings", ts(type = "string | null", optional))]
     pub metadata_hash: Option<Hash>,
@@ -1306,6 +1312,10 @@ pub struct NativeAgentIssuerStateRecord {
 )]
 pub struct NativeAgentAttestationStateRecord {
     pub attestation_id: Hash,
+    /// Issuer-local nonce captured when the attestation was issued.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number | null", optional))]
+    pub nonce: Option<u64>,
     #[serde(default)]
     #[cfg_attr(feature = "ts-bindings", ts(type = "string | null", optional))]
     pub issuer_id: Option<Hash>,
@@ -1335,6 +1345,10 @@ pub struct NativeAgentConsentStateRecord {
     pub consent_id: Hash,
     pub subject: Address,
     pub grantee: Address,
+    /// Subject-local consent nonce captured by the native agent module.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number | null", optional))]
+    pub nonce: Option<u64>,
     #[serde(default)]
     #[cfg_attr(feature = "ts-bindings", ts(type = "string | null", optional))]
     pub scope_hash: Option<Hash>,
@@ -1356,6 +1370,10 @@ pub struct NativeAgentConsentStateRecord {
 pub struct NativeAgentServiceStateRecord {
     pub service_id: Hash,
     pub provider: Address,
+    /// Provider-local service nonce captured by the native agent module.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number | null", optional))]
+    pub nonce: Option<u64>,
     #[serde(default)]
     #[cfg_attr(feature = "ts-bindings", ts(type = "string | null", optional))]
     pub category_hash: Option<Hash>,
@@ -1393,6 +1411,10 @@ pub struct NativeAgentAvailabilityStateRecord {
 pub struct NativeAgentArbiterStateRecord {
     pub arbiter_id: Hash,
     pub arbiter: Address,
+    /// Arbiter-local registration nonce captured by the native agent module.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number | null", optional))]
+    pub nonce: Option<u64>,
     #[serde(default)]
     #[cfg_attr(feature = "ts-bindings", ts(type = "number | null", optional))]
     pub tier: Option<u16>,
@@ -1415,6 +1437,10 @@ pub struct NativeAgentPolicyStateRecord {
     pub owner: Address,
     pub controller: Address,
     pub asset_id: Hash,
+    /// Owner/controller-local policy nonce captured by the native agent module.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number | null", optional))]
+    pub nonce: Option<u64>,
     pub enabled: bool,
     pub per_action_limit: String,
     pub window_limit: String,
@@ -1454,6 +1480,10 @@ pub struct NativeAgentEscrowStateRecord {
     pub provider: Address,
     pub arbiter: Address,
     pub asset_id: Hash,
+    /// Buyer-local escrow nonce captured by the native agent module.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number | null", optional))]
+    pub nonce: Option<u64>,
     pub amount: String,
     pub terms_hash: Hash,
     pub round: u8,
@@ -4700,6 +4730,141 @@ mod tests {
     }
 
     #[test]
+    fn native_agent_state_response_decodes_optional_nonces() {
+        let issuer_id = format!("0x{}", "11".repeat(32));
+        let legacy_issuer_id = format!("0x{}", "10".repeat(32));
+        let attestation_id = format!("0x{}", "12".repeat(32));
+        let consent_id = format!("0x{}", "13".repeat(32));
+        let service_id = format!("0x{}", "14".repeat(32));
+        let arbiter_id = format!("0x{}", "15".repeat(32));
+        let policy_id = format!("0x{}", "aa".repeat(32));
+        let escrow_id = format!("0x{}", "bb".repeat(32));
+        let asset_id = format!("0x{}", "cc".repeat(32));
+        let terms_hash = format!("0x{}", "dd".repeat(32));
+        let owner = "mono1agentowner000000000000000000000000000000";
+        let controller = "mono1agentcontroller000000000000000000000000";
+        let provider = "mono1agentprovider0000000000000000000000000";
+        let arbiter = "mono1agentarbiter00000000000000000000000000";
+
+        let response: NativeAgentStateResponse = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "limit": 5,
+            "filters": {
+                "policyId": null,
+                "escrowId": null,
+                "account": owner,
+                "includePolicySpends": false
+            },
+            "issuers": [
+                {
+                    "issuerId": issuer_id,
+                    "issuer": owner,
+                    "nonce": 1,
+                    "metadataHash": null,
+                    "updatedAtBlock": 45
+                },
+                {
+                    "issuerId": legacy_issuer_id,
+                    "issuer": provider,
+                    "metadataHash": null,
+                    "updatedAtBlock": 46
+                }
+            ],
+            "attestations": [{
+                "attestationId": attestation_id,
+                "nonce": 2,
+                "issuerId": issuer_id,
+                "issuer": owner,
+                "subject": controller,
+                "schemaHash": null,
+                "payloadHash": null,
+                "active": true,
+                "updatedAtBlock": 47
+            }],
+            "consents": [{
+                "consentId": consent_id,
+                "subject": controller,
+                "grantee": arbiter,
+                "nonce": 3,
+                "scopeHash": null,
+                "expiresAt": null,
+                "active": true,
+                "updatedAtBlock": 48
+            }],
+            "services": [{
+                "serviceId": service_id,
+                "provider": provider,
+                "nonce": 4,
+                "categoryHash": null,
+                "metadataHash": null,
+                "active": true,
+                "updatedAtBlock": 49
+            }],
+            "availability": [],
+            "arbiters": [{
+                "arbiterId": arbiter_id,
+                "arbiter": arbiter,
+                "nonce": 5,
+                "tier": null,
+                "metadataHash": null,
+                "updatedAtBlock": 50
+            }],
+            "reputationReviews": [],
+            "spendingPolicies": [{
+                "policyId": policy_id,
+                "owner": owner,
+                "controller": controller,
+                "assetId": asset_id,
+                "nonce": 6,
+                "enabled": true,
+                "perActionLimit": "100",
+                "windowLimit": "500",
+                "windowSecs": 60,
+                "updatedAtBlock": 51
+            }],
+            "policySpends": [],
+            "escrows": [{
+                "escrowId": escrow_id,
+                "buyer": owner,
+                "provider": provider,
+                "arbiter": arbiter,
+                "assetId": asset_id,
+                "nonce": 7,
+                "amount": "1000",
+                "termsHash": terms_hash,
+                "round": 2,
+                "buyerAccepted": true,
+                "providerAccepted": false,
+                "submittedPayloadHash": null,
+                "status": "created",
+                "resolution": null,
+                "lastActor": null,
+                "createdAtBlock": 40,
+                "updatedAtBlock": 52
+            }],
+            "source": {
+                "indexerProvider": "native_agent_state",
+                "projection": "native_agent_state"
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(response.issuers[0].nonce, Some(1));
+        assert_eq!(response.issuers[1].nonce, None);
+        assert_eq!(response.attestations[0].nonce, Some(2));
+        assert_eq!(response.consents[0].nonce, Some(3));
+        assert_eq!(response.services[0].nonce, Some(4));
+        assert_eq!(response.arbiters[0].nonce, Some(5));
+        assert_eq!(response.spending_policies[0].nonce, Some(6));
+        assert_eq!(response.escrows[0].nonce, Some(7));
+
+        let wire = serde_json::to_value(response).unwrap();
+        assert_eq!(wire["issuers"][0]["nonce"], serde_json::json!(1));
+        assert_eq!(wire["issuers"][1]["nonce"], serde_json::Value::Null);
+        assert_eq!(wire["escrows"][0]["nonce"], serde_json::json!(7));
+    }
+
+    #[test]
     fn block_header_decodes_execution_unit_fields_with_legacy_aliases() {
         let canonical: BlockHeader = serde_json::from_value(serde_json::json!({
             "number": 12,
@@ -5460,6 +5625,38 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(legacy.policy, None);
+    }
+
+    #[test]
+    fn native_event_projection_decodes_optional_nonce() {
+        let decoded: NativeEventProjection = serde_json::from_value(serde_json::json!({
+            "block_height": 100,
+            "tx_index": 0,
+            "sequence": 0,
+            "family": "agent",
+            "event_name": "agent.service.listed",
+            "nonce": 9,
+            "payload_hash": format!("0x{}", "44".repeat(32))
+        }))
+        .unwrap();
+
+        assert_eq!(decoded.nonce, Some(9));
+        assert!(!decoded.extra.contains_key("nonce"));
+        let wire = serde_json::to_value(&decoded).unwrap();
+        assert_eq!(wire["nonce"], serde_json::json!(9));
+
+        let legacy: NativeEventProjection = serde_json::from_value(serde_json::json!({
+            "block_height": 100,
+            "tx_index": 0,
+            "sequence": 1,
+            "family": "agent",
+            "event_name": "agent.service.listed",
+            "payload_hash": format!("0x{}", "45".repeat(32))
+        }))
+        .unwrap();
+        assert_eq!(legacy.nonce, None);
+        let legacy_wire = serde_json::to_value(&legacy).unwrap();
+        assert!(legacy_wire.get("nonce").is_none());
     }
 
     #[test]

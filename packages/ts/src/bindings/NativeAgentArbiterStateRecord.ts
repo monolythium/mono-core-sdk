@@ -3,4 +3,8 @@
 /**
  * Current-state native agent arbiter registry row.
  */
-export type NativeAgentArbiterStateRecord = { arbiterId: string, arbiter: string, tier?: number | null, metadataHash?: string | null, updatedAtBlock: bigint, };
+export type NativeAgentArbiterStateRecord = { arbiterId: string, arbiter: string,
+/**
+ * Arbiter-local registration nonce captured by the native agent module.
+ */
+nonce?: number | null, tier?: number | null, metadataHash?: string | null, updatedAtBlock: bigint, };

@@ -274,6 +274,8 @@ export interface NativeAgentPolicyStateRecord {
   owner: string;
   controller: string;
   assetId: string;
+  /** Owner/controller-local policy nonce; omitted by older nodes. */
+  nonce?: number | null;
   enabled: boolean;
   perActionLimit: string;
   windowLimit: string;
@@ -297,6 +299,8 @@ export interface NativeAgentEscrowStateRecord {
   provider: string;
   arbiter: string;
   assetId: string;
+  /** Buyer-local escrow nonce; omitted by older nodes. */
+  nonce?: number | null;
   amount: string;
   termsHash: string;
   round: number;
@@ -313,12 +317,16 @@ export interface NativeAgentEscrowStateRecord {
 export interface NativeAgentIssuerStateRecord {
   issuerId: string;
   issuer: string;
+  /** Issuer-local nonce; omitted by older nodes. */
+  nonce?: number | null;
   metadataHash?: string | null;
   updatedAtBlock: number;
 }
 
 export interface NativeAgentAttestationStateRecord {
   attestationId: string;
+  /** Issuer-local attestation nonce; omitted by older nodes. */
+  nonce?: number | null;
   issuerId?: string | null;
   issuer?: string | null;
   subject: string;
@@ -332,6 +340,8 @@ export interface NativeAgentConsentStateRecord {
   consentId: string;
   subject: string;
   grantee: string;
+  /** Subject-local consent nonce; omitted by older nodes. */
+  nonce?: number | null;
   scopeHash?: string | null;
   expiresAt?: number | null;
   active: boolean;
@@ -341,6 +351,8 @@ export interface NativeAgentConsentStateRecord {
 export interface NativeAgentServiceStateRecord {
   serviceId: string;
   provider: string;
+  /** Provider-local service nonce; omitted by older nodes. */
+  nonce?: number | null;
   categoryHash?: string | null;
   metadataHash?: string | null;
   active: boolean;
@@ -358,6 +370,8 @@ export interface NativeAgentAvailabilityStateRecord {
 export interface NativeAgentArbiterStateRecord {
   arbiterId: string;
   arbiter: string;
+  /** Arbiter-local registration nonce; omitted by older nodes. */
+  nonce?: number | null;
   tier?: number | null;
   metadataHash?: string | null;
   updatedAtBlock: number;
@@ -2201,6 +2215,7 @@ function decodeNativeAgentIssuerStateRecord(
   return {
     issuerId: parseStringField(row["issuerId"], `${label}.issuerId`),
     issuer: parseStringField(row["issuer"], `${label}.issuer`),
+    nonce: parseRpcNumberNullable(row["nonce"], `${label}.nonce`),
     metadataHash: parseStringNullable(row["metadataHash"]),
     updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`),
   };
@@ -2213,6 +2228,7 @@ function decodeNativeAgentAttestationStateRecord(
   const row = expectObject(value, label);
   return {
     attestationId: parseStringField(row["attestationId"], `${label}.attestationId`),
+    nonce: parseRpcNumberNullable(row["nonce"], `${label}.nonce`),
     issuerId: parseStringNullable(row["issuerId"]),
     issuer: parseStringNullable(row["issuer"]),
     subject: parseStringField(row["subject"], `${label}.subject`),
@@ -2232,6 +2248,7 @@ function decodeNativeAgentConsentStateRecord(
     consentId: parseStringField(row["consentId"], `${label}.consentId`),
     subject: parseStringField(row["subject"], `${label}.subject`),
     grantee: parseStringField(row["grantee"], `${label}.grantee`),
+    nonce: parseRpcNumberNullable(row["nonce"], `${label}.nonce`),
     scopeHash: parseStringNullable(row["scopeHash"]),
     expiresAt: parseRpcNumberNullable(row["expiresAt"], `${label}.expiresAt`),
     active: parseBooleanField(row["active"], `${label}.active`),
@@ -2247,6 +2264,7 @@ function decodeNativeAgentServiceStateRecord(
   return {
     serviceId: parseStringField(row["serviceId"], `${label}.serviceId`),
     provider: parseStringField(row["provider"], `${label}.provider`),
+    nonce: parseRpcNumberNullable(row["nonce"], `${label}.nonce`),
     categoryHash: parseStringNullable(row["categoryHash"]),
     metadataHash: parseStringNullable(row["metadataHash"]),
     active: parseBooleanField(row["active"], `${label}.active`),
@@ -2276,6 +2294,7 @@ function decodeNativeAgentArbiterStateRecord(
   return {
     arbiterId: parseStringField(row["arbiterId"], `${label}.arbiterId`),
     arbiter: parseStringField(row["arbiter"], `${label}.arbiter`),
+    nonce: parseRpcNumberNullable(row["nonce"], `${label}.nonce`),
     tier: parseRpcUintNullable(row["tier"], `${label}.tier`, 0xffff, "uint16"),
     metadataHash: parseStringNullable(row["metadataHash"]),
     updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`),

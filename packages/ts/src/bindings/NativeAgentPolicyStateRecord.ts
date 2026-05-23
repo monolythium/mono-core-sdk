@@ -3,4 +3,8 @@
 /**
  * Current-state native agent spending-policy aggregate.
  */
-export type NativeAgentPolicyStateRecord = { policyId: string, owner: string, controller: string, assetId: string, enabled: boolean, perActionLimit: string, windowLimit: string, windowSecs: bigint, updatedAtBlock: bigint, };
+export type NativeAgentPolicyStateRecord = { policyId: string, owner: string, controller: string, assetId: string,
+/**
+ * Owner/controller-local policy nonce captured by the native agent module.
+ */
+nonce?: number | null, enabled: boolean, perActionLimit: string, windowLimit: string, windowSecs: bigint, updatedAtBlock: bigint, };

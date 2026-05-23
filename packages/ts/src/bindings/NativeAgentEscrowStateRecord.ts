@@ -3,4 +3,8 @@
 /**
  * Current-state native agent escrow aggregate.
  */
-export type NativeAgentEscrowStateRecord = { escrowId: string, buyer: string, provider: string, arbiter: string, assetId: string, amount: string, termsHash: string, round: number, buyerAccepted: boolean, providerAccepted: boolean, submittedPayloadHash?: string | null, status: string, resolution?: string | null, lastActor?: string | null, createdAtBlock: bigint, updatedAtBlock: bigint, };
+export type NativeAgentEscrowStateRecord = { escrowId: string, buyer: string, provider: string, arbiter: string, assetId: string,
+/**
+ * Buyer-local escrow nonce captured by the native agent module.
+ */
+nonce?: number | null, amount: string, termsHash: string, round: number, buyerAccepted: boolean, providerAccepted: boolean, submittedPayloadHash?: string | null, status: string, resolution?: string | null, lastActor?: string | null, createdAtBlock: bigint, updatedAtBlock: bigint, };

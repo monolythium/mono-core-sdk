@@ -12,6 +12,7 @@ import {
   SdkError,
   addressToTypedBech32,
   assessBridgeRoute,
+  decodeNativeAgentStateResponse,
   parseQuantity,
   parseQuantityBig,
 } from "../src/index.js";
@@ -1376,6 +1377,190 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(response.events[0].decoded.market_related_asset_id).toBe(marketRelatedAssetId);
     expect(response.events[0].decoded.price).toBe("50");
     expect(response.events[0].decoded.min_notional).toBe("50");
+  });
+
+  it("lythNativeEventsTyped preserves agent nonce projections", async () => {
+    const decoded: NativeEventProjection = {
+      block_height: 122,
+      tx_index: 0,
+      sequence: 0,
+      family: "agent",
+      event_name: "agent.service.listed",
+      nonce: 21,
+      payload_hash: `0x${"37".repeat(32)}`,
+      service_id: `0x${"38".repeat(32)}`,
+      provider: "mono1agentprovider0000000000000000000000000",
+    };
+    const { fetch } = mockFetch({
+      schemaVersion: 1,
+      fromBlock: 122,
+      toBlock: 122,
+      limit: 1,
+      filters: { family: "agent" },
+      events: [
+        {
+          blockHeight: 122,
+          txIndex: 0,
+          logIndex: 0,
+          address: "monox1agent",
+          eventTopic: `0x${"39".repeat(32)}`,
+          decoded: null,
+          decodedJson: JSON.stringify(decoded),
+        },
+      ],
+      source: {
+        indexerProvider: "native_events",
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const response = await client.lythNativeEventsTyped<NativeEventProjection>({
+      fromBlock: 122,
+      toBlock: 122,
+      family: "agent",
+    });
+
+    expect(response.events[0].decoded.event_name).toBe("agent.service.listed");
+    expect(response.events[0].decoded.nonce).toBe(21);
+  });
+
+  it("decodeNativeAgentStateResponse preserves optional agent row nonces", () => {
+    const policyId = `0x${"aa".repeat(32)}`;
+    const escrowId = `0x${"bb".repeat(32)}`;
+    const assetId = `0x${"cc".repeat(32)}`;
+    const termsHash = `0x${"dd".repeat(32)}`;
+    const issuerId = `0x${"11".repeat(32)}`;
+    const attestationId = `0x${"12".repeat(32)}`;
+    const consentId = `0x${"13".repeat(32)}`;
+    const serviceId = `0x${"14".repeat(32)}`;
+    const arbiterId = `0x${"15".repeat(32)}`;
+    const owner = "mono1agentowner000000000000000000000000000000";
+    const controller = "mono1agentcontroller000000000000000000000000";
+    const provider = "mono1agentprovider0000000000000000000000000";
+    const arbiter = "mono1agentarbiter00000000000000000000000000";
+
+    const response = decodeNativeAgentStateResponse({
+      schemaVersion: 1,
+      limit: 5,
+      filters: {
+        policyId: null,
+        escrowId: null,
+        account: owner,
+        includePolicySpends: false,
+      },
+      issuers: [
+        {
+          issuerId,
+          issuer: owner,
+          nonce: 1,
+          metadataHash: null,
+          updatedAtBlock: 45,
+        },
+        {
+          issuerId: `0x${"10".repeat(32)}`,
+          issuer: provider,
+          metadataHash: null,
+          updatedAtBlock: 46,
+        },
+      ],
+      attestations: [
+        {
+          attestationId,
+          nonce: 2,
+          issuerId,
+          issuer: owner,
+          subject: controller,
+          schemaHash: null,
+          payloadHash: null,
+          active: true,
+          updatedAtBlock: 47,
+        },
+      ],
+      consents: [
+        {
+          consentId,
+          subject: controller,
+          grantee: arbiter,
+          nonce: 3,
+          scopeHash: null,
+          expiresAt: null,
+          active: true,
+          updatedAtBlock: 48,
+        },
+      ],
+      services: [
+        {
+          serviceId,
+          provider,
+          nonce: 4,
+          categoryHash: null,
+          metadataHash: null,
+          active: true,
+          updatedAtBlock: 49,
+        },
+      ],
+      availability: [],
+      arbiters: [
+        {
+          arbiterId,
+          arbiter,
+          nonce: 5,
+          tier: null,
+          metadataHash: null,
+          updatedAtBlock: 50,
+        },
+      ],
+      reputationReviews: [],
+      spendingPolicies: [
+        {
+          policyId,
+          owner,
+          controller,
+          assetId,
+          nonce: 6,
+          enabled: true,
+          perActionLimit: "100",
+          windowLimit: "500",
+          windowSecs: 60,
+          updatedAtBlock: 51,
+        },
+      ],
+      policySpends: [],
+      escrows: [
+        {
+          escrowId,
+          buyer: owner,
+          provider,
+          arbiter,
+          assetId,
+          nonce: 7,
+          amount: "1000",
+          termsHash,
+          round: 2,
+          buyerAccepted: true,
+          providerAccepted: false,
+          submittedPayloadHash: null,
+          status: "created",
+          resolution: null,
+          lastActor: null,
+          createdAtBlock: 40,
+          updatedAtBlock: 52,
+        },
+      ],
+      source: {
+        indexerProvider: "native_agent_state",
+        projection: "native_agent_state",
+      },
+    });
+
+    expect(response.issuers[0].nonce).toBe(1);
+    expect(response.issuers[1].nonce).toBeNull();
+    expect(response.attestations[0].nonce).toBe(2);
+    expect(response.consents[0].nonce).toBe(3);
+    expect(response.services[0].nonce).toBe(4);
+    expect(response.arbiters[0].nonce).toBe(5);
+    expect(response.spendingPolicies[0].nonce).toBe(6);
+    expect(response.escrows[0].nonce).toBe(7);
   });
 
   it("lythNativeAgentState forwards filter and decodes policy, spend, and escrow rows", async () => {
