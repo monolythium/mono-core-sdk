@@ -278,6 +278,8 @@ pub struct NativeReceiptResponse {
     pub schema: String,
     /// Consensus artifact hash from the RISC-V receipt.
     pub artifact_hash: Hash,
+    /// Deterministic commitment to the native receipt payload.
+    pub receipt_commitment: String,
     /// Opaque no-EVM proof payload. Current v4.1 nodes return `null`
     /// while proof sourcing is pending; older nodes may omit this field.
     #[serde(default)]
@@ -3177,6 +3179,7 @@ mod tests {
             "txIndex": 0,
             "schema": "riscv.receipt.v1",
             "artifactHash": artifact_hash,
+            "receiptCommitment": format!("0x{}", "bb".repeat(32)),
             "noEvmProof": null,
             "counters": {
                 "cycles": 44,
@@ -3215,6 +3218,7 @@ mod tests {
 
         assert_eq!(receipt.schema, "riscv.receipt.v1");
         assert_eq!(receipt.artifact_hash, format!("0x{}", "aa".repeat(32)));
+        assert_eq!(receipt.receipt_commitment, format!("0x{}", "bb".repeat(32)));
         assert_eq!(receipt.no_evm_proof, None);
         assert_eq!(receipt.counters.cycles, 44);
         assert_eq!(receipt.counters.syscall_units, 3);
@@ -3250,6 +3254,7 @@ mod tests {
             "txIndex": 0,
             "schema": "riscv.receipt.v1",
             "artifactHash": format!("0x{}", "aa".repeat(32)),
+            "receiptCommitment": format!("0x{}", "bb".repeat(32)),
             "counters": {
                 "cycles": 44,
                 "syscallUnits": 3,
@@ -3276,6 +3281,7 @@ mod tests {
         });
 
         let legacy: NativeReceiptResponse = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(legacy.receipt_commitment, format!("0x{}", "bb".repeat(32)));
         assert_eq!(legacy.no_evm_proof, None);
 
         wire.as_object_mut().unwrap().insert(
@@ -3300,7 +3306,48 @@ mod tests {
         let null_proof: NativeReceiptResponse = serde_json::from_value(wire).unwrap();
         assert_eq!(null_proof.no_evm_proof, None);
         let null_wire = serde_json::to_value(null_proof).unwrap();
+        assert_eq!(
+            null_wire["receiptCommitment"],
+            serde_json::json!(format!("0x{}", "bb".repeat(32)))
+        );
         assert_eq!(null_wire["noEvmProof"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn native_receipt_response_requires_receipt_commitment() {
+        let wire = serde_json::json!({
+            "txHash": format!("0x{}", "11".repeat(32)),
+            "blockHash": format!("0x{}", "22".repeat(32)),
+            "blockHeight": 100,
+            "txIndex": 0,
+            "schema": "riscv.receipt.v1",
+            "artifactHash": format!("0x{}", "aa".repeat(32)),
+            "counters": {
+                "cycles": 44,
+                "syscallUnits": 3,
+                "stateIoUnits": 2
+            },
+            "fee": {
+                "total_lythoshi": "440000000000",
+                "total_lyth": "4,400",
+                "cycles_used": 44,
+                "base_price_per_cycle_lythoshi": "10000000000",
+                "state_io_units": 2,
+                "state_io_price_per_unit_lythoshi": "0",
+                "priority_tip_lythoshi": "0"
+            },
+            "reverted": false,
+            "nativeDeltaCount": 0,
+            "eventCount": 0,
+            "events": [],
+            "source": {
+                "chainProvider": "mock_chain",
+                "indexerProvider": "native_events",
+                "metadataLogIndex": u32::MAX
+            }
+        });
+
+        assert!(serde_json::from_value::<NativeReceiptResponse>(wire).is_err());
     }
 
     #[test]
@@ -3504,6 +3551,7 @@ mod tests {
             tx_index: 0,
             schema: "riscv.receipt.v1".to_owned(),
             artifact_hash: format!("0x{}", "aa".repeat(32)),
+            receipt_commitment: format!("0x{}", "bb".repeat(32)),
             no_evm_proof: None,
             counters: NativeReceiptCounters {
                 cycles: 44,
@@ -3753,6 +3801,7 @@ mod tests {
             "txIndex": 0,
             "schema": "riscv.receipt.v1",
             "artifactHash": format!("0x{}", "33".repeat(32)),
+            "receiptCommitment": format!("0x{}", "88".repeat(32)),
             "counters": { "cycles": 1, "syscallUnits": 0, "stateIoUnits": 0 },
             "fee": {
                 "total_lythoshi": "0",
