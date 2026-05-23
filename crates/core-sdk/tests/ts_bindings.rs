@@ -10,6 +10,11 @@
 
 #![cfg(feature = "ts-bindings")]
 
+use monolythium_core_sdk::bridge::{
+    BridgeAdminControl, BridgeCircuitBreakerState, BridgeRiskTier, BridgeRouteAssessment,
+    BridgeRouteCandidate, BridgeRouteDisclosure, BridgeRouteSelection, BridgeTransferIntent,
+    BridgeTransferRequest, BridgeVerifierDisclosure,
+};
 use monolythium_core_sdk::mrv::{
     MrvAbiManifest, MrvAbiParam, MrvAbiSymbol, MrvAbiSymbolKind, MrvAbiType, MrvAddressKind,
     MrvArtifactMetadata, MrvBuildMetadata, MrvCallRequest, MrvCallResponse, MrvCallStatus,
@@ -57,6 +62,16 @@ fn export_bindings() {
     AgentReputationRecord::export_all_to(&out).expect("AgentReputationRecord");
     AgentReputationResponse::export_all_to(&out).expect("AgentReputationResponse");
     AssetPolicy::export_all_to(&out).expect("AssetPolicy");
+    BridgeAdminControl::export_all_to(&out).expect("BridgeAdminControl");
+    BridgeCircuitBreakerState::export_all_to(&out).expect("BridgeCircuitBreakerState");
+    BridgeRiskTier::export_all_to(&out).expect("BridgeRiskTier");
+    BridgeRouteAssessment::export_all_to(&out).expect("BridgeRouteAssessment");
+    BridgeRouteCandidate::export_all_to(&out).expect("BridgeRouteCandidate");
+    BridgeRouteDisclosure::export_all_to(&out).expect("BridgeRouteDisclosure");
+    BridgeRouteSelection::export_all_to(&out).expect("BridgeRouteSelection");
+    BridgeTransferIntent::export_all_to(&out).expect("BridgeTransferIntent");
+    BridgeTransferRequest::export_all_to(&out).expect("BridgeTransferRequest");
+    BridgeVerifierDisclosure::export_all_to(&out).expect("BridgeVerifierDisclosure");
     BlsCertificateResponse::export_all_to(&out).expect("BlsCertificateResponse");
     BlockHeader::export_all_to(&out).expect("BlockHeader");
     BlockTag::export_all_to(&out).expect("BlockTag");
