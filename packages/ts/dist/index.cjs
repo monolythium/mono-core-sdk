@@ -4508,7 +4508,21 @@ var CLOB_SELECTORS = {
    *
    * Args: `baseTokenId, quoteTokenId, side, price, amount, expiresAtBlock`.
    */
-  placeLimitOrder: "0x2468786f"
+  placeLimitOrder: "0x2468786f",
+  /**
+   * `placeMarketOrder(bytes32,bytes32,uint8,uint256,uint16)`
+   *
+   * Args: `baseTokenId, quoteTokenId, side, quantity, maxSlippageBps`.
+   */
+  placeMarketOrder: "0xb9b1fa86",
+  /**
+   * `placeMarketOrderEx(bytes32,bytes32,uint8,uint256,uint16,uint8)`
+   *
+   * Args: `baseTokenId, quoteTokenId, side, quantity, maxSlippageBps, mode`.
+   */
+  placeMarketOrderEx: "0xa6f092f0",
+  /** `cancelOrder(bytes32)` */
+  cancelOrder: "0x7489ec23"
 };
 var MarketActionError = class extends Error {
   constructor(message) {
@@ -4538,6 +4552,41 @@ function encodePlaceLimitOrderCalldata(args) {
     )
   );
 }
+function encodePlaceMarketOrderCalldata(args) {
+  const normalized = normalizePlaceSpotMarketOrderArgs(args);
+  return bytesToHex4(
+    concatBytes3(
+      hexToBytes3(CLOB_SELECTORS.placeMarketOrder, "placeMarketOrder selector"),
+      normalized.baseTokenId,
+      normalized.quoteTokenId,
+      uint8Word2(normalized.side),
+      uint256Word2(normalized.quantity, "quantity"),
+      uint16Word(normalized.maxSlippageBps, "maxSlippageBps")
+    )
+  );
+}
+function encodePlaceMarketOrderExCalldata(args) {
+  const normalized = normalizePlaceSpotMarketOrderExArgs(args);
+  return bytesToHex4(
+    concatBytes3(
+      hexToBytes3(CLOB_SELECTORS.placeMarketOrderEx, "placeMarketOrderEx selector"),
+      normalized.baseTokenId,
+      normalized.quoteTokenId,
+      uint8Word2(normalized.side),
+      uint256Word2(normalized.quantity, "quantity"),
+      uint16Word(normalized.maxSlippageBps, "maxSlippageBps"),
+      uint8Word2(normalized.mode)
+    )
+  );
+}
+function encodeCancelOrderCalldata(args) {
+  return bytesToHex4(
+    concatBytes3(
+      hexToBytes3(CLOB_SELECTORS.cancelOrder, "cancelOrder selector"),
+      bytes32FromHex(args.orderId, "orderId")
+    )
+  );
+}
 function buildPlaceSpotLimitOrderPlan(args) {
   return {
     method: "eth_sendTransaction",
@@ -4551,7 +4600,67 @@ function buildPlaceSpotLimitOrderPlan(args) {
     mempoolClass: MempoolClass.CLOBOp
   };
 }
+function buildPlaceSpotMarketOrderPlan(args) {
+  return {
+    method: "eth_sendTransaction",
+    params: [
+      {
+        to: PRECOMPILE_ADDRESSES.CLOB,
+        value: "0x0",
+        data: encodePlaceMarketOrderCalldata(args)
+      }
+    ],
+    mempoolClass: MempoolClass.CLOBOp
+  };
+}
+function buildPlaceSpotMarketOrderExPlan(args) {
+  return {
+    method: "eth_sendTransaction",
+    params: [
+      {
+        to: PRECOMPILE_ADDRESSES.CLOB,
+        value: "0x0",
+        data: encodePlaceMarketOrderExCalldata(args)
+      }
+    ],
+    mempoolClass: MempoolClass.CLOBOp
+  };
+}
+function buildCancelSpotOrderPlan(args) {
+  return {
+    method: "eth_sendTransaction",
+    params: [
+      {
+        to: PRECOMPILE_ADDRESSES.CLOB,
+        value: "0x0",
+        data: encodeCancelOrderCalldata(args)
+      }
+    ],
+    mempoolClass: MempoolClass.CLOBOp
+  };
+}
 function normalizePlaceSpotLimitOrderArgs(args) {
+  const normalized = normalizeSpotMarketArgs(args);
+  return {
+    ...normalized,
+    price: positiveDecimal(args.price, "price"),
+    expiryBlock: uint64(args.expiryBlock ?? 0n, "expiryBlock")
+  };
+}
+function normalizePlaceSpotMarketOrderArgs(args) {
+  const normalized = normalizeSpotMarketArgs(args);
+  return {
+    ...normalized,
+    maxSlippageBps: uint16Bps(args.maxSlippageBps, "maxSlippageBps")
+  };
+}
+function normalizePlaceSpotMarketOrderExArgs(args) {
+  return {
+    ...normalizePlaceSpotMarketOrderArgs(args),
+    mode: normalizeMarketOrderMode(args.mode)
+  };
+}
+function normalizeSpotMarketArgs(args) {
   const marketId = normalizeBytes32Hex(args.marketId, "marketId");
   const expectedMarketId = deriveClobMarketId(args.baseTokenId, args.quoteTokenId);
   if (marketId !== expectedMarketId) {
@@ -4562,9 +4671,7 @@ function normalizePlaceSpotLimitOrderArgs(args) {
     baseTokenId: bytes32FromHex(args.baseTokenId, "baseTokenId"),
     quoteTokenId: bytes32FromHex(args.quoteTokenId, "quoteTokenId"),
     side: normalizeSide(args.side),
-    price: positiveDecimal(args.price, "price"),
-    quantity: positiveDecimal(args.quantity, "quantity"),
-    expiryBlock: uint64(args.expiryBlock ?? 0n, "expiryBlock")
+    quantity: positiveDecimal(args.quantity, "quantity")
   };
 }
 function normalizeBytes32Hex(value, name) {
@@ -4582,6 +4689,11 @@ function normalizeSide(side) {
   if (side === "sell") return 1;
   throw new MarketActionError("side must be 'buy' or 'sell'");
 }
+function normalizeMarketOrderMode(mode) {
+  if (mode === "fill-or-refund") return 0;
+  if (mode === "fill-or-rest-at-cap") return 1;
+  throw new MarketActionError("mode must be 'fill-or-refund' or 'fill-or-rest-at-cap'");
+}
 function positiveDecimal(value, name) {
   if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) {
     throw new MarketActionError(`${name} must be an integer decimal string`);
@@ -4589,6 +4701,13 @@ function positiveDecimal(value, name) {
   const n = BigInt(value);
   if (n <= 0n) {
     throw new MarketActionError(`${name} must be positive`);
+  }
+  return n;
+}
+function uint16Bps(value, name) {
+  const n = uint64(value, name);
+  if (n >= 10000n) {
+    throw new MarketActionError(`${name} must be less than 10000`);
   }
   return n;
 }
@@ -4626,6 +4745,15 @@ function uint64Word3(value, name) {
     out[i] = Number(rest & 0xffn);
     rest >>= 8n;
   }
+  return out;
+}
+function uint16Word(value, name) {
+  if (value < 0n || value > 0xffffn) {
+    throw new MarketActionError(`${name} must fit uint16`);
+  }
+  const out = new Uint8Array(32);
+  out[30] = Number(value >> 8n & 0xffn);
+  out[31] = Number(value & 0xffn);
   return out;
 }
 function uint256Word2(value, name) {
@@ -4898,6 +5026,7 @@ exports.bridgeQuoteSubmitReadiness = bridgeQuoteSubmitReadiness;
 exports.bridgeRoutesReadiness = bridgeRoutesReadiness;
 exports.bridgeTransferCandidates = bridgeTransferCandidates;
 exports.buildBridgeRouteCatalogue = buildBridgeRouteCatalogue;
+exports.buildCancelSpotOrderPlan = buildCancelSpotOrderPlan;
 exports.buildMrvCallNativeTxPlan = buildMrvCallNativeTxPlan;
 exports.buildMrvCallPlan = buildMrvCallPlan;
 exports.buildMrvCallRequest = buildMrvCallRequest;
@@ -4908,6 +5037,8 @@ exports.buildMrvDeployPayloadRequest = buildMrvDeployPayloadRequest;
 exports.buildMrvDeployPlan = buildMrvDeployPlan;
 exports.buildMrvDeployRequest = buildMrvDeployRequest;
 exports.buildPlaceSpotLimitOrderPlan = buildPlaceSpotLimitOrderPlan;
+exports.buildPlaceSpotMarketOrderExPlan = buildPlaceSpotMarketOrderExPlan;
+exports.buildPlaceSpotMarketOrderPlan = buildPlaceSpotMarketOrderPlan;
 exports.checkMrvFeeDisplayConformance = checkMrvFeeDisplayConformance;
 exports.clobAddressHex = clobAddressHex;
 exports.composeClaimBoundMessage = composeClaimBoundMessage;
@@ -4921,6 +5052,7 @@ exports.delegationAddressHex = delegationAddressHex;
 exports.deriveClobMarketId = deriveClobMarketId;
 exports.deriveMrvContractAddress = deriveMrvContractAddress;
 exports.encodeBlockSelector = encodeBlockSelector;
+exports.encodeCancelOrderCalldata = encodeCancelOrderCalldata;
 exports.encodeClaimPolicyByAddressCalldata = encodeClaimPolicyByAddressCalldata;
 exports.encodeCompleteRedemptionCalldata = encodeCompleteRedemptionCalldata;
 exports.encodeDisableCalldata = encodeDisableCalldata;
@@ -4930,6 +5062,8 @@ exports.encodeLockBridgeConfigCalldata = encodeLockBridgeConfigCalldata;
 exports.encodeLookupPubkeyCalldata = encodeLookupPubkeyCalldata;
 exports.encodeMrvDeployPayload = encodeMrvDeployPayload;
 exports.encodePlaceLimitOrderCalldata = encodePlaceLimitOrderCalldata;
+exports.encodePlaceMarketOrderCalldata = encodePlaceMarketOrderCalldata;
+exports.encodePlaceMarketOrderExCalldata = encodePlaceMarketOrderExCalldata;
 exports.encodeRegisterPubkeyCalldata = encodeRegisterPubkeyCalldata;
 exports.encodeReportServiceProbeCalldata = encodeReportServiceProbeCalldata;
 exports.encodeSetBridgeResumeCooldownCalldata = encodeSetBridgeResumeCooldownCalldata;

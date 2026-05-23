@@ -332,16 +332,26 @@ export {
   CLOB_MARKET_ID_DOMAIN_TAG,
   CLOB_SELECTORS,
   MarketActionError,
+  buildCancelSpotOrderPlan,
   buildPlaceSpotLimitOrderPlan,
+  buildPlaceSpotMarketOrderExPlan,
+  buildPlaceSpotMarketOrderPlan,
   clobAddressHex,
   deriveClobMarketId,
+  encodeCancelOrderCalldata,
   encodePlaceLimitOrderCalldata,
+  encodePlaceMarketOrderCalldata,
+  encodePlaceMarketOrderExCalldata,
 } from "./market-actions.js";
 export type {
+  CancelSpotOrderArgs,
   EthSendTransactionRequest,
   MarketTransactionPlan,
   PlaceSpotLimitOrderArgs,
+  PlaceSpotMarketOrderArgs,
+  PlaceSpotMarketOrderExArgs,
   SpotLimitOrderSide,
+  SpotMarketOrderMode,
 } from "./market-actions.js";
 
 // ethers.js compat shim — ethers is a peerDependency. Importers that
