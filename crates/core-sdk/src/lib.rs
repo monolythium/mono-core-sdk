@@ -24,6 +24,7 @@ pub mod api;
 pub mod bridge;
 pub mod client;
 pub mod consts;
+pub mod delegation;
 pub mod error;
 pub mod mrv;
 pub mod pubkey_registry;
@@ -44,6 +45,11 @@ pub use client::{
     MrvCallNativeEncryptedSubmitResult, MrvDeployNativeEncryptedSubmitResult, RpcClient,
 };
 pub use consts::{burn_addr_hex, BURN_ADDR};
+pub use delegation::{
+    calldata_to_hex as delegation_calldata_to_hex, delegation_address_hex,
+    encode_complete_redemption_calldata, encode_complete_redemption_calldata_hex,
+    selector_complete_redemption, SIGHASH_COMPLETE_REDEMPTION,
+};
 pub use error::SdkError;
 pub use mrv::{
     assert_mrv_call_native_submission_plan, assert_mrv_deploy_native_submission_plan,
