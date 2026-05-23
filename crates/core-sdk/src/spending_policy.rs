@@ -81,10 +81,10 @@ pub struct SpendingPolicyArgs {
     pub sub_account: [u8; 20],
     /// Principal allowed to manage the policy.
     pub principal: [u8; 20],
-    /// Daily spend cap in wei.
-    pub daily_cap_wei: u128,
-    /// Per-transaction cap in wei.
-    pub per_tx_cap_wei: u128,
+    /// Daily spend cap in lythoshi.
+    pub daily_cap_lythoshi: u128,
+    /// Per-transaction cap in lythoshi.
+    pub per_tx_cap_lythoshi: u128,
     /// Allow-list Merkle root.
     pub allow_root: [u8; 32],
     /// Deny-list Merkle root.
@@ -99,16 +99,16 @@ impl SpendingPolicyArgs {
     pub fn from_hex_addresses(
         sub_account: &str,
         principal: &str,
-        daily_cap_wei: u128,
-        per_tx_cap_wei: u128,
+        daily_cap_lythoshi: u128,
+        per_tx_cap_lythoshi: u128,
         allow_root: [u8; 32],
         deny_root: [u8; 32],
     ) -> Result<Self, SpendingPolicyError> {
         Ok(Self {
             sub_account: hex_to_address(sub_account)?,
             principal: hex_to_address(principal)?,
-            daily_cap_wei,
-            per_tx_cap_wei,
+            daily_cap_lythoshi,
+            per_tx_cap_lythoshi,
             allow_root,
             deny_root,
         })
@@ -174,8 +174,8 @@ pub fn compose_claim_bound_message(
     out.extend_from_slice(&precompile_addr);
     out.extend_from_slice(&args.sub_account);
     out.extend_from_slice(&args.principal);
-    out.extend_from_slice(&args.daily_cap_wei.to_be_bytes());
-    out.extend_from_slice(&args.per_tx_cap_wei.to_be_bytes());
+    out.extend_from_slice(&args.daily_cap_lythoshi.to_be_bytes());
+    out.extend_from_slice(&args.per_tx_cap_lythoshi.to_be_bytes());
     out.extend_from_slice(&args.allow_root);
     out.extend_from_slice(&args.deny_root);
     out.extend_from_slice(&expected_policy_version.to_be_bytes());
@@ -269,8 +269,8 @@ pub fn encode_disable_calldata(sub_account: [u8; 20]) -> Vec<u8> {
 fn encode_policy_words(out: &mut Vec<u8>, args: &SpendingPolicyArgs) {
     encode_address_word(out, args.sub_account);
     encode_address_word(out, args.principal);
-    encode_u128_word(out, args.daily_cap_wei);
-    encode_u128_word(out, args.per_tx_cap_wei);
+    encode_u128_word(out, args.daily_cap_lythoshi);
+    encode_u128_word(out, args.per_tx_cap_lythoshi);
     out.extend_from_slice(&args.allow_root);
     out.extend_from_slice(&args.deny_root);
 }
@@ -317,8 +317,8 @@ mod tests {
         SpendingPolicyArgs {
             sub_account: [0x11; 20],
             principal: [0x22; 20],
-            daily_cap_wei: 100,
-            per_tx_cap_wei: 7,
+            daily_cap_lythoshi: 100,
+            per_tx_cap_lythoshi: 7,
             allow_root: [0xAA; 32],
             deny_root: [0xBB; 32],
         }

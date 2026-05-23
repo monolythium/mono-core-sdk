@@ -2163,8 +2163,8 @@ function composeClaimBoundMessage(chainId, args, opts) {
     precompileAddress,
     normalized.subAccount,
     normalized.principal,
-    uint128Bytes(normalized.dailyCapWei, "dailyCapWei"),
-    uint128Bytes(normalized.perTxCapWei, "perTxCapWei"),
+    uint128Bytes(normalized.dailyCapLythoshi, "dailyCapLythoshi"),
+    uint128Bytes(normalized.perTxCapLythoshi, "perTxCapLythoshi"),
     normalized.allowRoot,
     normalized.denyRoot,
     uint64Bytes(opts?.expectedPolicyVersion ?? 0n, "expectedPolicyVersion")
@@ -2228,8 +2228,8 @@ function normalizeArgs(args) {
   return {
     subAccount: toAddressBytes(args.subAccount),
     principal: toAddressBytes(args.principal),
-    dailyCapWei: toBigint(args.dailyCapWei, "dailyCapWei"),
-    perTxCapWei: toBigint(args.perTxCapWei, "perTxCapWei"),
+    dailyCapLythoshi: toBigint(args.dailyCapLythoshi, "dailyCapLythoshi"),
+    perTxCapLythoshi: toBigint(args.perTxCapLythoshi, "perTxCapLythoshi"),
     allowRoot: expectLength3(toBytes2(args.allowRoot), 32, "allowRoot"),
     denyRoot: expectLength3(toBytes2(args.denyRoot), 32, "denyRoot")
   };
@@ -2238,8 +2238,8 @@ function encodePolicyWords(args) {
   return concatBytes3(
     encodeAddressWord(args.subAccount),
     encodeAddressWord(args.principal),
-    encodeUint128Word(args.dailyCapWei),
-    encodeUint128Word(args.perTxCapWei),
+    encodeUint128Word(args.dailyCapLythoshi),
+    encodeUint128Word(args.perTxCapLythoshi),
     args.allowRoot,
     args.denyRoot
   );
