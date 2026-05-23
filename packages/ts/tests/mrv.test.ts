@@ -3,6 +3,7 @@ import {
   MRV_FORMAT_VERSION,
   MRV_PROFILE_MONO_RV32IM_V1,
   MRV_TX_EXTENSION_KIND,
+  RpcClient,
   addressToTypedBech32,
   buildMrvCallNativeTxPlan,
   buildMrvCallPlan,
@@ -15,11 +16,49 @@ import {
   mrvBech32ToAddress,
   mrvCodeHashHex,
   mrvV1TransactionExtension,
+  submitMrvCallNativeTx,
+  submitMrvDeployNativeTx,
   validateMrvArtifactMetadata,
   validateMrvCallRequest,
   validateMrvDeployRequest,
 } from "../src/index.js";
+import {
+  ML_DSA_65_SEED_LEN,
+  ML_KEM_768_ENCAPSULATION_KEY_LEN,
+  MempoolClass,
+  MlDsa65Backend,
+  bytesToHex,
+} from "../src/crypto/index.js";
 import type { MrvArtifactMetadata, MrvCallRequest, MrvDeployRequest } from "../src/index.js";
+
+interface CapturedCall {
+  method: string;
+  params: unknown;
+}
+
+function mockFetchSequence(replies: unknown[]): {
+  fetch: typeof fetch;
+  calls: CapturedCall[];
+} {
+  const calls: CapturedCall[] = [];
+  const fetchImpl: typeof fetch = async (_input, init) => {
+    const body = init?.body;
+    if (typeof body !== "string") {
+      throw new Error("expected string body");
+    }
+    const parsed = JSON.parse(body) as { method: string; params: unknown };
+    calls.push({ method: parsed.method, params: parsed.params });
+    const reply = replies.shift();
+    if (reply === undefined) {
+      throw new Error("unexpected RPC call");
+    }
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: reply }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  return { fetch: fetchImpl, calls };
+}
 
 function validMetadata(): MrvArtifactMetadata {
   const code = Uint8Array.from([0x13, 0x00, 0x00, 0x00]);
@@ -271,6 +310,73 @@ describe("MRV/RISC-V SDK helpers", () => {
       input: "0x0102",
       extensions: [{ kind: MRV_TX_EXTENSION_KIND, bodyHex: "0x01" }],
     });
+    const { tx: _deploySigningAdapter, ...deployAppFacing } = deploy;
+    const { tx: _callSigningAdapter, ...callAppFacing } = call;
+    const appWire = JSON.stringify(
+      [deployAppFacing, callAppFacing],
+      (_key, value) => (typeof value === "bigint" ? value.toString() : value),
+    );
+    expect(appWire).not.toMatch(/gas|gwei|wei/i);
+  });
+
+  it("submits MRV deploy and call plans through encrypted native envelopes", async () => {
+    const backend = MlDsa65Backend.fromSeed(new Uint8Array(ML_DSA_65_SEED_LEN).fill(0x41));
+    const user = addressToTypedBech32("user", backend.getAddress());
+    const contract = addressToTypedBech32("contract", "0x2222222222222222222222222222222222222222");
+    const encryptionKey = {
+      algo: "ml-kem-768",
+      epoch: 9n,
+      encapsulationKey: new Uint8Array(ML_KEM_768_ENCAPSULATION_KEY_LEN).fill(0x33),
+    };
+    const { fetch, calls } = mockFetchSequence([
+      {
+        algo: encryptionKey.algo,
+        epoch: encryptionKey.epoch.toString(),
+        encapsulationKey: bytesToHex(encryptionKey.encapsulationKey),
+      },
+      `0x${"aa".repeat(32)}`,
+      `0x${"bb".repeat(32)}`,
+    ]);
+    const client = new RpcClient("http://node", { fetch });
+
+    const deploy = await submitMrvDeployNativeTx(client, backend, "0x13000000", {
+      from: user,
+      chainId: 69_420n,
+      nonce: 7n,
+      executionUnitLimit: 100_000n,
+      maxExecutionFeeLythoshi: "25",
+      priorityTipLythoshi: "1",
+      class: MempoolClass.ContractCall,
+    });
+    expect(deploy.txHash).toBe(`0x${"aa".repeat(32)}`);
+    expect(deploy.request.artifactBytes).toBe("0x13000000");
+    expect(deploy.nativeTx.maxExecutionFeeLythoshi).toBe("25");
+    expect(deploy.innerSighashHex).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(deploy.innerTxHashHex).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(deploy.envelopeWireHex.startsWith("0x")).toBe(true);
+    expect(deploy.innerWireBytes).toBeGreaterThan(0);
+
+    const call = await submitMrvCallNativeTx(client, backend, contract, [0x01, 0x02], {
+      from: user,
+      chainId: 69_420n,
+      nonce: 8n,
+      executionUnitLimit: 50_000n,
+      maxExecutionFeeLythoshi: "10",
+      valueLythoshi: "3",
+      encryptionKey,
+    });
+    expect(call.txHash).toBe(`0x${"bb".repeat(32)}`);
+    expect(call.request.contractAddress).toBe(contract);
+    expect(call.nativeTx.valueLythoshi).toBe("3");
+
+    expect(calls.map((c) => c.method)).toEqual([
+      "lyth_getEncryptionKey",
+      "lyth_submitEncrypted",
+      "lyth_submitEncrypted",
+    ]);
+    expect(calls[0].params).toEqual([]);
+    expect(calls[1].params).toEqual([deploy.envelopeWireHex]);
+    expect(calls[2].params).toEqual([call.envelopeWireHex]);
     const { tx: _deploySigningAdapter, ...deployAppFacing } = deploy;
     const { tx: _callSigningAdapter, ...callAppFacing } = call;
     const appWire = JSON.stringify(

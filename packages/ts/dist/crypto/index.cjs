@@ -544,6 +544,7 @@ async function buildEncryptedSubmission(args) {
   return {
     envelopeWireHex: built.wireHex,
     innerSighashHex: `0x${[...signed.sighash].map((b) => b.toString(16).padStart(2, "0")).join("")}`,
+    innerTxHashHex: bytesToHex(signed.txHash),
     innerWireBytes: signed.wireBytes.length
   };
 }

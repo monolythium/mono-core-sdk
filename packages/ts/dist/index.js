@@ -1,4 +1,9 @@
 import { blake3 } from '@noble/hashes/blake3.js';
+import { ml_kem768 } from '@noble/post-quantum/ml-kem.js';
+import { chacha20poly1305 } from '@noble/ciphers/chacha.js';
+import { keccak_256 } from '@noble/hashes/sha3.js';
+import { randomBytes } from '@noble/hashes/utils.js';
+import '@noble/post-quantum/ml-dsa.js';
 import { JsonRpcApiProvider, Network, AbstractSigner } from 'ethers';
 
 // src/error.ts
@@ -1748,6 +1753,256 @@ function normalizeMempoolSnapshot(value) {
     bytes_by_class: bytesByClass.map((v, i) => parseRpcBigint(v, `mempool bytes_by_class[${i}]`))
   };
 }
+
+// src/crypto/bytes.ts
+function concatBytes2(...chunks) {
+  const len = chunks.reduce((n, c) => n + c.length, 0);
+  const out = new Uint8Array(len);
+  let off = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, off);
+    off += chunk.length;
+  }
+  return out;
+}
+function bytesToHex2(bytes) {
+  let out = "0x";
+  for (let i = 0; i < bytes.length; i++) {
+    out += bytes[i].toString(16).padStart(2, "0");
+  }
+  return out;
+}
+function hexToBytes2(hex, label = "hex") {
+  const stripped = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
+  if (stripped.length % 2 !== 0) {
+    throw new Error(`${label} must have even length`);
+  }
+  const out = new Uint8Array(stripped.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    const b = Number.parseInt(stripped.slice(i * 2, i * 2 + 2), 16);
+    if (Number.isNaN(b)) {
+      throw new Error(`${label} contains invalid hex`);
+    }
+    out[i] = b;
+  }
+  return out;
+}
+function expectBytes(value, len, label) {
+  if (value.length !== len) {
+    throw new Error(`${label} must be ${len} bytes, got ${value.length}`);
+  }
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+function parseBigint(value, label) {
+  if (value === void 0) throw new Error(`${label} missing`);
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${label} must be a non-negative safe integer`);
+    return BigInt(value);
+  }
+  if (value.startsWith("0x") || value.startsWith("0X")) return BigInt(value);
+  return BigInt(value);
+}
+
+// src/crypto/bincode.ts
+var BincodeWriter = class {
+  #chunks = [];
+  u8(value) {
+    this.#int(value, 1);
+  }
+  u16(value) {
+    this.#int(value, 2);
+  }
+  u32(value) {
+    this.#int(value, 4);
+  }
+  u64(value) {
+    this.#big(value, 8);
+  }
+  u128(value) {
+    this.#big(value, 16);
+  }
+  enumVariant(value) {
+    this.u32(value);
+  }
+  rawBytes(bytes) {
+    for (const b of bytes) this.#chunks.push(b);
+  }
+  bytes(bytes) {
+    this.u64(BigInt(bytes.length));
+    this.rawBytes(bytes);
+  }
+  optionBytes(bytes) {
+    if (bytes === null) {
+      this.u8(0);
+      return;
+    }
+    this.u8(1);
+    this.rawBytes(bytes);
+  }
+  toBytes() {
+    return Uint8Array.from(this.#chunks);
+  }
+  #int(value, bytes) {
+    if (!Number.isSafeInteger(value) || value < 0 || value >= 2 ** (bytes * 8)) {
+      throw new Error(`integer out of u${bytes * 8} range`);
+    }
+    for (let i = 0; i < bytes; i++) {
+      this.#chunks.push(value >> 8 * i & 255);
+    }
+  }
+  #big(value, bytes) {
+    let v = typeof value === "bigint" ? value : BigInt(value);
+    if (v < 0n || v >= 1n << BigInt(bytes * 8)) {
+      throw new Error(`integer out of u${bytes * 8} range`);
+    }
+    for (let i = 0; i < bytes; i++) {
+      this.#chunks.push(Number(v & 0xffn));
+      v >>= 8n;
+    }
+  }
+};
+var ML_DSA_65_PUBLIC_KEY_LEN = 1952;
+var ML_DSA_65_SIGNATURE_LEN = 3309;
+var STANDARD_ALGO_NUMBER_ML_DSA_65 = 1001;
+var ENUM_VARIANT_INDEX_ML_DSA_65 = 5;
+
+// src/crypto/envelope.ts
+var DKG_AEAD_DOMAIN_TAG = new TextEncoder().encode("protocore/v2/mempool/dkg-mlkem768/1");
+var ML_KEM_768_ENCAPSULATION_KEY_LEN = 1184;
+var DKG_NONCE_LEN = 12;
+var MempoolClass = {
+  Transfer: 0,
+  ContractCall: 1};
+function bincodeNonceAad(aad) {
+  const w = new BincodeWriter();
+  w.bytes(expectBytes(aad.sender, 20, "NonceAad.sender"));
+  w.u64(aad.nonce);
+  w.u64(aad.chainId);
+  w.enumVariant(aad.class);
+  w.u128(aad.maxFeePerGas);
+  w.u128(aad.maxPriorityFeePerGas);
+  w.u64(aad.gasLimit);
+  return w.toBytes();
+}
+function bincodeDecryptHint(hint) {
+  const w = new BincodeWriter();
+  w.u64(hint.epoch);
+  w.u16(hint.scheme);
+  return w.toBytes();
+}
+function bincodeEncryptedEnvelope(env) {
+  const w = new BincodeWriter();
+  w.rawBytes(bincodeNonceAad(env.nonceAad));
+  w.bytes(env.ciphertext);
+  w.rawBytes(bincodeDecryptHint(env.decryptionHint));
+  bincodeMlDsa65OpaqueInto(w, expectBytes(env.senderPubkey, ML_DSA_65_PUBLIC_KEY_LEN, "senderPubkey"));
+  bincodeMlDsa65OpaqueInto(w, expectBytes(env.outerSignature, ML_DSA_65_SIGNATURE_LEN, "outerSignature"));
+  w.bytes(expectBytes(env.sender, 20, "sender"));
+  return w.toBytes();
+}
+function encryptInnerTx(signedInnerTxBincode, nonceAad, kemEncapsulationKey) {
+  expectBytes(kemEncapsulationKey, ML_KEM_768_ENCAPSULATION_KEY_LEN, "kemEncapsulationKey");
+  const { cipherText: kemCt, sharedSecret } = ml_kem768.encapsulate(kemEncapsulationKey);
+  const nonce = randomBytes(DKG_NONCE_LEN);
+  const cipher = chacha20poly1305(sharedSecret, nonce, aadFor(nonceAad));
+  const aeadCt = cipher.encrypt(signedInnerTxBincode);
+  sharedSecret.fill(0);
+  return concatBytes2(kemCt, nonce, aeadCt);
+}
+function outerSigDigest(nonceAad, ciphertext, decryptionHint, senderPubkey) {
+  const aad = bincodeNonceAad(nonceAad);
+  const hint = bincodeDecryptHint(decryptionHint);
+  return keccak_256(concatBytes2(aad, ciphertext, hint, expectBytes(senderPubkey, ML_DSA_65_PUBLIC_KEY_LEN, "senderPubkey")));
+}
+async function buildEncryptedEnvelope(args) {
+  const ciphertext = encryptInnerTx(args.signedInnerTxBincode, args.nonceAad, args.kemEncapsulationKey);
+  const digest = outerSigDigest(args.nonceAad, ciphertext, args.decryptionHint, args.senderPubkey);
+  const outerSignature = await args.signOuterDigest(digest);
+  const envelope = {
+    nonceAad: args.nonceAad,
+    ciphertext,
+    decryptionHint: args.decryptionHint,
+    senderPubkey: expectBytes(args.senderPubkey, ML_DSA_65_PUBLIC_KEY_LEN, "senderPubkey"),
+    outerSignature: expectBytes(outerSignature, ML_DSA_65_SIGNATURE_LEN, "outerSignature"),
+    sender: expectBytes(args.senderAddress, 20, "senderAddress")
+  };
+  const wireBytes = bincodeEncryptedEnvelope(envelope);
+  return { envelope, wireBytes, wireHex: bytesToHex2(wireBytes) };
+}
+function aadFor(aad) {
+  return concatBytes2(DKG_AEAD_DOMAIN_TAG, bincodeNonceAad(aad));
+}
+function bincodeMlDsa65OpaqueInto(w, raw) {
+  w.enumVariant(ENUM_VARIANT_INDEX_ML_DSA_65);
+  w.u16(STANDARD_ALGO_NUMBER_ML_DSA_65);
+  w.bytes(raw);
+}
+
+// src/crypto/submission.ts
+async function fetchEncryptionKey(client) {
+  const result = await client.call(
+    "lyth_getEncryptionKey",
+    []
+  );
+  return {
+    algo: result.algo ?? "ml-kem-768",
+    epoch: typeof result.epoch === "string" ? BigInt(result.epoch) : BigInt(result.epoch),
+    encapsulationKey: hexToBytes2(result.encapsulationKey, "encapsulationKey")
+  };
+}
+async function buildEncryptedSubmission(args) {
+  const signed = args.backend.signEvmTx(args.tx);
+  const input = normalizeInput(args.tx.input);
+  const to = normalizeTo(args.tx.to);
+  const nonceAad = {
+    sender: args.backend.addressBytes(),
+    nonce: parseBigint(args.tx.nonce, "nonce"),
+    chainId: parseBigint(args.tx.chainId, "chainId"),
+    class: args.class ?? (to !== null && input.length === 0 ? MempoolClass.Transfer : MempoolClass.ContractCall),
+    maxFeePerGas: u128Saturate(parseBigint(args.tx.maxFeePerGas, "maxFeePerGas")),
+    maxPriorityFeePerGas: u128Saturate(parseBigint(args.tx.maxPriorityFeePerGas, "maxPriorityFeePerGas")),
+    gasLimit: parseBigint(args.tx.gasLimit, "gasLimit")
+  };
+  const decryptionHint = { epoch: args.encryptionKey.epoch, scheme: 0 };
+  const built = await buildEncryptedEnvelope({
+    signedInnerTxBincode: signed.wireBytes,
+    nonceAad,
+    decryptionHint,
+    kemEncapsulationKey: args.encryptionKey.encapsulationKey,
+    senderAddress: args.backend.addressBytes(),
+    senderPubkey: args.backend.publicKey(),
+    signOuterDigest: (digest) => args.backend.signPrehash(digest)
+  });
+  return {
+    envelopeWireHex: built.wireHex,
+    innerSighashHex: `0x${[...signed.sighash].map((b) => b.toString(16).padStart(2, "0")).join("")}`,
+    innerTxHashHex: bytesToHex2(signed.txHash),
+    innerWireBytes: signed.wireBytes.length
+  };
+}
+async function submitEncryptedEnvelope(client, envelopeWireHex) {
+  return client.call("lyth_submitEncrypted", [envelopeWireHex]);
+}
+function u128Saturate(value) {
+  const cap = (1n << 128n) - 1n;
+  if (value < 0n) return 0n;
+  return value > cap ? cap : value;
+}
+function normalizeTo(value) {
+  if (value === null) return null;
+  if (typeof value === "string") return hexToAddressBytes(value);
+  const bytes = value instanceof Uint8Array ? value : Uint8Array.from(value);
+  if (bytes.length !== 20) throw new Error("to must be 20 bytes");
+  return bytes;
+}
+function normalizeInput(value) {
+  if (value === void 0) return new Uint8Array(0);
+  if (typeof value === "string") return hexToBytes2(value, "input");
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+
+// src/mrv.ts
 var MRV_FORMAT_VERSION = 1;
 var MRV_PROFILE_MONO_RV32IM_V1 = "mono_rv32im_v1";
 var MRV_MEMORY_PAGE_BYTES = 65536;
@@ -1790,7 +2045,7 @@ function mrvCodeHashHex(code) {
   const codeBytes = bytesFrom(code, "code");
   const len = new Uint8Array(8);
   new DataView(len.buffer).setBigUint64(0, BigInt(codeBytes.length), false);
-  return bytesToHex2(blake3(concatBytes2(MRV_CODE_HASH_DOMAIN, len, codeBytes)));
+  return bytesToHex3(blake3(concatBytes3(MRV_CODE_HASH_DOMAIN, len, codeBytes)));
 }
 function mrvV1TransactionExtension() {
   return { kind: MRV_TX_EXTENSION_KIND, bodyHex: "0x01" };
@@ -1803,17 +2058,17 @@ function mrvBech32ToAddress(address, expectedKind) {
 }
 function deriveMrvContractAddress(deployerAddress, deployerNonce, artifactHashHex) {
   const deployer = typedBech32ToAddress(deployerAddress);
-  const artifactHash = hexToBytes2(artifactHashHex, "artifactHash");
+  const artifactHash = hexToBytes3(artifactHashHex, "artifactHash");
   if (artifactHash.length !== 32) throw new MrvValidationError("artifactHash must be 32 bytes");
   const nonceValue = normalizeU64(deployerNonce, "deployerNonce");
   const nonce = new Uint8Array(8);
   new DataView(nonce.buffer).setBigUint64(0, nonceValue, false);
   const digest = blake3(
-    concatBytes2(
+    concatBytes3(
       MRV_CONTRACT_ADDRESS_DOMAIN,
       new TextEncoder().encode(ADDRESS_KIND_HRPS[deployer.kind]),
       Uint8Array.of(0),
-      hexToBytes2(deployer.hex, "deployerAddress"),
+      hexToBytes3(deployer.hex, "deployerAddress"),
       nonce,
       artifactHash
     )
@@ -1866,7 +2121,7 @@ function validateMrvArtifactMetadata(metadata, code) {
 }
 function validateMrvDeployRequest(request) {
   if (request.from !== void 0) typedBech32ToAddress(request.from, "user");
-  hexToBytes2(request.artifactBytes, "artifactBytes");
+  hexToBytes3(request.artifactBytes, "artifactBytes");
   validateDecimal("valueLythoshi", request.valueLythoshi);
   validateOptionalDecimal("maxExecutionFeeLythoshi", request.maxExecutionFeeLythoshi);
   validateOptionalDecimal("priorityTipLythoshi", request.priorityTipLythoshi);
@@ -1875,7 +2130,7 @@ function validateMrvDeployRequest(request) {
 function validateMrvCallRequest(request) {
   if (request.from !== void 0) typedBech32ToAddress(request.from, "user");
   typedBech32ToAddress(request.contractAddress, "contract");
-  hexToBytes2(request.input, "input");
+  hexToBytes3(request.input, "input");
   validateDecimal("valueLythoshi", request.valueLythoshi);
   validateOptionalDecimal("maxExecutionFeeLythoshi", request.maxExecutionFeeLythoshi);
   validateOptionalDecimal("priorityTipLythoshi", request.priorityTipLythoshi);
@@ -1991,6 +2246,34 @@ function buildMrvCallNativeTxPlan(contractAddress, input, options) {
     }
   };
 }
+async function submitMrvDeployNativeTx(client, backend, artifactBytes, options) {
+  const plan = buildMrvDeployNativeTxPlan(artifactBytes, options);
+  const submission = await buildEncryptedSubmission({
+    backend,
+    tx: plan.tx,
+    encryptionKey: options.encryptionKey ?? await fetchEncryptionKey(client),
+    class: options.class
+  });
+  return {
+    ...plan,
+    ...submission,
+    txHash: await submitEncryptedEnvelope(client, submission.envelopeWireHex)
+  };
+}
+async function submitMrvCallNativeTx(client, backend, contractAddress, input, options) {
+  const plan = buildMrvCallNativeTxPlan(contractAddress, input, options);
+  const submission = await buildEncryptedSubmission({
+    backend,
+    tx: plan.tx,
+    encryptionKey: options.encryptionKey ?? await fetchEncryptionKey(client),
+    class: options.class
+  });
+  return {
+    ...plan,
+    ...submission,
+    txHash: await submitEncryptedEnvelope(client, submission.envelopeWireHex)
+  };
+}
 function validateMemory(initialPages, maxPages, stackBytes) {
   if (initialPages === 0) throw new MrvValidationError("initialPages is zero");
   if (maxPages === 0) throw new MrvValidationError("maxPages is zero");
@@ -2065,7 +2348,7 @@ function applyRequestOptions(request, options) {
   if (nonce !== void 0) request.nonce = nonce;
 }
 function normalizeBytesHex(value, field) {
-  return bytesToHex2(bytesFrom(value, field));
+  return bytesToHex3(bytesFrom(value, field));
 }
 function normalizeOptionalDecimalLike(field, value) {
   return value === void 0 ? void 0 : normalizeDecimalLike(field, value);
@@ -2115,14 +2398,14 @@ function normalizeU64(value, field) {
   return out;
 }
 function validateHexLength(field, value, expected) {
-  const bytes = hexToBytes2(value, field);
+  const bytes = hexToBytes3(value, field);
   if (bytes.length !== expected) throw new MrvValidationError(`${field} must be ${expected} bytes`);
 }
 function bytesFrom(value, field) {
-  if (typeof value === "string") return hexToBytes2(value, field);
+  if (typeof value === "string") return hexToBytes3(value, field);
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes2(value, field) {
+function hexToBytes3(value, field) {
   if (!/^0x(?:[0-9a-fA-F]{2})*$/.test(value)) {
     throw new MrvValidationError(`${field} must be 0x-prefixed even-length hex`);
   }
@@ -2132,10 +2415,10 @@ function hexToBytes2(value, field) {
   }
   return out;
 }
-function bytesToHex2(bytes) {
+function bytesToHex3(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function concatBytes2(...parts) {
+function concatBytes3(...parts) {
   const len = parts.reduce((sum, item) => sum + item.length, 0);
   const out = new Uint8Array(len);
   let offset = 0;
@@ -2151,8 +2434,8 @@ function isIdentifier(value) {
 
 // src/spending-policy.ts
 var SET_POLICY_CLAIM_DOMAIN_TAG = "lyth.spending-policy.claim.v1";
-var ML_DSA_65_PUBLIC_KEY_LEN = 1952;
-var ML_DSA_65_SIGNATURE_LEN = 3309;
+var ML_DSA_65_PUBLIC_KEY_LEN2 = 1952;
+var ML_DSA_65_SIGNATURE_LEN2 = 3309;
 var SPENDING_POLICY_SELECTORS = {
   setPolicy: "0xd6a518b2",
   setPolicyClaim: "0x08d78f9c",
@@ -2173,7 +2456,7 @@ function spendingPolicyAddressHex() {
 function composeClaimBoundMessage(chainId, args, opts) {
   const precompileAddress = toAddressBytes(opts?.precompileAddress ?? PRECOMPILE_ADDRESSES.SPENDING_POLICY);
   const normalized = normalizeArgs(args);
-  return concatBytes3(
+  return concatBytes4(
     new TextEncoder().encode(SET_POLICY_CLAIM_DOMAIN_TAG),
     uint64Bytes(chainId, "chainId"),
     precompileAddress,
@@ -2188,9 +2471,9 @@ function composeClaimBoundMessage(chainId, args, opts) {
 }
 function encodeSetPolicyCalldata(args) {
   const normalized = normalizeArgs(args);
-  return bytesToHex3(
-    concatBytes3(
-      hexToBytes3(SPENDING_POLICY_SELECTORS.setPolicy),
+  return bytesToHex4(
+    concatBytes4(
+      hexToBytes4(SPENDING_POLICY_SELECTORS.setPolicy),
       encodePolicyWords(normalized)
     )
   );
@@ -2199,19 +2482,19 @@ function encodeSetPolicyClaimCalldata(args, subAccountPubkey, subAccountSig) {
   const normalized = normalizeArgs(args);
   const pubkey = toBytes2(subAccountPubkey);
   const sig = toBytes2(subAccountSig);
-  if (pubkey.length !== ML_DSA_65_PUBLIC_KEY_LEN) {
+  if (pubkey.length !== ML_DSA_65_PUBLIC_KEY_LEN2) {
     throw new SpendingPolicyError(
-      `subAccountPubkey must be ${ML_DSA_65_PUBLIC_KEY_LEN} bytes, got ${pubkey.length}`
+      `subAccountPubkey must be ${ML_DSA_65_PUBLIC_KEY_LEN2} bytes, got ${pubkey.length}`
     );
   }
-  if (sig.length !== ML_DSA_65_SIGNATURE_LEN) {
+  if (sig.length !== ML_DSA_65_SIGNATURE_LEN2) {
     throw new SpendingPolicyError(
-      `subAccountSig must be ${ML_DSA_65_SIGNATURE_LEN} bytes, got ${sig.length}`
+      `subAccountSig must be ${ML_DSA_65_SIGNATURE_LEN2} bytes, got ${sig.length}`
     );
   }
-  return bytesToHex3(
-    concatBytes3(
-      hexToBytes3(SPENDING_POLICY_SELECTORS.setPolicyClaim),
+  return bytesToHex4(
+    concatBytes4(
+      hexToBytes4(SPENDING_POLICY_SELECTORS.setPolicyClaim),
       encodePolicyWords(normalized),
       pubkey,
       sig
@@ -2221,14 +2504,14 @@ function encodeSetPolicyClaimCalldata(args, subAccountPubkey, subAccountSig) {
 function encodeClaimPolicyByAddressCalldata(args, subAccountSig) {
   const normalized = normalizeArgs(args);
   const sig = toBytes2(subAccountSig);
-  if (sig.length !== ML_DSA_65_SIGNATURE_LEN) {
+  if (sig.length !== ML_DSA_65_SIGNATURE_LEN2) {
     throw new SpendingPolicyError(
-      `subAccountSig must be ${ML_DSA_65_SIGNATURE_LEN} bytes, got ${sig.length}`
+      `subAccountSig must be ${ML_DSA_65_SIGNATURE_LEN2} bytes, got ${sig.length}`
     );
   }
-  return bytesToHex3(
-    concatBytes3(
-      hexToBytes3(SPENDING_POLICY_SELECTORS.claimPolicyByAddress),
+  return bytesToHex4(
+    concatBytes4(
+      hexToBytes4(SPENDING_POLICY_SELECTORS.claimPolicyByAddress),
       encodePolicyWords(normalized),
       sig
     )
@@ -2251,7 +2534,7 @@ function normalizeArgs(args) {
   };
 }
 function encodePolicyWords(args) {
-  return concatBytes3(
+  return concatBytes4(
     encodeAddressWord(args.subAccount),
     encodeAddressWord(args.principal),
     encodeUint128Word(args.dailyCapLythoshi),
@@ -2261,13 +2544,13 @@ function encodePolicyWords(args) {
   );
 }
 function encodeSingleAddressCall(selector, address) {
-  return bytesToHex3(concatBytes3(hexToBytes3(selector), encodeAddressWord(toAddressBytes(address))));
+  return bytesToHex4(concatBytes4(hexToBytes4(selector), encodeAddressWord(toAddressBytes(address))));
 }
 function encodeAddressWord(address) {
-  return concatBytes3(new Uint8Array(12), address);
+  return concatBytes4(new Uint8Array(12), address);
 }
 function encodeUint128Word(value) {
-  return concatBytes3(new Uint8Array(16), uint128Bytes(value, "uint128"));
+  return concatBytes4(new Uint8Array(16), uint128Bytes(value, "uint128"));
 }
 function toAddressBytes(value) {
   if (typeof value === "string") {
@@ -2277,11 +2560,11 @@ function toAddressBytes(value) {
 }
 function toBytes2(value) {
   if (typeof value === "string") {
-    return hexToBytes3(value);
+    return hexToBytes4(value);
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes3(hex) {
+function hexToBytes4(hex) {
   const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
   if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
     throw new SpendingPolicyError("invalid hex bytes");
@@ -2292,10 +2575,10 @@ function hexToBytes3(hex) {
   }
   return out;
 }
-function bytesToHex3(bytes) {
+function bytesToHex4(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function concatBytes3(...parts) {
+function concatBytes4(...parts) {
   const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
   let offset = 0;
   for (const part of parts) {
@@ -2363,9 +2646,9 @@ function encodeRegisterPubkeyCalldata(pubkey) {
       `pubkey must be ${PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN} bytes, got ${bytes.length}`
     );
   }
-  return bytesToHex4(
-    concatBytes4(
-      hexToBytes4(PUBKEY_REGISTRY_SELECTORS.registerPubkey),
+  return bytesToHex5(
+    concatBytes5(
+      hexToBytes5(PUBKEY_REGISTRY_SELECTORS.registerPubkey),
       uint256Word(32n),
       uint256Word(BigInt(bytes.length)),
       bytes
@@ -2418,10 +2701,10 @@ function decodeHasPubkeyReturn(data) {
   throw new PubkeyRegistryError("hasPubkey bool must be 0 or 1");
 }
 function encodeSingleAddressCall2(selector, address) {
-  return bytesToHex4(concatBytes4(hexToBytes4(selector), addressWord(toAddressBytes2(address))));
+  return bytesToHex5(concatBytes5(hexToBytes5(selector), addressWord(toAddressBytes2(address))));
 }
 function addressWord(address) {
-  return concatBytes4(new Uint8Array(12), address);
+  return concatBytes5(new Uint8Array(12), address);
 }
 function toAddressBytes2(value) {
   if (typeof value === "string") {
@@ -2431,11 +2714,11 @@ function toAddressBytes2(value) {
 }
 function toBytes3(value) {
   if (typeof value === "string") {
-    return hexToBytes4(value);
+    return hexToBytes5(value);
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes4(hex) {
+function hexToBytes5(hex) {
   const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
   if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
     throw new PubkeyRegistryError("invalid hex bytes");
@@ -2446,10 +2729,10 @@ function hexToBytes4(hex) {
   }
   return out;
 }
-function bytesToHex4(bytes) {
+function bytesToHex5(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function concatBytes4(...parts) {
+function concatBytes5(...parts) {
   const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
   let offset = 0;
   for (const part of parts) {
@@ -2662,6 +2945,6 @@ function translateBlockOut(header) {
 // src/index.ts
 var version = "0.1.0";
 
-export { ADDRESS_HRP, ADDRESS_KIND_HRPS, AddressError, ApiClient, BURN_ADDR, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MonolythiumProvider, MonolythiumSigner, MrvValidationError, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, bech32ToAddress, bech32ToAddressBytes, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPlan, buildMrvDeployRequest, composeClaimBoundMessage, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, deriveMrvContractAddress, encodeBlockSelector, encodeClaimPolicyByAddressCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLookupPubkeyCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, fetchChainInfoLatest, fetchChainRegistryLatest, getChainInfo, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isConcreteServiceProbeStatus, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nodeRegistryAddressHex, normalizeAddressHex, parseAddress, parseChainRegistryToml, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, serviceProbeStatusLabel, spendingPolicyAddressHex, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, version };
+export { ADDRESS_HRP, ADDRESS_KIND_HRPS, AddressError, ApiClient, BURN_ADDR, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MonolythiumProvider, MonolythiumSigner, MrvValidationError, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, bech32ToAddress, bech32ToAddressBytes, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPlan, buildMrvDeployRequest, composeClaimBoundMessage, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, deriveMrvContractAddress, encodeBlockSelector, encodeClaimPolicyByAddressCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLookupPubkeyCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, fetchChainInfoLatest, fetchChainRegistryLatest, getChainInfo, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isConcreteServiceProbeStatus, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nodeRegistryAddressHex, normalizeAddressHex, parseAddress, parseChainRegistryToml, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, version };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

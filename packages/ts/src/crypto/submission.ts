@@ -1,6 +1,6 @@
 import { RpcClient } from "../client.js";
 import { hexToAddressBytes } from "../address.js";
-import { hexToBytes, parseBigint } from "./bytes.js";
+import { bytesToHex, hexToBytes, parseBigint } from "./bytes.js";
 import { buildEncryptedEnvelope, MempoolClass, type DecryptHint, type NonceAad } from "./envelope.js";
 import type { MlDsa65Backend } from "./ml-dsa.js";
 import type { NativeEvmTxFields } from "./tx.js";
@@ -14,6 +14,7 @@ export interface EncryptionKey {
 export interface EncryptedSubmission {
   envelopeWireHex: string;
   innerSighashHex: string;
+  innerTxHashHex: string;
   innerWireBytes: number;
 }
 
@@ -60,6 +61,7 @@ export async function buildEncryptedSubmission(args: {
   return {
     envelopeWireHex: built.wireHex,
     innerSighashHex: `0x${[...signed.sighash].map((b) => b.toString(16).padStart(2, "0")).join("")}`,
+    innerTxHashHex: bytesToHex(signed.txHash),
     innerWireBytes: signed.wireBytes.length,
   };
 }
