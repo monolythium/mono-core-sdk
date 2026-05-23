@@ -3,4 +3,8 @@
 /**
  * Current-state native agent service-discovery row.
  */
-export type NativeAgentServiceStateRecord = { serviceId: string, provider: string, categoryHash?: string | null, metadataHash?: string | null, active: boolean, updatedAtBlock: bigint, };
+export type NativeAgentServiceStateRecord = { serviceId: string, provider: string,
+/**
+ * Provider-local service nonce captured by the native agent module.
+ */
+nonce?: number | null, categoryHash?: string | null, metadataHash?: string | null, active: boolean, updatedAtBlock: bigint, };

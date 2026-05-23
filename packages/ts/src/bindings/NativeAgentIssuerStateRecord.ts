@@ -3,4 +3,8 @@
 /**
  * Current-state native agent issuer registry row.
  */
-export type NativeAgentIssuerStateRecord = { issuerId: string, issuer: string, metadataHash?: string | null, updatedAtBlock: bigint, };
+export type NativeAgentIssuerStateRecord = { issuerId: string, issuer: string,
+/**
+ * Issuer-local nonce captured by the native agent module.
+ */
+nonce?: number | null, metadataHash?: string | null, updatedAtBlock: bigint, };

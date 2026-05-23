@@ -3,4 +3,8 @@
 /**
  * Current-state native agent consent row.
  */
-export type NativeAgentConsentStateRecord = { consentId: string, subject: string, grantee: string, scopeHash?: string | null, expiresAt?: number | null, active: boolean, updatedAtBlock: bigint, };
+export type NativeAgentConsentStateRecord = { consentId: string, subject: string, grantee: string,
+/**
+ * Subject-local consent nonce captured by the native agent module.
+ */
+nonce?: number | null, scopeHash?: string | null, expiresAt?: number | null, active: boolean, updatedAtBlock: bigint, };

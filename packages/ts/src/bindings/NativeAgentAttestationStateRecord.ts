@@ -3,4 +3,8 @@
 /**
  * Current-state native agent attestation row.
  */
-export type NativeAgentAttestationStateRecord = { attestationId: string, issuerId?: string | null, issuer?: string | null, subject: string, schemaHash?: string | null, payloadHash?: string | null, active: boolean, updatedAtBlock: bigint, };
+export type NativeAgentAttestationStateRecord = { attestationId: string,
+/**
+ * Issuer-local nonce captured when the attestation was issued.
+ */
+nonce?: number | null, issuerId?: string | null, issuer?: string | null, subject: string, schemaHash?: string | null, payloadHash?: string | null, active: boolean, updatedAtBlock: bigint, };

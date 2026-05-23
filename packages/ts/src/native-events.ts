@@ -12,6 +12,7 @@ export interface NativeDecodedEvent {
   sequence: number;
   family: string;
   event_name: string;
+  nonce?: number | null;
   market_surface?: string | null;
   marketSurface?: string | null;
   market_asset_id?: string | null;
