@@ -21,6 +21,7 @@
 
 pub mod address;
 pub mod api;
+pub mod bridge;
 pub mod client;
 pub mod consts;
 pub mod error;
@@ -35,6 +36,10 @@ pub use address::{
     AddressKind, ADDRESS_HRP, ADDRESS_HRPS, RESERVED_ADDRESS_HRPS,
 };
 pub use api::ApiClient;
+pub use bridge::{
+    assess_bridge_route, rank_bridge_routes, BridgeAdminControl, BridgeCircuitBreakerState,
+    BridgeRiskTier, BridgeRouteAssessment, BridgeRouteDisclosure, BridgeVerifierDisclosure,
+};
 pub use client::{
     MrvCallNativeEncryptedSubmitResult, MrvDeployNativeEncryptedSubmitResult, RpcClient,
 };
