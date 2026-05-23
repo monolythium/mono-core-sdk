@@ -398,6 +398,8 @@ describe("ApiClient", () => {
     const { fetch, calls } = mockGet(apiEnvelope({ schemaVersion: 1 }));
     const client = new ApiClient("https://rpc.example", { fetch });
     const marketId = `0x${"55".repeat(32)}`;
+    const assetId = `0x${"bb".repeat(32)}`;
+    const mrcTokenId = `0x${"cc".repeat(32)}`;
 
     await client.search("0xabc", 5);
     await client.stats();
@@ -405,6 +407,8 @@ describe("ApiClient", () => {
     await client.addressProfile("0x1111111111111111111111111111111111111111");
     await client.addressFlow("0x1111111111111111111111111111111111111111", 75);
     await client.addressPendingRewards("mono1wallet", 99);
+    await client.assetMrcMetadata(assetId, mrcTokenId);
+    await client.assetMrcMetadata(assetId);
     await client.markets(10);
     await client.market(marketId);
     await client.marketTrades(marketId, 15, "0xabcd");
@@ -419,6 +423,8 @@ describe("ApiClient", () => {
       "https://rpc.example/api/v1/addresses/0x1111111111111111111111111111111111111111/profile",
       "https://rpc.example/api/v1/addresses/0x1111111111111111111111111111111111111111/flow?limit=75",
       "https://rpc.example/api/v1/addresses/mono1wallet/pending-rewards?block=0x63",
+      `https://rpc.example/api/v1/assets/${assetId}/metadata?mrcTokenId=${mrcTokenId}`,
+      `https://rpc.example/api/v1/assets/${assetId}/metadata`,
       "https://rpc.example/api/v1/markets?limit=10",
       `https://rpc.example/api/v1/markets/${marketId}`,
       `https://rpc.example/api/v1/markets/${marketId}/trades?limit=15&cursor=0xabcd`,
