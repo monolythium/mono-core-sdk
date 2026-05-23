@@ -328,18 +328,30 @@ pub struct CallRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-bindings", ts(optional))]
     pub to: Option<Address>,
-    /// Gas limit.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "ts-bindings", ts(optional))]
-    pub gas: Option<Quantity>,
-    /// Gas price (legacy / non-EIP-1559).
-    #[serde(rename = "gasPrice", skip_serializing_if = "Option::is_none")]
+    /// Execution-unit limit.
+    #[serde(
+        rename = "gas",
+        alias = "executionUnitLimit",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "gas", optional))]
+    pub execution_unit_limit: Option<Quantity>,
+    /// Fee per execution unit on legacy / non-EIP-1559 paths.
+    #[serde(
+        rename = "gasPrice",
+        alias = "feePerExecutionUnit",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[cfg_attr(feature = "ts-bindings", ts(rename = "gasPrice", optional))]
-    pub gas_price: Option<Quantity>,
-    /// Wei to transfer.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "ts-bindings", ts(optional))]
-    pub value: Option<Quantity>,
+    pub fee_per_execution_unit: Option<Quantity>,
+    /// Native value to transfer, in lythoshi.
+    #[serde(
+        rename = "value",
+        alias = "valueLythoshi",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "value", optional))]
+    pub value_lythoshi: Option<Quantity>,
     /// Calldata (`data` is canonical; chains accept `input` as alias).
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-bindings", ts(optional))]
@@ -1969,6 +1981,49 @@ pub struct PeerSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn call_request_uses_v41_rust_fields_with_legacy_wire_keys() {
+        let request = CallRequest {
+            from: Some("0x1111111111111111111111111111111111111111".to_owned()),
+            to: Some("0x2222222222222222222222222222222222222222".to_owned()),
+            execution_unit_limit: Some("0x5208".to_owned()),
+            fee_per_execution_unit: Some("0x3b9aca00".to_owned()),
+            value_lythoshi: Some("0xa".to_owned()),
+            data: Some("0x".to_owned()),
+        };
+
+        let wire = serde_json::to_value(&request).unwrap();
+        assert_eq!(wire["gas"], "0x5208");
+        assert_eq!(wire["gasPrice"], "0x3b9aca00");
+        assert_eq!(wire["value"], "0xa");
+        assert!(wire.get("executionUnitLimit").is_none());
+        assert!(wire.get("feePerExecutionUnit").is_none());
+        assert!(wire.get("valueLythoshi").is_none());
+
+        let native_names: CallRequest = serde_json::from_value(serde_json::json!({
+            "executionUnitLimit": "0x2a",
+            "feePerExecutionUnit": "0x7",
+            "valueLythoshi": "0x9"
+        }))
+        .unwrap();
+        assert_eq!(native_names.execution_unit_limit.as_deref(), Some("0x2a"));
+        assert_eq!(native_names.fee_per_execution_unit.as_deref(), Some("0x7"));
+        assert_eq!(native_names.value_lythoshi.as_deref(), Some("0x9"));
+
+        let legacy_wire: CallRequest = serde_json::from_value(serde_json::json!({
+            "gas": "0x5208",
+            "gasPrice": "0x3b9aca00",
+            "value": "0xa"
+        }))
+        .unwrap();
+        assert_eq!(legacy_wire.execution_unit_limit.as_deref(), Some("0x5208"));
+        assert_eq!(
+            legacy_wire.fee_per_execution_unit.as_deref(),
+            Some("0x3b9aca00")
+        );
+        assert_eq!(legacy_wire.value_lythoshi.as_deref(), Some("0xa"));
+    }
 
     #[test]
     fn native_receipt_response_decodes_camel_case_wire_shape() {
