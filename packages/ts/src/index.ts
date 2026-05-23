@@ -328,6 +328,21 @@ export {
   pubkeyRegistryAddressHex,
 } from "./pubkey-registry.js";
 export type { PubkeyLookup } from "./pubkey-registry.js";
+export {
+  CLOB_MARKET_ID_DOMAIN_TAG,
+  CLOB_SELECTORS,
+  MarketActionError,
+  buildPlaceSpotLimitOrderPlan,
+  clobAddressHex,
+  deriveClobMarketId,
+  encodePlaceLimitOrderCalldata,
+} from "./market-actions.js";
+export type {
+  EthSendTransactionRequest,
+  MarketTransactionPlan,
+  PlaceSpotLimitOrderArgs,
+  SpotLimitOrderSide,
+} from "./market-actions.js";
 
 // ethers.js compat shim — ethers is a peerDependency. Importers that
 // don't use the shim never pay for the ethers types.

@@ -3089,7 +3089,8 @@ var ML_KEM_768_ENCAPSULATION_KEY_LEN = 1184;
 var DKG_NONCE_LEN = 12;
 var MempoolClass = {
   Transfer: 0,
-  ContractCall: 1};
+  ContractCall: 1,
+  CLOBOp: 3};
 function bincodeNonceAad(aad) {
   const w = new BincodeWriter();
   w.bytes(expectBytes(aad.sender, 20, "NonceAad.sender"));
@@ -4500,6 +4501,145 @@ function wordToBigint(word) {
   }
   return out;
 }
+var CLOB_MARKET_ID_DOMAIN_TAG = 193;
+var CLOB_SELECTORS = {
+  /**
+   * `placeLimitOrder(bytes32,bytes32,uint8,uint256,uint256,uint64)`
+   *
+   * Args: `baseTokenId, quoteTokenId, side, price, amount, expiresAtBlock`.
+   */
+  placeLimitOrder: "0x2468786f"
+};
+var MarketActionError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "MarketActionError";
+  }
+};
+function clobAddressHex() {
+  return PRECOMPILE_ADDRESSES.CLOB.toLowerCase();
+}
+function deriveClobMarketId(baseTokenId, quoteTokenId) {
+  const base = bytes32FromHex(baseTokenId, "baseTokenId");
+  const quote = bytes32FromHex(quoteTokenId, "quoteTokenId");
+  return bytesToHex4(sha3_js.keccak_256(concatBytes3(new Uint8Array([CLOB_MARKET_ID_DOMAIN_TAG]), base, quote)));
+}
+function encodePlaceLimitOrderCalldata(args) {
+  const normalized = normalizePlaceSpotLimitOrderArgs(args);
+  return bytesToHex4(
+    concatBytes3(
+      hexToBytes3(CLOB_SELECTORS.placeLimitOrder, "placeLimitOrder selector"),
+      normalized.baseTokenId,
+      normalized.quoteTokenId,
+      uint8Word2(normalized.side),
+      uint256Word2(normalized.price, "price"),
+      uint256Word2(normalized.quantity, "quantity"),
+      uint64Word3(normalized.expiryBlock, "expiryBlock")
+    )
+  );
+}
+function buildPlaceSpotLimitOrderPlan(args) {
+  return {
+    method: "eth_sendTransaction",
+    params: [
+      {
+        to: PRECOMPILE_ADDRESSES.CLOB,
+        value: "0x0",
+        data: encodePlaceLimitOrderCalldata(args)
+      }
+    ],
+    mempoolClass: MempoolClass.CLOBOp
+  };
+}
+function normalizePlaceSpotLimitOrderArgs(args) {
+  const marketId = normalizeBytes32Hex(args.marketId, "marketId");
+  const expectedMarketId = deriveClobMarketId(args.baseTokenId, args.quoteTokenId);
+  if (marketId !== expectedMarketId) {
+    throw new MarketActionError("marketId must match baseTokenId and quoteTokenId");
+  }
+  return {
+    marketId,
+    baseTokenId: bytes32FromHex(args.baseTokenId, "baseTokenId"),
+    quoteTokenId: bytes32FromHex(args.quoteTokenId, "quoteTokenId"),
+    side: normalizeSide(args.side),
+    price: positiveDecimal(args.price, "price"),
+    quantity: positiveDecimal(args.quantity, "quantity"),
+    expiryBlock: uint64(args.expiryBlock ?? 0n, "expiryBlock")
+  };
+}
+function normalizeBytes32Hex(value, name) {
+  if (typeof value !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(value)) {
+    throw new MarketActionError(`${name} must be a 32-byte 0x-prefixed hex string`);
+  }
+  return value.toLowerCase();
+}
+function bytes32FromHex(value, name) {
+  normalizeBytes32Hex(value, name);
+  return hexToBytes3(value, name);
+}
+function normalizeSide(side) {
+  if (side === "buy") return 0;
+  if (side === "sell") return 1;
+  throw new MarketActionError("side must be 'buy' or 'sell'");
+}
+function positiveDecimal(value, name) {
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) {
+    throw new MarketActionError(`${name} must be an integer decimal string`);
+  }
+  const n = BigInt(value);
+  if (n <= 0n) {
+    throw new MarketActionError(`${name} must be positive`);
+  }
+  return n;
+}
+function uint64(value, name) {
+  let n;
+  if (typeof value === "bigint") {
+    n = value;
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) {
+      throw new MarketActionError(`${name} must be a safe integer`);
+    }
+    n = BigInt(value);
+  } else if (/^(0|[1-9][0-9]*|0x[0-9a-fA-F]+)$/.test(value)) {
+    n = BigInt(value);
+  } else {
+    throw new MarketActionError(`${name} must be a nonnegative integer`);
+  }
+  if (n < 0n || n > 0xffffffffffffffffn) {
+    throw new MarketActionError(`${name} must fit uint64`);
+  }
+  return n;
+}
+function uint8Word2(value) {
+  const out = new Uint8Array(32);
+  out[31] = value;
+  return out;
+}
+function uint64Word3(value, name) {
+  if (value < 0n || value > 0xffffffffffffffffn) {
+    throw new MarketActionError(`${name} must fit uint64`);
+  }
+  const out = new Uint8Array(32);
+  let rest = value;
+  for (let i = 31; i >= 24; i--) {
+    out[i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  return out;
+}
+function uint256Word2(value, name) {
+  if (value < 0n || value >= 1n << 256n) {
+    throw new MarketActionError(`${name} must fit uint256`);
+  }
+  const out = new Uint8Array(32);
+  let rest = value;
+  for (let i = 31; i >= 0; i--) {
+    out[i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  return out;
+}
 
 // src/ethers/network.ts
 var MONOLYTHIUM_TESTNET_CHAIN_ID = 69420n;
@@ -4689,6 +4829,8 @@ exports.BridgePrecompileError = BridgePrecompileError;
 exports.BridgeRouteCatalogueError = BridgeRouteCatalogueError;
 exports.CHAIN_REGISTRY = CHAIN_REGISTRY;
 exports.CHAIN_REGISTRY_RAW_BASE = CHAIN_REGISTRY_RAW_BASE;
+exports.CLOB_MARKET_ID_DOMAIN_TAG = CLOB_MARKET_ID_DOMAIN_TAG;
+exports.CLOB_SELECTORS = CLOB_SELECTORS;
 exports.DELEGATION_REVERT_TAGS = DELEGATION_REVERT_TAGS;
 exports.DELEGATION_SELECTORS = DELEGATION_SELECTORS;
 exports.DelegationPrecompileError = DelegationPrecompileError;
@@ -4712,6 +4854,7 @@ exports.MRV_PROFILE_MONO_RV32IM_V1 = MRV_PROFILE_MONO_RV32IM_V1;
 exports.MRV_STRUCTURED_FEE_FIELDS = MRV_STRUCTURED_FEE_FIELDS;
 exports.MRV_TX_EXTENSION_KIND = MRV_TX_EXTENSION_KIND;
 exports.MRV_TX_EXTENSION_V1 = MRV_TX_EXTENSION_V1;
+exports.MarketActionError = MarketActionError;
 exports.MonolythiumProvider = MonolythiumProvider;
 exports.MonolythiumSigner = MonolythiumSigner;
 exports.MrvValidationError = MrvValidationError;
@@ -4764,7 +4907,9 @@ exports.buildMrvDeployPayloadPlan = buildMrvDeployPayloadPlan;
 exports.buildMrvDeployPayloadRequest = buildMrvDeployPayloadRequest;
 exports.buildMrvDeployPlan = buildMrvDeployPlan;
 exports.buildMrvDeployRequest = buildMrvDeployRequest;
+exports.buildPlaceSpotLimitOrderPlan = buildPlaceSpotLimitOrderPlan;
 exports.checkMrvFeeDisplayConformance = checkMrvFeeDisplayConformance;
+exports.clobAddressHex = clobAddressHex;
 exports.composeClaimBoundMessage = composeClaimBoundMessage;
 exports.computeNoEvmReceiptsRoot = computeNoEvmReceiptsRoot;
 exports.computeNoEvmTargetReceiptHash = computeNoEvmTargetReceiptHash;
@@ -4773,6 +4918,7 @@ exports.decodeHasPubkeyReturn = decodeHasPubkeyReturn;
 exports.decodeLookupPubkeyReturn = decodeLookupPubkeyReturn;
 exports.decodeNoEvmReceiptTranscript = decodeNoEvmReceiptTranscript;
 exports.delegationAddressHex = delegationAddressHex;
+exports.deriveClobMarketId = deriveClobMarketId;
 exports.deriveMrvContractAddress = deriveMrvContractAddress;
 exports.encodeBlockSelector = encodeBlockSelector;
 exports.encodeClaimPolicyByAddressCalldata = encodeClaimPolicyByAddressCalldata;
@@ -4783,6 +4929,7 @@ exports.encodeHasPubkeyCalldata = encodeHasPubkeyCalldata;
 exports.encodeLockBridgeConfigCalldata = encodeLockBridgeConfigCalldata;
 exports.encodeLookupPubkeyCalldata = encodeLookupPubkeyCalldata;
 exports.encodeMrvDeployPayload = encodeMrvDeployPayload;
+exports.encodePlaceLimitOrderCalldata = encodePlaceLimitOrderCalldata;
 exports.encodeRegisterPubkeyCalldata = encodeRegisterPubkeyCalldata;
 exports.encodeReportServiceProbeCalldata = encodeReportServiceProbeCalldata;
 exports.encodeSetBridgeResumeCooldownCalldata = encodeSetBridgeResumeCooldownCalldata;
