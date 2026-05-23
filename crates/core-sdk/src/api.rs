@@ -16,9 +16,9 @@ use crate::types::{
     native_events_from_receipt, typed_native_events_from_response, AddressFlowResponse,
     AddressProfileResponse, BlockSelector, ChainStatsResponse, ClobMarketResponse,
     ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse, ClobTradesResponse,
-    NativeEventFilter, NativeEventsFilter, NativeEventsResponse, NativeReceiptFee,
-    NativeReceiptResponse, PendingRewardsResponse, SearchResponse, TxFeedResponse,
-    TypedNativeEventsResponse, TypedNativeReceiptEvent,
+    MrcMetadataResponse, NativeEventFilter, NativeEventsFilter, NativeEventsResponse,
+    NativeReceiptFee, NativeReceiptResponse, PendingRewardsResponse, SearchResponse,
+    TxFeedResponse, TypedNativeEventsResponse, TypedNativeReceiptEvent,
 };
 
 /// Typed HTTP API client for `/api/v1`.
@@ -273,6 +273,19 @@ impl ApiClient {
     ) -> Result<ApiEnvelope<PendingRewardsResponse>, SdkError> {
         let query = block.map_or_else(Vec::new, |block| vec![("block", block_path(block))]);
         self.get(&format!("addresses/{address}/pending-rewards"), &query)
+            .await
+    }
+
+    /// `/api/v1/assets/{token_id}/metadata`.
+    pub async fn asset_mrc_metadata(
+        &self,
+        asset_id: &str,
+        mrc_token_id: Option<&str>,
+    ) -> Result<ApiEnvelope<MrcMetadataResponse>, SdkError> {
+        let query = mrc_token_id.map_or_else(Vec::new, |token_id| {
+            vec![("mrcTokenId", token_id.to_owned())]
+        });
+        self.get(&format!("assets/{asset_id}/metadata"), &query)
             .await
     }
 
@@ -853,6 +866,22 @@ mod tests {
         assert_eq!(
             url.as_str(),
             "https://rpc.example/api/v1/addresses/mono1wallet/pending-rewards?block=0x63"
+        );
+    }
+
+    #[test]
+    fn build_url_encodes_mrc_metadata_token_query() {
+        let asset_id = format!("0x{}", "bb".repeat(32));
+        let token_id = format!("0x{}", "cc".repeat(32));
+        let url = build_url(
+            "https://rpc.example/api/v1",
+            &format!("assets/{asset_id}/metadata"),
+            &[("mrcTokenId", token_id.clone())],
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            format!("https://rpc.example/api/v1/assets/{asset_id}/metadata?mrcTokenId={token_id}")
         );
     }
 

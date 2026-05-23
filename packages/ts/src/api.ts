@@ -9,6 +9,7 @@
 import { SdkError } from "./error.js";
 import { nativeEventsFromHistory, nativeEventsFromReceipt } from "./native-events.js";
 import type { ClobMarketResponse } from "./bindings/ClobMarketResponse.js";
+import type { MrcMetadataResponse } from "./bindings/MrcMetadataResponse.js";
 import type { PendingRewardsResponse } from "./bindings/PendingRewardsResponse.js";
 import type { BlockSelector } from "./types.js";
 import { encodeBlockSelector } from "./types.js";
@@ -548,6 +549,15 @@ export class ApiClient {
   ): Promise<ApiEnvelope<PendingRewardsResponse>> {
     return this.get(`/addresses/${encodePathSegment(address)}/pending-rewards`, {
       block: block == null ? undefined : encodeBlockSelector(block),
+    });
+  }
+
+  async assetMrcMetadata(
+    assetId: string,
+    mrcTokenId?: string | null,
+  ): Promise<ApiEnvelope<MrcMetadataResponse>> {
+    return this.get(`/assets/${encodePathSegment(assetId)}/metadata`, {
+      mrcTokenId: mrcTokenId ?? undefined,
     });
   }
 

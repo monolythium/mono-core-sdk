@@ -221,6 +221,11 @@ var ApiClient = class {
       block: block == null ? void 0 : encodeBlockSelector(block)
     });
   }
+  async assetMrcMetadata(assetId, mrcTokenId) {
+    return this.get(`/assets/${encodePathSegment(assetId)}/metadata`, {
+      mrcTokenId: mrcTokenId ?? void 0
+    });
+  }
   async clusters(page = 0, limit = 25) {
     return this.get("/clusters", { page, limit });
   }
