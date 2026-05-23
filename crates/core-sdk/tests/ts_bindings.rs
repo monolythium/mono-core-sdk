@@ -41,12 +41,12 @@ use monolythium_core_sdk::types::{
     MrcHoldersRequest, MrcHoldersResponse, MrcMetadataRecord, MrcMetadataResponse, MrcPolicyRecord,
     MrcPolicySpendRecord, NativeCollectionRoyaltyStateRecord, NativeMarketStateFilter,
     NativeMarketStateResponse, NativeMarketStateResponseFilters, NativeMarketStateSource,
-    NativeNftListingStateRecord, NativeReceiptFee, NativeSpotMarketStateRecord,
-    NativeSpotOrderStateRecord, PeerSummary, PendingRewardsResponse, PendingRewardsRow,
-    PendingTxSummary, PrecompileDescriptor, RedemptionQueueResponse, RedemptionQueueTicket,
-    RegistryRecord, RichListHolder, RichListResponse, RoundInfo, StorageProofBatch, SyncStatus,
-    TokenBalanceMrcIdentity, TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt,
-    TransactionView,
+    NativeModuleForwarderDescriptor, NativeNftListingStateRecord, NativeReceiptFee,
+    NativeSpotMarketStateRecord, NativeSpotOrderStateRecord, PeerSummary, PendingRewardsResponse,
+    PendingRewardsRow, PendingTxSummary, PrecompileDescriptor, RedemptionQueueResponse,
+    RedemptionQueueTicket, RegistryRecord, RichListHolder, RichListResponse, RoundInfo,
+    StorageProofBatch, SyncStatus, TokenBalanceMrcIdentity, TokenBalanceRecord,
+    TpmAttestationResponse, TransactionReceipt, TransactionView,
 };
 use ts_rs::TS;
 
@@ -138,6 +138,7 @@ fn export_bindings() {
     NativeMarketStateResponseFilters::export_all_to(&out)
         .expect("NativeMarketStateResponseFilters");
     NativeMarketStateSource::export_all_to(&out).expect("NativeMarketStateSource");
+    NativeModuleForwarderDescriptor::export_all_to(&out).expect("NativeModuleForwarderDescriptor");
     NativeNftListingStateRecord::export_all_to(&out).expect("NativeNftListingStateRecord");
     NativeReceiptFee::export_all_to(&out).expect("NativeReceiptFee");
     NativeSpotMarketStateRecord::export_all_to(&out).expect("NativeSpotMarketStateRecord");

@@ -113,6 +113,7 @@ export type { NativeMarketStateFilter } from "./NativeMarketStateFilter.js";
 export type { NativeMarketStateResponse } from "./NativeMarketStateResponse.js";
 export type { NativeMarketStateResponseFilters } from "./NativeMarketStateResponseFilters.js";
 export type { NativeMarketStateSource } from "./NativeMarketStateSource.js";
+export type { NativeModuleForwarderDescriptor } from "./NativeModuleForwarderDescriptor.js";
 export type { NativeNftListingStateRecord } from "./NativeNftListingStateRecord.js";
 export type { NativeReceiptFee } from "./NativeReceiptFee.js";
 export type { NativeSpotMarketStateRecord } from "./NativeSpotMarketStateRecord.js";
