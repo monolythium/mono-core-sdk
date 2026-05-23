@@ -975,6 +975,47 @@ impl MrvNativeTxFacade {
     }
 }
 
+/// Application-facing native fee preview for MRV deploy/call plans.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvNativeFeePreview {
+    /// Total native fee cap in lythoshi.
+    #[serde(rename = "totalLythoshi")]
+    pub total_lythoshi: String,
+    /// Total native fee cap formatted as numeric LYTH without a unit suffix.
+    #[serde(rename = "totalLyth")]
+    pub total_lyth: String,
+    /// Estimated execution units used by the plan.
+    #[serde(rename = "cyclesUsed")]
+    pub cycles_used: u64,
+    /// Execution-unit ceiling carried by the signed transaction.
+    #[serde(rename = "executionUnitLimit")]
+    pub execution_unit_limit: u64,
+    /// Max execution fee in lythoshi.
+    #[serde(rename = "maxExecutionFeeLythoshi")]
+    pub max_execution_fee_lythoshi: String,
+    /// Priority tip in lythoshi.
+    #[serde(rename = "priorityTipLythoshi")]
+    pub priority_tip_lythoshi: String,
+}
+
+impl MrvNativeFeePreview {
+    fn from_options(options: &MrvNativeTxBuildOptions) -> Self {
+        let total_lythoshi = options.max_execution_fee_lythoshi.to_string();
+        Self {
+            total_lyth: format_lyth(
+                options.max_execution_fee_lythoshi,
+                LythFormatOptions::NUMERIC_ONLY,
+            ),
+            total_lythoshi: total_lythoshi.clone(),
+            cycles_used: options.execution_unit_limit,
+            execution_unit_limit: options.execution_unit_limit,
+            max_execution_fee_lythoshi: total_lythoshi,
+            priority_tip_lythoshi: options.priority_tip_lythoshi.to_string(),
+        }
+    }
+}
+
 /// Fully-built MRV deploy request plus SDK-local execution metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1019,6 +1060,9 @@ pub struct MrvDeployNativeTxPlan {
     /// Application-facing native transaction summary with v4.1 names.
     #[serde(rename = "nativeTx")]
     pub native_tx: MrvNativeTxFacade,
+    /// Application-facing native fee preview with v4.1 names.
+    #[serde(rename = "feePreview")]
+    pub fee_preview: MrvNativeFeePreview,
     /// Sign-ready transaction fields for the current native transaction adapter.
     pub tx: MrvNativeTxFields,
 }
@@ -1035,6 +1079,9 @@ pub struct MrvCallNativeTxPlan {
     /// Application-facing native transaction summary with v4.1 names.
     #[serde(rename = "nativeTx")]
     pub native_tx: MrvNativeTxFacade,
+    /// Application-facing native fee preview with v4.1 names.
+    #[serde(rename = "feePreview")]
+    pub fee_preview: MrvNativeFeePreview,
     /// Sign-ready transaction fields for the current native transaction adapter.
     pub tx: MrvNativeTxFields,
 }
@@ -1540,11 +1587,13 @@ pub fn build_mrv_deploy_native_tx_plan(
         plan.extension.clone(),
     );
     let native_tx = MrvNativeTxFacade::from_options(&options, &plan.request.value_lythoshi);
+    let fee_preview = MrvNativeFeePreview::from_options(&options);
     Ok(MrvDeployNativeTxPlan {
         request: plan.request,
         extension: plan.extension,
         expected_contract_address: plan.expected_contract_address,
         native_tx,
+        fee_preview,
         tx,
     })
 }
@@ -1572,10 +1621,12 @@ pub fn build_mrv_call_native_tx_plan(
         plan.extension.clone(),
     );
     let native_tx = MrvNativeTxFacade::from_options(&options, &plan.request.value_lythoshi);
+    let fee_preview = MrvNativeFeePreview::from_options(&options);
     Ok(MrvCallNativeTxPlan {
         request: plan.request,
         extension: plan.extension,
         native_tx,
+        fee_preview,
         tx,
     })
 }
@@ -2489,6 +2540,12 @@ mod tests {
         assert_eq!(deploy.native_tx.execution_unit_limit, 100_000);
         assert_eq!(deploy.native_tx.max_execution_fee_lythoshi, "25");
         assert_eq!(deploy.native_tx.priority_tip_lythoshi, "1");
+        assert_eq!(deploy.fee_preview.total_lythoshi, "25");
+        assert_eq!(deploy.fee_preview.total_lyth, "0.00000025");
+        assert_eq!(deploy.fee_preview.cycles_used, 100_000);
+        assert_eq!(deploy.fee_preview.execution_unit_limit, 100_000);
+        assert_eq!(deploy.fee_preview.max_execution_fee_lythoshi, "25");
+        assert_eq!(deploy.fee_preview.priority_tip_lythoshi, "1");
         assert_eq!(deploy.tx.chain_id, 69_420);
         assert_eq!(deploy.tx.nonce, 7);
         assert_eq!(deploy.tx.max_priority_fee_per_gas, "1");
@@ -2519,6 +2576,12 @@ mod tests {
         assert_eq!(call.native_tx.execution_unit_limit, 50_000);
         assert_eq!(call.native_tx.max_execution_fee_lythoshi, "10");
         assert_eq!(call.native_tx.priority_tip_lythoshi, "0");
+        assert_eq!(call.fee_preview.total_lythoshi, "10");
+        assert_eq!(call.fee_preview.total_lyth, "0.0000001");
+        assert_eq!(call.fee_preview.cycles_used, 50_000);
+        assert_eq!(call.fee_preview.execution_unit_limit, 50_000);
+        assert_eq!(call.fee_preview.max_execution_fee_lythoshi, "10");
+        assert_eq!(call.fee_preview.priority_tip_lythoshi, "0");
         assert_eq!(call.tx.chain_id, 69_420);
         assert_eq!(call.tx.nonce, 8);
         assert_eq!(call.tx.max_priority_fee_per_gas, "0");
@@ -2539,6 +2602,9 @@ mod tests {
         assert_eq!(wire["tx"]["extensions"][0]["bodyHex"], "0x01");
         assert_eq!(wire["nativeTx"]["maxExecutionFeeLythoshi"], "10");
         assert_eq!(wire["nativeTx"]["executionUnitLimit"], 50_000);
+        assert_eq!(wire["feePreview"]["totalLythoshi"], "10");
+        assert_eq!(wire["feePreview"]["totalLyth"], "0.0000001");
+        assert_eq!(wire["feePreview"]["cyclesUsed"], 50_000);
         let signing_adapter = wire.as_object_mut().unwrap().remove("tx").unwrap();
         let app_facing_wire = serde_json::to_string(&wire).unwrap().to_lowercase();
         assert!(!app_facing_wire.contains("gas"));

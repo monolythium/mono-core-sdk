@@ -2234,6 +2234,7 @@ function buildMrvDeployNativeTxPlan(artifactBytes, options) {
       maxExecutionFeeLythoshi: maxExecutionFee,
       priorityTipLythoshi: priorityTip ?? "0"
     },
+    feePreview: buildMrvNativeFeePreview(executionUnitLimit, maxExecutionFee, priorityTip ?? "0"),
     tx: {
       chainId,
       nonce,
@@ -2270,6 +2271,7 @@ function buildMrvCallNativeTxPlan(contractAddress, input, options) {
       maxExecutionFeeLythoshi: maxExecutionFee,
       priorityTipLythoshi: priorityTip ?? "0"
     },
+    feePreview: buildMrvNativeFeePreview(executionUnitLimit, maxExecutionFee, priorityTip ?? "0"),
     tx: {
       chainId,
       nonce,
@@ -2281,6 +2283,17 @@ function buildMrvCallNativeTxPlan(contractAddress, input, options) {
       input: plan.request.input,
       extensions: [plan.extension]
     }
+  };
+}
+function buildMrvNativeFeePreview(executionUnitLimit, maxExecutionFeeLythoshi, priorityTipLythoshi) {
+  const totalLythoshi = normalizeDecimalLike("maxExecutionFeeLythoshi", maxExecutionFeeLythoshi);
+  return {
+    totalLythoshi,
+    totalLyth: formatLyth(totalLythoshi, { includeUnit: false }),
+    cyclesUsed: executionUnitLimit,
+    executionUnitLimit,
+    maxExecutionFeeLythoshi: totalLythoshi,
+    priorityTipLythoshi: normalizeDecimalLike("priorityTipLythoshi", priorityTipLythoshi)
   };
 }
 async function submitMrvDeployNativeTx(client, backend, artifactBytes, options) {
