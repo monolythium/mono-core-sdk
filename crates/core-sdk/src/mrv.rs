@@ -848,6 +848,47 @@ impl MrvNativeTxFields {
     }
 }
 
+/// Application-facing MRV native transaction fields.
+///
+/// The separate [`MrvNativeTxFields`] value is the compatibility signing
+/// adapter shape. This facade keeps SDK plan consumers on v4.1 lythoshi and
+/// execution-unit names without asking them to inspect `maxFeePerGas` or
+/// `gasLimit`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvNativeTxFacade {
+    /// Chain id.
+    #[serde(rename = "chainId")]
+    pub chain_id: u64,
+    /// Sender nonce.
+    pub nonce: u64,
+    /// Native value in lythoshi, rendered as a decimal string.
+    #[serde(rename = "valueLythoshi")]
+    pub value_lythoshi: String,
+    /// Execution-unit ceiling.
+    #[serde(rename = "executionUnitLimit")]
+    pub execution_unit_limit: u64,
+    /// Max execution fee in lythoshi, rendered as a decimal string.
+    #[serde(rename = "maxExecutionFeeLythoshi")]
+    pub max_execution_fee_lythoshi: String,
+    /// Priority tip in lythoshi, rendered as a decimal string.
+    #[serde(rename = "priorityTipLythoshi")]
+    pub priority_tip_lythoshi: String,
+}
+
+impl MrvNativeTxFacade {
+    fn from_options(options: &MrvNativeTxBuildOptions, value_lythoshi: &str) -> Self {
+        Self {
+            chain_id: options.chain_id,
+            nonce: options.nonce,
+            value_lythoshi: value_lythoshi.to_owned(),
+            execution_unit_limit: options.execution_unit_limit,
+            max_execution_fee_lythoshi: options.max_execution_fee_lythoshi.to_string(),
+            priority_tip_lythoshi: options.priority_tip_lythoshi.to_string(),
+        }
+    }
+}
+
 /// Fully-built MRV deploy request plus SDK-local execution metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -889,6 +930,9 @@ pub struct MrvDeployNativeTxPlan {
         skip_serializing_if = "Option::is_none"
     )]
     pub expected_contract_address: Option<String>,
+    /// Application-facing native transaction summary with v4.1 names.
+    #[serde(rename = "nativeTx")]
+    pub native_tx: MrvNativeTxFacade,
     /// Sign-ready transaction fields for the current native transaction adapter.
     pub tx: MrvNativeTxFields,
 }
@@ -902,6 +946,9 @@ pub struct MrvCallNativeTxPlan {
     pub request: MrvCallRequest,
     /// MRV v1 transaction extension descriptor.
     pub extension: MrvTransactionExtension,
+    /// Application-facing native transaction summary with v4.1 names.
+    #[serde(rename = "nativeTx")]
+    pub native_tx: MrvNativeTxFacade,
     /// Sign-ready transaction fields for the current native transaction adapter.
     pub tx: MrvNativeTxFields,
 }
@@ -1406,10 +1453,12 @@ pub fn build_mrv_deploy_native_tx_plan(
         &plan.request.value_lythoshi,
         plan.extension.clone(),
     );
+    let native_tx = MrvNativeTxFacade::from_options(&options, &plan.request.value_lythoshi);
     Ok(MrvDeployNativeTxPlan {
         request: plan.request,
         extension: plan.extension,
         expected_contract_address: plan.expected_contract_address,
+        native_tx,
         tx,
     })
 }
@@ -1436,9 +1485,11 @@ pub fn build_mrv_call_native_tx_plan(
         &plan.request.value_lythoshi,
         plan.extension.clone(),
     );
+    let native_tx = MrvNativeTxFacade::from_options(&options, &plan.request.value_lythoshi);
     Ok(MrvCallNativeTxPlan {
         request: plan.request,
         extension: plan.extension,
+        native_tx,
         tx,
     })
 }
@@ -2246,6 +2297,12 @@ mod tests {
                     .as_str()
             )
         );
+        assert_eq!(deploy.native_tx.chain_id, 69_420);
+        assert_eq!(deploy.native_tx.nonce, 7);
+        assert_eq!(deploy.native_tx.value_lythoshi, "0");
+        assert_eq!(deploy.native_tx.execution_unit_limit, 100_000);
+        assert_eq!(deploy.native_tx.max_execution_fee_lythoshi, "25");
+        assert_eq!(deploy.native_tx.priority_tip_lythoshi, "1");
         assert_eq!(deploy.tx.chain_id, 69_420);
         assert_eq!(deploy.tx.nonce, 7);
         assert_eq!(deploy.tx.max_priority_fee_per_gas, "1");
@@ -2270,6 +2327,12 @@ mod tests {
                 .value_lythoshi(3),
         )
         .unwrap();
+        assert_eq!(call.native_tx.chain_id, 69_420);
+        assert_eq!(call.native_tx.nonce, 8);
+        assert_eq!(call.native_tx.value_lythoshi, "3");
+        assert_eq!(call.native_tx.execution_unit_limit, 50_000);
+        assert_eq!(call.native_tx.max_execution_fee_lythoshi, "10");
+        assert_eq!(call.native_tx.priority_tip_lythoshi, "0");
         assert_eq!(call.tx.chain_id, 69_420);
         assert_eq!(call.tx.nonce, 8);
         assert_eq!(call.tx.max_priority_fee_per_gas, "0");
@@ -2283,11 +2346,20 @@ mod tests {
         assert_eq!(call.tx.input, "0x0102");
         assert_eq!(call.tx.extensions[0].kind, MRV_TX_EXTENSION_KIND);
 
-        let wire = serde_json::to_value(&call).unwrap();
+        let mut wire = serde_json::to_value(&call).unwrap();
         assert_eq!(wire["tx"]["chainId"], 69_420);
         assert_eq!(wire["tx"]["maxFeePerGas"], "10");
         assert_eq!(wire["tx"]["gasLimit"], 50_000);
         assert_eq!(wire["tx"]["extensions"][0]["bodyHex"], "0x01");
+        assert_eq!(wire["nativeTx"]["maxExecutionFeeLythoshi"], "10");
+        assert_eq!(wire["nativeTx"]["executionUnitLimit"], 50_000);
+        let signing_adapter = wire.as_object_mut().unwrap().remove("tx").unwrap();
+        let app_facing_wire = serde_json::to_string(&wire).unwrap().to_lowercase();
+        assert!(!app_facing_wire.contains("gas"));
+        assert!(!app_facing_wire.contains("wei"));
+        assert!(serde_json::to_string(&signing_adapter)
+            .unwrap()
+            .contains("gasLimit"));
 
         assert!(build_mrv_call_native_tx_plan(
             &mrv_address_to_bech32(MrvAddressKind::User, [0x33; 20]),

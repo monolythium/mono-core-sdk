@@ -224,6 +224,14 @@ describe("MRV/RISC-V SDK helpers", () => {
       artifactHash,
     });
     expect(deploy.expectedContractAddress).toBe(deriveMrvContractAddress(user, 7n, artifactHash));
+    expect(deploy.nativeTx).toEqual({
+      chainId: 69_420n,
+      nonce: 7n,
+      valueLythoshi: "0",
+      executionUnitLimit: 100_000n,
+      maxExecutionFeeLythoshi: "25",
+      priorityTipLythoshi: "1",
+    });
     expect(deploy.tx).toEqual({
       chainId: 69_420n,
       nonce: 7n,
@@ -244,6 +252,14 @@ describe("MRV/RISC-V SDK helpers", () => {
       maxExecutionFeeLythoshi: 10n,
       valueLythoshi: "3",
     });
+    expect(call.nativeTx).toEqual({
+      chainId: 69_420n,
+      nonce: 8n,
+      valueLythoshi: "3",
+      executionUnitLimit: 50_000n,
+      maxExecutionFeeLythoshi: "10",
+      priorityTipLythoshi: "0",
+    });
     expect(call.tx).toEqual({
       chainId: 69_420n,
       nonce: 8n,
@@ -255,5 +271,12 @@ describe("MRV/RISC-V SDK helpers", () => {
       input: "0x0102",
       extensions: [{ kind: MRV_TX_EXTENSION_KIND, bodyHex: "0x01" }],
     });
+    const { tx: _deploySigningAdapter, ...deployAppFacing } = deploy;
+    const { tx: _callSigningAdapter, ...callAppFacing } = call;
+    const appWire = JSON.stringify(
+      [deployAppFacing, callAppFacing],
+      (_key, value) => (typeof value === "bigint" ? value.toString() : value),
+    );
+    expect(appWire).not.toMatch(/gas|gwei|wei/i);
   });
 });

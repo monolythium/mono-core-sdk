@@ -1936,6 +1936,14 @@ function buildMrvDeployNativeTxPlan(artifactBytes, options) {
   });
   return {
     ...plan,
+    nativeTx: {
+      chainId,
+      nonce,
+      valueLythoshi: plan.request.valueLythoshi,
+      executionUnitLimit,
+      maxExecutionFeeLythoshi: maxExecutionFee,
+      priorityTipLythoshi: priorityTip ?? "0"
+    },
     tx: {
       chainId,
       nonce,
@@ -1964,6 +1972,14 @@ function buildMrvCallNativeTxPlan(contractAddress, input, options) {
   });
   return {
     ...plan,
+    nativeTx: {
+      chainId,
+      nonce,
+      valueLythoshi: plan.request.valueLythoshi,
+      executionUnitLimit,
+      maxExecutionFeeLythoshi: maxExecutionFee,
+      priorityTipLythoshi: priorityTip ?? "0"
+    },
     tx: {
       chainId,
       nonce,
