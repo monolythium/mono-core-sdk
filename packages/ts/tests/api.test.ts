@@ -263,6 +263,82 @@ describe("ApiClient", () => {
     ]);
   });
 
+  it("queries /api/v1/native-events with filters and decodes typed rows", async () => {
+    const eventTopic = `0x${"11".repeat(32)}`;
+    const primaryId = `0x${"77".repeat(32)}`;
+    const account = "mono1agentconsumer";
+    const counterparty = "mono1agentcounterparty";
+    const decoded: AgentEscrowCreatedEvent = {
+      block_height: 100,
+      tx_index: 0,
+      sequence: 0,
+      family: "agent",
+      event_name: "agent.escrow.created",
+      payload_hash: `0x${"44".repeat(32)}`,
+      amount_lythoshi: "440000000000",
+      agent_address: account,
+      contract_address: "monos1nativeeventemitter",
+    };
+    const { fetch, calls } = mockGet(
+      apiEnvelope({
+        schemaVersion: 1,
+        fromBlock: 100,
+        toBlock: 105,
+        limit: 10,
+        filters: {
+          txIndex: 0,
+          address: decoded.contract_address,
+          eventTopic,
+          family: "agent",
+          eventName: "agent.escrow.created",
+          primaryId,
+          account,
+          counterparty,
+        },
+        events: [
+          {
+            blockHeight: 100,
+            txIndex: 0,
+            logIndex: 0,
+            address: decoded.contract_address,
+            eventTopic,
+            decoded: null,
+            decodedJson: JSON.stringify(decoded),
+          },
+        ],
+        source: {
+          indexerProvider: "native_events",
+        },
+      }),
+    );
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    const response = await client.nativeEventsTyped<AgentEscrowCreatedEvent>({
+      fromBlock: 100,
+      toBlock: 105,
+      limit: 10,
+      txIndex: 0,
+      logIndex: 0,
+      address: decoded.contract_address,
+      eventTopic,
+      family: "agent",
+      eventName: "agent.escrow.created",
+      primaryId,
+      account,
+      counterparty,
+    });
+
+    expect(response.data.source.indexerProvider).toBe("native_events");
+    expect(response.data.events[0].decoded.amount_lythoshi).toBe("440000000000");
+    expect(response.data.events[0].decoded.agent_address).toBe(account);
+    expect(calls).toEqual([
+      {
+        url: `https://rpc.example/api/v1/native-events?fromBlock=100&toBlock=105&limit=10&txIndex=0&logIndex=0&address=monos1nativeeventemitter&eventTopic=${eventTopic}&family=agent&eventName=agent.escrow.created&primaryId=${primaryId}&account=${account}&counterparty=${counterparty}`,
+        method: "GET",
+      },
+    ]);
+  });
+
   it("wraps search, transaction-feed, address aggregate, stats, and market routes", async () => {
     const { fetch, calls } = mockGet(apiEnvelope({ schemaVersion: 1 }));
     const client = new ApiClient("https://rpc.example", { fetch });

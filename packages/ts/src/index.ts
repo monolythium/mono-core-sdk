@@ -51,7 +51,13 @@ export type {
   ApiUpgradeStatus,
   ApiUpgradeStatusData,
 } from "./api.js";
-export { MAX_NATIVE_RECEIPT_EVENTS, RpcClient, parseQuantity, parseQuantityBig } from "./client.js";
+export {
+  MAX_NATIVE_RECEIPT_EVENTS,
+  RpcClient,
+  nativeEventsFilterParams,
+  parseQuantity,
+  parseQuantityBig,
+} from "./client.js";
 export type {
   AddressActivityKind,
   AddressFlowResponse,
@@ -85,6 +91,10 @@ export type {
   NativeReceiptFee,
   NativeReceiptResponse,
   NativeReceiptSource,
+  NativeEventsFilter,
+  NativeEventsResponse,
+  NativeEventsResponseFilters,
+  NativeEventsSource,
   NetworkClientOptions,
   OperatorAuthorityResponse,
   OperatorCapabilitiesResponse,
@@ -123,6 +133,7 @@ export {
   consumeNativeEvents,
   isNativeDecodedEvent,
   nativeEventMatches,
+  nativeEventsFromHistory,
   nativeEventsFromReceipt,
   parseNativeDecodedEvent,
 } from "./native-events.js";

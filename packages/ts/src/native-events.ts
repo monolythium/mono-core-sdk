@@ -1,5 +1,9 @@
 import { SdkError } from "./error.js";
-import type { NativeReceiptEvent, NativeReceiptResponse } from "./client.js";
+import type {
+  NativeEventsResponse,
+  NativeReceiptEvent,
+  NativeReceiptResponse,
+} from "./client.js";
 
 /** Common typed payload envelope emitted by the native event projector. */
 export interface NativeDecodedEvent {
@@ -93,6 +97,18 @@ export function nativeEventsFromReceipt<
       ...event,
       decoded: parseNativeDecodedEvent<TDecoded>(event),
     }));
+}
+
+export function nativeEventsFromHistory<
+  TDecoded extends NativeDecodedEvent = NativeDecodedEvent,
+>(response: NativeEventsResponse<unknown>): NativeEventsResponse<TDecoded> {
+  return {
+    ...response,
+    events: response.events.map((event) => ({
+      ...event,
+      decoded: parseNativeDecodedEvent<TDecoded>(event),
+    })),
+  };
 }
 
 export async function consumeNativeEvents<

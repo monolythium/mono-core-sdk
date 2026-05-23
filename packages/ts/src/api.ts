@@ -7,7 +7,7 @@
  */
 
 import { SdkError } from "./error.js";
-import { nativeEventsFromReceipt } from "./native-events.js";
+import { nativeEventsFromHistory, nativeEventsFromReceipt } from "./native-events.js";
 import type { ClobMarketResponse } from "./bindings/ClobMarketResponse.js";
 import type { BlockSelector } from "./types.js";
 import { encodeBlockSelector } from "./types.js";
@@ -26,6 +26,8 @@ import type {
   ClobTradesResponse,
   NativeReceiptFee,
   NativeReceiptResponse,
+  NativeEventsFilter,
+  NativeEventsResponse,
   OperatorCapabilitiesResponse,
   RuntimeBuildProvenance,
   RuntimeUpgradeStatus,
@@ -500,6 +502,22 @@ export class ApiClient {
     };
   }
 
+  async nativeEvents<TDecoded = unknown>(
+    filter: NativeEventsFilter,
+  ): Promise<ApiEnvelope<NativeEventsResponse<TDecoded>>> {
+    return this.get("/native-events", nativeEventsFilterQuery(filter));
+  }
+
+  async nativeEventsTyped<
+    TDecoded extends NativeDecodedEvent = NativeDecodedEvent,
+  >(filter: NativeEventsFilter): Promise<ApiEnvelope<NativeEventsResponse<TDecoded>>> {
+    const response = await this.nativeEvents(filter);
+    return {
+      ...response,
+      data: nativeEventsFromHistory<TDecoded>(response.data),
+    };
+  }
+
   async addressProfile(address: string): Promise<ApiEnvelope<AddressProfileResponse>> {
     return this.get(`/addresses/${encodePathSegment(address)}/profile`);
   }
@@ -650,6 +668,25 @@ function buildUrl(baseUrl: string, path: string, query: Record<string, ApiQueryV
   }
   const qs = params.toString();
   return qs.length === 0 ? `${cleanBase}${cleanPath}` : `${cleanBase}${cleanPath}?${qs}`;
+}
+
+function nativeEventsFilterQuery(filter: NativeEventsFilter): Record<string, ApiQueryValue> {
+  return {
+    fromBlock: filter.fromBlock,
+    toBlock: filter.toBlock,
+    limit: filter.limit,
+    txIndex: filter.txIndex,
+    logIndex: filter.logIndex,
+    address: filter.address,
+    eventTopic: filter.eventTopic,
+    family: filter.family,
+    eventName: filter.eventName,
+    primaryId: filter.primaryId,
+    relatedId: filter.relatedId,
+    tokenId: filter.tokenId,
+    account: filter.account,
+    counterparty: filter.counterparty,
+  };
 }
 
 function encodePathBlock(block: BlockSelector): string {
