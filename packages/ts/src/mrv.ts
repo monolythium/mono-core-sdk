@@ -38,6 +38,7 @@ import type { MrvDeployRequest } from "./bindings/MrvDeployRequest.js";
 import type { MrvResolvedSyscall } from "./bindings/MrvResolvedSyscall.js";
 import type { MrvTransactionExtension } from "./bindings/MrvTransactionExtension.js";
 import type { MrvValidatedArtifactMetadata } from "./bindings/MrvValidatedArtifactMetadata.js";
+import type { NativeEvmTxFields } from "./crypto/tx.js";
 
 export type MrvBytesLike = string | Uint8Array | readonly number[];
 export type MrvDecimalLike = string | number | bigint;
@@ -64,6 +65,34 @@ export interface MrvDeployPlan {
 export interface MrvCallPlan {
   request: MrvCallRequest;
   extension: MrvTransactionExtension;
+}
+
+export type MrvDeployNativeTxOptions = Omit<
+  MrvDeployPlanOptions,
+  "executionUnitLimit" | "maxExecutionFeeLythoshi" | "nonce"
+> & {
+  chainId: number | bigint;
+  nonce: number | bigint;
+  executionUnitLimit: number | bigint;
+  maxExecutionFeeLythoshi: MrvDecimalLike;
+};
+
+export type MrvCallNativeTxOptions = Omit<
+  MrvRequestBuildOptions,
+  "executionUnitLimit" | "maxExecutionFeeLythoshi" | "nonce"
+> & {
+  chainId: number | bigint;
+  nonce: number | bigint;
+  executionUnitLimit: number | bigint;
+  maxExecutionFeeLythoshi: MrvDecimalLike;
+};
+
+export interface MrvDeployNativeTxPlan extends MrvDeployPlan {
+  tx: NativeEvmTxFields;
+}
+
+export interface MrvCallNativeTxPlan extends MrvCallPlan {
+  tx: NativeEvmTxFields;
 }
 
 export const MRV_FORMAT_VERSION = 1 as const;
@@ -272,6 +301,77 @@ export function buildMrvCallPlan(
   return {
     request: buildMrvCallRequest(contractAddress, input, options),
     extension: mrvV1TransactionExtension(),
+  };
+}
+
+export function buildMrvDeployNativeTxPlan(
+  artifactBytes: MrvBytesLike,
+  options: MrvDeployNativeTxOptions,
+): MrvDeployNativeTxPlan {
+  const chainId = normalizeU64(options.chainId, "chainId");
+  const nonce = normalizeU64(options.nonce, "nonce");
+  const executionUnitLimit = normalizeU64(options.executionUnitLimit, "executionUnitLimit");
+  const maxExecutionFee = normalizeDecimalLike("maxExecutionFeeLythoshi", options.maxExecutionFeeLythoshi);
+  const priorityTip =
+    options.priorityTipLythoshi === undefined
+      ? undefined
+      : normalizeDecimalLike("priorityTipLythoshi", options.priorityTipLythoshi);
+  const plan = buildMrvDeployPlan(artifactBytes, {
+    ...options,
+    nonce,
+    executionUnitLimit,
+    maxExecutionFeeLythoshi: maxExecutionFee,
+    priorityTipLythoshi: priorityTip,
+  });
+  return {
+    ...plan,
+    tx: {
+      chainId,
+      nonce,
+      maxPriorityFeePerGas: priorityTip ?? "0",
+      maxFeePerGas: maxExecutionFee,
+      gasLimit: executionUnitLimit,
+      to: null,
+      value: plan.request.valueLythoshi,
+      input: plan.request.artifactBytes,
+      extensions: [plan.extension],
+    },
+  };
+}
+
+export function buildMrvCallNativeTxPlan(
+  contractAddress: string,
+  input: MrvBytesLike,
+  options: MrvCallNativeTxOptions,
+): MrvCallNativeTxPlan {
+  const chainId = normalizeU64(options.chainId, "chainId");
+  const nonce = normalizeU64(options.nonce, "nonce");
+  const executionUnitLimit = normalizeU64(options.executionUnitLimit, "executionUnitLimit");
+  const maxExecutionFee = normalizeDecimalLike("maxExecutionFeeLythoshi", options.maxExecutionFeeLythoshi);
+  const priorityTip =
+    options.priorityTipLythoshi === undefined
+      ? undefined
+      : normalizeDecimalLike("priorityTipLythoshi", options.priorityTipLythoshi);
+  const plan = buildMrvCallPlan(contractAddress, input, {
+    ...options,
+    nonce,
+    executionUnitLimit,
+    maxExecutionFeeLythoshi: maxExecutionFee,
+    priorityTipLythoshi: priorityTip,
+  });
+  return {
+    ...plan,
+    tx: {
+      chainId,
+      nonce,
+      maxPriorityFeePerGas: priorityTip ?? "0",
+      maxFeePerGas: maxExecutionFee,
+      gasLimit: executionUnitLimit,
+      to: typedBech32ToAddress(plan.request.contractAddress, "contract").hex,
+      value: plan.request.valueLythoshi,
+      input: plan.request.input,
+      extensions: [plan.extension],
+    },
   };
 }
 

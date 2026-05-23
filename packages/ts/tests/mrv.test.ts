@@ -4,8 +4,10 @@ import {
   MRV_PROFILE_MONO_RV32IM_V1,
   MRV_TX_EXTENSION_KIND,
   addressToTypedBech32,
+  buildMrvCallNativeTxPlan,
   buildMrvCallPlan,
   buildMrvCallRequest,
+  buildMrvDeployNativeTxPlan,
   buildMrvDeployPlan,
   buildMrvDeployRequest,
   deriveMrvContractAddress,
@@ -205,5 +207,53 @@ describe("MRV/RISC-V SDK helpers", () => {
     expect(() => buildMrvDeployRequest([0x13], { valueLythoshi: "01" })).toThrow(/valueLythoshi/);
     expect(() => buildMrvCallRequest(contract, [0x01], { executionUnitLimit: 0n })).toThrow(/executionUnitLimit/);
     expect(() => buildMrvDeployPlan([0x13], { artifactHash: "0x1234" })).toThrow(/artifactHash/);
+  });
+
+  it("builds signer-ready MRV deploy and call native transaction plans", () => {
+    const user = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
+    const contract = addressToTypedBech32("contract", "0x2222222222222222222222222222222222222222");
+    const artifactHash = "0x598501b99b388ca564905b49040c6d315a55fb13bf34a6f002aa04960a27895d";
+
+    const deploy = buildMrvDeployNativeTxPlan("0x13000000", {
+      from: user,
+      chainId: 69_420n,
+      nonce: 7n,
+      executionUnitLimit: 100_000n,
+      maxExecutionFeeLythoshi: "25",
+      priorityTipLythoshi: 1n,
+      artifactHash,
+    });
+    expect(deploy.expectedContractAddress).toBe(deriveMrvContractAddress(user, 7n, artifactHash));
+    expect(deploy.tx).toEqual({
+      chainId: 69_420n,
+      nonce: 7n,
+      maxPriorityFeePerGas: "1",
+      maxFeePerGas: "25",
+      gasLimit: 100_000n,
+      to: null,
+      value: "0",
+      input: "0x13000000",
+      extensions: [{ kind: MRV_TX_EXTENSION_KIND, bodyHex: "0x01" }],
+    });
+
+    const call = buildMrvCallNativeTxPlan(contract, [0x01, 0x02], {
+      from: user,
+      chainId: 69_420n,
+      nonce: 8n,
+      executionUnitLimit: 50_000n,
+      maxExecutionFeeLythoshi: 10n,
+      valueLythoshi: "3",
+    });
+    expect(call.tx).toEqual({
+      chainId: 69_420n,
+      nonce: 8n,
+      maxPriorityFeePerGas: "0",
+      maxFeePerGas: "10",
+      gasLimit: 50_000n,
+      to: "0x2222222222222222222222222222222222222222",
+      value: "3",
+      input: "0x0102",
+      extensions: [{ kind: MRV_TX_EXTENSION_KIND, bodyHex: "0x01" }],
+    });
   });
 });

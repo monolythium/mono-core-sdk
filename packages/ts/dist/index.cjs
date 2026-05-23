@@ -1921,6 +1921,62 @@ function buildMrvCallPlan(contractAddress, input = "0x", options = {}) {
     extension: mrvV1TransactionExtension()
   };
 }
+function buildMrvDeployNativeTxPlan(artifactBytes, options) {
+  const chainId = normalizeU64(options.chainId, "chainId");
+  const nonce = normalizeU64(options.nonce, "nonce");
+  const executionUnitLimit = normalizeU64(options.executionUnitLimit, "executionUnitLimit");
+  const maxExecutionFee = normalizeDecimalLike("maxExecutionFeeLythoshi", options.maxExecutionFeeLythoshi);
+  const priorityTip = options.priorityTipLythoshi === void 0 ? void 0 : normalizeDecimalLike("priorityTipLythoshi", options.priorityTipLythoshi);
+  const plan = buildMrvDeployPlan(artifactBytes, {
+    ...options,
+    nonce,
+    executionUnitLimit,
+    maxExecutionFeeLythoshi: maxExecutionFee,
+    priorityTipLythoshi: priorityTip
+  });
+  return {
+    ...plan,
+    tx: {
+      chainId,
+      nonce,
+      maxPriorityFeePerGas: priorityTip ?? "0",
+      maxFeePerGas: maxExecutionFee,
+      gasLimit: executionUnitLimit,
+      to: null,
+      value: plan.request.valueLythoshi,
+      input: plan.request.artifactBytes,
+      extensions: [plan.extension]
+    }
+  };
+}
+function buildMrvCallNativeTxPlan(contractAddress, input, options) {
+  const chainId = normalizeU64(options.chainId, "chainId");
+  const nonce = normalizeU64(options.nonce, "nonce");
+  const executionUnitLimit = normalizeU64(options.executionUnitLimit, "executionUnitLimit");
+  const maxExecutionFee = normalizeDecimalLike("maxExecutionFeeLythoshi", options.maxExecutionFeeLythoshi);
+  const priorityTip = options.priorityTipLythoshi === void 0 ? void 0 : normalizeDecimalLike("priorityTipLythoshi", options.priorityTipLythoshi);
+  const plan = buildMrvCallPlan(contractAddress, input, {
+    ...options,
+    nonce,
+    executionUnitLimit,
+    maxExecutionFeeLythoshi: maxExecutionFee,
+    priorityTipLythoshi: priorityTip
+  });
+  return {
+    ...plan,
+    tx: {
+      chainId,
+      nonce,
+      maxPriorityFeePerGas: priorityTip ?? "0",
+      maxFeePerGas: maxExecutionFee,
+      gasLimit: executionUnitLimit,
+      to: typedBech32ToAddress(plan.request.contractAddress, "contract").hex,
+      value: plan.request.valueLythoshi,
+      input: plan.request.input,
+      extensions: [plan.extension]
+    }
+  };
+}
 function validateMemory(initialPages, maxPages, stackBytes) {
   if (initialPages === 0) throw new MrvValidationError("initialPages is zero");
   if (maxPages === 0) throw new MrvValidationError("maxPages is zero");
@@ -2643,8 +2699,10 @@ exports.addressToTypedBech32 = addressToTypedBech32;
 exports.apiEndpointFromRpcEndpoint = apiEndpointFromRpcEndpoint;
 exports.bech32ToAddress = bech32ToAddress;
 exports.bech32ToAddressBytes = bech32ToAddressBytes;
+exports.buildMrvCallNativeTxPlan = buildMrvCallNativeTxPlan;
 exports.buildMrvCallPlan = buildMrvCallPlan;
 exports.buildMrvCallRequest = buildMrvCallRequest;
+exports.buildMrvDeployNativeTxPlan = buildMrvDeployNativeTxPlan;
 exports.buildMrvDeployPlan = buildMrvDeployPlan;
 exports.buildMrvDeployRequest = buildMrvDeployRequest;
 exports.composeClaimBoundMessage = composeClaimBoundMessage;

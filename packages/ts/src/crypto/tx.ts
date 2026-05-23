@@ -16,7 +16,20 @@ export interface NativeEvmTxFields {
   to: Uint8Array | readonly number[] | string | null;
   value: bigint | number | string;
   input?: Uint8Array | readonly number[] | string;
+  extensions?: readonly NativeTxExtensionLike[];
 }
+
+export interface NativeTxExtension {
+  kind: number;
+  body: Uint8Array | readonly number[] | string;
+}
+
+export interface NativeTxExtensionDescriptor {
+  kind: number;
+  bodyHex: string;
+}
+
+export type NativeTxExtensionLike = NativeTxExtension | NativeTxExtensionDescriptor;
 
 export function encodeTransactionForHash(fields: NativeEvmTxFields, tag: 0x01 | 0x02): Uint8Array {
   const n = normalizeTxFields(fields);
@@ -32,7 +45,7 @@ export function encodeTransactionForHash(fields: NativeEvmTxFields, tag: 0x01 | 
     bigintToBeBytes(BigInt(n.input.length), 4, "input.length"),
     n.input,
     new Uint8Array(4), // access_list length
-    new Uint8Array(4), // extensions length
+    encodeExtensionsForHash(n.extensions),
   );
 }
 
@@ -54,10 +67,16 @@ export function bincodeSignedTransaction(
   w.rawBytes(uint256Le(n.value, "value"));
   w.bytes(n.input);
   w.u64(0n); // access_list length
-  w.u64(0n); // extensions length
+  w.u64(BigInt(n.extensions.length));
+  for (const ext of n.extensions) bincodeTypedExtensionInto(w, ext);
   bincodeMlDsa65OpaqueInto(w, sig);
   bincodeMlDsa65OpaqueInto(w, pk);
   return w.toBytes();
+}
+
+interface NormalizedNativeTxExtension {
+  kind: number;
+  body: Uint8Array;
 }
 
 interface NormalizedNativeEvmTxFields {
@@ -69,6 +88,7 @@ interface NormalizedNativeEvmTxFields {
   to: Uint8Array | null;
   value: bigint;
   input: Uint8Array;
+  extensions: NormalizedNativeTxExtension[];
 }
 
 function normalizeTxFields(fields: NativeEvmTxFields): NormalizedNativeEvmTxFields {
@@ -81,6 +101,7 @@ function normalizeTxFields(fields: NativeEvmTxFields): NormalizedNativeEvmTxFiel
     to: normalizeTo(fields.to),
     value: parseBigint(fields.value, "value"),
     input: normalizeBytes(fields.input ?? new Uint8Array(0), "input"),
+    extensions: normalizeExtensions(fields.extensions),
   };
 }
 
@@ -93,6 +114,32 @@ function normalizeTo(value: NativeEvmTxFields["to"]): Uint8Array | null {
 function normalizeBytes(value: Uint8Array | readonly number[] | string, label: string): Uint8Array {
   if (typeof value === "string") return hexToBytes(value, label);
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+
+function normalizeExtensions(value: NativeEvmTxFields["extensions"]): NormalizedNativeTxExtension[] {
+  if (value === undefined) return [];
+  return value.map((ext, index) => {
+    if (!Number.isInteger(ext.kind) || ext.kind < 0 || ext.kind > 0xff) {
+      throw new Error(`extensions[${index}].kind out of u8 range`);
+    }
+    const body = normalizeBytes("bodyHex" in ext ? ext.bodyHex : ext.body, `extensions[${index}].body`);
+    if (body.length > 0xffff_ffff) {
+      throw new Error(`extensions[${index}].body exceeds u32 length`);
+    }
+    return { kind: ext.kind, body };
+  });
+}
+
+function encodeExtensionsForHash(extensions: readonly NormalizedNativeTxExtension[]): Uint8Array {
+  const chunks: Uint8Array[] = [bigintToBeBytes(BigInt(extensions.length), 4, "extensions.length")];
+  for (const ext of extensions) {
+    chunks.push(
+      Uint8Array.of(ext.kind),
+      bigintToBeBytes(BigInt(ext.body.length), 4, "extension.body.length"),
+      ext.body,
+    );
+  }
+  return concatBytes(...chunks);
 }
 
 function uint256Le(value: bigint, label: string): Uint8Array {
@@ -110,4 +157,9 @@ function bincodeMlDsa65OpaqueInto(w: BincodeWriter, raw: Uint8Array): void {
   w.enumVariant(ENUM_VARIANT_INDEX_ML_DSA_65);
   w.u16(STANDARD_ALGO_NUMBER_ML_DSA_65);
   w.bytes(raw);
+}
+
+function bincodeTypedExtensionInto(w: BincodeWriter, ext: NormalizedNativeTxExtension): void {
+  w.u8(ext.kind);
+  w.bytes(ext.body);
 }
