@@ -5,17 +5,17 @@
  */
 export type MrcHoldersRequest = {
 /**
- * MRC standard, for example `mrc20`, `mrc721`, or `mrc1155`.
+ * MRC standard, for example `mrc20`, `mrc721`, `mrc1155`, or `mrc4626`.
  */
 standard: string,
 /**
- * MRC asset id, or collection id for token-specific standards.
+ * MRC asset id, collection id, or MRC-4626 vault id.
  */
 assetId: string,
 /**
- * Token id inside the MRC holder namespace.
+ * Token id inside the MRC holder namespace; `null`/omitted for MRC-4626 vault scope.
  */
-tokenId: string,
+tokenId?: string | null,
 /**
  * Optional result limit.
  */

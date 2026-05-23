@@ -5,14 +5,14 @@
  */
 export type TokenBalanceMrcIdentity = {
 /**
- * MRC standard, currently `mrc20`, `mrc721`, or `mrc1155`.
+ * MRC standard, currently `mrc20`, `mrc721`, `mrc1155`, or `mrc4626`.
  */
 standard: string,
 /**
- * MRC asset id, or collection id for token-specific standards.
+ * MRC asset id, collection id, or MRC-4626 vault id.
  */
 assetId: string,
 /**
- * Token id inside the collection for MRC-721/MRC-1155 rows.
+ * Token id inside the collection for MRC-721/MRC-1155 rows; `null` for MRC-20/MRC-4626.
  */
 tokenId?: string | null, };

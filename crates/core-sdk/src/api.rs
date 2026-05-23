@@ -365,6 +365,29 @@ impl ApiClient {
         .await
     }
 
+    /// `/api/v1/mrc/{standard}/{asset_id}/holders`.
+    ///
+    /// This is the asset-scoped form used by MRC-4626 vault share balances.
+    pub async fn mrc_asset_holders(
+        &self,
+        standard: &str,
+        asset_id: &str,
+        limit: Option<u32>,
+    ) -> Result<ApiEnvelope<MrcHoldersResponse>, SdkError> {
+        let query = limit.map_or_else(Vec::new, |limit| vec![("limit", limit.to_string())]);
+        self.get(&format!("mrc/{standard}/{asset_id}/holders"), &query)
+            .await
+    }
+
+    /// `/api/v1/mrc/mrc4626/{vault_id}/holders`.
+    pub async fn mrc4626_holders(
+        &self,
+        vault_id: &str,
+        limit: Option<u32>,
+    ) -> Result<ApiEnvelope<MrcHoldersResponse>, SdkError> {
+        self.mrc_asset_holders("mrc4626", vault_id, limit).await
+    }
+
     /// `/api/v1/bridge/routes`.
     ///
     /// The route is read-only `GET`, so the typed request is encoded as a
@@ -1028,6 +1051,17 @@ mod tests {
             url.as_str(),
             format!("https://rpc.example/api/v1/mrc/mrc1155/{asset_id}/{token_id}/holders?limit=5")
         );
+
+        let vault_url = build_url(
+            "https://rpc.example/api/v1",
+            &format!("mrc/mrc4626/{asset_id}/holders"),
+            &[("limit", "10".to_owned())],
+        )
+        .unwrap();
+        assert_eq!(
+            vault_url.as_str(),
+            format!("https://rpc.example/api/v1/mrc/mrc4626/{asset_id}/holders?limit=10")
+        );
     }
 
     #[tokio::test]
@@ -1075,6 +1109,51 @@ mod tests {
         assert_eq!(
             request_line,
             format!("GET /api/v1/mrc/mrc1155/{asset_id}/{token_id}/holders?limit=5 HTTP/1.1")
+        );
+    }
+
+    #[tokio::test]
+    async fn mrc4626_holders_gets_asset_scoped_rest_route() {
+        let vault_id = format!("0x{}", "bb".repeat(32));
+        let address = "0x1111111111111111111111111111111111111111";
+        let (endpoint, server) = spawn_api_server(json!({
+            "schemaVersion": 1,
+            "chainId": 69420,
+            "genesisHash": format!("0x{}", "00".repeat(32)),
+            "latest": {
+                "available": true,
+                "height": 100,
+                "blockHash": format!("0x{}", "11".repeat(32)),
+                "stateRoot": format!("0x{}", "22".repeat(32)),
+                "timestamp": 123
+            },
+            "data": {
+                "schemaVersion": 1,
+                "standard": "mrc4626",
+                "assetId": vault_id,
+                "tokenId": null,
+                "limit": 10,
+                "holders": [
+                    {
+                        "rank": 1,
+                        "address": address,
+                        "balance": "700",
+                        "updatedAtBlock": 92
+                    }
+                ]
+            }
+        }));
+        let client = ApiClient::new(endpoint).unwrap();
+
+        let response = client.mrc4626_holders(&vault_id, Some(10)).await.unwrap();
+
+        assert_eq!(response.data.standard, "mrc4626");
+        assert_eq!(response.data.token_id, None);
+        assert_eq!(response.data.holders[0].balance, "700");
+        let request_line = server.join().unwrap();
+        assert_eq!(
+            request_line,
+            format!("GET /api/v1/mrc/mrc4626/{vault_id}/holders?limit=10 HTTP/1.1")
         );
     }
 

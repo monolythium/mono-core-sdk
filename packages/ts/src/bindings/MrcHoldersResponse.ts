@@ -18,9 +18,9 @@ standard: string,
  */
 assetId: string,
 /**
- * Queried token id.
+ * Queried token id, or `null` for MRC-4626 vault scope.
  */
-tokenId: string,
+tokenId: string | null,
 /**
  * Result limit applied by the node.
  */

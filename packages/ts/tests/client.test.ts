@@ -37,6 +37,16 @@ interface NativeMarketSaleEvent extends NativeDecodedEvent {
   price: string;
 }
 
+interface Mrc4626DepositEvent extends NativeDecodedEvent {
+  family: "mrc";
+  event_name: "mrc4626.deposit";
+  amount: string;
+  share_amount: string;
+  primary_id: string;
+  account: string;
+  counterparty: string;
+}
+
 function bridgeRoute(routeId: string): BridgeRouteDisclosure {
   return {
     routeId,
@@ -287,6 +297,7 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     const tokenId = `0x${"aa".repeat(32)}`;
     const assetId = `0x${"bb".repeat(32)}`;
     const childTokenId = `0x${"cc".repeat(32)}`;
+    const vaultId = `0x${"ff".repeat(32)}`;
     const directRoute = bridgeRoute("ccip-usdc-eth");
     const listedRoute = bridgeRoute("layerzero-usdc-eth");
     const legacyBalance: TokenBalanceRecord = {
@@ -317,6 +328,16 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
         bridgeRouteDisclosures: [listedRoute],
       },
       {
+        tokenId: vaultId,
+        balance: "700",
+        updatedAtBlock: 92,
+        mrc: {
+          standard: "mrc4626",
+          assetId: vaultId,
+          tokenId: null,
+        },
+      },
+      {
         tokenId: legacyBalance.tokenId,
         balance: legacyBalance.balance,
         updatedAtBlock: 89,
@@ -332,9 +353,13 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(assessBridgeRoute(balances[0].bridgeRouteDisclosure!).accepted).toBe(true);
     expect(balances[1].mrc).toBeNull();
     expect(assessBridgeRoute(balances[1].bridgeRouteDisclosures![0]).accepted).toBe(true);
-    expect(balances[2].mrc).toBeUndefined();
-    expect(balances[2].bridgeRouteDisclosure).toBeUndefined();
-    expect(balances[2].bridgeRouteDisclosures).toBeUndefined();
+    expect(balances[2].tokenId).toBe(vaultId);
+    expect(balances[2].mrc?.standard).toBe("mrc4626");
+    expect(balances[2].mrc?.assetId).toBe(vaultId);
+    expect(balances[2].mrc?.tokenId).toBeNull();
+    expect(balances[3].mrc).toBeUndefined();
+    expect(balances[3].bridgeRouteDisclosure).toBeUndefined();
+    expect(balances[3].bridgeRouteDisclosures).toBeUndefined();
   });
 
   it("lyth_bridgeRoutes forwards the typed readiness request", async () => {
@@ -490,20 +515,37 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
         limit: 50,
         holders: [],
       },
+      {
+        schemaVersion: 1,
+        standard: "mrc4626",
+        assetId,
+        tokenId: null,
+        limit: 10,
+        holders: [{ rank: 1, address, balance: "700", updatedAtBlock: 92 }],
+      },
     ]);
     const client = new RpcClient("http://x", { fetch });
 
     const limited = await client.lythMrcHolders("mrc1155", assetId, tokenId, 5);
     const defaulted = await client.lythMrcHolders("mrc1155", assetId, tokenId);
+    const vaultHolders = await client.lythMrc4626Holders(assetId, 10);
 
     expect(limited.holders[0]).toMatchObject({ rank: 1, address, balance: "42" });
     expect(limited.holders[0].updatedAtBlock).toBe(91);
     expect(defaulted.limit).toBe(50);
     expect(defaulted.holders).toEqual([]);
-    expect(calls.map((c) => c.method)).toEqual(["lyth_mrcHolders", "lyth_mrcHolders"]);
+    expect(vaultHolders.standard).toBe("mrc4626");
+    expect(vaultHolders.tokenId).toBeNull();
+    expect(vaultHolders.holders[0]).toMatchObject({ rank: 1, address, balance: "700" });
+    expect(calls.map((c) => c.method)).toEqual([
+      "lyth_mrcHolders",
+      "lyth_mrcHolders",
+      "lyth_mrcHolders",
+    ]);
     expect(calls.map((c) => c.params)).toEqual([
       ["mrc1155", assetId, tokenId, 5],
       ["mrc1155", assetId, tokenId],
+      ["mrc4626", assetId, null, 10],
     ]);
   });
 
@@ -856,6 +898,74 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(calls[0].method).toBe("lyth_nativeReceipt");
     expect(calls[0].method).not.toBe("lyth_nativeEvents");
     expect(calls[0].params).toEqual([txHash]);
+  });
+
+  it("lythNativeReceiptEvents preserves MRC-4626 share amount projections", async () => {
+    const txHash = `0x${"23".repeat(32)}`;
+    const eventTopic = `0x${"12".repeat(32)}`;
+    const decoded: Mrc4626DepositEvent = {
+      block_height: 100,
+      tx_index: 0,
+      sequence: 0,
+      family: "mrc",
+      event_name: "mrc4626.deposit",
+      payload_hash: `0x${"45".repeat(32)}`,
+      amount: "1000",
+      share_amount: "700",
+      primary_id: `0x${"55".repeat(32)}`,
+      account: "mono1vaultdepositor",
+      counterparty: "mono1vaultreceiver",
+    };
+    const { fetch } = mockFetch({
+      txHash,
+      blockHash: `0x${"33".repeat(32)}`,
+      blockHeight: 100,
+      txIndex: 0,
+      schema: "riscv.receipt.v1",
+      artifactHash: `0x${"aa".repeat(32)}`,
+      receiptCommitment: `0x${"bb".repeat(32)}`,
+      counters: { cycles: 44, syscallUnits: 3, stateIoUnits: 2 },
+      fee: {
+        total_lythoshi: "0",
+        total_lyth: "0",
+        cycles_used: 44,
+        base_price_per_cycle_lythoshi: "10000000000",
+        state_io_units: 2,
+        state_io_price_per_unit_lythoshi: "0",
+        priority_tip_lythoshi: "0",
+      },
+      reverted: false,
+      nativeDeltaCount: 0,
+      eventCount: 1,
+      events: [
+        {
+          blockHeight: 100,
+          txIndex: 0,
+          logIndex: 0,
+          address: "monos1nativeeventemitter",
+          eventTopic,
+          decoded: null,
+          decodedJson: JSON.stringify(decoded),
+        },
+      ],
+      source: {
+        chainProvider: "mock_chain",
+        indexerProvider: "native_events",
+        metadataLogIndex: 0xffff_ffff,
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const events = await client.lythNativeReceiptEvents<Mrc4626DepositEvent>(txHash, {
+      family: "mrc",
+      eventName: "mrc4626.deposit",
+    });
+
+    expect(events[0].decoded.amount).toBe("1000");
+    expect(events[0].decoded.share_amount).toBe("700");
+    expect(events[0].decoded.primary_id).toBe(decoded.primary_id);
+    expect(events[0].decoded.account).toBe("mono1vaultdepositor");
+    expect(events[0].decoded.counterparty).toBe("mono1vaultreceiver");
   });
 
   it("lythNativeEvents sends historical filters and decodes typed rows", async () => {

@@ -1303,12 +1303,12 @@ pub struct RoundInfo {
     ts(export, export_to = "TokenBalanceMrcIdentity.ts")
 )]
 pub struct TokenBalanceMrcIdentity {
-    /// MRC standard, currently `mrc20`, `mrc721`, or `mrc1155`.
+    /// MRC standard, currently `mrc20`, `mrc721`, `mrc1155`, or `mrc4626`.
     pub standard: String,
-    /// MRC asset id, or collection id for token-specific standards.
+    /// MRC asset id, collection id, or MRC-4626 vault id.
     pub asset_id: Hash,
-    /// Token id inside the collection for MRC-721/MRC-1155 rows.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Token id inside the collection for MRC-721/MRC-1155 rows; `null` for MRC-20/MRC-4626.
+    #[serde(default)]
     #[cfg_attr(feature = "ts-bindings", ts(optional = nullable))]
     pub token_id: Option<Hash>,
 }
@@ -2714,12 +2714,14 @@ pub struct RichListResponse {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct MrcHoldersRequest {
-    /// MRC standard, for example `mrc20`, `mrc721`, or `mrc1155`.
+    /// MRC standard, for example `mrc20`, `mrc721`, `mrc1155`, or `mrc4626`.
     pub standard: String,
-    /// MRC asset id, or collection id for token-specific standards.
+    /// MRC asset id, collection id, or MRC-4626 vault id.
     pub asset_id: Hash,
-    /// Token id inside the MRC holder namespace.
-    pub token_id: Hash,
+    /// Token id inside the MRC holder namespace; `null`/omitted for MRC-4626 vault scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional = nullable))]
+    pub token_id: Option<Hash>,
     /// Optional result limit.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-bindings", ts(optional))]
@@ -2742,9 +2744,9 @@ pub struct MrcHoldersResponse {
     /// Queried MRC asset or collection id.
     #[serde(rename = "assetId")]
     pub asset_id: Hash,
-    /// Queried token id.
+    /// Queried token id, or `null` for MRC-4626 vault scope.
     #[serde(rename = "tokenId")]
-    pub token_id: Hash,
+    pub token_id: Option<Hash>,
     /// Result limit applied by the node.
     pub limit: u32,
     /// Holder rows. The row shape is shared with `lyth_richList`.
@@ -3314,11 +3316,32 @@ mod tests {
             "updatedAtBlock": 89,
             "mrc": {
                 "standard": "mrc20",
-                "assetId": format!("0x{}", "ee".repeat(32))
+                "assetId": format!("0x{}", "ee".repeat(32)),
+                "tokenId": null
             }
         }))
         .unwrap();
         assert_eq!(mrc20.mrc.unwrap().token_id, None);
+
+        let vault_id = format!("0x{}", "ff".repeat(32));
+        let mrc4626: TokenBalanceRecord = serde_json::from_value(serde_json::json!({
+            "tokenId": vault_id,
+            "balance": "700",
+            "updatedAtBlock": 92,
+            "mrc": {
+                "standard": "mrc4626",
+                "assetId": vault_id,
+                "tokenId": null
+            }
+        }))
+        .unwrap();
+        let mrc = mrc4626.mrc.as_ref().expect("mrc4626 identity");
+        assert_eq!(mrc4626.token_id, vault_id);
+        assert_eq!(mrc.standard, "mrc4626");
+        assert_eq!(mrc.asset_id, vault_id);
+        assert_eq!(mrc.token_id, None);
+        let mrc4626_wire = serde_json::to_value(&mrc4626).unwrap();
+        assert_eq!(mrc4626_wire["mrc"]["tokenId"], serde_json::Value::Null);
 
         let absent_mrc: TokenBalanceRecord = serde_json::from_value(serde_json::json!({
             "tokenId": format!("0x{}", "11".repeat(32)),
@@ -3423,7 +3446,7 @@ mod tests {
         let request = MrcHoldersRequest {
             standard: "mrc1155".to_owned(),
             asset_id: asset_id.clone(),
-            token_id: token_id.clone(),
+            token_id: Some(token_id.clone()),
             limit: Some(5),
         };
         let wire = serde_json::to_value(&request).unwrap();
@@ -3436,6 +3459,15 @@ mod tests {
         })
         .unwrap();
         assert!(without_limit.get("limit").is_none());
+
+        let asset_scoped = serde_json::to_value(MrcHoldersRequest {
+            standard: "mrc4626".to_owned(),
+            asset_id: asset_id.clone(),
+            token_id: None,
+            limit: None,
+        })
+        .unwrap();
+        assert!(asset_scoped.get("tokenId").is_none());
 
         let response: MrcHoldersResponse = serde_json::from_value(serde_json::json!({
             "schemaVersion": 1,
@@ -3457,6 +3489,18 @@ mod tests {
         assert_eq!(response.holders[0].rank, 1);
         assert_eq!(response.holders[0].balance, "42");
         assert_eq!(response.holders[0].updated_at_block, 91);
+
+        let vault_response: MrcHoldersResponse = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "standard": "mrc4626",
+            "assetId": asset_id,
+            "tokenId": null,
+            "limit": 50,
+            "holders": []
+        }))
+        .unwrap();
+        assert_eq!(vault_response.standard, "mrc4626");
+        assert_eq!(vault_response.token_id, None);
     }
 
     #[test]
@@ -4206,6 +4250,55 @@ mod tests {
         assert_eq!(events[0].decoded.amount_lythoshi, "440000000000");
         assert!(events[0].decoded.agent_address.starts_with("mono1"));
         assert!(events[0].decoded.contract_address.starts_with("monoc1"));
+    }
+
+    #[test]
+    fn native_events_preserve_mrc4626_share_amount_projection() {
+        #[derive(Debug, Deserialize)]
+        struct Mrc4626DepositEvent {
+            family: String,
+            event_name: String,
+            amount: String,
+            share_amount: String,
+            primary_id: String,
+            account: String,
+            counterparty: String,
+        }
+
+        let vault_id = format!("0x{}", "55".repeat(32));
+        let decoded = serde_json::json!({
+            "block_height": 100,
+            "tx_index": 0,
+            "sequence": 0,
+            "family": "mrc",
+            "event_name": "mrc4626.deposit",
+            "payload_hash": format!("0x{}", "44".repeat(32)),
+            "amount": "1000",
+            "share_amount": "700",
+            "primary_id": vault_id,
+            "account": "mono1vaultdepositor",
+            "counterparty": "mono1vaultreceiver"
+        });
+        let event = NativeReceiptEvent {
+            block_height: 100,
+            tx_index: 0,
+            log_index: 0,
+            address: "monos1nativeeventemitter".to_owned(),
+            event_topic: format!("0x{}", "33".repeat(32)),
+            decoded: serde_json::Value::Null,
+            decoded_json: decoded.to_string(),
+        };
+
+        let typed = TypedNativeReceiptEvent::<Mrc4626DepositEvent>::from_receipt_event(&event)
+            .expect("mrc4626 deposit decoded");
+
+        assert_eq!(typed.decoded.family, "mrc");
+        assert_eq!(typed.decoded.event_name, "mrc4626.deposit");
+        assert_eq!(typed.decoded.amount, "1000");
+        assert_eq!(typed.decoded.share_amount, "700");
+        assert_eq!(typed.decoded.primary_id, vault_id);
+        assert!(typed.decoded.account.starts_with("mono1"));
+        assert!(typed.decoded.counterparty.starts_with("mono1"));
     }
 
     #[test]

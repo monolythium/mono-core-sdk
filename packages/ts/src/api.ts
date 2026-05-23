@@ -628,6 +628,30 @@ export class ApiClient {
   }
 
   /**
+   * Asset-scoped `/api/v1/mrc/{standard}/{assetId}/holders`.
+   *
+   * This is the REST form used by MRC-4626 vault share balances.
+   */
+  async mrcAssetHolders(
+    standard: string,
+    assetId: string,
+    limit?: number | null,
+  ): Promise<ApiEnvelope<MrcHoldersResponse>> {
+    return this.get(
+      `/mrc/${encodePathSegment(standard)}/${encodePathSegment(assetId)}/holders`,
+      { limit: limit ?? undefined },
+    );
+  }
+
+  /** `/api/v1/mrc/mrc4626/{vaultId}/holders`. */
+  async mrc4626Holders(
+    vaultId: string,
+    limit?: number | null,
+  ): Promise<ApiEnvelope<MrcHoldersResponse>> {
+    return this.mrcAssetHolders("mrc4626", vaultId, limit);
+  }
+
+  /**
    * `/api/v1/bridge/routes`.
    *
    * The forthcoming route is read-only `GET`, so the typed request is encoded
