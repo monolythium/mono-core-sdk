@@ -171,6 +171,7 @@ export interface NativeReceiptResponse<TDecoded = unknown> {
   txIndex: number;
   schema: string;
   artifactHash: string;
+  receiptCommitment: string;
   /** Current nodes return `null`; older nodes may omit the field. */
   noEvmProof?: unknown | null;
   counters: NativeReceiptCounters;
