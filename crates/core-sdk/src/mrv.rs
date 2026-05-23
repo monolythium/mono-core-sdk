@@ -3256,4 +3256,52 @@ mod tests {
             .contains("000000000000000001000000000000003001000000000000000105000000"));
         assert!(encode_mrv_signed_native_tx_bincode(&plan.tx, &sig[..10], &public_key).is_err());
     }
+
+    #[test]
+    fn native_tx_encoding_matches_typescript_golden_vector() {
+        let plan = build_mrv_deploy_native_tx_plan(
+            &[0x13, 0x00, 0x00, 0x00],
+            None,
+            MrvNativeTxBuildOptions::new(69_420, 7, 100_000, 25).priority_tip_lythoshi(1),
+        )
+        .unwrap();
+        let sig = vec![0x55; ML_DSA_65_SIGNATURE_LEN];
+        let public_key = vec![0x66; ML_DSA_65_PUBLIC_KEY_LEN];
+
+        let signing_preimage = encode_mrv_native_tx_signing_preimage(&plan.tx).unwrap();
+        let identity_preimage =
+            encode_mrv_native_tx_for_hash(&plan.tx, TX_HASH_TAG_IDENTITY).unwrap();
+        let sighash = mrv_native_tx_sighash(&plan.tx).unwrap();
+        let tx_hash = mrv_native_tx_hash(&plan.tx, &sig, &public_key).unwrap();
+        let wire = encode_mrv_signed_native_tx_bincode(&plan.tx, &sig, &public_key).unwrap();
+
+        assert_eq!(
+            hex_encode(&signing_preimage),
+            "0x010000000000010f2c00000000000000070000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000001900000000000186a000000000000000000000000000000000000000000000000000000000000000000000000004130000000000000000000001300000000101"
+        );
+        assert_eq!(
+            hex_encode(&identity_preimage),
+            "0x020000000000010f2c00000000000000070000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000001900000000000186a000000000000000000000000000000000000000000000000000000000000000000000000004130000000000000000000001300000000101"
+        );
+        assert_eq!(
+            hex_encode(&sighash),
+            "0xb680eb3b3e67b441d22c4ac441c9355809cac860dc2c0773ed47e49f273725c3"
+        );
+        assert_eq!(
+            hex_encode(&tx_hash),
+            "0x0f826159573ebe870876d03e9b54541fbbb652de4642552abc9a65a481781789"
+        );
+        assert_eq!(wire.len(), 5_448);
+        assert_eq!(
+            hex_encode(&wire[..160]),
+            "0x2c0f010000000000070000000000000001000000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000000000000000a086010000000000000000000000000000000000000000000000000000000000000000000000000000040000000000000013000000000000000000000001000000000000003001000000000000000105"
+        );
+        assert_eq!(
+            hex_encode(&wire[wire.len() - 80..]),
+            concat!(
+                "0x666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666",
+                "6666666666666666666666666666666666666666666666666666666666666666"
+            )
+        );
+    }
 }

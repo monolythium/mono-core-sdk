@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { keccak_256 } from "@noble/hashes/sha3.js";
 import {
   ML_DSA_65_PUBLIC_KEY_LEN,
   ML_DSA_65_SEED_LEN,
@@ -27,6 +28,29 @@ import {
 } from "../src/crypto/index.js";
 
 describe("crypto subpath", () => {
+  const MRV_NATIVE_TX_VECTOR = {
+    fields: {
+      chainId: 69_420n,
+      nonce: 7n,
+      maxPriorityFeePerGas: 1n,
+      maxFeePerGas: 25n,
+      gasLimit: 100_000n,
+      to: null,
+      value: 0n,
+      input: "0x13000000",
+      extensions: [{ kind: 0x30, bodyHex: "0x01" }],
+    },
+    signingPreimage:
+      "0x010000000000010f2c00000000000000070000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000001900000000000186a000000000000000000000000000000000000000000000000000000000000000000000000004130000000000000000000001300000000101",
+    sighash: "0xb680eb3b3e67b441d22c4ac441c9355809cac860dc2c0773ed47e49f273725c3",
+    identityTxHash: "0x0f826159573ebe870876d03e9b54541fbbb652de4642552abc9a65a481781789",
+    wireLen: 5_448,
+    wirePrefix:
+      "0x2c0f010000000000070000000000000001000000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000000000000000a086010000000000000000000000000000000000000000000000000000000000000000000000000000040000000000000013000000000000000000000001000000000000003001000000000000000105",
+    wireSuffix:
+      "0x6666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666",
+  } as const;
+
   it("derives deterministic ML-DSA-65 keys and signatures from a seed", () => {
     const seed = new Uint8Array(ML_DSA_65_SEED_LEN).fill(0x42);
     const a = MlDsa65Backend.fromSeed(seed);
@@ -91,6 +115,22 @@ describe("crypto subpath", () => {
       new Uint8Array(ML_DSA_65_PUBLIC_KEY_LEN).fill(0x66),
     );
     expect(bytesToHex(wire)).toContain("000000000000000001000000000000003001000000000000000105000000");
+  });
+
+  it("matches the Rust MRV native transaction golden vector", () => {
+    const signingPreimage = encodeTransactionForHash(MRV_NATIVE_TX_VECTOR.fields, 0x01);
+    const identityPreimage = encodeTransactionForHash(MRV_NATIVE_TX_VECTOR.fields, 0x02);
+    const signature = new Uint8Array(ML_DSA_65_SIGNATURE_LEN).fill(0x55);
+    const publicKey = new Uint8Array(ML_DSA_65_PUBLIC_KEY_LEN).fill(0x66);
+    const wire = bincodeSignedTransaction(MRV_NATIVE_TX_VECTOR.fields, signature, publicKey);
+    const identityHash = keccak_256(new Uint8Array([...identityPreimage, ...signature, ...publicKey]));
+
+    expect(bytesToHex(signingPreimage)).toBe(MRV_NATIVE_TX_VECTOR.signingPreimage);
+    expect(bytesToHex(keccak_256(signingPreimage))).toBe(MRV_NATIVE_TX_VECTOR.sighash);
+    expect(bytesToHex(identityHash)).toBe(MRV_NATIVE_TX_VECTOR.identityTxHash);
+    expect(wire).toHaveLength(MRV_NATIVE_TX_VECTOR.wireLen);
+    expect(bytesToHex(wire.slice(0, 160))).toBe(MRV_NATIVE_TX_VECTOR.wirePrefix);
+    expect(bytesToHex(wire.slice(-80))).toBe(MRV_NATIVE_TX_VECTOR.wireSuffix);
   });
 
   it("builds an encrypted envelope around signed tx bytes", async () => {
