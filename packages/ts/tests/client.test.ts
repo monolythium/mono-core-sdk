@@ -293,6 +293,47 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(balances[2].mrc).toBeUndefined();
   });
 
+  it("lyth_mrcMetadata reads asset and token metadata rows", async () => {
+    const assetId = `0x${"bb".repeat(32)}`;
+    const tokenId = `0x${"cc".repeat(32)}`;
+    const { fetch, calls } = mockFetchSequence([
+      {
+        schemaVersion: 1,
+        assetId,
+        tokenId,
+        metadata: {
+          standard: "mrc1155",
+          assetId,
+          tokenId,
+          name: null,
+          symbol: null,
+          decimals: null,
+          uri: "ipfs://metadata/1",
+          updatedAtBlock: 91,
+        },
+      },
+      {
+        schemaVersion: 1,
+        assetId,
+        tokenId: null,
+        metadata: null,
+      },
+    ]);
+    const client = new RpcClient("http://x", { fetch });
+
+    const tokenMetadata = await client.lythMrcMetadata(assetId, tokenId);
+    const assetMetadata = await client.lythMrcMetadata(assetId);
+
+    expect(tokenMetadata.metadata?.uri).toBe("ipfs://metadata/1");
+    expect(tokenMetadata.metadata?.updatedAtBlock).toBe(91);
+    expect(assetMetadata.tokenId).toBeNull();
+    expect(assetMetadata.metadata).toBeNull();
+    expect(calls[0].method).toBe("lyth_mrcMetadata");
+    expect(calls[0].params).toEqual([assetId, tokenId]);
+    expect(calls[1].method).toBe("lyth_mrcMetadata");
+    expect(calls[1].params).toEqual([assetId]);
+  });
+
   it("lyth_getAddressLabel returns null for unlabeled addresses", async () => {
     const { fetch } = mockFetch(null);
     const client = new RpcClient("http://x", { fetch });

@@ -48,6 +48,7 @@ import type {
   MeshSignedTxResponse,
   MeshTxIntent,
   MeshUnsignedTxResponse,
+  MrcMetadataResponse,
   PeerSummary,
   PendingRewardsResponse,
   PendingTxSummary,
@@ -1031,6 +1032,15 @@ export class RpcClient {
   /** `lyth_getTokenBalances` — indexed per-asset balances for one address. */
   async lythGetTokenBalances(address: string): Promise<TokenBalanceRecord[]> {
     return this.call("lyth_getTokenBalances", [address]);
+  }
+
+  /** `lyth_mrcMetadata` — exact current-state native MRC metadata lookup. */
+  async lythMrcMetadata(
+    assetId: string,
+    tokenId?: string | null,
+  ): Promise<MrcMetadataResponse> {
+    const params = tokenId == null ? [assetId] : [assetId, tokenId];
+    return this.call("lyth_mrcMetadata", params);
   }
 
   /** `lyth_getAddressLabel` — indexed display/category label for one address. */

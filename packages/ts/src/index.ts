@@ -145,6 +145,8 @@ export type {
 } from "./native-events.js";
 export type { ClobMarketRecord } from "./bindings/ClobMarketRecord.js";
 export type { ClobMarketResponse } from "./bindings/ClobMarketResponse.js";
+export type { MrcMetadataRecord } from "./bindings/MrcMetadataRecord.js";
+export type { MrcMetadataResponse } from "./bindings/MrcMetadataResponse.js";
 export * from "./mrv.js";
 export {
   CHAIN_REGISTRY,

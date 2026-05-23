@@ -29,11 +29,11 @@ use monolythium_core_sdk::types::{
     DecodeTxPqAttestation, DecodeTxResponse, DelegationCapResponse, DelegationHistoryRecord,
     DelegationRow, DelegationsResponse, EncryptionKeyResponse, EntityRatchetResponse,
     FeeHistoryResponse, GapRange, GapRecord, GapRecordsResponse, IndexerStatus, MempoolSnapshot,
-    MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse, NativeReceiptFee,
-    PeerSummary, PendingRewardsResponse, PendingRewardsRow, PendingTxSummary, PrecompileDescriptor,
-    RegistryRecord, RichListHolder, RichListResponse, RoundInfo, StorageProofBatch, SyncStatus,
-    TokenBalanceMrcIdentity, TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt,
-    TransactionView,
+    MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse, MrcMetadataRecord,
+    MrcMetadataResponse, NativeReceiptFee, PeerSummary, PendingRewardsResponse, PendingRewardsRow,
+    PendingTxSummary, PrecompileDescriptor, RegistryRecord, RichListHolder, RichListResponse,
+    RoundInfo, StorageProofBatch, SyncStatus, TokenBalanceMrcIdentity, TokenBalanceRecord,
+    TpmAttestationResponse, TransactionReceipt, TransactionView,
 };
 use ts_rs::TS;
 
@@ -91,6 +91,8 @@ fn export_bindings() {
     MeshSignedTxResponse::export_all_to(&out).expect("MeshSignedTxResponse");
     MeshTxIntent::export_all_to(&out).expect("MeshTxIntent");
     MeshUnsignedTxResponse::export_all_to(&out).expect("MeshUnsignedTxResponse");
+    MrcMetadataRecord::export_all_to(&out).expect("MrcMetadataRecord");
+    MrcMetadataResponse::export_all_to(&out).expect("MrcMetadataResponse");
     NativeReceiptFee::export_all_to(&out).expect("NativeReceiptFee");
     PeerSummary::export_all_to(&out).expect("PeerSummary");
     PendingRewardsResponse::export_all_to(&out).expect("PendingRewardsResponse");

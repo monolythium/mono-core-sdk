@@ -939,6 +939,53 @@ pub struct TokenBalanceRecord {
     pub mrc: Option<TokenBalanceMrcIdentity>,
 }
 
+/// Current-state metadata folded from native MRC creation/metadata events.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "MrcMetadataRecord.ts")
+)]
+pub struct MrcMetadataRecord {
+    /// MRC standard: `mrc20`, `mrc721`, `mrc1155`, or `mrc4626`.
+    pub standard: String,
+    /// Asset, collection, or vault id.
+    pub asset_id: Hash,
+    /// Token id for token-specific metadata rows.
+    pub token_id: Option<Hash>,
+    /// Human-readable name, when carried by the source event.
+    pub name: Option<String>,
+    /// Short symbol, when carried by the source event.
+    pub symbol: Option<String>,
+    /// Display decimals, when carried by the source event.
+    pub decimals: Option<u8>,
+    /// Metadata URI, when carried by the source event.
+    pub uri: Option<String>,
+    /// Block height of the latest fold into this row.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number"))]
+    pub updated_at_block: u64,
+}
+
+/// `lyth_mrcMetadata` exact current-state metadata lookup response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "MrcMetadataResponse.ts")
+)]
+pub struct MrcMetadataResponse {
+    /// Response schema version.
+    pub schema_version: u32,
+    /// Queried asset, collection, or vault id.
+    pub asset_id: Hash,
+    /// Queried token id, or `null` for asset/collection scope.
+    pub token_id: Option<Hash>,
+    /// Metadata row, or `null` when no aggregate exists for the key.
+    pub metadata: Option<MrcMetadataRecord>,
+}
+
 /// Address-label row surfaced by `lyth_getAddressLabel`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
@@ -2629,6 +2676,44 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(null_mrc.mrc, None);
+    }
+
+    #[test]
+    fn mrc_metadata_response_decodes_nullable_metadata_scopes() {
+        let asset_id = format!("0x{}", "bb".repeat(32));
+        let token_id = format!("0x{}", "cc".repeat(32));
+        let with_metadata: MrcMetadataResponse = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "assetId": asset_id,
+            "tokenId": token_id,
+            "metadata": {
+                "standard": "mrc1155",
+                "assetId": asset_id,
+                "tokenId": token_id,
+                "name": null,
+                "symbol": null,
+                "decimals": null,
+                "uri": "ipfs://metadata/1",
+                "updatedAtBlock": 91
+            }
+        }))
+        .unwrap();
+        assert_eq!(with_metadata.schema_version, 1);
+        assert_eq!(with_metadata.token_id.as_ref().unwrap(), &token_id);
+        let metadata = with_metadata.metadata.as_ref().expect("metadata row");
+        assert_eq!(metadata.standard, "mrc1155");
+        assert_eq!(metadata.uri.as_deref(), Some("ipfs://metadata/1"));
+        assert_eq!(metadata.updated_at_block, 91);
+
+        let missing_metadata: MrcMetadataResponse = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "assetId": asset_id,
+            "tokenId": null,
+            "metadata": null
+        }))
+        .unwrap();
+        assert_eq!(missing_metadata.token_id, None);
+        assert_eq!(missing_metadata.metadata, None);
     }
 
     #[test]

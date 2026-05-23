@@ -30,13 +30,13 @@ use crate::types::{
     DelegationCapResponse, DelegationHistoryRecord, DelegationsResponse, EncryptionKeyResponse,
     EntityRatchetResponse, FeeHistoryResponse, GapRecordsResponse, IndexerStatus,
     LythUpgradeStatusResponse, MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent,
-    MeshUnsignedTxResponse, MetricsRangeResponse, NativeEventFilter, NativeEventsFilter,
-    NativeEventsResponse, NativeReceiptResponse, OperatorCapabilitiesResponse, PeerSummary,
-    PeerSummaryAggregate, PendingRewardsResponse, PendingTxSummary, PrecompileDescriptor,
-    RegistryRecord, RichListResponse, RoundInfo, SearchResponse, StorageProofBatch, SyncStatus,
-    TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt, TransactionView,
-    TxFeedResponse, TxStatusResponse, TypedNativeEventsResponse, TypedNativeReceiptEvent,
-    VerticesAtRoundResponse,
+    MeshUnsignedTxResponse, MetricsRangeResponse, MrcMetadataResponse, NativeEventFilter,
+    NativeEventsFilter, NativeEventsResponse, NativeReceiptResponse, OperatorCapabilitiesResponse,
+    PeerSummary, PeerSummaryAggregate, PendingRewardsResponse, PendingTxSummary,
+    PrecompileDescriptor, RegistryRecord, RichListResponse, RoundInfo, SearchResponse,
+    StorageProofBatch, SyncStatus, TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt,
+    TransactionView, TxFeedResponse, TxStatusResponse, TypedNativeEventsResponse,
+    TypedNativeReceiptEvent, VerticesAtRoundResponse,
 };
 
 /// Result from building and submitting an encrypted MRV deploy envelope.
@@ -487,6 +487,19 @@ impl RpcClient {
         address: &str,
     ) -> Result<Vec<TokenBalanceRecord>, SdkError> {
         self.call("lyth_getTokenBalances", json!([address])).await
+    }
+
+    /// `lyth_mrcMetadata` — exact current-state native MRC metadata lookup.
+    pub async fn lyth_mrc_metadata(
+        &self,
+        asset_id: &str,
+        token_id: Option<&str>,
+    ) -> Result<MrcMetadataResponse, SdkError> {
+        let params = match token_id {
+            Some(token_id) => json!([asset_id, token_id]),
+            None => json!([asset_id]),
+        };
+        self.call("lyth_mrcMetadata", params).await
     }
 
     /// `lyth_getAddressLabel` — indexed display/category label for one address.
@@ -1352,6 +1365,56 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0]["method"], "lyth_getTokenBalances");
         assert_eq!(requests[0]["params"], json!([address]));
+    }
+
+    #[tokio::test]
+    async fn lyth_mrc_metadata_decodes_present_and_missing_rows() {
+        let asset_id = format!("0x{}", "bb".repeat(32));
+        let token_id = format!("0x{}", "cc".repeat(32));
+        let (endpoint, server) = spawn_rpc_server(vec![
+            json!({
+                "schemaVersion": 1,
+                "assetId": asset_id,
+                "tokenId": token_id,
+                "metadata": {
+                    "standard": "mrc1155",
+                    "assetId": asset_id,
+                    "tokenId": token_id,
+                    "name": null,
+                    "symbol": null,
+                    "decimals": null,
+                    "uri": "ipfs://metadata/1",
+                    "updatedAtBlock": 91
+                }
+            }),
+            json!({
+                "schemaVersion": 1,
+                "assetId": asset_id,
+                "tokenId": null,
+                "metadata": null
+            }),
+        ]);
+
+        let client = RpcClient::new(endpoint).unwrap();
+        let token_metadata = client
+            .lyth_mrc_metadata(&asset_id, Some(&token_id))
+            .await
+            .unwrap();
+        assert_eq!(
+            token_metadata.metadata.unwrap().uri.unwrap(),
+            "ipfs://metadata/1"
+        );
+
+        let asset_metadata = client.lyth_mrc_metadata(&asset_id, None).await.unwrap();
+        assert_eq!(asset_metadata.token_id, None);
+        assert_eq!(asset_metadata.metadata, None);
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0]["method"], "lyth_mrcMetadata");
+        assert_eq!(requests[0]["params"], json!([asset_id, token_id]));
+        assert_eq!(requests[1]["method"], "lyth_mrcMetadata");
+        assert_eq!(requests[1]["params"], json!([asset_id]));
     }
 
     #[tokio::test]
