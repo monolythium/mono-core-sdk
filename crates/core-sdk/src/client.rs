@@ -2173,6 +2173,13 @@ mod tests {
         let asset_id = format!("0x{}", "cc".repeat(32));
         let terms_hash = format!("0x{}", "dd".repeat(32));
         let payload_hash = format!("0x{}", "ee".repeat(32));
+        let issuer_id = format!("0x{}", "11".repeat(32));
+        let attestation_id = format!("0x{}", "12".repeat(32));
+        let consent_id = format!("0x{}", "13".repeat(32));
+        let service_id = format!("0x{}", "14".repeat(32));
+        let arbiter_id = format!("0x{}", "15".repeat(32));
+        let review_id = format!("0x{}", "16".repeat(32));
+        let metadata_hash = format!("0x{}", "1b".repeat(32));
         let owner = "mono1agentowner000000000000000000000000000000";
         let controller = "mono1agentcontroller000000000000000000000000";
         let provider = "mono1agentprovider0000000000000000000000000";
@@ -2186,6 +2193,65 @@ mod tests {
                 "account": owner,
                 "includePolicySpends": true
             },
+            "issuers": [{
+                "issuerId": issuer_id,
+                "issuer": owner,
+                "metadataHash": metadata_hash,
+                "updatedAtBlock": 45
+            }],
+            "attestations": [{
+                "attestationId": attestation_id,
+                "issuerId": issuer_id,
+                "issuer": owner,
+                "subject": controller,
+                "schemaHash": format!("0x{}", "17".repeat(32)),
+                "payloadHash": payload_hash,
+                "active": false,
+                "updatedAtBlock": 46
+            }],
+            "consents": [{
+                "consentId": consent_id,
+                "subject": controller,
+                "grantee": arbiter,
+                "scopeHash": format!("0x{}", "19".repeat(32)),
+                "expiresAt": 10_000,
+                "active": true,
+                "updatedAtBlock": 47
+            }],
+            "services": [{
+                "serviceId": service_id,
+                "provider": provider,
+                "categoryHash": format!("0x{}", "1a".repeat(32)),
+                "metadataHash": metadata_hash,
+                "active": true,
+                "updatedAtBlock": 48
+            }],
+            "availability": [{
+                "provider": provider,
+                "maxConcurrent": 8,
+                "openRequests": 2,
+                "paused": false,
+                "updatedAtBlock": 49
+            }],
+            "arbiters": [{
+                "arbiterId": arbiter_id,
+                "arbiter": arbiter,
+                "tier": 2,
+                "metadataHash": metadata_hash,
+                "updatedAtBlock": 50
+            }],
+            "reputationReviews": [{
+                "reviewId": review_id,
+                "reviewer": owner,
+                "subject": provider,
+                "categoryId": 7,
+                "speedScore": 9,
+                "qualityScore": 8,
+                "communicationScore": 10,
+                "accuracyScore": 9,
+                "payloadHash": payload_hash,
+                "updatedAtBlock": 51
+            }],
             "spendingPolicies": [{
                 "policyId": policy_id,
                 "owner": owner,
@@ -2242,6 +2308,14 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.schema_version, 1);
+        assert_eq!(response.issuers[0].issuer_id, issuer_id);
+        assert_eq!(response.attestations[0].attestation_id, attestation_id);
+        assert!(!response.attestations[0].active);
+        assert_eq!(response.consents[0].expires_at, Some(10_000));
+        assert_eq!(response.services[0].service_id, service_id);
+        assert_eq!(response.availability[0].max_concurrent, 8);
+        assert_eq!(response.arbiters[0].tier, Some(2));
+        assert_eq!(response.reputation_reviews[0].quality_score, 8);
         assert_eq!(response.spending_policies[0].per_action_limit, "100");
         assert_eq!(response.policy_spends[0].window, 7);
         assert_eq!(response.policy_spends[0].spent, "125");
