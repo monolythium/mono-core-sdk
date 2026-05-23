@@ -1,5 +1,11 @@
 import { blake3 } from "@noble/hashes/blake3.js";
 import { ADDRESS_KIND_HRPS, addressToTypedBech32, typedBech32ToAddress } from "./address.js";
+import {
+  buildEncryptedSubmission,
+  fetchEncryptionKey,
+  submitEncryptedEnvelope,
+  type EncryptionKey,
+} from "./crypto/submission.js";
 
 export type { MrvAbiManifest } from "./bindings/MrvAbiManifest.js";
 export type { MrvAbiParam } from "./bindings/MrvAbiParam.js";
@@ -38,6 +44,9 @@ import type { MrvDeployRequest } from "./bindings/MrvDeployRequest.js";
 import type { MrvResolvedSyscall } from "./bindings/MrvResolvedSyscall.js";
 import type { MrvTransactionExtension } from "./bindings/MrvTransactionExtension.js";
 import type { MrvValidatedArtifactMetadata } from "./bindings/MrvValidatedArtifactMetadata.js";
+import type { RpcClient } from "./client.js";
+import type { MempoolClass } from "./crypto/envelope.js";
+import type { MlDsa65Backend } from "./crypto/ml-dsa.js";
 import type { NativeEvmTxFields } from "./crypto/tx.js";
 
 export type MrvBytesLike = string | Uint8Array | readonly number[];
@@ -105,6 +114,27 @@ export interface MrvCallNativeTxPlan extends MrvCallPlan {
   nativeTx: MrvNativeTxFacade;
   tx: NativeEvmTxFields;
 }
+
+export interface MrvEncryptedSubmissionResult {
+  envelopeWireHex: string;
+  innerSighashHex: string;
+  innerTxHashHex: string;
+  innerWireBytes: number;
+  txHash: string;
+}
+
+export type MrvDeploySubmitOptions = MrvDeployNativeTxOptions & {
+  encryptionKey?: EncryptionKey;
+  class?: MempoolClass;
+};
+
+export type MrvCallSubmitOptions = MrvCallNativeTxOptions & {
+  encryptionKey?: EncryptionKey;
+  class?: MempoolClass;
+};
+
+export type MrvDeploySubmission = MrvDeployNativeTxPlan & MrvEncryptedSubmissionResult;
+export type MrvCallSubmission = MrvCallNativeTxPlan & MrvEncryptedSubmissionResult;
 
 export const MRV_FORMAT_VERSION = 1 as const;
 export const MRV_PROFILE_MONO_RV32IM_V1 = "mono_rv32im_v1" as const;
@@ -399,6 +429,47 @@ export function buildMrvCallNativeTxPlan(
       input: plan.request.input,
       extensions: [plan.extension],
     },
+  };
+}
+
+export async function submitMrvDeployNativeTx(
+  client: RpcClient,
+  backend: MlDsa65Backend,
+  artifactBytes: MrvBytesLike,
+  options: MrvDeploySubmitOptions,
+): Promise<MrvDeploySubmission> {
+  const plan = buildMrvDeployNativeTxPlan(artifactBytes, options);
+  const submission = await buildEncryptedSubmission({
+    backend,
+    tx: plan.tx,
+    encryptionKey: options.encryptionKey ?? (await fetchEncryptionKey(client)),
+    class: options.class,
+  });
+  return {
+    ...plan,
+    ...submission,
+    txHash: await submitEncryptedEnvelope(client, submission.envelopeWireHex),
+  };
+}
+
+export async function submitMrvCallNativeTx(
+  client: RpcClient,
+  backend: MlDsa65Backend,
+  contractAddress: string,
+  input: MrvBytesLike,
+  options: MrvCallSubmitOptions,
+): Promise<MrvCallSubmission> {
+  const plan = buildMrvCallNativeTxPlan(contractAddress, input, options);
+  const submission = await buildEncryptedSubmission({
+    backend,
+    tx: plan.tx,
+    encryptionKey: options.encryptionKey ?? (await fetchEncryptionKey(client)),
+    class: options.class,
+  });
+  return {
+    ...plan,
+    ...submission,
+    txHash: await submitEncryptedEnvelope(client, submission.envelopeWireHex),
   };
 }
 
