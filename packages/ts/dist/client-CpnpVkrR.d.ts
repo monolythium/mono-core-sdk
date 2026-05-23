@@ -1489,7 +1489,7 @@ declare function encodeBlockSelector(b: BlockSelector): string;
  * Chain-registry snapshot and helpers.
  *
  * Source of truth:
- * https://github.com/monolythium-vision/chain-registry
+ * https://github.com/monolythium/chain-registry
  *
  * The SDK vendors a release-time snapshot so callers can bootstrap without
  * network access to GitHub. Callers that want the newest registry state can
@@ -1528,7 +1528,7 @@ interface ChainInfo {
 type ChainRegistry = Record<NetworkSlug | string, ChainInfo>;
 declare const TESTNET_69420: ChainInfo;
 declare const CHAIN_REGISTRY: ChainRegistry;
-declare const CHAIN_REGISTRY_RAW_BASE: "https://raw.githubusercontent.com/monolythium-vision/chain-registry/master/chains";
+declare const CHAIN_REGISTRY_RAW_BASE: "https://raw.githubusercontent.com/monolythium/chain-registry/master/chains";
 declare function getChainInfo(network: NetworkSlug | string): ChainInfo;
 declare function getRpcEndpoints(network: NetworkSlug | string): readonly RpcEndpoint[];
 declare function getP2pSeeds(network: NetworkSlug | string): readonly P2pSeed[];
@@ -2005,7 +2005,7 @@ declare class RpcClient {
      * Construct a client from the chain-registry network slug.
      *
      * Defaults to the SDK-bundled registry snapshot from
-     * `monolythium-vision/chain-registry`. Set `probe: true` to walk the
+     * `monolythium/chain-registry`. Set `probe: true` to walk the
      * registry endpoints in order and return the first endpoint whose
      * `eth_chainId` matches the registry chain id.
      */

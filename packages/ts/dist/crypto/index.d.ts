@@ -1,4 +1,4 @@
-import { i as RpcClient } from '../client-CU-UgTSM.js';
+import { i as RpcClient } from '../client-CpnpVkrR.js';
 
 declare class BincodeWriter {
     #private;
