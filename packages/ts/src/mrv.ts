@@ -87,11 +87,22 @@ export type MrvCallNativeTxOptions = Omit<
   maxExecutionFeeLythoshi: MrvDecimalLike;
 };
 
+export interface MrvNativeTxFacade {
+  chainId: bigint;
+  nonce: bigint;
+  valueLythoshi: string;
+  executionUnitLimit: bigint;
+  maxExecutionFeeLythoshi: string;
+  priorityTipLythoshi: string;
+}
+
 export interface MrvDeployNativeTxPlan extends MrvDeployPlan {
+  nativeTx: MrvNativeTxFacade;
   tx: NativeEvmTxFields;
 }
 
 export interface MrvCallNativeTxPlan extends MrvCallPlan {
+  nativeTx: MrvNativeTxFacade;
   tx: NativeEvmTxFields;
 }
 
@@ -325,6 +336,14 @@ export function buildMrvDeployNativeTxPlan(
   });
   return {
     ...plan,
+    nativeTx: {
+      chainId,
+      nonce,
+      valueLythoshi: plan.request.valueLythoshi,
+      executionUnitLimit,
+      maxExecutionFeeLythoshi: maxExecutionFee,
+      priorityTipLythoshi: priorityTip ?? "0",
+    },
     tx: {
       chainId,
       nonce,
@@ -361,6 +380,14 @@ export function buildMrvCallNativeTxPlan(
   });
   return {
     ...plan,
+    nativeTx: {
+      chainId,
+      nonce,
+      valueLythoshi: plan.request.valueLythoshi,
+      executionUnitLimit,
+      maxExecutionFeeLythoshi: maxExecutionFee,
+      priorityTipLythoshi: priorityTip ?? "0",
+    },
     tx: {
       chainId,
       nonce,
