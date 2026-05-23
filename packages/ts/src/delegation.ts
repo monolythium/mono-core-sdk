@@ -12,6 +12,13 @@ export const DELEGATION_SELECTORS = {
   completeRedemption: "0x26169d0a",
 } as const;
 
+export const DELEGATION_REVERT_TAGS = {
+  redemptionQueueFull: "0x020e",
+  redemptionTicketNotFound: "0x020f",
+  redemptionNotMature: "0x0210",
+  redemptionPrincipalUnavailable: "0x0211",
+} as const;
+
 export class DelegationPrecompileError extends Error {
   constructor(message: string) {
     super(message);
@@ -30,6 +37,10 @@ export function encodeCompleteRedemptionCalldata(index: bigint | number | string
       uint64Word(index, "index"),
     ),
   );
+}
+
+export function isRedemptionPrincipalUnavailableRevert(data: string | Uint8Array | readonly number[]): boolean {
+  return bytesToHex(toBytes(data)).toLowerCase() === DELEGATION_REVERT_TAGS.redemptionPrincipalUnavailable;
 }
 
 function uint64Word(value: bigint | number | string, name: string): Uint8Array {
@@ -58,6 +69,13 @@ function toBigint(value: bigint | number | string, name: string): bigint {
     throw new DelegationPrecompileError(`${name} must be an integer string`);
   }
   return BigInt(value);
+}
+
+function toBytes(value: string | Uint8Array | readonly number[]): Uint8Array {
+  if (typeof value === "string") {
+    return hexToBytes(value);
+  }
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
 
 function hexToBytes(hex: string): Uint8Array {

@@ -12,6 +12,29 @@ use crate::consts::precompile_addresses;
 /// `completeRedemption(uint64)`.
 pub const SIGHASH_COMPLETE_REDEMPTION: &str = "completeRedemption(uint64)";
 
+/// Delegation precompile revert namespace byte.
+pub const DELEGATION_REVERT_NAMESPACE: u8 = 0x02;
+
+/// Stable revert payload for a full wallet redemption queue.
+pub const REVERT_REDEMPTION_QUEUE_FULL: [u8; 2] = [DELEGATION_REVERT_NAMESPACE, 0x0E];
+
+/// Stable revert payload for a missing redemption ticket.
+pub const REVERT_REDEMPTION_TICKET_NOT_FOUND: [u8; 2] = [DELEGATION_REVERT_NAMESPACE, 0x0F];
+
+/// Stable revert payload for a redemption ticket that has not reached
+/// its maturity height.
+pub const REVERT_REDEMPTION_NOT_MATURE: [u8; 2] = [DELEGATION_REVERT_NAMESPACE, 0x10];
+
+/// Stable revert payload for the current fail-closed principal boundary.
+pub const REVERT_REDEMPTION_PRINCIPAL_UNAVAILABLE: [u8; 2] = [DELEGATION_REVERT_NAMESPACE, 0x11];
+
+/// Return true when a revert payload is the current fail-closed
+/// redemption-principal boundary.
+#[must_use]
+pub fn is_redemption_principal_unavailable_revert(data: &[u8]) -> bool {
+    data == REVERT_REDEMPTION_PRINCIPAL_UNAVAILABLE
+}
+
 /// Return the first four bytes of `keccak256(sighash)`.
 #[must_use]
 pub fn selector_for(sighash: &str) -> [u8; 4] {
@@ -69,6 +92,16 @@ mod tests {
     #[test]
     fn selector_matches_mono_core() {
         assert_eq!(selector_complete_redemption(), [0x26, 0x16, 0x9d, 0x0a]);
+    }
+
+    #[test]
+    fn redemption_revert_tags_match_mono_core() {
+        assert_eq!(REVERT_REDEMPTION_QUEUE_FULL, [0x02, 0x0E]);
+        assert_eq!(REVERT_REDEMPTION_TICKET_NOT_FOUND, [0x02, 0x0F]);
+        assert_eq!(REVERT_REDEMPTION_NOT_MATURE, [0x02, 0x10]);
+        assert_eq!(REVERT_REDEMPTION_PRINCIPAL_UNAVAILABLE, [0x02, 0x11]);
+        assert!(is_redemption_principal_unavailable_revert(&[0x02, 0x11]));
+        assert!(!is_redemption_principal_unavailable_revert(&[0x02, 0x10]));
     }
 
     #[test]
