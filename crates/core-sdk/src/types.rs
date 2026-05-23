@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use crate::bridge::BridgeRouteDisclosure;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use sha3::{Digest, Keccak256};
 
 #[cfg(feature = "ts-bindings")]
 use ts_rs::TS;
@@ -292,6 +293,328 @@ pub struct NoEvmReceiptProof {
     pub receipt_count: u32,
     /// Bounded full receipt bytes in transaction order.
     pub receipt_transcript: Vec<Hex>,
+}
+
+/// Current no-EVM receipt proof schema.
+pub const NO_EVM_RECEIPT_PROOF_SCHEMA: &str = "mono.no_evm_receipt_proof.v1";
+
+/// Current no-EVM receipt proof type.
+pub const NO_EVM_RECEIPT_PROOF_TYPE: &str = "canonicalReceiptsTranscript";
+
+/// Current no-EVM receipt transcript root algorithm label.
+pub const NO_EVM_RECEIPT_ROOT_ALGORITHM: &str =
+    "keccak256(monolythium/v2/receipts_root/1 || len || indexed bincode receipts)";
+
+/// Current receipt byte codec label used inside no-EVM receipt transcripts.
+pub const NO_EVM_RECEIPT_CODEC: &str = "bincode(protocore_evm::Receipt)";
+
+const NO_EVM_RECEIPTS_ROOT_DOMAIN: &[u8] = b"monolythium/v2/receipts_root/1";
+
+/// Verified no-EVM receipt transcript with decoded receipt bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoEvmReceiptProofVerification {
+    /// Decoded receipt bytes in transaction order.
+    pub receipts: Vec<Vec<u8>>,
+    /// Recomputed canonical receipts root as lower-case `0x` hex.
+    pub receipts_root: Hash,
+    /// Recomputed target receipt hash as lower-case `0x` hex.
+    pub target_receipt_hash: Hash,
+    /// Number of decoded receipts.
+    pub receipt_count: u32,
+    /// Target transaction index checked against `targetReceiptHash`.
+    pub tx_index: u32,
+    /// Decoded target receipt bytes.
+    pub target_receipt: Vec<u8>,
+}
+
+/// Local no-EVM receipt proof transcript verification failure.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum NoEvmReceiptProofError {
+    /// Proof schema is not supported by these helpers.
+    #[error("unsupported no-EVM receipt proof schema `{actual}`")]
+    UnsupportedSchema { actual: String },
+    /// Proof type is not supported by these helpers.
+    #[error("unsupported no-EVM receipt proof type `{actual}`")]
+    UnsupportedProofType { actual: String },
+    /// Root algorithm is not supported by these helpers.
+    #[error("unsupported no-EVM receipt root algorithm `{actual}`")]
+    UnsupportedRootAlgorithm { actual: String },
+    /// Receipt codec is not supported by these helpers.
+    #[error("unsupported no-EVM receipt codec `{actual}`")]
+    UnsupportedReceiptCodec { actual: String },
+    /// A `0x` byte field is malformed.
+    #[error("{field} must be 0x-prefixed even-length hex")]
+    InvalidHex { field: String },
+    /// A `0x` hash field has the wrong byte length.
+    #[error("{field} must be {expected} bytes, got {actual}")]
+    InvalidHexLength {
+        field: String,
+        expected: usize,
+        actual: usize,
+    },
+    /// The transcript length cannot be encoded by the runtime root algorithm.
+    #[error("receiptTranscript has {actual} receipts, exceeding u32::MAX")]
+    TooManyReceipts { actual: usize },
+    /// A receipt byte length cannot be encoded by the runtime root algorithm.
+    #[error("receiptTranscript[{index}] has {actual} bytes, exceeding u32::MAX")]
+    ReceiptTooLarge { index: usize, actual: usize },
+    /// `receiptCount` does not match the decoded transcript length.
+    #[error("receiptCount declares {expected} receipts but receiptTranscript has {actual}")]
+    ReceiptCountMismatch { expected: u32, actual: usize },
+    /// `txIndex` does not point at a decoded receipt.
+    #[error("txIndex {tx_index} is out of bounds for {receipt_count} decoded receipts")]
+    TxIndexOutOfBounds { tx_index: u32, receipt_count: usize },
+    /// The recomputed receipts root differs from `receiptsRoot`.
+    #[error("receiptsRoot mismatch: expected {expected}, computed {actual}")]
+    ReceiptsRootMismatch { expected: Hash, actual: Hash },
+    /// The recomputed target receipt hash differs from `targetReceiptHash`.
+    #[error("targetReceiptHash mismatch: expected {expected}, computed {actual}")]
+    TargetReceiptHashMismatch { expected: Hash, actual: Hash },
+}
+
+impl NoEvmReceiptProof {
+    /// Decode `receiptTranscript` entries into raw receipt bytes.
+    pub fn decode_receipt_transcript(&self) -> Result<Vec<Vec<u8>>, NoEvmReceiptProofError> {
+        decode_no_evm_receipt_transcript(self)
+    }
+
+    /// Verify this transcript's local self-consistency.
+    ///
+    /// This recomputes the runtime receipts root and target receipt hash. It
+    /// does not prove multi-validator finality.
+    pub fn verify_transcript(
+        &self,
+    ) -> Result<NoEvmReceiptProofVerification, NoEvmReceiptProofError> {
+        let Some(verified) = verify_no_evm_receipt_proof(Some(self))? else {
+            unreachable!("Some proof always yields Some verification");
+        };
+        Ok(verified)
+    }
+}
+
+/// Decode a no-EVM proof's `receiptTranscript` `0x` byte blobs.
+pub fn decode_no_evm_receipt_transcript(
+    proof: &NoEvmReceiptProof,
+) -> Result<Vec<Vec<u8>>, NoEvmReceiptProofError> {
+    proof
+        .receipt_transcript
+        .iter()
+        .enumerate()
+        .map(|(index, hex)| decode_no_evm_hex(format!("receiptTranscript[{index}]"), hex))
+        .collect()
+}
+
+/// Compute the runtime no-EVM receipts root from decoded receipt bytes.
+///
+/// The root is `keccak256("monolythium/v2/receipts_root/1" || len_le_u32 ||
+/// (index_le_u32 || receipt_len_le_u32 || receipt_bytes)*)`, returned as
+/// lower-case `0x` hex.
+pub fn compute_no_evm_receipts_root<T>(receipts: &[T]) -> Result<Hash, NoEvmReceiptProofError>
+where
+    T: AsRef<[u8]>,
+{
+    compute_no_evm_receipts_root_bytes(receipts).map(|root| hex_encode_0x(&root))
+}
+
+/// Compute `keccak256(target receipt bytes)` as lower-case `0x` hex.
+#[must_use]
+pub fn compute_no_evm_target_receipt_hash(receipt_bytes: &[u8]) -> Hash {
+    let digest = Keccak256::digest(receipt_bytes);
+    hex_encode_0x(digest.as_ref())
+}
+
+/// Verify a nullable no-EVM proof transcript.
+///
+/// Returns `Ok(None)` when `proof` is absent. A successful `Some`
+/// verification only checks transcript self-consistency, not
+/// multi-validator finality.
+pub fn verify_no_evm_receipt_proof(
+    proof: Option<&NoEvmReceiptProof>,
+) -> Result<Option<NoEvmReceiptProofVerification>, NoEvmReceiptProofError> {
+    let Some(proof) = proof else {
+        return Ok(None);
+    };
+
+    validate_no_evm_receipt_proof_metadata(proof)?;
+
+    let receipts = decode_no_evm_receipt_transcript(proof)?;
+    let receipt_count =
+        u32::try_from(receipts.len()).map_err(|_| NoEvmReceiptProofError::TooManyReceipts {
+            actual: receipts.len(),
+        })?;
+    if proof.receipt_count != receipt_count {
+        return Err(NoEvmReceiptProofError::ReceiptCountMismatch {
+            expected: proof.receipt_count,
+            actual: receipts.len(),
+        });
+    }
+
+    let tx_index = usize::try_from(proof.tx_index).map_err(|_| {
+        NoEvmReceiptProofError::TxIndexOutOfBounds {
+            tx_index: proof.tx_index,
+            receipt_count: receipts.len(),
+        }
+    })?;
+    let target_receipt =
+        receipts
+            .get(tx_index)
+            .cloned()
+            .ok_or(NoEvmReceiptProofError::TxIndexOutOfBounds {
+                tx_index: proof.tx_index,
+                receipt_count: receipts.len(),
+            })?;
+
+    let actual_root_bytes = compute_no_evm_receipts_root_bytes(&receipts)?;
+    let actual_root = hex_encode_0x(&actual_root_bytes);
+    let expected_root_bytes = decode_no_evm_hash("receiptsRoot", &proof.receipts_root)?;
+    if expected_root_bytes != actual_root_bytes {
+        return Err(NoEvmReceiptProofError::ReceiptsRootMismatch {
+            expected: proof.receipts_root.clone(),
+            actual: actual_root,
+        });
+    }
+
+    let actual_target_hash = compute_no_evm_target_receipt_hash(&target_receipt);
+    let actual_target_hash_bytes =
+        decode_no_evm_hash("computedTargetReceiptHash", &actual_target_hash)
+            .expect("computed target receipt hash is always a 32-byte hash");
+    let expected_target_hash_bytes =
+        decode_no_evm_hash("targetReceiptHash", &proof.target_receipt_hash)?;
+    if expected_target_hash_bytes != actual_target_hash_bytes {
+        return Err(NoEvmReceiptProofError::TargetReceiptHashMismatch {
+            expected: proof.target_receipt_hash.clone(),
+            actual: actual_target_hash,
+        });
+    }
+
+    Ok(Some(NoEvmReceiptProofVerification {
+        receipts,
+        receipts_root: actual_root,
+        target_receipt_hash: actual_target_hash,
+        receipt_count,
+        tx_index: proof.tx_index,
+        target_receipt,
+    }))
+}
+
+fn validate_no_evm_receipt_proof_metadata(
+    proof: &NoEvmReceiptProof,
+) -> Result<(), NoEvmReceiptProofError> {
+    if proof.schema != NO_EVM_RECEIPT_PROOF_SCHEMA {
+        return Err(NoEvmReceiptProofError::UnsupportedSchema {
+            actual: proof.schema.clone(),
+        });
+    }
+    if proof.proof_type != NO_EVM_RECEIPT_PROOF_TYPE {
+        return Err(NoEvmReceiptProofError::UnsupportedProofType {
+            actual: proof.proof_type.clone(),
+        });
+    }
+    if proof.root_algorithm != NO_EVM_RECEIPT_ROOT_ALGORITHM {
+        return Err(NoEvmReceiptProofError::UnsupportedRootAlgorithm {
+            actual: proof.root_algorithm.clone(),
+        });
+    }
+    if proof.receipt_codec != NO_EVM_RECEIPT_CODEC {
+        return Err(NoEvmReceiptProofError::UnsupportedReceiptCodec {
+            actual: proof.receipt_codec.clone(),
+        });
+    }
+    Ok(())
+}
+
+fn compute_no_evm_receipts_root_bytes<T>(receipts: &[T]) -> Result<[u8; 32], NoEvmReceiptProofError>
+where
+    T: AsRef<[u8]>,
+{
+    let receipt_count =
+        u32::try_from(receipts.len()).map_err(|_| NoEvmReceiptProofError::TooManyReceipts {
+            actual: receipts.len(),
+        })?;
+    let mut hasher = Keccak256::new();
+    hasher.update(NO_EVM_RECEIPTS_ROOT_DOMAIN);
+    hasher.update(receipt_count.to_le_bytes());
+
+    for (index, receipt) in receipts.iter().enumerate() {
+        let index_u32 = u32::try_from(index)
+            .expect("receipt index fits into u32 after receipt count conversion");
+        let bytes = receipt.as_ref();
+        let len_u32 =
+            u32::try_from(bytes.len()).map_err(|_| NoEvmReceiptProofError::ReceiptTooLarge {
+                index,
+                actual: bytes.len(),
+            })?;
+        hasher.update(index_u32.to_le_bytes());
+        hasher.update(len_u32.to_le_bytes());
+        hasher.update(bytes);
+    }
+
+    let digest = hasher.finalize();
+    let mut out = [0_u8; 32];
+    out.copy_from_slice(digest.as_ref());
+    Ok(out)
+}
+
+fn decode_no_evm_hash(field: &str, value: &str) -> Result<[u8; 32], NoEvmReceiptProofError> {
+    let bytes = decode_no_evm_hex(field.to_owned(), value)?;
+    if bytes.len() != 32 {
+        return Err(NoEvmReceiptProofError::InvalidHexLength {
+            field: field.to_owned(),
+            expected: 32,
+            actual: bytes.len(),
+        });
+    }
+    let mut out = [0_u8; 32];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
+fn decode_no_evm_hex(field: String, value: &str) -> Result<Vec<u8>, NoEvmReceiptProofError> {
+    let Some(body) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    else {
+        return Err(NoEvmReceiptProofError::InvalidHex { field });
+    };
+    if body.len() % 2 != 0 {
+        return Err(NoEvmReceiptProofError::InvalidHex { field });
+    }
+
+    let mut out = Vec::with_capacity(body.len() / 2);
+    for index in 0..body.len() / 2 {
+        let hi = decode_no_evm_hex_nibble(body.as_bytes()[index * 2]).ok_or_else(|| {
+            NoEvmReceiptProofError::InvalidHex {
+                field: field.clone(),
+            }
+        })?;
+        let lo = decode_no_evm_hex_nibble(body.as_bytes()[index * 2 + 1]).ok_or_else(|| {
+            NoEvmReceiptProofError::InvalidHex {
+                field: field.clone(),
+            }
+        })?;
+        out.push((hi << 4) | lo);
+    }
+    Ok(out)
+}
+
+fn decode_no_evm_hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn hex_encode_0x(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(2 + bytes.len() * 2);
+    out.push_str("0x");
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 /// Typed response returned by `lyth_nativeReceipt` and
@@ -3470,6 +3793,121 @@ mod tests {
             serde_json::json!(format!("0x{}", "bb".repeat(32)))
         );
         assert_eq!(null_wire["noEvmProof"], serde_json::Value::Null);
+    }
+
+    fn test_no_evm_proof() -> NoEvmReceiptProof {
+        let receipt_bytes = vec![vec![0x01, 0x02, 0x03], vec![0x04, 0x05, 0x06, 0x07], vec![]];
+        NoEvmReceiptProof {
+            schema: NO_EVM_RECEIPT_PROOF_SCHEMA.to_owned(),
+            proof_type: NO_EVM_RECEIPT_PROOF_TYPE.to_owned(),
+            root_algorithm: NO_EVM_RECEIPT_ROOT_ALGORITHM.to_owned(),
+            receipt_codec: NO_EVM_RECEIPT_CODEC.to_owned(),
+            block_hash: format!("0x{}", "22".repeat(32)),
+            tx_hash: format!("0x{}", "11".repeat(32)),
+            receipts_root: compute_no_evm_receipts_root(&receipt_bytes).unwrap(),
+            target_receipt_hash: compute_no_evm_target_receipt_hash(&receipt_bytes[1]),
+            block_height: 100,
+            tx_index: 1,
+            receipt_count: u32::try_from(receipt_bytes.len()).unwrap(),
+            receipt_transcript: receipt_bytes
+                .iter()
+                .map(|receipt| hex_encode_0x(receipt))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn no_evm_receipt_proof_verifies_valid_transcript_and_null() {
+        let proof = test_no_evm_proof();
+
+        assert_eq!(
+            proof.receipts_root,
+            "0xd889f488b3fe1ea852730deb17971b3618abd21e15a2b0824525151e8d14950a"
+        );
+        assert_eq!(
+            proof.target_receipt_hash,
+            "0xf53a5554601329f91c1b8baec5d7270102bd621873e3b119aff9c83c1d73d86c"
+        );
+        assert_eq!(
+            decode_no_evm_receipt_transcript(&proof).unwrap(),
+            vec![vec![0x01, 0x02, 0x03], vec![0x04, 0x05, 0x06, 0x07], vec![]]
+        );
+
+        let verified = verify_no_evm_receipt_proof(Some(&proof))
+            .unwrap()
+            .expect("verified proof");
+        assert_eq!(verified.receipt_count, 3);
+        assert_eq!(verified.tx_index, 1);
+        assert_eq!(verified.target_receipt, vec![0x04, 0x05, 0x06, 0x07]);
+        assert_eq!(verified.receipts_root, proof.receipts_root);
+        assert_eq!(verified.target_receipt_hash, proof.target_receipt_hash);
+        assert_eq!(proof.verify_transcript().unwrap(), verified);
+        assert_eq!(verify_no_evm_receipt_proof(None).unwrap(), None);
+    }
+
+    #[test]
+    fn no_evm_receipt_proof_rejects_mismatches() {
+        let mut proof = test_no_evm_proof();
+        proof.receipt_count = 2;
+        assert!(matches!(
+            verify_no_evm_receipt_proof(Some(&proof)),
+            Err(NoEvmReceiptProofError::ReceiptCountMismatch {
+                expected: 2,
+                actual: 3
+            })
+        ));
+
+        let mut proof = test_no_evm_proof();
+        proof.receipts_root = format!("0x{}", "00".repeat(32));
+        assert!(matches!(
+            verify_no_evm_receipt_proof(Some(&proof)),
+            Err(NoEvmReceiptProofError::ReceiptsRootMismatch { .. })
+        ));
+
+        let mut proof = test_no_evm_proof();
+        proof.tx_index = 0;
+        assert!(matches!(
+            verify_no_evm_receipt_proof(Some(&proof)),
+            Err(NoEvmReceiptProofError::TargetReceiptHashMismatch { .. })
+        ));
+
+        let mut proof = test_no_evm_proof();
+        proof.tx_index = 3;
+        assert!(matches!(
+            verify_no_evm_receipt_proof(Some(&proof)),
+            Err(NoEvmReceiptProofError::TxIndexOutOfBounds {
+                tx_index: 3,
+                receipt_count: 3
+            })
+        ));
+    }
+
+    #[test]
+    fn no_evm_receipt_proof_rejects_malformed_bytes() {
+        let mut proof = test_no_evm_proof();
+        proof.receipt_transcript[1] = "0xabc".to_owned();
+        assert!(matches!(
+            decode_no_evm_receipt_transcript(&proof),
+            Err(NoEvmReceiptProofError::InvalidHex { field }) if field == "receiptTranscript[1]"
+        ));
+
+        let mut proof = test_no_evm_proof();
+        proof.receipt_transcript[0] = "010203".to_owned();
+        assert!(matches!(
+            verify_no_evm_receipt_proof(Some(&proof)),
+            Err(NoEvmReceiptProofError::InvalidHex { field }) if field == "receiptTranscript[0]"
+        ));
+
+        let mut proof = test_no_evm_proof();
+        proof.target_receipt_hash = "0x12".to_owned();
+        assert!(matches!(
+            verify_no_evm_receipt_proof(Some(&proof)),
+            Err(NoEvmReceiptProofError::InvalidHexLength {
+                field,
+                expected: 32,
+                actual: 1
+            }) if field == "targetReceiptHash"
+        ));
     }
 
     #[test]

@@ -93,8 +93,12 @@ pub use mrv::{
     MRV_STRUCTURED_FEE_FIELDS, NATIVE_LYTH_DECIMALS,
 };
 pub use types::{
-    native_market_events_filter, native_market_events_from_receipt,
-    native_market_receipt_event_filter, NATIVE_MARKET_EVENT_FAMILY,
+    compute_no_evm_receipts_root, compute_no_evm_target_receipt_hash,
+    decode_no_evm_receipt_transcript, native_market_events_filter,
+    native_market_events_from_receipt, native_market_receipt_event_filter,
+    verify_no_evm_receipt_proof, NoEvmReceiptProof, NoEvmReceiptProofError,
+    NoEvmReceiptProofVerification, NATIVE_MARKET_EVENT_FAMILY, NO_EVM_RECEIPT_CODEC,
+    NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM,
 };
 
 /// Crate version, sourced from `Cargo.toml`.

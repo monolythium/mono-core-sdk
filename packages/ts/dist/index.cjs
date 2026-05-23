@@ -1,9 +1,9 @@
 'use strict';
 
+var sha3_js = require('@noble/hashes/sha3.js');
 var blake3_js = require('@noble/hashes/blake3.js');
 var mlKem_js = require('@noble/post-quantum/ml-kem.js');
 var chacha_js = require('@noble/ciphers/chacha.js');
-var sha3_js = require('@noble/hashes/sha3.js');
 var utils_js = require('@noble/hashes/utils.js');
 require('@noble/post-quantum/ml-dsa.js');
 var ethers = require('ethers');
@@ -2733,6 +2733,183 @@ function normalizeMempoolSnapshot(value) {
     bytes_by_class: bytesByClass.map((v, i) => parseRpcBigint(v, `mempool bytes_by_class[${i}]`))
   };
 }
+var NO_EVM_RECEIPT_PROOF_SCHEMA = "mono.no_evm_receipt_proof.v1";
+var NO_EVM_RECEIPT_PROOF_TYPE = "canonicalReceiptsTranscript";
+var NO_EVM_RECEIPT_ROOT_ALGORITHM = "keccak256(monolythium/v2/receipts_root/1 || len || indexed bincode receipts)";
+var NO_EVM_RECEIPT_CODEC = "bincode(protocore_evm::Receipt)";
+var NO_EVM_RECEIPTS_ROOT_DOMAIN = "monolythium/v2/receipts_root/1";
+var ROOT_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPTS_ROOT_DOMAIN);
+var UINT32_MAX = 4294967295;
+var HEX_RE = /^[0-9a-fA-F]*$/u;
+var NoEvmReceiptProofError = class extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+    this.name = "NoEvmReceiptProofError";
+  }
+  code;
+};
+function decodeNoEvmReceiptTranscript(proof) {
+  return proof.receiptTranscript.map(
+    (hex, index) => decodeHexBytes(hex, `receiptTranscript[${index}]`)
+  );
+}
+function computeNoEvmReceiptsRoot(receipts) {
+  if (receipts.length > UINT32_MAX) {
+    throw new NoEvmReceiptProofError(
+      "too_many_receipts",
+      `receiptTranscript has ${receipts.length} receipts, exceeding u32::MAX`
+    );
+  }
+  let totalLen = ROOT_DOMAIN_BYTES.length + 4;
+  receipts.forEach((receipt, index) => {
+    if (receipt.length > UINT32_MAX) {
+      throw new NoEvmReceiptProofError(
+        "receipt_too_large",
+        `receiptTranscript[${index}] has ${receipt.length} bytes, exceeding u32::MAX`
+      );
+    }
+    totalLen += 8 + receipt.length;
+  });
+  const preimage = new Uint8Array(totalLen);
+  const view = new DataView(preimage.buffer);
+  let offset = 0;
+  preimage.set(ROOT_DOMAIN_BYTES, offset);
+  offset += ROOT_DOMAIN_BYTES.length;
+  view.setUint32(offset, receipts.length, true);
+  offset += 4;
+  receipts.forEach((receipt, index) => {
+    view.setUint32(offset, index, true);
+    offset += 4;
+    view.setUint32(offset, receipt.length, true);
+    offset += 4;
+    preimage.set(receipt, offset);
+    offset += receipt.length;
+  });
+  return bytesToHex3(sha3_js.keccak_256(preimage));
+}
+function computeNoEvmTargetReceiptHash(receiptBytes) {
+  return bytesToHex3(sha3_js.keccak_256(receiptBytes));
+}
+function verifyNoEvmReceiptProof(proof) {
+  if (proof == null) return null;
+  validateProofMetadata(proof);
+  assertUint32(proof.receiptCount, "receiptCount");
+  assertUint32(proof.txIndex, "txIndex");
+  const receipts = decodeNoEvmReceiptTranscript(proof);
+  if (proof.receiptCount !== receipts.length) {
+    throw new NoEvmReceiptProofError(
+      "receipt_count_mismatch",
+      `receiptCount declares ${proof.receiptCount} receipts but receiptTranscript has ${receipts.length}`
+    );
+  }
+  const targetReceipt = receipts[proof.txIndex];
+  if (targetReceipt === void 0) {
+    throw new NoEvmReceiptProofError(
+      "tx_index_out_of_bounds",
+      `txIndex ${proof.txIndex} is out of bounds for ${receipts.length} decoded receipts`
+    );
+  }
+  const actualRoot = computeNoEvmReceiptsRoot(receipts);
+  const expectedRoot = decodeHash(proof.receiptsRoot, "receiptsRoot");
+  if (!bytesEqual(expectedRoot, decodeHash(actualRoot, "computedReceiptsRoot"))) {
+    throw new NoEvmReceiptProofError(
+      "receipts_root_mismatch",
+      `receiptsRoot mismatch: expected ${proof.receiptsRoot}, computed ${actualRoot}`
+    );
+  }
+  const actualTargetHash = computeNoEvmTargetReceiptHash(targetReceipt);
+  const expectedTargetHash = decodeHash(proof.targetReceiptHash, "targetReceiptHash");
+  if (!bytesEqual(expectedTargetHash, decodeHash(actualTargetHash, "computedTargetReceiptHash"))) {
+    throw new NoEvmReceiptProofError(
+      "target_receipt_hash_mismatch",
+      `targetReceiptHash mismatch: expected ${proof.targetReceiptHash}, computed ${actualTargetHash}`
+    );
+  }
+  return {
+    receipts,
+    receiptsRoot: actualRoot,
+    targetReceiptHash: actualTargetHash,
+    receiptCount: receipts.length,
+    txIndex: proof.txIndex,
+    targetReceipt
+  };
+}
+function validateProofMetadata(proof) {
+  assertSupported(
+    proof.schema,
+    NO_EVM_RECEIPT_PROOF_SCHEMA,
+    "schema",
+    "unsupported_schema"
+  );
+  assertSupported(
+    proof.proofType,
+    NO_EVM_RECEIPT_PROOF_TYPE,
+    "proofType",
+    "unsupported_proof_type"
+  );
+  assertSupported(
+    proof.rootAlgorithm,
+    NO_EVM_RECEIPT_ROOT_ALGORITHM,
+    "rootAlgorithm",
+    "unsupported_root_algorithm"
+  );
+  assertSupported(
+    proof.receiptCodec,
+    NO_EVM_RECEIPT_CODEC,
+    "receiptCodec",
+    "unsupported_receipt_codec"
+  );
+}
+function assertSupported(actual, expected, field2, code) {
+  if (actual !== expected) {
+    throw new NoEvmReceiptProofError(code, `unsupported no-EVM receipt proof ${field2}: ${actual}`);
+  }
+}
+function assertUint32(value, field2) {
+  if (!Number.isInteger(value) || value < 0 || value > UINT32_MAX) {
+    throw new NoEvmReceiptProofError("invalid_uint32", `${field2} must be a uint32`);
+  }
+}
+function decodeHash(value, field2) {
+  const bytes = decodeHexBytes(value, field2);
+  if (bytes.length !== 32) {
+    throw new NoEvmReceiptProofError(
+      "invalid_hash_length",
+      `${field2} must be 32 bytes, got ${bytes.length}`
+    );
+  }
+  return bytes;
+}
+function decodeHexBytes(value, field2) {
+  if (!(value.startsWith("0x") || value.startsWith("0X"))) {
+    throw new NoEvmReceiptProofError("invalid_hex", `${field2} must be 0x-prefixed even-length hex`);
+  }
+  const body = value.slice(2);
+  if (body.length % 2 !== 0 || !HEX_RE.test(body)) {
+    throw new NoEvmReceiptProofError("invalid_hex", `${field2} must be 0x-prefixed even-length hex`);
+  }
+  const out = new Uint8Array(body.length / 2);
+  for (let index = 0; index < out.length; index++) {
+    out[index] = Number.parseInt(body.slice(index * 2, index * 2 + 2), 16);
+  }
+  return out;
+}
+function bytesEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let index = 0; index < a.length; index++) {
+    diff |= a[index] ^ b[index];
+  }
+  return diff === 0;
+}
+function bytesToHex3(bytes) {
+  let out = "0x";
+  for (let index = 0; index < bytes.length; index++) {
+    out += bytes[index].toString(16).padStart(2, "0");
+  }
+  return out;
+}
 
 // src/crypto/bytes.ts
 function concatBytes3(...chunks) {
@@ -2745,7 +2922,7 @@ function concatBytes3(...chunks) {
   }
   return out;
 }
-function bytesToHex3(bytes) {
+function bytesToHex4(bytes) {
   let out = "0x";
   for (let i = 0; i < bytes.length; i++) {
     out += bytes[i].toString(16).padStart(2, "0");
@@ -2908,7 +3085,7 @@ async function buildEncryptedEnvelope(args) {
     sender: expectBytes(args.senderAddress, 20, "senderAddress")
   };
   const wireBytes = bincodeEncryptedEnvelope(envelope);
-  return { envelope, wireBytes, wireHex: bytesToHex3(wireBytes) };
+  return { envelope, wireBytes, wireHex: bytesToHex4(wireBytes) };
 }
 function aadFor(aad) {
   return concatBytes3(DKG_AEAD_DOMAIN_TAG, bincodeNonceAad(aad));
@@ -2960,7 +3137,7 @@ async function buildEncryptedSubmission(args) {
   return {
     envelopeWireHex: built.wireHex,
     innerSighashHex: `0x${[...signed.sighash].map((b) => b.toString(16).padStart(2, "0")).join("")}`,
-    innerTxHashHex: bytesToHex3(signed.txHash),
+    innerTxHashHex: bytesToHex4(signed.txHash),
     innerWireBytes: signed.wireBytes.length
   };
 }
@@ -3142,7 +3319,7 @@ function mrvCodeHashHex(code) {
   const codeBytes = bytesFrom(code, "code");
   const len = new Uint8Array(8);
   new DataView(len.buffer).setBigUint64(0, BigInt(codeBytes.length), false);
-  return bytesToHex4(blake3_js.blake3(concatBytes4(MRV_CODE_HASH_DOMAIN, len, codeBytes)));
+  return bytesToHex5(blake3_js.blake3(concatBytes4(MRV_CODE_HASH_DOMAIN, len, codeBytes)));
 }
 function mrvV1TransactionExtension() {
   return { kind: MRV_TX_EXTENSION_KIND, bodyHex: "0x01" };
@@ -3159,7 +3336,7 @@ function encodeMrvDeployPayload(artifactBytes, constructorInput) {
     w.u8(1);
     w.bytes(constructor);
   }
-  return bytesToHex4(w.toBytes());
+  return bytesToHex5(w.toBytes());
 }
 function mrvAddressToBech32(kind, bytes) {
   return addressToTypedBech32(kind, bytesFrom(bytes, "address"));
@@ -3544,7 +3721,7 @@ function normalizeNativeTxToHex(value, field2) {
   if (bytes.length !== 20) {
     throw new MrvValidationError(`${field2} must be a 20-byte address`);
   }
-  return bytesToHex4(bytes).toLowerCase();
+  return bytesToHex5(bytes).toLowerCase();
 }
 function normalizeU64Like(value, field2) {
   if (typeof value === "string") {
@@ -3626,7 +3803,7 @@ function applyRequestOptions(request, options) {
   if (nonce !== void 0) request.nonce = nonce;
 }
 function normalizeBytesHex(value, field2) {
-  return bytesToHex4(bytesFrom(value, field2));
+  return bytesToHex5(bytesFrom(value, field2));
 }
 function normalizeOptionalDecimalLike(field2, value) {
   return value === void 0 ? void 0 : normalizeDecimalLike(field2, value);
@@ -3824,7 +4001,7 @@ function hexToBytes4(value, field2) {
   }
   return out;
 }
-function bytesToHex4(bytes) {
+function bytesToHex5(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 function concatBytes4(...parts) {
@@ -3861,7 +4038,7 @@ function delegationAddressHex() {
   return PRECOMPILE_ADDRESSES.DELEGATION.toLowerCase();
 }
 function encodeCompleteRedemptionCalldata(index) {
-  return bytesToHex5(
+  return bytesToHex6(
     concatBytes5(
       hexToBytes5(DELEGATION_SELECTORS.completeRedemption),
       uint64Word2(index, "index")
@@ -3869,7 +4046,7 @@ function encodeCompleteRedemptionCalldata(index) {
   );
 }
 function isRedemptionPrincipalUnavailableRevert(data) {
-  return bytesToHex5(toBytes3(data)).toLowerCase() === DELEGATION_REVERT_TAGS.redemptionPrincipalUnavailable;
+  return bytesToHex6(toBytes3(data)).toLowerCase() === DELEGATION_REVERT_TAGS.redemptionPrincipalUnavailable;
 }
 function uint64Word2(value, name) {
   const n = toBigint2(value, name);
@@ -3914,7 +4091,7 @@ function hexToBytes5(hex) {
   }
   return out;
 }
-function bytesToHex5(bytes) {
+function bytesToHex6(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 function concatBytes5(...parts) {
@@ -3966,7 +4143,7 @@ function composeClaimBoundMessage(chainId, args, opts) {
 }
 function encodeSetPolicyCalldata(args) {
   const normalized = normalizeArgs(args);
-  return bytesToHex6(
+  return bytesToHex7(
     concatBytes6(
       hexToBytes6(SPENDING_POLICY_SELECTORS.setPolicy),
       encodePolicyWords(normalized)
@@ -3987,7 +4164,7 @@ function encodeSetPolicyClaimCalldata(args, subAccountPubkey, subAccountSig) {
       `subAccountSig must be ${ML_DSA_65_SIGNATURE_LEN2} bytes, got ${sig.length}`
     );
   }
-  return bytesToHex6(
+  return bytesToHex7(
     concatBytes6(
       hexToBytes6(SPENDING_POLICY_SELECTORS.setPolicyClaim),
       encodePolicyWords(normalized),
@@ -4004,7 +4181,7 @@ function encodeClaimPolicyByAddressCalldata(args, subAccountSig) {
       `subAccountSig must be ${ML_DSA_65_SIGNATURE_LEN2} bytes, got ${sig.length}`
     );
   }
-  return bytesToHex6(
+  return bytesToHex7(
     concatBytes6(
       hexToBytes6(SPENDING_POLICY_SELECTORS.claimPolicyByAddress),
       encodePolicyWords(normalized),
@@ -4039,7 +4216,7 @@ function encodePolicyWords(args) {
   );
 }
 function encodeSingleAddressCall(selector, address) {
-  return bytesToHex6(concatBytes6(hexToBytes6(selector), encodeAddressWord(toAddressBytes(address))));
+  return bytesToHex7(concatBytes6(hexToBytes6(selector), encodeAddressWord(toAddressBytes(address))));
 }
 function encodeAddressWord(address) {
   return concatBytes6(new Uint8Array(12), address);
@@ -4070,7 +4247,7 @@ function hexToBytes6(hex) {
   }
   return out;
 }
-function bytesToHex6(bytes) {
+function bytesToHex7(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 function concatBytes6(...parts) {
@@ -4141,7 +4318,7 @@ function encodeRegisterPubkeyCalldata(pubkey) {
       `pubkey must be ${PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN} bytes, got ${bytes.length}`
     );
   }
-  return bytesToHex7(
+  return bytesToHex8(
     concatBytes7(
       hexToBytes7(PUBKEY_REGISTRY_SELECTORS.registerPubkey),
       uint256Word(32n),
@@ -4196,7 +4373,7 @@ function decodeHasPubkeyReturn(data) {
   throw new PubkeyRegistryError("hasPubkey bool must be 0 or 1");
 }
 function encodeSingleAddressCall2(selector, address) {
-  return bytesToHex7(concatBytes7(hexToBytes7(selector), addressWord(toAddressBytes2(address))));
+  return bytesToHex8(concatBytes7(hexToBytes7(selector), addressWord(toAddressBytes2(address))));
 }
 function addressWord(address) {
   return concatBytes7(new Uint8Array(12), address);
@@ -4224,7 +4401,7 @@ function hexToBytes7(hex) {
   }
   return out;
 }
-function bytesToHex7(bytes) {
+function bytesToHex8(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 function concatBytes7(...parts) {
@@ -4485,6 +4662,12 @@ exports.NODE_REGISTRY_CAPABILITIES = NODE_REGISTRY_CAPABILITIES;
 exports.NODE_REGISTRY_CAPABILITY_MASK = NODE_REGISTRY_CAPABILITY_MASK;
 exports.NODE_REGISTRY_PUBLIC_SERVICE_MASK = NODE_REGISTRY_PUBLIC_SERVICE_MASK;
 exports.NODE_REGISTRY_SELECTORS = NODE_REGISTRY_SELECTORS;
+exports.NO_EVM_RECEIPTS_ROOT_DOMAIN = NO_EVM_RECEIPTS_ROOT_DOMAIN;
+exports.NO_EVM_RECEIPT_CODEC = NO_EVM_RECEIPT_CODEC;
+exports.NO_EVM_RECEIPT_PROOF_SCHEMA = NO_EVM_RECEIPT_PROOF_SCHEMA;
+exports.NO_EVM_RECEIPT_PROOF_TYPE = NO_EVM_RECEIPT_PROOF_TYPE;
+exports.NO_EVM_RECEIPT_ROOT_ALGORITHM = NO_EVM_RECEIPT_ROOT_ALGORITHM;
+exports.NoEvmReceiptProofError = NoEvmReceiptProofError;
 exports.NodeRegistryError = NodeRegistryError;
 exports.PRECOMPILE_ADDRESSES = PRECOMPILE_ADDRESSES;
 exports.PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN = PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN;
@@ -4524,9 +4707,12 @@ exports.buildMrvDeployPlan = buildMrvDeployPlan;
 exports.buildMrvDeployRequest = buildMrvDeployRequest;
 exports.checkMrvFeeDisplayConformance = checkMrvFeeDisplayConformance;
 exports.composeClaimBoundMessage = composeClaimBoundMessage;
+exports.computeNoEvmReceiptsRoot = computeNoEvmReceiptsRoot;
+exports.computeNoEvmTargetReceiptHash = computeNoEvmTargetReceiptHash;
 exports.consumeNativeEvents = consumeNativeEvents;
 exports.decodeHasPubkeyReturn = decodeHasPubkeyReturn;
 exports.decodeLookupPubkeyReturn = decodeLookupPubkeyReturn;
+exports.decodeNoEvmReceiptTranscript = decodeNoEvmReceiptTranscript;
 exports.delegationAddressHex = delegationAddressHex;
 exports.deriveMrvContractAddress = deriveMrvContractAddress;
 exports.encodeBlockSelector = encodeBlockSelector;
@@ -4601,6 +4787,7 @@ exports.validateBridgeRouteCatalogue = validateBridgeRouteCatalogue;
 exports.validateMrvArtifactMetadata = validateMrvArtifactMetadata;
 exports.validateMrvCallRequest = validateMrvCallRequest;
 exports.validateMrvDeployRequest = validateMrvDeployRequest;
+exports.verifyNoEvmReceiptProof = verifyNoEvmReceiptProof;
 exports.version = version;
 //# sourceMappingURL=index.cjs.map
 //# sourceMappingURL=index.cjs.map
