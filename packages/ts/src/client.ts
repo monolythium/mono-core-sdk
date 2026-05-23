@@ -89,7 +89,7 @@ export type UserAddressInput = string | Uint8Array | readonly number[];
 
 export interface TxFeedReceipt {
   status: number;
-  gasUsed: number;
+  executionUnitsUsed: number;
   logsCount: number;
 }
 
@@ -102,10 +102,12 @@ export interface TxFeedTransaction {
   from: string;
   to: string | null;
   nonce: number;
+  /** Native value in lythoshi. The tx-feed wire key is still `value`. */
   value: string;
-  gasLimit: number;
-  maxFeePerGas: string;
-  maxPriorityFeePerGas: string;
+  executionUnitLimit: number;
+  maxExecutionFeeLythoshi: string;
+  priorityTipLythoshi: string;
+  fee: NativeReceiptFee;
   input: string;
   receipt: TxFeedReceipt | null;
 }

@@ -24,6 +24,7 @@ import type {
   ClobOhlcResponse,
   ClobOrderBookResponse,
   ClobTradesResponse,
+  NativeReceiptFee,
   NativeReceiptResponse,
   OperatorCapabilitiesResponse,
   RuntimeBuildProvenance,
@@ -164,9 +165,9 @@ export interface ApiBlockHeader {
   parentHash: string;
   stateRoot: string;
   timestamp: number;
-  gasUsed: number;
-  gasLimit: number;
-  baseFeePerGas: string;
+  executionUnitsUsed: number;
+  executionUnitLimit: number;
+  basePricePerCycleLythoshi: string;
 }
 
 export interface ApiLogEntry {
@@ -183,10 +184,11 @@ export interface ApiTransactionView {
   from: string;
   to: string | null;
   nonce: number;
-  value: string;
-  maxFeePerGas: string;
-  maxPriorityFeePerGas: string;
-  gasLimit: number;
+  valueLythoshi: string;
+  maxExecutionFeeLythoshi: string;
+  priorityTipLythoshi: string;
+  executionUnitLimit: number;
+  fee: NativeReceiptFee;
   input: string;
   signedEnvelope: string;
 }
@@ -197,7 +199,7 @@ export interface ApiTransactionReceipt {
   blockHeight: number;
   txIndex: number;
   status: number;
-  gasUsed: number;
+  executionUnitsUsed: number;
   logs: ApiLogEntry[];
 }
 

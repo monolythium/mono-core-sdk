@@ -190,6 +190,8 @@ pub struct NativeReceiptCounters {
 
 /// Structured native fee object attached to a RISC-V/native receipt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "NativeReceiptFee.ts"))]
 pub struct NativeReceiptFee {
     /// Total fee in lythoshi.
     pub total_lythoshi: String,
@@ -1312,22 +1314,24 @@ pub struct DecodeTxResponse {
     pub from: Address,
     /// Recipient address, or `null` for contract creation.
     pub to: Option<Address>,
-    /// Transferred value as a hex quantity.
+    /// Transferred native value as a hex lythoshi quantity.
     pub value: Quantity,
     /// Sender nonce.
     pub nonce: u64,
-    /// Gas limit.
-    #[serde(rename = "gasLimit")]
-    pub gas_limit: u64,
-    /// Max fee per gas as a hex quantity.
-    #[serde(rename = "maxFeePerGas")]
-    pub max_fee_per_gas: Quantity,
-    /// Max priority fee per gas as a hex quantity.
-    #[serde(rename = "maxPriorityFeePerGas")]
-    pub max_priority_fee_per_gas: Quantity,
-    /// Gas used when the transaction is confirmed.
-    #[serde(rename = "gasUsed")]
-    pub gas_used: Option<u64>,
+    /// Execution-unit limit.
+    #[serde(rename = "executionUnitLimit")]
+    pub execution_unit_limit: u64,
+    /// Max execution fee in lythoshi.
+    #[serde(rename = "maxExecutionFeeLythoshi")]
+    pub max_execution_fee_lythoshi: String,
+    /// Priority tip in lythoshi.
+    #[serde(rename = "priorityTipLythoshi")]
+    pub priority_tip_lythoshi: String,
+    /// Execution units used when the transaction is confirmed.
+    #[serde(rename = "executionUnitsUsed")]
+    pub execution_units_used: Option<u64>,
+    /// Structured native fee summary.
+    pub fee: NativeReceiptFee,
     /// Opaque decoded calldata descriptor.
     #[serde(rename = "decodedCalldata")]
     #[cfg_attr(feature = "ts-bindings", ts(type = "unknown | null"))]
@@ -1769,8 +1773,8 @@ pub struct ClobMarketResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TxFeedReceipt {
     pub status: u8,
-    #[serde(rename = "gasUsed")]
-    pub gas_used: u64,
+    #[serde(rename = "executionUnitsUsed")]
+    pub execution_units_used: u64,
     #[serde(rename = "logsCount")]
     pub logs_count: usize,
 }
@@ -1790,13 +1794,15 @@ pub struct TxFeedTransaction {
     pub from: Address,
     pub to: Option<Address>,
     pub nonce: u64,
+    /// Native value in lythoshi. The tx-feed wire key is still `value`.
     pub value: String,
-    #[serde(rename = "gasLimit")]
-    pub gas_limit: u64,
-    #[serde(rename = "maxFeePerGas")]
-    pub max_fee_per_gas: String,
-    #[serde(rename = "maxPriorityFeePerGas")]
-    pub max_priority_fee_per_gas: String,
+    #[serde(rename = "executionUnitLimit")]
+    pub execution_unit_limit: u64,
+    #[serde(rename = "maxExecutionFeeLythoshi")]
+    pub max_execution_fee_lythoshi: String,
+    #[serde(rename = "priorityTipLythoshi")]
+    pub priority_tip_lythoshi: String,
+    pub fee: NativeReceiptFee,
     pub input: Hex,
     pub receipt: Option<TxFeedReceipt>,
 }
@@ -2281,6 +2287,156 @@ mod tests {
             serde_json::json!("agent.escrow.created")
         );
         assert_eq!(receipt.events[0].decoded_json, decoded.to_string());
+    }
+
+    #[test]
+    fn tx_feed_response_decodes_execution_unit_fee_shape() {
+        let wire = serde_json::json!({
+            "schemaVersion": 1,
+            "latestHeight": 12,
+            "limit": 5,
+            "nextCursor": null,
+            "transactions": [{
+                "txHash": format!("0x{}", "11".repeat(32)),
+                "blockHash": format!("0x{}", "22".repeat(32)),
+                "blockNumber": 12,
+                "blockTimestamp": 1_700_000_000u64,
+                "txIndex": 0,
+                "from": "mono1sender",
+                "to": null,
+                "nonce": 1,
+                "value": "100000000",
+                "executionUnitLimit": 21_000,
+                "maxExecutionFeeLythoshi": "10000000000",
+                "priorityTipLythoshi": "1",
+                "fee": {
+                    "total_lythoshi": "21000",
+                    "total_lyth": "0.00021",
+                    "cycles_used": 21_000,
+                    "base_price_per_cycle_lythoshi": "1",
+                    "state_io_units": 0,
+                    "state_io_price_per_unit_lythoshi": "0",
+                    "priority_tip_lythoshi": "0"
+                },
+                "input": "0x",
+                "receipt": {
+                    "status": 1,
+                    "executionUnitsUsed": 21_000,
+                    "logsCount": 0
+                }
+            }]
+        });
+
+        let feed: TxFeedResponse = serde_json::from_value(wire).unwrap();
+
+        let tx = &feed.transactions[0];
+        assert_eq!(tx.value, "100000000");
+        assert_eq!(tx.execution_unit_limit, 21_000);
+        assert_eq!(tx.max_execution_fee_lythoshi, "10000000000");
+        assert_eq!(tx.priority_tip_lythoshi, "1");
+        assert_eq!(tx.fee.total_lythoshi, "21000");
+        assert_eq!(tx.fee.base_price_per_cycle_lythoshi, "1");
+        assert_eq!(tx.receipt.as_ref().unwrap().execution_units_used, 21_000);
+
+        let stale = serde_json::json!({
+            "schemaVersion": 1,
+            "latestHeight": 12,
+            "limit": 5,
+            "nextCursor": null,
+            "transactions": [{
+                "txHash": format!("0x{}", "11".repeat(32)),
+                "blockHash": format!("0x{}", "22".repeat(32)),
+                "blockNumber": 12,
+                "blockTimestamp": 1_700_000_000u64,
+                "txIndex": 0,
+                "from": "mono1sender",
+                "to": null,
+                "nonce": 1,
+                "value": "100000000",
+                "gasLimit": 21_000,
+                "maxFeePerGas": "10000000000",
+                "maxPriorityFeePerGas": "1",
+                "input": "0x",
+                "receipt": {
+                    "status": 1,
+                    "gasUsed": 21_000,
+                    "logsCount": 0
+                }
+            }]
+        });
+        assert!(serde_json::from_value::<TxFeedResponse>(stale).is_err());
+    }
+
+    #[test]
+    fn decode_tx_response_decodes_execution_unit_fee_shape() {
+        let wire = serde_json::json!({
+            "txHash": format!("0x{}", "11".repeat(32)),
+            "blockHash": format!("0x{}", "22".repeat(32)),
+            "blockNumber": 12,
+            "txIndex": 0,
+            "from": "mono1sender",
+            "to": null,
+            "value": "0x5f5e100",
+            "nonce": 1,
+            "executionUnitLimit": 21_000,
+            "maxExecutionFeeLythoshi": "10000000000",
+            "priorityTipLythoshi": "1",
+            "executionUnitsUsed": 20_500,
+            "fee": {
+                "total_lythoshi": "20500",
+                "total_lyth": "0.000205",
+                "cycles_used": 20_500,
+                "base_price_per_cycle_lythoshi": "1",
+                "state_io_units": 0,
+                "state_io_price_per_unit_lythoshi": "0",
+                "priority_tip_lythoshi": "0"
+            },
+            "decodedCalldata": null,
+            "memo": null,
+            "round": 7,
+            "clusterId": null,
+            "blsAttestation": null,
+            "pqAttestation": null,
+            "finalityProof": null,
+            "logs": [],
+            "status": "success",
+            "errorCode": null
+        });
+
+        let decoded: DecodeTxResponse = serde_json::from_value(wire).unwrap();
+
+        assert_eq!(decoded.value, "0x5f5e100");
+        assert_eq!(decoded.execution_unit_limit, 21_000);
+        assert_eq!(decoded.max_execution_fee_lythoshi, "10000000000");
+        assert_eq!(decoded.priority_tip_lythoshi, "1");
+        assert_eq!(decoded.execution_units_used, Some(20_500));
+        assert_eq!(decoded.fee.total_lythoshi, "20500");
+
+        let stale = serde_json::json!({
+            "txHash": format!("0x{}", "11".repeat(32)),
+            "blockHash": format!("0x{}", "22".repeat(32)),
+            "blockNumber": 12,
+            "txIndex": 0,
+            "from": "mono1sender",
+            "to": null,
+            "value": "0x5f5e100",
+            "nonce": 1,
+            "gasLimit": 21_000,
+            "maxFeePerGas": "10000000000",
+            "maxPriorityFeePerGas": "1",
+            "gasUsed": 20_500,
+            "decodedCalldata": null,
+            "memo": null,
+            "round": 7,
+            "clusterId": null,
+            "blsAttestation": null,
+            "pqAttestation": null,
+            "finalityProof": null,
+            "logs": [],
+            "status": "success",
+            "errorCode": null
+        });
+        assert!(serde_json::from_value::<DecodeTxResponse>(stale).is_err());
     }
 
     #[test]

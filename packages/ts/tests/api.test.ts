@@ -77,9 +77,9 @@ describe("ApiClient", () => {
         parentHash: `0x${"bb".repeat(32)}`,
         stateRoot: `0x${"cc".repeat(32)}`,
         timestamp: 1_700_000_000,
-        gasUsed: 42,
-        gasLimit: 30_000_000,
-        baseFeePerGas: "1000000000",
+        executionUnitsUsed: 42,
+        executionUnitLimit: 30_000_000,
+        basePricePerCycleLythoshi: "1000000000",
       },
       transactionCount: 1,
       transactionHashes: [`0x${"dd".repeat(32)}`],
@@ -91,6 +91,9 @@ describe("ApiClient", () => {
     const block = await client.block("latest");
 
     expect(block.data.block.blockHash).toBe(blockHash);
+    expect(block.data.block.executionUnitsUsed).toBe(42);
+    expect(block.data.block.basePricePerCycleLythoshi).toBe("1000000000");
+    expect("gasUsed" in block.data.block).toBe(false);
     expect(block.data.transactionCount).toBe(1);
     expect(calls).toEqual([
       {
