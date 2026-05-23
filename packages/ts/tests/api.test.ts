@@ -258,6 +258,7 @@ describe("ApiClient", () => {
         txIndex: 0,
         schema: "riscv.receipt.v1",
         artifactHash: `0x${"aa".repeat(32)}`,
+        noEvmProof: null,
         counters: { cycles: 44, syscallUnits: 3, stateIoUnits: 2 },
         fee: {
           total_lythoshi: "440000000000",
@@ -294,6 +295,7 @@ describe("ApiClient", () => {
     const receipt = await client.transactionNativeReceipt(txHash);
 
     expect(receipt.data.artifactHash).toBe(`0x${"aa".repeat(32)}`);
+    expect(receipt.data.noEvmProof).toBeNull();
     expect(receipt.data.counters.stateIoUnits).toBe(2);
     expect(receipt.data.fee.total_lythoshi).toBe("440000000000");
     expect(receipt.data.fee.total_lyth).toBe("4,400");

@@ -584,6 +584,7 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     const receipt = await client.lythNativeReceipt(txHash);
 
     expect(receipt.artifactHash).toBe(`0x${"aa".repeat(32)}`);
+    expect(receipt.noEvmProof).toBeUndefined();
     expect(receipt.counters).toEqual({ cycles: 44, syscallUnits: 3, stateIoUnits: 2 });
     expect(receipt.fee.total_lythoshi).toBe("440000000000");
     expect(receipt.fee.total_lyth).toBe("4,400");

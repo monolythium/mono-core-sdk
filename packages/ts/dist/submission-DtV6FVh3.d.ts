@@ -1938,6 +1938,8 @@ interface NativeReceiptResponse<TDecoded = unknown> {
     txIndex: number;
     schema: string;
     artifactHash: string;
+    /** Current nodes return `null`; older nodes may omit the field. */
+    noEvmProof?: unknown | null;
     counters: NativeReceiptCounters;
     fee: NativeReceiptFee;
     reverted: boolean;

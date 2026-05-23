@@ -278,6 +278,10 @@ pub struct NativeReceiptResponse {
     pub schema: String,
     /// Consensus artifact hash from the RISC-V receipt.
     pub artifact_hash: Hash,
+    /// Opaque no-EVM proof payload. Current v4.1 nodes return `null`
+    /// while proof sourcing is pending; older nodes may omit this field.
+    #[serde(default)]
+    pub no_evm_proof: Option<serde_json::Value>,
     /// Execution counters reported by the RISC-V runner.
     pub counters: NativeReceiptCounters,
     /// Structured native fee object derived from receipt counters.
@@ -3173,6 +3177,7 @@ mod tests {
             "txIndex": 0,
             "schema": "riscv.receipt.v1",
             "artifactHash": artifact_hash,
+            "noEvmProof": null,
             "counters": {
                 "cycles": 44,
                 "syscallUnits": 3,
@@ -3210,6 +3215,7 @@ mod tests {
 
         assert_eq!(receipt.schema, "riscv.receipt.v1");
         assert_eq!(receipt.artifact_hash, format!("0x{}", "aa".repeat(32)));
+        assert_eq!(receipt.no_evm_proof, None);
         assert_eq!(receipt.counters.cycles, 44);
         assert_eq!(receipt.counters.syscall_units, 3);
         assert_eq!(receipt.counters.state_io_units, 2);
@@ -3233,6 +3239,68 @@ mod tests {
             serde_json::json!("agent.escrow.created")
         );
         assert_eq!(receipt.events[0].decoded_json, decoded.to_string());
+    }
+
+    #[test]
+    fn native_receipt_response_accepts_missing_and_opaque_no_evm_proof() {
+        let mut wire = serde_json::json!({
+            "txHash": format!("0x{}", "11".repeat(32)),
+            "blockHash": format!("0x{}", "22".repeat(32)),
+            "blockHeight": 100,
+            "txIndex": 0,
+            "schema": "riscv.receipt.v1",
+            "artifactHash": format!("0x{}", "aa".repeat(32)),
+            "counters": {
+                "cycles": 44,
+                "syscallUnits": 3,
+                "stateIoUnits": 2
+            },
+            "fee": {
+                "total_lythoshi": "440000000000",
+                "total_lyth": "4,400",
+                "cycles_used": 44,
+                "base_price_per_cycle_lythoshi": "10000000000",
+                "state_io_units": 2,
+                "state_io_price_per_unit_lythoshi": "0",
+                "priority_tip_lythoshi": "0"
+            },
+            "reverted": false,
+            "nativeDeltaCount": 0,
+            "eventCount": 0,
+            "events": [],
+            "source": {
+                "chainProvider": "mock_chain",
+                "indexerProvider": "native_events",
+                "metadataLogIndex": u32::MAX
+            }
+        });
+
+        let legacy: NativeReceiptResponse = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(legacy.no_evm_proof, None);
+
+        wire.as_object_mut().unwrap().insert(
+            "noEvmProof".to_owned(),
+            serde_json::json!({
+                "proofKind": "future",
+                "payload": { "opaque": true }
+            }),
+        );
+        let with_proof: NativeReceiptResponse = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            with_proof.no_evm_proof,
+            Some(serde_json::json!({
+                "proofKind": "future",
+                "payload": { "opaque": true }
+            }))
+        );
+
+        wire.as_object_mut()
+            .unwrap()
+            .insert("noEvmProof".to_owned(), serde_json::Value::Null);
+        let null_proof: NativeReceiptResponse = serde_json::from_value(wire).unwrap();
+        assert_eq!(null_proof.no_evm_proof, None);
+        let null_wire = serde_json::to_value(null_proof).unwrap();
+        assert_eq!(null_wire["noEvmProof"], serde_json::Value::Null);
     }
 
     #[test]
@@ -3436,6 +3504,7 @@ mod tests {
             tx_index: 0,
             schema: "riscv.receipt.v1".to_owned(),
             artifact_hash: format!("0x{}", "aa".repeat(32)),
+            no_evm_proof: None,
             counters: NativeReceiptCounters {
                 cycles: 44,
                 syscall_units: 3,
