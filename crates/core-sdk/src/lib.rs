@@ -38,6 +38,10 @@ pub use api::ApiClient;
 pub use client::RpcClient;
 pub use consts::{burn_addr_hex, BURN_ADDR};
 pub use error::SdkError;
+pub use mrv::{
+    format_lyth, format_lythoshi, parse_lyth_to_lythoshi, LythFormatOptions, LYTHOSHI_PER_LYTH,
+    LYTH_DECIMALS, NATIVE_LYTH_DECIMALS,
+};
 
 /// Crate version, sourced from `Cargo.toml`.
 #[must_use]

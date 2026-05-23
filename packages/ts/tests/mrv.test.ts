@@ -3,6 +3,7 @@ import {
   MRV_FORMAT_VERSION,
   MRV_PROFILE_MONO_RV32IM_V1,
   MRV_TX_EXTENSION_KIND,
+  NATIVE_LYTH_DECIMALS,
   RpcClient,
   addressToTypedBech32,
   buildMrvCallNativeTxPlan,
@@ -12,10 +13,13 @@ import {
   buildMrvDeployPlan,
   buildMrvDeployRequest,
   deriveMrvContractAddress,
+  formatLyth,
+  formatLythoshi,
   mrvAddressToBech32,
   mrvBech32ToAddress,
   mrvCodeHashHex,
   mrvV1TransactionExtension,
+  parseLythToLythoshi,
   submitMrvCallNativeTx,
   submitMrvDeployNativeTx,
   validateMrvArtifactMetadata,
@@ -100,6 +104,29 @@ function validMetadata(): MrvArtifactMetadata {
 }
 
 describe("MRV/RISC-V SDK helpers", () => {
+  it("formats and parses native LYTH amounts at 8 decimal precision", () => {
+    const cases: Array<[bigint, string]> = [
+      [0n, "0 LYTH"],
+      [1n, "0.00000001 LYTH"],
+      [50_000n, "0.0005 LYTH"],
+      [12_340_000n, "0.1234 LYTH"],
+      [12_345_678n, "0.12345678 LYTH"],
+      [500_050_000_000n, "5,000.5 LYTH"],
+    ];
+
+    expect(NATIVE_LYTH_DECIMALS).toBe(8);
+    for (const [lythoshi, expected] of cases) {
+      expect(formatLyth(lythoshi)).toBe(expected);
+      expect(formatLythoshi(lythoshi)).toBe(expected);
+      expect(parseLythToLythoshi(expected)).toBe(lythoshi);
+    }
+    expect(formatLyth(500_050_000_000n, { includeUnit: false })).toBe("5,000.5");
+    expect(parseLythToLythoshi("1.00000001")).toBe(100_000_001n);
+    expect(() => parseLythToLythoshi("1.")).toThrow(/canonical LYTH decimal/);
+    expect(() => parseLythToLythoshi("1.000000001")).toThrow(/8 decimal/);
+    expect(() => parseLythToLythoshi("12,34 LYTH")).toThrow(/canonical LYTH decimal/);
+  });
+
   it("validates artifact metadata and resolves syscalls", () => {
     const code = Uint8Array.from([0x13, 0x00, 0x00, 0x00]);
     const metadata = validMetadata();

@@ -145,6 +145,7 @@ export const MRV_MAX_MEMORY_PAGES = 1024 as const;
 export const MRV_MAX_ABI_SYMBOLS = 1024 as const;
 export const MRV_MAX_STORAGE_NAMESPACE_BYTES = 64 as const;
 export const LYTH_DECIMALS = 8 as const;
+export const NATIVE_LYTH_DECIMALS = LYTH_DECIMALS;
 export const LYTHOSHI_PER_LYTH = 100_000_000n;
 export const MRV_TX_EXTENSION_KIND = 0x30 as const;
 export const MRV_TX_EXTENSION_V1 = 0x01 as const;
@@ -177,6 +178,49 @@ export class MrvValidationError extends Error {
     super(message);
     this.name = "MrvValidationError";
   }
+}
+
+export interface LythFormatOptions {
+  includeUnit?: boolean;
+}
+
+export function formatLyth(lythoshi: MrvDecimalLike, options: LythFormatOptions = {}): string {
+  const amount = BigInt(normalizeDecimalLike("lythoshi", lythoshi));
+  const whole = amount / LYTHOSHI_PER_LYTH;
+  const fraction = amount % LYTHOSHI_PER_LYTH;
+  let formatted = formatWholeWithCommas(whole);
+  if (fraction !== 0n) {
+    formatted += `.${fraction.toString().padStart(NATIVE_LYTH_DECIMALS, "0").replace(/0+$/, "")}`;
+  }
+  if (options.includeUnit !== false) {
+    formatted += " LYTH";
+  }
+  return formatted;
+}
+
+export function formatLythoshi(lythoshi: MrvDecimalLike, options: LythFormatOptions = {}): string {
+  return formatLyth(lythoshi, options);
+}
+
+export function parseLythToLythoshi(input: string): bigint {
+  const numeric = stripLythUnit(input);
+  const parts = numeric.split(".");
+  if (parts.length > 2) {
+    throw new MrvValidationError("lyth amount must be a canonical LYTH decimal");
+  }
+  const [wholeRaw, fractionRaw = ""] = parts;
+  if (!isCanonicalWholeLyth(wholeRaw)) {
+    throw new MrvValidationError("lyth amount must be a canonical LYTH decimal");
+  }
+  if (numeric.includes(".") && fractionRaw.length === 0) {
+    throw new MrvValidationError("lyth amount must be a canonical LYTH decimal");
+  }
+  if (fractionRaw.length > NATIVE_LYTH_DECIMALS || !/^[0-9]*$/.test(fractionRaw)) {
+    throw new MrvValidationError("lyth amount supports at most 8 decimal places");
+  }
+  const whole = BigInt(wholeRaw.replaceAll(",", ""));
+  const fraction = fractionRaw === "" ? 0n : BigInt(fractionRaw.padEnd(NATIVE_LYTH_DECIMALS, "0"));
+  return whole * LYTHOSHI_PER_LYTH + fraction;
 }
 
 export function mrvCodeHashHex(code: MrvBytesLike): string {
@@ -559,6 +603,38 @@ function normalizeBytesHex(value: MrvBytesLike, field: string): string {
 
 function normalizeOptionalDecimalLike(field: string, value: MrvDecimalLike | undefined): string | undefined {
   return value === undefined ? undefined : normalizeDecimalLike(field, value);
+}
+
+function formatWholeWithCommas(value: bigint): string {
+  const digits = value.toString();
+  const firstGroupLen = digits.length % 3;
+  const groups: string[] = [];
+  let index = 0;
+  if (firstGroupLen !== 0) {
+    groups.push(digits.slice(0, firstGroupLen));
+    index = firstGroupLen;
+  }
+  while (index < digits.length) {
+    groups.push(digits.slice(index, index + 3));
+    index += 3;
+  }
+  return groups.join(",");
+}
+
+function stripLythUnit(input: string): string {
+  const trimmed = input.trim();
+  const withoutUnit = trimmed.replace(/\s+LYTH$/i, "").trim();
+  if (withoutUnit.length === 0) {
+    throw new MrvValidationError("lyth amount must be a canonical LYTH decimal");
+  }
+  return withoutUnit;
+}
+
+function isCanonicalWholeLyth(value: string): boolean {
+  if (/^(0|[1-9][0-9]*)$/.test(value)) {
+    return true;
+  }
+  return /^[1-9][0-9]{0,2}(,[0-9]{3})+$/.test(value);
 }
 
 function normalizeDecimalLike(field: string, value: MrvDecimalLike | undefined, defaultValue?: string): string {
