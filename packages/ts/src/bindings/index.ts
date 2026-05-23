@@ -87,6 +87,7 @@ export type { MrvBuildMetadata } from "./MrvBuildMetadata.js";
 export type { MrvCallRequest } from "./MrvCallRequest.js";
 export type { MrvCallResponse } from "./MrvCallResponse.js";
 export type { MrvCallStatus } from "./MrvCallStatus.js";
+export type { MrvDeployPayload } from "./MrvDeployPayload.js";
 export type { MrvDeployRequest } from "./MrvDeployRequest.js";
 export type { MrvDeployResponse } from "./MrvDeployResponse.js";
 export type { MrvEventRecord } from "./MrvEventRecord.js";

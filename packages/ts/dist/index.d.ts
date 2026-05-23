@@ -405,6 +405,27 @@ type MrvCallResponse = {
 };
 
 /**
+ * Versioned MRV deploy payload envelope.
+ *
+ * Raw artifact deploys remain valid. This envelope is only needed when a
+ * deploy carries optional constructor input alongside the canonical artifact.
+ */
+type MrvDeployPayload = {
+    /**
+     * Payload schema version.
+     */
+    version: number;
+    /**
+     * Canonical MRV artifact bytes.
+     */
+    artifact: Array<number>;
+    /**
+     * Optional constructor input already encoded with the artifact ABI.
+     */
+    constructor: Array<number> | null;
+};
+
+/**
  * Native MRV deploy request model.
  */
 type MrvDeployRequest = {
@@ -413,7 +434,11 @@ type MrvDeployRequest = {
      */
     from?: string;
     /**
-     * Raw bincode MRV artifact bytes as `0x`-hex.
+     * Deploy input bytes as `0x`-hex.
+     *
+     * Raw bincode MRV artifact bytes remain accepted. Constructor-bearing
+     * deploys use [`encode_mrv_deploy_payload`] to place a versioned payload
+     * envelope in this field.
      */
     artifactBytes: string;
     /**
@@ -975,6 +1000,12 @@ interface MrvRequestBuildOptions {
 interface MrvDeployPlanOptions extends MrvRequestBuildOptions {
     artifactHash?: string;
 }
+interface MrvDeployPayloadRequestOptions extends MrvRequestBuildOptions {
+    constructorInput?: MrvBytesLike | null;
+}
+interface MrvDeployPayloadPlanOptions extends MrvDeployPayloadRequestOptions {
+    artifactHash?: string;
+}
 interface MrvDeployPlan {
     request: MrvDeployRequest;
     extension: MrvTransactionExtension;
@@ -985,6 +1016,12 @@ interface MrvCallPlan {
     extension: MrvTransactionExtension;
 }
 type MrvDeployNativeTxOptions = Omit<MrvDeployPlanOptions, "executionUnitLimit" | "maxExecutionFeeLythoshi" | "nonce"> & {
+    chainId: number | bigint;
+    nonce: number | bigint;
+    executionUnitLimit: number | bigint;
+    maxExecutionFeeLythoshi: MrvDecimalLike;
+};
+type MrvDeployPayloadNativeTxOptions = Omit<MrvDeployPayloadPlanOptions, "executionUnitLimit" | "maxExecutionFeeLythoshi" | "nonce"> & {
     chainId: number | bigint;
     nonce: number | bigint;
     executionUnitLimit: number | bigint;
@@ -1033,13 +1070,19 @@ type MrvDeploySubmitOptions = MrvDeployNativeTxOptions & {
     encryptionKey?: EncryptionKey;
     class?: MempoolClass;
 };
+type MrvDeployPayloadSubmitOptions = MrvDeployPayloadNativeTxOptions & {
+    encryptionKey?: EncryptionKey;
+    class?: MempoolClass;
+};
 type MrvCallSubmitOptions = MrvCallNativeTxOptions & {
     encryptionKey?: EncryptionKey;
     class?: MempoolClass;
 };
 type MrvDeploySubmission = MrvDeployNativeTxPlan & MrvEncryptedSubmissionResult;
+type MrvDeployPayloadSubmission = MrvDeployNativeTxPlan & MrvEncryptedSubmissionResult;
 type MrvCallSubmission = MrvCallNativeTxPlan & MrvEncryptedSubmissionResult;
 declare const MRV_FORMAT_VERSION: 1;
+declare const MRV_DEPLOY_PAYLOAD_VERSION: 1;
 declare const MRV_PROFILE_MONO_RV32IM_V1: "mono_rv32im_v1";
 declare const MRV_MEMORY_PAGE_BYTES: 65536;
 declare const MRV_MAX_CODE_BYTES: number;
@@ -1086,6 +1129,7 @@ declare function assertMrvFeeDisplayConformance(input: MrvFeeDisplayConformanceI
 declare function formatNativeReceiptFeeDisplay(fee: Pick<NativeReceiptFee, "total_lythoshi" | "cycles_used" | "state_io_units" | "base_price_per_cycle_lythoshi" | "state_io_price_per_unit_lythoshi" | "priority_tip_lythoshi">): NativeReceiptFeeDisplay;
 declare function mrvCodeHashHex(code: MrvBytesLike): string;
 declare function mrvV1TransactionExtension(): MrvTransactionExtension;
+declare function encodeMrvDeployPayload(artifactBytes: MrvBytesLike, constructorInput?: MrvBytesLike | null): string;
 declare function mrvAddressToBech32(kind: MrvAddressKind, bytes: MrvBytesLike): string;
 declare function mrvBech32ToAddress(address: string, expectedKind?: MrvAddressKind): TypedAddress;
 declare function deriveMrvContractAddress(deployerAddress: string, deployerNonce: number | bigint, artifactHashHex: string): string;
@@ -1093,14 +1137,18 @@ declare function validateMrvArtifactMetadata(metadata: MrvArtifactMetadata, code
 declare function validateMrvDeployRequest(request: MrvDeployRequest): void;
 declare function validateMrvCallRequest(request: MrvCallRequest): void;
 declare function buildMrvDeployRequest(artifactBytes: MrvBytesLike, options?: MrvRequestBuildOptions): MrvDeployRequest;
+declare function buildMrvDeployPayloadRequest(artifactBytes: MrvBytesLike, options?: MrvDeployPayloadRequestOptions): MrvDeployRequest;
 declare function buildMrvCallRequest(contractAddress: string, input?: MrvBytesLike, options?: MrvRequestBuildOptions): MrvCallRequest;
 declare function buildMrvDeployPlan(artifactBytes: MrvBytesLike, options?: MrvDeployPlanOptions): MrvDeployPlan;
+declare function buildMrvDeployPayloadPlan(artifactBytes: MrvBytesLike, options?: MrvDeployPayloadPlanOptions): MrvDeployPlan;
 declare function buildMrvCallPlan(contractAddress: string, input?: MrvBytesLike, options?: MrvRequestBuildOptions): MrvCallPlan;
 declare function buildMrvDeployNativeTxPlan(artifactBytes: MrvBytesLike, options: MrvDeployNativeTxOptions): MrvDeployNativeTxPlan;
+declare function buildMrvDeployPayloadNativeTxPlan(artifactBytes: MrvBytesLike, options: MrvDeployPayloadNativeTxOptions): MrvDeployNativeTxPlan;
 declare function buildMrvCallNativeTxPlan(contractAddress: string, input: MrvBytesLike, options: MrvCallNativeTxOptions): MrvCallNativeTxPlan;
 declare function assertMrvDeployNativeSubmissionPlan(plan: MrvDeployNativeTxPlan): void;
 declare function assertMrvCallNativeSubmissionPlan(plan: MrvCallNativeTxPlan): void;
 declare function submitMrvDeployNativeTx(client: RpcClient, backend: MlDsa65Backend, artifactBytes: MrvBytesLike, options: MrvDeploySubmitOptions): Promise<MrvDeploySubmission>;
+declare function submitMrvDeployPayloadNativeTx(client: RpcClient, backend: MlDsa65Backend, artifactBytes: MrvBytesLike, options: MrvDeployPayloadSubmitOptions): Promise<MrvDeployPayloadSubmission>;
 declare function submitMrvCallNativeTx(client: RpcClient, backend: MlDsa65Backend, contractAddress: string, input: MrvBytesLike, options: MrvCallSubmitOptions): Promise<MrvCallSubmission>;
 
 /**
@@ -1688,4 +1736,4 @@ declare function translateBlockOut(header: {
  */
 declare const version = "0.1.0";
 
-export { ADDRESS_HRP, ADDRESS_KIND_HRPS, AddressError, AddressFlowResponse, type AddressKind, AddressProfileResponse, type ApiAddressActivityData, type ApiAddressActivityEntry, type ApiAddressActivityKind, type ApiAddressActivityKindData, type ApiAddressActivityKindSummary, type ApiBlockData, type ApiBlockHeader, type ApiBlockTransactionsData, type ApiCapabilitiesResponse, ApiClient, type ApiClientOptions, type ApiClusterData, type ApiClusterDirectoryEntry, type ApiClusterDirectoryPage, type ApiClusterMember, type ApiClusterStatus, type ApiClustersData, type ApiEnvelope, type ApiErrorEnvelope, type ApiHealthResponse, type ApiIndexerStatus, type ApiLatestAnchor, type ApiLogEntry, type ApiOperatorData, type ApiOperatorInfo, type ApiQueryValue, type ApiRuntimeProvenanceData, type ApiServiceProbeData, type ApiTransactionData, type ApiTransactionNativeReceiptData, type ApiTransactionReceipt, type ApiTransactionReceiptData, type ApiTransactionView, type ApiUpgradePlanStatus, type ApiUpgradeStatus, type ApiUpgradeStatusData, BURN_ADDR, BlockSelector, BridgeRoutesRequest, BridgeRoutesResponse, CallRequest, ChainStatsResponse, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse, ClobTradesResponse, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DelegationPrecompileError, type EthersBlockShape, type EthersReceiptShape, type EthersTxRequestSubset, type HealthSummary, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, type LatencyBands, type LythFormatOptions, ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, type MonolythiumNetworkConfig, MonolythiumProvider, type MonolythiumProviderOptions, MonolythiumSigner, type MonolythiumSignerBackend, type MrcHoldersRequest, MrcHoldersResponse, MrcMetadataResponse, type MrvAbiManifest, type MrvAbiParam, type MrvAbiSymbol, type MrvAbiSymbolKind, type MrvAbiType, type MrvAddressKind, type MrvArtifactMetadata, type MrvBuildMetadata, type MrvBytesLike, type MrvCallNativeTxOptions, type MrvCallNativeTxPlan, type MrvCallPlan, type MrvCallRequest, type MrvCallResponse, type MrvCallStatus, type MrvCallSubmission, type MrvCallSubmitOptions, type MrvDecimalLike, type MrvDeployNativeTxOptions, type MrvDeployNativeTxPlan, type MrvDeployPlan, type MrvDeployPlanOptions, type MrvDeployRequest, type MrvDeployResponse, type MrvDeploySubmission, type MrvDeploySubmitOptions, type MrvEncryptedSubmissionResult, type MrvEventRecord, type MrvExecutionReceipt, type MrvFeeDisplayConformanceInput, type MrvFeeDisplayConformanceReport, type MrvMemoryLimits, type MrvMeterCounters, type MrvNativeFeePreview, type MrvNativeStateDelta, type MrvNativeTxFacade, type MrvRequestBuildOptions, type MrvResolvedSyscall, type MrvRevertPayload, type MrvRiscvProfile, type MrvStorageNamespace, type MrvSyscallImport, type MrvTransactionExtension, type MrvTypedAddress, type MrvValidatedArtifactMetadata, MrvValidationError, NATIVE_LYTH_DECIMALS, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NativeDecodedEvent, NativeEventFilter, NativeEventsFilter, NativeEventsResponse, NativeReceiptFee, type NativeReceiptFeeDisplay, NativeReceiptResponse, NodeRegistryError, OperatorCapabilitiesResponse, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PendingRewardsResponse, type PrecompileAddress, type PrecompileName, type PubkeyLookup, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RedemptionQueueResponse, type ReportServiceProbeCalldataArgs, RpcClient, RpcClientOptions, RuntimeBuildProvenance, RuntimeUpgradeStatus, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SearchResponse, ServiceProbeResponse, type SpendingPolicyArgs, SpendingPolicyError, TransactionReceipt, TxFeedResponse, type TypedAddress, TypedNativeReceiptEvent, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, bech32ToAddress, bech32ToAddressBytes, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPlan, buildMrvDeployRequest, checkMrvFeeDisplayConformance, composeClaimBoundMessage, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, delegationAddressHex, deriveMrvContractAddress, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLookupPubkeyCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, hexToAddressBytes, isConcreteServiceProbeStatus, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nodeRegistryAddressHex, normalizeAddressHex, parseAddress, parseLythToLythoshi, pubkeyRegistryAddressHex, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, version };
+export { ADDRESS_HRP, ADDRESS_KIND_HRPS, AddressError, AddressFlowResponse, type AddressKind, AddressProfileResponse, type ApiAddressActivityData, type ApiAddressActivityEntry, type ApiAddressActivityKind, type ApiAddressActivityKindData, type ApiAddressActivityKindSummary, type ApiBlockData, type ApiBlockHeader, type ApiBlockTransactionsData, type ApiCapabilitiesResponse, ApiClient, type ApiClientOptions, type ApiClusterData, type ApiClusterDirectoryEntry, type ApiClusterDirectoryPage, type ApiClusterMember, type ApiClusterStatus, type ApiClustersData, type ApiEnvelope, type ApiErrorEnvelope, type ApiHealthResponse, type ApiIndexerStatus, type ApiLatestAnchor, type ApiLogEntry, type ApiOperatorData, type ApiOperatorInfo, type ApiQueryValue, type ApiRuntimeProvenanceData, type ApiServiceProbeData, type ApiTransactionData, type ApiTransactionNativeReceiptData, type ApiTransactionReceipt, type ApiTransactionReceiptData, type ApiTransactionView, type ApiUpgradePlanStatus, type ApiUpgradeStatus, type ApiUpgradeStatusData, BURN_ADDR, BlockSelector, BridgeRoutesRequest, BridgeRoutesResponse, CallRequest, ChainStatsResponse, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse, ClobTradesResponse, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DelegationPrecompileError, type EthersBlockShape, type EthersReceiptShape, type EthersTxRequestSubset, type HealthSummary, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, type LatencyBands, type LythFormatOptions, ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, type MonolythiumNetworkConfig, MonolythiumProvider, type MonolythiumProviderOptions, MonolythiumSigner, type MonolythiumSignerBackend, type MrcHoldersRequest, MrcHoldersResponse, MrcMetadataResponse, type MrvAbiManifest, type MrvAbiParam, type MrvAbiSymbol, type MrvAbiSymbolKind, type MrvAbiType, type MrvAddressKind, type MrvArtifactMetadata, type MrvBuildMetadata, type MrvBytesLike, type MrvCallNativeTxOptions, type MrvCallNativeTxPlan, type MrvCallPlan, type MrvCallRequest, type MrvCallResponse, type MrvCallStatus, type MrvCallSubmission, type MrvCallSubmitOptions, type MrvDecimalLike, type MrvDeployNativeTxOptions, type MrvDeployNativeTxPlan, type MrvDeployPayload, type MrvDeployPayloadNativeTxOptions, type MrvDeployPayloadPlanOptions, type MrvDeployPayloadRequestOptions, type MrvDeployPayloadSubmission, type MrvDeployPayloadSubmitOptions, type MrvDeployPlan, type MrvDeployPlanOptions, type MrvDeployRequest, type MrvDeployResponse, type MrvDeploySubmission, type MrvDeploySubmitOptions, type MrvEncryptedSubmissionResult, type MrvEventRecord, type MrvExecutionReceipt, type MrvFeeDisplayConformanceInput, type MrvFeeDisplayConformanceReport, type MrvMemoryLimits, type MrvMeterCounters, type MrvNativeFeePreview, type MrvNativeStateDelta, type MrvNativeTxFacade, type MrvRequestBuildOptions, type MrvResolvedSyscall, type MrvRevertPayload, type MrvRiscvProfile, type MrvStorageNamespace, type MrvSyscallImport, type MrvTransactionExtension, type MrvTypedAddress, type MrvValidatedArtifactMetadata, MrvValidationError, NATIVE_LYTH_DECIMALS, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NativeDecodedEvent, NativeEventFilter, NativeEventsFilter, NativeEventsResponse, NativeReceiptFee, type NativeReceiptFeeDisplay, NativeReceiptResponse, NodeRegistryError, OperatorCapabilitiesResponse, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PendingRewardsResponse, type PrecompileAddress, type PrecompileName, type PubkeyLookup, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RedemptionQueueResponse, type ReportServiceProbeCalldataArgs, RpcClient, RpcClientOptions, RuntimeBuildProvenance, RuntimeUpgradeStatus, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SearchResponse, ServiceProbeResponse, type SpendingPolicyArgs, SpendingPolicyError, TransactionReceipt, TxFeedResponse, type TypedAddress, TypedNativeReceiptEvent, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, bech32ToAddress, bech32ToAddressBytes, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, checkMrvFeeDisplayConformance, composeClaimBoundMessage, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, delegationAddressHex, deriveMrvContractAddress, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, hexToAddressBytes, isConcreteServiceProbeStatus, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nodeRegistryAddressHex, normalizeAddressHex, parseAddress, parseLythToLythoshi, pubkeyRegistryAddressHex, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, version };

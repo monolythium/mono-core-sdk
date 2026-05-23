@@ -2989,6 +2989,7 @@ function normalizeInput(value) {
 
 // src/mrv.ts
 var MRV_FORMAT_VERSION = 1;
+var MRV_DEPLOY_PAYLOAD_VERSION = 1;
 var MRV_PROFILE_MONO_RV32IM_V1 = "mono_rv32im_v1";
 var MRV_MEMORY_PAGE_BYTES = 65536;
 var MRV_MAX_CODE_BYTES = 16 * 1024 * 1024;
@@ -3146,6 +3147,20 @@ function mrvCodeHashHex(code) {
 function mrvV1TransactionExtension() {
   return { kind: MRV_TX_EXTENSION_KIND, bodyHex: "0x01" };
 }
+function encodeMrvDeployPayload(artifactBytes, constructorInput) {
+  const artifact = bytesFrom(artifactBytes, "artifactBytes");
+  const w = new BincodeWriter();
+  w.u16(MRV_DEPLOY_PAYLOAD_VERSION);
+  w.bytes(artifact);
+  if (constructorInput === void 0 || constructorInput === null) {
+    w.u8(0);
+  } else {
+    const constructor = bytesFrom(constructorInput, "constructorInput");
+    w.u8(1);
+    w.bytes(constructor);
+  }
+  return bytesToHex4(w.toBytes());
+}
 function mrvAddressToBech32(kind, bytes) {
   return addressToTypedBech32(kind, bytesFrom(bytes, "address"));
 }
@@ -3241,6 +3256,13 @@ function buildMrvDeployRequest(artifactBytes, options = {}) {
   validateMrvDeployRequest(request);
   return request;
 }
+function buildMrvDeployPayloadRequest(artifactBytes, options = {}) {
+  const request = buildMrvDeployRequest(
+    encodeMrvDeployPayload(artifactBytes, options.constructorInput),
+    options
+  );
+  return request;
+}
 function buildMrvCallRequest(contractAddress, input = "0x", options = {}) {
   const request = {
     contractAddress,
@@ -3253,6 +3275,19 @@ function buildMrvCallRequest(contractAddress, input = "0x", options = {}) {
 }
 function buildMrvDeployPlan(artifactBytes, options = {}) {
   const request = buildMrvDeployRequest(artifactBytes, options);
+  const plan = {
+    request,
+    extension: mrvV1TransactionExtension()
+  };
+  if (options.artifactHash !== void 0 && request.from !== void 0 && request.nonce !== void 0) {
+    plan.expectedContractAddress = deriveMrvContractAddress(request.from, request.nonce, options.artifactHash);
+  } else if (options.artifactHash !== void 0) {
+    validateHexLength("artifactHash", options.artifactHash, 32);
+  }
+  return plan;
+}
+function buildMrvDeployPayloadPlan(artifactBytes, options = {}) {
+  const request = buildMrvDeployPayloadRequest(artifactBytes, options);
   const plan = {
     request,
     extension: mrvV1TransactionExtension()
@@ -3277,6 +3312,43 @@ function buildMrvDeployNativeTxPlan(artifactBytes, options) {
   const maxExecutionFee = normalizeDecimalLike("maxExecutionFeeLythoshi", options.maxExecutionFeeLythoshi);
   const priorityTip = options.priorityTipLythoshi === void 0 ? void 0 : normalizeDecimalLike("priorityTipLythoshi", options.priorityTipLythoshi);
   const plan = buildMrvDeployPlan(artifactBytes, {
+    ...options,
+    nonce,
+    executionUnitLimit,
+    maxExecutionFeeLythoshi: maxExecutionFee,
+    priorityTipLythoshi: priorityTip
+  });
+  return {
+    ...plan,
+    nativeTx: {
+      chainId,
+      nonce,
+      valueLythoshi: plan.request.valueLythoshi,
+      executionUnitLimit,
+      maxExecutionFeeLythoshi: maxExecutionFee,
+      priorityTipLythoshi: priorityTip ?? "0"
+    },
+    feePreview: buildMrvNativeFeePreview(executionUnitLimit, maxExecutionFee, priorityTip ?? "0"),
+    tx: {
+      chainId,
+      nonce,
+      maxPriorityFeePerGas: priorityTip ?? "0",
+      maxFeePerGas: maxExecutionFee,
+      gasLimit: executionUnitLimit,
+      to: null,
+      value: plan.request.valueLythoshi,
+      input: plan.request.artifactBytes,
+      extensions: [plan.extension]
+    }
+  };
+}
+function buildMrvDeployPayloadNativeTxPlan(artifactBytes, options) {
+  const chainId = normalizeU64(options.chainId, "chainId");
+  const nonce = normalizeU64(options.nonce, "nonce");
+  const executionUnitLimit = normalizeU64(options.executionUnitLimit, "executionUnitLimit");
+  const maxExecutionFee = normalizeDecimalLike("maxExecutionFeeLythoshi", options.maxExecutionFeeLythoshi);
+  const priorityTip = options.priorityTipLythoshi === void 0 ? void 0 : normalizeDecimalLike("priorityTipLythoshi", options.priorityTipLythoshi);
+  const plan = buildMrvDeployPayloadPlan(artifactBytes, {
     ...options,
     nonce,
     executionUnitLimit,
@@ -3382,6 +3454,21 @@ function buildMrvNativeFeePreview(executionUnitLimit, maxExecutionFeeLythoshi, p
 }
 async function submitMrvDeployNativeTx(client, backend, artifactBytes, options) {
   const plan = buildMrvDeployNativeTxPlan(artifactBytes, options);
+  assertMrvDeployNativeSubmissionPlan(plan);
+  const submission = await buildEncryptedSubmission({
+    backend,
+    tx: plan.tx,
+    encryptionKey: options.encryptionKey ?? await fetchEncryptionKey(client),
+    class: options.class
+  });
+  return {
+    ...plan,
+    ...submission,
+    txHash: await submitEncryptedEnvelope(client, submission.envelopeWireHex)
+  };
+}
+async function submitMrvDeployPayloadNativeTx(client, backend, artifactBytes, options) {
+  const plan = buildMrvDeployPayloadNativeTxPlan(artifactBytes, options);
   assertMrvDeployNativeSubmissionPlan(plan);
   const submission = await buildEncryptedSubmission({
     backend,
@@ -4377,6 +4464,7 @@ exports.ML_DSA_65_SIGNATURE_LEN = ML_DSA_65_SIGNATURE_LEN2;
 exports.MONOLYTHIUM_NETWORKS = MONOLYTHIUM_NETWORKS;
 exports.MONOLYTHIUM_TESTNET_CHAIN_ID = MONOLYTHIUM_TESTNET_CHAIN_ID;
 exports.MONOLYTHIUM_TESTNET_NETWORK_NAME = MONOLYTHIUM_TESTNET_NETWORK_NAME;
+exports.MRV_DEPLOY_PAYLOAD_VERSION = MRV_DEPLOY_PAYLOAD_VERSION;
 exports.MRV_FORMAT_VERSION = MRV_FORMAT_VERSION;
 exports.MRV_MAX_ABI_SYMBOLS = MRV_MAX_ABI_SYMBOLS;
 exports.MRV_MAX_CODE_BYTES = MRV_MAX_CODE_BYTES;
@@ -4429,6 +4517,9 @@ exports.buildMrvCallNativeTxPlan = buildMrvCallNativeTxPlan;
 exports.buildMrvCallPlan = buildMrvCallPlan;
 exports.buildMrvCallRequest = buildMrvCallRequest;
 exports.buildMrvDeployNativeTxPlan = buildMrvDeployNativeTxPlan;
+exports.buildMrvDeployPayloadNativeTxPlan = buildMrvDeployPayloadNativeTxPlan;
+exports.buildMrvDeployPayloadPlan = buildMrvDeployPayloadPlan;
+exports.buildMrvDeployPayloadRequest = buildMrvDeployPayloadRequest;
 exports.buildMrvDeployPlan = buildMrvDeployPlan;
 exports.buildMrvDeployRequest = buildMrvDeployRequest;
 exports.checkMrvFeeDisplayConformance = checkMrvFeeDisplayConformance;
@@ -4446,6 +4537,7 @@ exports.encodeEnableCalldata = encodeEnableCalldata;
 exports.encodeHasPubkeyCalldata = encodeHasPubkeyCalldata;
 exports.encodeLockBridgeConfigCalldata = encodeLockBridgeConfigCalldata;
 exports.encodeLookupPubkeyCalldata = encodeLookupPubkeyCalldata;
+exports.encodeMrvDeployPayload = encodeMrvDeployPayload;
 exports.encodeRegisterPubkeyCalldata = encodeRegisterPubkeyCalldata;
 exports.encodeReportServiceProbeCalldata = encodeReportServiceProbeCalldata;
 exports.encodeSetBridgeResumeCooldownCalldata = encodeSetBridgeResumeCooldownCalldata;
@@ -4500,6 +4592,7 @@ exports.serviceProbeStatusLabel = serviceProbeStatusLabel;
 exports.spendingPolicyAddressHex = spendingPolicyAddressHex;
 exports.submitMrvCallNativeTx = submitMrvCallNativeTx;
 exports.submitMrvDeployNativeTx = submitMrvDeployNativeTx;
+exports.submitMrvDeployPayloadNativeTx = submitMrvDeployPayloadNativeTx;
 exports.translateBlockOut = translateBlockOut;
 exports.translateReceiptOut = translateReceiptOut;
 exports.translateTxIn = translateTxIn;

@@ -20,10 +20,10 @@ use monolythium_core_sdk::bridge::{
 use monolythium_core_sdk::mrv::{
     MrvAbiManifest, MrvAbiParam, MrvAbiSymbol, MrvAbiSymbolKind, MrvAbiType, MrvAddressKind,
     MrvArtifactMetadata, MrvBuildMetadata, MrvCallRequest, MrvCallResponse, MrvCallStatus,
-    MrvDeployRequest, MrvDeployResponse, MrvEventRecord, MrvExecutionReceipt, MrvMemoryLimits,
-    MrvMeterCounters, MrvNativeStateDelta, MrvResolvedSyscall, MrvRevertPayload, MrvRiscvProfile,
-    MrvStorageNamespace, MrvSyscallImport, MrvTransactionExtension, MrvTypedAddress,
-    MrvValidatedArtifactMetadata,
+    MrvDeployPayload, MrvDeployRequest, MrvDeployResponse, MrvEventRecord, MrvExecutionReceipt,
+    MrvMemoryLimits, MrvMeterCounters, MrvNativeStateDelta, MrvResolvedSyscall, MrvRevertPayload,
+    MrvRiscvProfile, MrvStorageNamespace, MrvSyscallImport, MrvTransactionExtension,
+    MrvTypedAddress, MrvValidatedArtifactMetadata,
 };
 use monolythium_core_sdk::types::{
     AccountPolicy, AccountProofResponse, AddressActivityArchiveRedirect, AddressActivityEntry,
@@ -153,6 +153,7 @@ fn export_bindings() {
     MrvCallRequest::export_all_to(&out).expect("MrvCallRequest");
     MrvCallResponse::export_all_to(&out).expect("MrvCallResponse");
     MrvCallStatus::export_all_to(&out).expect("MrvCallStatus");
+    MrvDeployPayload::export_all_to(&out).expect("MrvDeployPayload");
     MrvDeployRequest::export_all_to(&out).expect("MrvDeployRequest");
     MrvDeployResponse::export_all_to(&out).expect("MrvDeployResponse");
     MrvEventRecord::export_all_to(&out).expect("MrvEventRecord");
