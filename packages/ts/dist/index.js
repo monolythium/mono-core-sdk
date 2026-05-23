@@ -1018,7 +1018,7 @@ var RpcClient = class _RpcClient {
   }
   /** `eth_getTransactionReceipt` — receipt for a confirmed tx. */
   async ethGetTransactionReceipt(txHash) {
-    return this.call("eth_getTransactionReceipt", [txHash]);
+    return normalizeTransactionReceipt(await this.call("eth_getTransactionReceipt", [txHash]));
   }
   /** `eth_sendRawTransaction` — submit a signed raw tx. */
   async ethSendRawTransaction(rawTx) {
@@ -1542,6 +1542,12 @@ function expectObject(value, label) {
   }
   return value;
 }
+function firstField(row, keys, label) {
+  for (const key of keys) {
+    if (row[key] !== void 0) return row[key];
+  }
+  throw SdkError.malformed(`${label} is missing (${keys.join(" | ")})`);
+}
 function normalizeServiceProbe(value) {
   const row = expectObject(value, "service probe response");
   return {
@@ -1788,11 +1794,54 @@ function normalizeBlockHeader(value) {
   return {
     number: parseRpcBigint(h["number"], "block header number"),
     hash: String(h["hash"]),
-    parent_hash: String(h["parent_hash"]),
-    state_root: String(h["state_root"]),
+    parent_hash: String(firstField(h, ["parent_hash", "parentHash"], "block header parent hash")),
+    state_root: String(firstField(h, ["state_root", "stateRoot"], "block header state root")),
     timestamp: parseRpcBigint(h["timestamp"], "block header timestamp"),
-    gas_used: parseRpcBigint(h["gas_used"], "block header gas_used"),
-    gas_limit: parseRpcBigint(h["gas_limit"], "block header gas_limit")
+    executionUnitsUsed: parseRpcBigint(
+      firstField(
+        h,
+        ["executionUnitsUsed", "execution_units_used", "gas_used", "gasUsed"],
+        "block header execution units used"
+      ),
+      "block header execution units used"
+    ),
+    executionUnitLimit: parseRpcBigint(
+      firstField(
+        h,
+        ["executionUnitLimit", "execution_unit_limit", "gas_limit", "gasLimit"],
+        "block header execution unit limit"
+      ),
+      "block header execution unit limit"
+    )
+  };
+}
+function normalizeTransactionReceipt(value) {
+  if (value === null || value === void 0) return null;
+  const r = expectObject(value, "transaction receipt");
+  return {
+    tx_hash: String(
+      firstField(r, ["tx_hash", "txHash", "transactionHash"], "transaction receipt tx hash")
+    ),
+    block_hash: String(
+      firstField(r, ["block_hash", "blockHash"], "transaction receipt block hash")
+    ),
+    block_number: parseRpcBigint(
+      firstField(r, ["block_number", "blockNumber"], "transaction receipt block number"),
+      "transaction receipt block number"
+    ),
+    tx_index: parseRpcNumber(
+      firstField(r, ["tx_index", "txIndex", "transactionIndex"], "transaction receipt tx index"),
+      "transaction receipt tx index"
+    ),
+    status: parseRpcNumber(firstField(r, ["status"], "transaction receipt status"), "transaction receipt status"),
+    executionUnitsUsed: parseRpcBigint(
+      firstField(
+        r,
+        ["executionUnitsUsed", "execution_units_used", "gas_used", "gasUsed"],
+        "transaction receipt execution units used"
+      ),
+      "transaction receipt execution units used"
+    )
   };
 }
 function normalizeUserBech32Address(address) {
@@ -3323,8 +3372,8 @@ function translateReceiptOut(monoReceipt, fromAddress, toAddress) {
     blockNumber: `0x${BigInt(monoReceipt.block_number).toString(16)}`,
     transactionIndex: `0x${monoReceipt.tx_index.toString(16)}`,
     status: monoReceipt.status === 1 ? "0x1" : "0x0",
-    gasUsed: `0x${BigInt(monoReceipt.gas_used).toString(16)}`,
-    cumulativeGasUsed: `0x${BigInt(monoReceipt.gas_used).toString(16)}`,
+    gasUsed: `0x${BigInt(monoReceipt.executionUnitsUsed).toString(16)}`,
+    cumulativeGasUsed: `0x${BigInt(monoReceipt.executionUnitsUsed).toString(16)}`,
     effectiveGasPrice: "0x0",
     contractAddress: null,
     from: fromAddress ?? "0x0000000000000000000000000000000000000000",
@@ -3340,8 +3389,8 @@ function translateBlockOut(header) {
     hash: header.hash,
     parentHash: header.parent_hash,
     timestamp: `0x${header.timestamp.toString(16)}`,
-    gasUsed: `0x${header.gas_used.toString(16)}`,
-    gasLimit: `0x${header.gas_limit.toString(16)}`,
+    gasUsed: `0x${header.executionUnitsUsed.toString(16)}`,
+    gasLimit: `0x${header.executionUnitLimit.toString(16)}`,
     stateRoot: header.state_root,
     miner: "0x0000000000000000000000000000000000000000",
     difficulty: "0x0",

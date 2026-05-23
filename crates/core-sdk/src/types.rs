@@ -119,9 +119,10 @@ pub struct AccountProofResponse {
 
 /// Block header surfaced via `eth_getBlockByNumber` / `eth_getBlockByHash`.
 ///
-/// Field naming mirrors the on-wire shape — fields use snake_case in
-/// the v0.0.1 server. A future server version may upgrade to camelCase;
-/// when that happens we add a serde alias.
+/// The v4.1 SDK shape exposes execution-unit terminology. Legacy node
+/// payloads that still return `gas_used` / `gas_limit` decode through
+/// serde aliases so callers can upgrade the SDK before every node RPC
+/// response has been regenerated.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
 #[cfg_attr(feature = "ts-bindings", ts(export, export_to = "BlockHeader.ts"))]
@@ -138,12 +139,24 @@ pub struct BlockHeader {
     pub state_root: Hash,
     /// UNIX seconds.
     pub timestamp: u64,
-    /// Total gas consumed.
-    #[serde(rename = "gas_used", alias = "gasUsed")]
-    pub gas_used: u64,
-    /// Block gas limit.
-    #[serde(rename = "gas_limit", alias = "gasLimit")]
-    pub gas_limit: u64,
+    /// Total execution units consumed.
+    #[serde(
+        rename = "executionUnitsUsed",
+        alias = "execution_units_used",
+        alias = "gas_used",
+        alias = "gasUsed"
+    )]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "executionUnitsUsed"))]
+    pub execution_units_used: u64,
+    /// Block execution-unit limit.
+    #[serde(
+        rename = "executionUnitLimit",
+        alias = "execution_unit_limit",
+        alias = "gas_limit",
+        alias = "gasLimit"
+    )]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "executionUnitLimit"))]
+    pub execution_unit_limit: u64,
 }
 
 /// Receipt for a confirmed transaction.
@@ -168,9 +181,15 @@ pub struct TransactionReceipt {
     pub tx_index: u32,
     /// `1` on success, `0` on revert.
     pub status: u8,
-    /// Gas consumed by this transaction.
-    #[serde(rename = "gas_used", alias = "gasUsed")]
-    pub gas_used: u64,
+    /// Execution units consumed by this transaction.
+    #[serde(
+        rename = "executionUnitsUsed",
+        alias = "execution_units_used",
+        alias = "gas_used",
+        alias = "gasUsed"
+    )]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "executionUnitsUsed"))]
+    pub execution_units_used: u64,
 }
 
 /// Maximum native receipt event rows returned by the node's v4.1 API surface.
@@ -2204,6 +2223,74 @@ mod tests {
             Some("0x3b9aca00")
         );
         assert_eq!(legacy_wire.value_lythoshi.as_deref(), Some("0xa"));
+    }
+
+    #[test]
+    fn block_header_decodes_execution_unit_fields_with_legacy_aliases() {
+        let canonical: BlockHeader = serde_json::from_value(serde_json::json!({
+            "number": 12,
+            "hash": format!("0x{}", "11".repeat(32)),
+            "parentHash": format!("0x{}", "22".repeat(32)),
+            "stateRoot": format!("0x{}", "33".repeat(32)),
+            "timestamp": 1_700_000_000u64,
+            "executionUnitsUsed": 42,
+            "executionUnitLimit": 200_000_000
+        }))
+        .unwrap();
+
+        assert_eq!(canonical.execution_units_used, 42);
+        assert_eq!(canonical.execution_unit_limit, 200_000_000);
+
+        let legacy: BlockHeader = serde_json::from_value(serde_json::json!({
+            "number": 12,
+            "hash": format!("0x{}", "11".repeat(32)),
+            "parent_hash": format!("0x{}", "22".repeat(32)),
+            "state_root": format!("0x{}", "33".repeat(32)),
+            "timestamp": 1_700_000_000u64,
+            "gas_used": 42,
+            "gas_limit": 200_000_000
+        }))
+        .unwrap();
+
+        assert_eq!(legacy.execution_units_used, 42);
+        assert_eq!(legacy.execution_unit_limit, 200_000_000);
+
+        let wire = serde_json::to_value(canonical).unwrap();
+        assert_eq!(wire["executionUnitsUsed"], 42);
+        assert_eq!(wire["executionUnitLimit"], 200_000_000);
+        assert!(wire.get("gas_used").is_none());
+        assert!(wire.get("gas_limit").is_none());
+    }
+
+    #[test]
+    fn transaction_receipt_decodes_execution_units_with_legacy_alias() {
+        let canonical: TransactionReceipt = serde_json::from_value(serde_json::json!({
+            "txHash": format!("0x{}", "11".repeat(32)),
+            "blockHash": format!("0x{}", "22".repeat(32)),
+            "blockNumber": 12,
+            "txIndex": 1,
+            "status": 1,
+            "executionUnitsUsed": 21_000
+        }))
+        .unwrap();
+
+        assert_eq!(canonical.execution_units_used, 21_000);
+
+        let legacy: TransactionReceipt = serde_json::from_value(serde_json::json!({
+            "tx_hash": format!("0x{}", "11".repeat(32)),
+            "block_hash": format!("0x{}", "22".repeat(32)),
+            "block_number": 12,
+            "tx_index": 1,
+            "status": 1,
+            "gas_used": 21_000
+        }))
+        .unwrap();
+
+        assert_eq!(legacy.execution_units_used, 21_000);
+
+        let wire = serde_json::to_value(canonical).unwrap();
+        assert_eq!(wire["executionUnitsUsed"], 21_000);
+        assert!(wire.get("gas_used").is_none());
     }
 
     #[test]

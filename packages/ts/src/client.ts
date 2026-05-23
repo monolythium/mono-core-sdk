@@ -875,7 +875,7 @@ export class RpcClient {
 
   /** `eth_getTransactionReceipt` — receipt for a confirmed tx. */
   async ethGetTransactionReceipt(txHash: string): Promise<TransactionReceipt | null> {
-    return this.call("eth_getTransactionReceipt", [txHash]);
+    return normalizeTransactionReceipt(await this.call("eth_getTransactionReceipt", [txHash]));
   }
 
   /** `eth_sendRawTransaction` — submit a signed raw tx. */
@@ -1635,6 +1635,13 @@ function expectObject(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function firstField(row: Record<string, unknown>, keys: readonly string[], label: string): unknown {
+  for (const key of keys) {
+    if (row[key] !== undefined) return row[key];
+  }
+  throw SdkError.malformed(`${label} is missing (${keys.join(" | ")})`);
+}
+
 function normalizeServiceProbe(value: unknown): ServiceProbeResponse {
   const row = expectObject(value, "service probe response");
   return {
@@ -1901,11 +1908,55 @@ function normalizeBlockHeader(value: unknown): BlockHeader | null {
   return {
     number: parseRpcBigint(h["number"], "block header number"),
     hash: String(h["hash"]),
-    parent_hash: String(h["parent_hash"]),
-    state_root: String(h["state_root"]),
+    parent_hash: String(firstField(h, ["parent_hash", "parentHash"], "block header parent hash")),
+    state_root: String(firstField(h, ["state_root", "stateRoot"], "block header state root")),
     timestamp: parseRpcBigint(h["timestamp"], "block header timestamp"),
-    gas_used: parseRpcBigint(h["gas_used"], "block header gas_used"),
-    gas_limit: parseRpcBigint(h["gas_limit"], "block header gas_limit"),
+    executionUnitsUsed: parseRpcBigint(
+      firstField(
+        h,
+        ["executionUnitsUsed", "execution_units_used", "gas_used", "gasUsed"],
+        "block header execution units used",
+      ),
+      "block header execution units used",
+    ),
+    executionUnitLimit: parseRpcBigint(
+      firstField(
+        h,
+        ["executionUnitLimit", "execution_unit_limit", "gas_limit", "gasLimit"],
+        "block header execution unit limit",
+      ),
+      "block header execution unit limit",
+    ),
+  };
+}
+
+function normalizeTransactionReceipt(value: unknown): TransactionReceipt | null {
+  if (value === null || value === undefined) return null;
+  const r = expectObject(value, "transaction receipt");
+  return {
+    tx_hash: String(
+      firstField(r, ["tx_hash", "txHash", "transactionHash"], "transaction receipt tx hash"),
+    ),
+    block_hash: String(
+      firstField(r, ["block_hash", "blockHash"], "transaction receipt block hash"),
+    ),
+    block_number: parseRpcBigint(
+      firstField(r, ["block_number", "blockNumber"], "transaction receipt block number"),
+      "transaction receipt block number",
+    ),
+    tx_index: parseRpcNumber(
+      firstField(r, ["tx_index", "txIndex", "transactionIndex"], "transaction receipt tx index"),
+      "transaction receipt tx index",
+    ),
+    status: parseRpcNumber(firstField(r, ["status"], "transaction receipt status"), "transaction receipt status"),
+    executionUnitsUsed: parseRpcBigint(
+      firstField(
+        r,
+        ["executionUnitsUsed", "execution_units_used", "gas_used", "gasUsed"],
+        "transaction receipt execution units used",
+      ),
+      "transaction receipt execution units used",
+    ),
   };
 }
 

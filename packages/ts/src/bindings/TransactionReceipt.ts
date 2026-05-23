@@ -25,6 +25,6 @@ tx_index: number,
  */
 status: number,
 /**
- * Gas consumed by this transaction.
+ * Execution units consumed by this transaction.
  */
-gas_used: bigint, };
+executionUnitsUsed: bigint, };
