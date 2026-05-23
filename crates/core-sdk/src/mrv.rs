@@ -6,11 +6,12 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
+use sha3::{Digest, Keccak256};
 use thiserror::Error;
 
 use crate::address::{
-    address_to_hex, address_to_typed_bech32, typed_bech32_to_address, typed_bech32_to_address_kind,
-    AddressKind,
+    address_to_hex, address_to_typed_bech32, hex_to_address, typed_bech32_to_address,
+    typed_bech32_to_address_kind, AddressKind,
 };
 
 #[cfg(feature = "ts-bindings")]
@@ -40,6 +41,14 @@ pub const LYTHOSHI_PER_LYTH: u128 = 100_000_000;
 pub const MRV_TX_EXTENSION_KIND: u8 = 0x30;
 /// Body byte for the first MRV extension version.
 pub const MRV_TX_EXTENSION_V1: u8 = 0x01;
+/// ML-DSA-65 public key byte length for native transaction envelopes.
+pub const ML_DSA_65_PUBLIC_KEY_LEN: usize = 1_952;
+/// ML-DSA-65 signature byte length for native transaction envelopes.
+pub const ML_DSA_65_SIGNATURE_LEN: usize = 3_309;
+const STANDARD_ALGO_NUMBER_ML_DSA_65: u16 = 1_001;
+const ENUM_VARIANT_INDEX_ML_DSA_65: u32 = 5;
+const TX_HASH_TAG_SIGNING: u8 = 0x01;
+const TX_HASH_TAG_IDENTITY: u8 = 0x02;
 
 const MRV_CODE_HASH_DOMAIN: &[u8] = b"MONO_MRV_CODE_V1";
 const MRV_CONTRACT_ADDRESS_DOMAIN: &[u8] = b"mono:riscv:contract-address:v1";
@@ -1052,6 +1061,24 @@ pub enum MrvValidationError {
         /// Field name.
         field: &'static str,
     },
+
+    /// Raw transaction signing input had an invalid fixed-length byte vector.
+    #[error("{field} must be {expected} bytes, got {actual}")]
+    InvalidNativeTxBytes {
+        /// Field name.
+        field: &'static str,
+        /// Expected byte length.
+        expected: usize,
+        /// Actual byte length.
+        actual: usize,
+    },
+
+    /// Raw transaction signing input exceeded a 32-bit canonical length field.
+    #[error("{field} exceeds u32 length")]
+    NativeTxLengthOverflow {
+        /// Field name.
+        field: &'static str,
+    },
 }
 
 /// Compute the MRV code-section BLAKE3 hash as `0x`-hex.
@@ -1414,6 +1441,250 @@ pub fn build_mrv_call_native_tx_plan(
         extension: plan.extension,
         tx,
     })
+}
+
+/// Encode the canonical transaction preimage that native transaction signers
+/// hash before signing.
+///
+/// The returned bytes are not the signed wire envelope. Hash them with
+/// Keccak-256 or call [`mrv_native_tx_sighash`] directly.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when decimal, hex, address, or extension
+/// fields are malformed.
+pub fn encode_mrv_native_tx_signing_preimage(
+    tx: &MrvNativeTxFields,
+) -> Result<Vec<u8>, MrvValidationError> {
+    encode_mrv_native_tx_for_hash(tx, TX_HASH_TAG_SIGNING)
+}
+
+/// Compute the Keccak-256 digest that an external ML-DSA-65 signer signs for a
+/// native MRV transaction.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when transaction fields are malformed.
+pub fn mrv_native_tx_sighash(tx: &MrvNativeTxFields) -> Result<[u8; 32], MrvValidationError> {
+    Ok(keccak32(&encode_mrv_native_tx_signing_preimage(tx)?))
+}
+
+/// Compute the signed transaction identity hash from the transaction fields,
+/// raw ML-DSA-65 signature, and raw ML-DSA-65 public key.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when transaction fields are malformed or the
+/// signature/public key lengths are wrong.
+pub fn mrv_native_tx_hash(
+    tx: &MrvNativeTxFields,
+    signature: &[u8],
+    public_key: &[u8],
+) -> Result<[u8; 32], MrvValidationError> {
+    expect_len("signature", signature, ML_DSA_65_SIGNATURE_LEN)?;
+    expect_len("publicKey", public_key, ML_DSA_65_PUBLIC_KEY_LEN)?;
+    let mut preimage = encode_mrv_native_tx_for_hash(tx, TX_HASH_TAG_IDENTITY)?;
+    preimage.extend_from_slice(signature);
+    preimage.extend_from_slice(public_key);
+    Ok(keccak32(&preimage))
+}
+
+/// Encode the current bincode signed native transaction envelope from an
+/// already-produced ML-DSA-65 signature and public key.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when transaction fields are malformed or the
+/// signature/public key lengths are wrong.
+pub fn encode_mrv_signed_native_tx_bincode(
+    tx: &MrvNativeTxFields,
+    signature: &[u8],
+    public_key: &[u8],
+) -> Result<Vec<u8>, MrvValidationError> {
+    expect_len("signature", signature, ML_DSA_65_SIGNATURE_LEN)?;
+    expect_len("publicKey", public_key, ML_DSA_65_PUBLIC_KEY_LEN)?;
+
+    let input = decode_hex("input", &tx.input)?;
+    let to = tx
+        .to
+        .as_deref()
+        .map(|to| {
+            hex_to_address(to).map_err(|err| MrvValidationError::InvalidAddress {
+                field: "to",
+                reason: err.to_string(),
+            })
+        })
+        .transpose()?;
+    let extensions = decode_native_tx_extensions(&tx.extensions)?;
+    let mut out = Vec::new();
+    push_u64_le(&mut out, tx.chain_id);
+    push_u64_le(&mut out, tx.nonce);
+    push_u256_le(
+        &mut out,
+        parse_u128_decimal("maxPriorityFeePerGas", &tx.max_priority_fee_per_gas)?,
+    );
+    push_u256_le(
+        &mut out,
+        parse_u128_decimal("maxFeePerGas", &tx.max_fee_per_gas)?,
+    );
+    push_u64_le(&mut out, tx.gas_limit);
+    match to {
+        Some(addr) => {
+            out.push(1);
+            out.extend_from_slice(&addr);
+        }
+        None => out.push(0),
+    }
+    push_u256_le(&mut out, parse_u128_decimal("value", &tx.value)?);
+    push_bincode_bytes(&mut out, "input", &input)?;
+    push_u64_le(&mut out, 0);
+    push_u64_le(
+        &mut out,
+        u64::try_from(extensions.len()).unwrap_or(u64::MAX),
+    );
+    for extension in extensions {
+        out.push(extension.kind);
+        push_bincode_bytes(&mut out, "extension.body", &extension.body)?;
+    }
+    push_ml_dsa65_opaque(&mut out, signature)?;
+    push_ml_dsa65_opaque(&mut out, public_key)?;
+    Ok(out)
+}
+
+struct DecodedNativeTxExtension {
+    kind: u8,
+    body: Vec<u8>,
+}
+
+fn encode_mrv_native_tx_for_hash(
+    tx: &MrvNativeTxFields,
+    tag: u8,
+) -> Result<Vec<u8>, MrvValidationError> {
+    let input = decode_hex("input", &tx.input)?;
+    let to = tx
+        .to
+        .as_deref()
+        .map(|to| {
+            hex_to_address(to).map_err(|err| MrvValidationError::InvalidAddress {
+                field: "to",
+                reason: err.to_string(),
+            })
+        })
+        .transpose()?;
+    let extensions = decode_native_tx_extensions(&tx.extensions)?;
+    let mut out = Vec::new();
+    out.push(tag);
+    out.extend_from_slice(&tx.chain_id.to_be_bytes());
+    out.extend_from_slice(&tx.nonce.to_be_bytes());
+    push_u256_be(
+        &mut out,
+        parse_u128_decimal("maxPriorityFeePerGas", &tx.max_priority_fee_per_gas)?,
+    );
+    push_u256_be(
+        &mut out,
+        parse_u128_decimal("maxFeePerGas", &tx.max_fee_per_gas)?,
+    );
+    out.extend_from_slice(&tx.gas_limit.to_be_bytes());
+    match to {
+        Some(addr) => {
+            out.push(1);
+            out.extend_from_slice(&addr);
+        }
+        None => out.push(0),
+    }
+    push_u256_be(&mut out, parse_u128_decimal("value", &tx.value)?);
+    push_u32_len_be(&mut out, "input.length", input.len())?;
+    out.extend_from_slice(&input);
+    out.extend_from_slice(&0_u32.to_be_bytes());
+    push_u32_len_be(&mut out, "extensions.length", extensions.len())?;
+    for extension in extensions {
+        out.push(extension.kind);
+        push_u32_len_be(&mut out, "extension.body", extension.body.len())?;
+        out.extend_from_slice(&extension.body);
+    }
+    Ok(out)
+}
+
+fn decode_native_tx_extensions(
+    extensions: &[MrvTransactionExtension],
+) -> Result<Vec<DecodedNativeTxExtension>, MrvValidationError> {
+    extensions
+        .iter()
+        .map(|extension| {
+            Ok(DecodedNativeTxExtension {
+                kind: extension.kind,
+                body: decode_hex("extension.bodyHex", &extension.body_hex)?,
+            })
+        })
+        .collect()
+}
+
+fn parse_u128_decimal(field: &'static str, value: &str) -> Result<u128, MrvValidationError> {
+    validate_decimal(field, value)?;
+    value
+        .parse::<u128>()
+        .map_err(|_| MrvValidationError::InvalidDecimal { field })
+}
+
+fn push_u256_be(out: &mut Vec<u8>, value: u128) {
+    out.extend_from_slice(&[0u8; 16]);
+    out.extend_from_slice(&value.to_be_bytes());
+}
+
+fn push_u256_le(out: &mut Vec<u8>, value: u128) {
+    out.extend_from_slice(&value.to_le_bytes());
+    out.extend_from_slice(&[0u8; 16]);
+}
+
+fn push_u32_len_be(
+    out: &mut Vec<u8>,
+    field: &'static str,
+    len: usize,
+) -> Result<(), MrvValidationError> {
+    let len =
+        u32::try_from(len).map_err(|_| MrvValidationError::NativeTxLengthOverflow { field })?;
+    out.extend_from_slice(&len.to_be_bytes());
+    Ok(())
+}
+
+fn push_u64_le(out: &mut Vec<u8>, value: u64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_bincode_bytes(
+    out: &mut Vec<u8>,
+    field: &'static str,
+    bytes: &[u8],
+) -> Result<(), MrvValidationError> {
+    let len = u64::try_from(bytes.len())
+        .map_err(|_| MrvValidationError::NativeTxLengthOverflow { field })?;
+    push_u64_le(out, len);
+    out.extend_from_slice(bytes);
+    Ok(())
+}
+
+fn push_ml_dsa65_opaque(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), MrvValidationError> {
+    out.extend_from_slice(&ENUM_VARIANT_INDEX_ML_DSA_65.to_le_bytes());
+    out.extend_from_slice(&STANDARD_ALGO_NUMBER_ML_DSA_65.to_le_bytes());
+    push_bincode_bytes(out, "ml_dsa_65", bytes)
+}
+
+fn expect_len(
+    field: &'static str,
+    bytes: &[u8],
+    expected: usize,
+) -> Result<(), MrvValidationError> {
+    if bytes.len() != expected {
+        return Err(MrvValidationError::InvalidNativeTxBytes {
+            field,
+            expected,
+            actual: bytes.len(),
+        });
+    }
+    Ok(())
+}
+
+fn keccak32(bytes: &[u8]) -> [u8; 32] {
+    let digest = Keccak256::digest(bytes);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
+    out
 }
 
 fn compute_mrv_code_hash(code: &[u8]) -> [u8; 32] {
@@ -2024,5 +2295,37 @@ mod tests {
             MrvNativeTxBuildOptions::new(69_420, 0, 1, 1)
         )
         .is_err());
+    }
+
+    #[test]
+    fn native_tx_encoding_commits_to_mrv_extensions() {
+        let contract = mrv_address_to_bech32(MrvAddressKind::Contract, [0x22; 20]);
+        let plan = build_mrv_call_native_tx_plan(
+            &contract,
+            &[0x01, 0x02],
+            MrvNativeTxBuildOptions::new(69_420, 8, 50_000, 10).value_lythoshi(3),
+        )
+        .unwrap();
+        let mut no_extension = plan.tx.clone();
+        no_extension.extensions.clear();
+
+        let no_extension_preimage = encode_mrv_native_tx_signing_preimage(&no_extension).unwrap();
+        let with_extension_preimage = encode_mrv_native_tx_signing_preimage(&plan.tx).unwrap();
+        assert_ne!(with_extension_preimage, no_extension_preimage);
+        assert!(hex_encode(&no_extension_preimage).ends_with("0000000000000000"));
+        assert!(hex_encode(&with_extension_preimage).ends_with("0000000001300000000101"));
+
+        let sig = vec![0x55; ML_DSA_65_SIGNATURE_LEN];
+        let public_key = vec![0x66; ML_DSA_65_PUBLIC_KEY_LEN];
+        let sighash = mrv_native_tx_sighash(&plan.tx).unwrap();
+        let tx_hash = mrv_native_tx_hash(&plan.tx, &sig, &public_key).unwrap();
+        assert_eq!(sighash.len(), 32);
+        assert_eq!(tx_hash.len(), 32);
+        assert_ne!(sighash, tx_hash);
+
+        let wire = encode_mrv_signed_native_tx_bincode(&plan.tx, &sig, &public_key).unwrap();
+        assert!(hex_encode(&wire)
+            .contains("000000000000000001000000000000003001000000000000000105000000"));
+        assert!(encode_mrv_signed_native_tx_bincode(&plan.tx, &sig[..10], &public_key).is_err());
     }
 }
