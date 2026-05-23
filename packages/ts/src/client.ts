@@ -54,6 +54,8 @@ import type {
   MeshSignedTxResponse,
   MeshTxIntent,
   MeshUnsignedTxResponse,
+  MrcAccountRequest,
+  MrcAccountResponse,
   MrcHoldersRequest,
   MrcHoldersResponse,
   MrcMetadataResponse,
@@ -1074,6 +1076,20 @@ export class RpcClient {
   ): Promise<MrcMetadataResponse> {
     const params = tokenId == null ? [assetId] : [assetId, tokenId];
     return this.call("lyth_mrcMetadata", params);
+  }
+
+  /** `lyth_mrcAccount` — exact current-state native MRC account lookup. */
+  async lythMrcAccount(
+    account: string,
+    spendLimit?: number | null,
+  ): Promise<MrcAccountResponse> {
+    const request: MrcAccountRequest = { account };
+    if (spendLimit != null) request.spendLimit = spendLimit;
+    const params =
+      request.spendLimit == null
+        ? [request.account]
+        : [request.account, request.spendLimit];
+    return this.call("lyth_mrcAccount", params);
   }
 
   /** `lyth_mrcHolders` — top holders for a native MRC asset/token key. */

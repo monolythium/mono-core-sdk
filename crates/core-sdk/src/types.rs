@@ -1412,6 +1412,96 @@ pub struct MrcMetadataResponse {
     pub metadata: Option<MrcMetadataRecord>,
 }
 
+/// Current-state smart/policy account row folded from native MRC account events.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrcAccountRecord.ts"))]
+pub struct MrcAccountRecord {
+    /// Account row kind: `smart_account` or `policy_account`.
+    pub kind: String,
+    /// Account address this row describes.
+    pub account: Address,
+    /// Controller address authorized for this account.
+    pub controller: Address,
+    /// Recovery address registered for this account, when smart-account state carries one.
+    #[serde(default)]
+    pub recovery: Option<Address>,
+    /// Active policy hash, when this row is a policy account.
+    #[serde(default)]
+    pub policy_hash: Option<Hash>,
+    /// Account nonce as decimal text, or `null` when the row has no nonce.
+    #[serde(default)]
+    pub nonce: Option<String>,
+    /// Block height of the latest fold into this row.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number"))]
+    pub updated_at_block: u64,
+}
+
+/// Current-state policy spend row included in `lyth_mrcAccount`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "MrcPolicySpendRecord.ts")
+)]
+pub struct MrcPolicySpendRecord {
+    /// Policy account address.
+    pub account: Address,
+    /// Asset id governed by this spend window.
+    pub asset_id: Hash,
+    /// Spend window identifier as decimal text.
+    pub window: String,
+    /// Window allowance amount as decimal text.
+    pub amount: String,
+    /// Amount already spent in this window as decimal text.
+    pub spent: String,
+    /// Block height of the latest fold into this row.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number"))]
+    pub updated_at_block: u64,
+}
+
+/// Request parameters for `lyth_mrcAccount` and `/api/v1/mrc/accounts/{account}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "MrcAccountRequest.ts")
+)]
+pub struct MrcAccountRequest {
+    /// Account address to inspect.
+    pub account: Address,
+    /// Optional spend-row limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub spend_limit: Option<u32>,
+}
+
+/// `lyth_mrcAccount` exact current-state smart/policy account lookup response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "MrcAccountResponse.ts")
+)]
+pub struct MrcAccountResponse {
+    /// Response schema version.
+    pub schema_version: u32,
+    /// Queried account address.
+    pub account: Address,
+    /// Policy spend row limit applied by the node.
+    pub spend_limit: u32,
+    /// Smart-account row, or `null` when none exists.
+    pub smart_account: Option<MrcAccountRecord>,
+    /// Policy-account row, or `null` when none exists.
+    pub policy_account: Option<MrcAccountRecord>,
+    /// Policy spend rows for this account.
+    pub policy_spends: Vec<MrcPolicySpendRecord>,
+}
+
 /// Address-label row surfaced by `lyth_getAddressLabel`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
@@ -3437,6 +3527,86 @@ mod tests {
         .unwrap();
         assert_eq!(missing_metadata.token_id, None);
         assert_eq!(missing_metadata.metadata, None);
+    }
+
+    #[test]
+    fn mrc_account_response_decodes_account_and_policy_spend_rows() {
+        let account = "monos1effvdw0d05a35j69wwxplhmctpcclx382n60yf";
+        let controller = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+        let recovery = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+        let asset_id = format!("0x{}", "bb".repeat(32));
+        let policy_hash = format!("0x{}", "44".repeat(32));
+
+        let request = MrcAccountRequest {
+            account: account.to_owned(),
+            spend_limit: Some(2),
+        };
+        let wire = serde_json::to_value(&request).unwrap();
+        assert_eq!(wire["account"], account);
+        assert_eq!(wire["spendLimit"], 2);
+
+        let without_limit = serde_json::to_value(MrcAccountRequest {
+            account: account.to_owned(),
+            spend_limit: None,
+        })
+        .unwrap();
+        assert!(without_limit.get("spendLimit").is_none());
+
+        let response: MrcAccountResponse = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "account": account,
+            "spendLimit": 2,
+            "smartAccount": {
+                "kind": "smart_account",
+                "account": account,
+                "controller": controller,
+                "recovery": recovery,
+                "policyHash": null,
+                "nonce": "7",
+                "updatedAtBlock": 91
+            },
+            "policyAccount": {
+                "kind": "policy_account",
+                "account": account,
+                "controller": controller,
+                "recovery": null,
+                "policyHash": policy_hash,
+                "nonce": null,
+                "updatedAtBlock": 90
+            },
+            "policySpends": [
+                {
+                    "account": account,
+                    "assetId": asset_id,
+                    "window": "3600",
+                    "amount": "1000",
+                    "spent": "250",
+                    "updatedAtBlock": 92
+                }
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(response.schema_version, 1);
+        assert_eq!(response.account, account);
+        assert_eq!(response.spend_limit, 2);
+        let smart = response.smart_account.as_ref().expect("smart account row");
+        assert_eq!(smart.kind, "smart_account");
+        assert_eq!(smart.recovery.as_deref(), Some(recovery));
+        assert_eq!(smart.policy_hash, None);
+        assert_eq!(smart.nonce.as_deref(), Some("7"));
+        assert_eq!(smart.updated_at_block, 91);
+        let policy = response
+            .policy_account
+            .as_ref()
+            .expect("policy account row");
+        assert_eq!(policy.kind, "policy_account");
+        assert_eq!(policy.recovery, None);
+        assert_eq!(policy.policy_hash.as_deref(), Some(policy_hash.as_str()));
+        assert_eq!(response.policy_spends[0].asset_id, asset_id);
+        assert_eq!(response.policy_spends[0].window, "3600");
+        assert_eq!(response.policy_spends[0].spent, "250");
+        assert_eq!(response.policy_spends[0].updated_at_block, 92);
     }
 
     #[test]

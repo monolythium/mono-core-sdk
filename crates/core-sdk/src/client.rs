@@ -32,13 +32,14 @@ use crate::types::{
     DelegationHistoryRecord, DelegationsResponse, EncryptionKeyResponse, EntityRatchetResponse,
     FeeHistoryResponse, GapRecordsResponse, IndexerStatus, LythUpgradeStatusResponse,
     MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse,
-    MetricsRangeResponse, MrcHoldersRequest, MrcHoldersResponse, MrcMetadataResponse,
-    NativeEventFilter, NativeEventsFilter, NativeEventsResponse, NativeReceiptResponse,
-    OperatorCapabilitiesResponse, PeerSummary, PeerSummaryAggregate, PendingRewardsResponse,
-    PendingTxSummary, PrecompileDescriptor, RedemptionQueueResponse, RegistryRecord,
-    RichListResponse, RoundInfo, SearchResponse, StorageProofBatch, SyncStatus, TokenBalanceRecord,
-    TpmAttestationResponse, TransactionReceipt, TransactionView, TxFeedResponse, TxStatusResponse,
-    TypedNativeEventsResponse, TypedNativeReceiptEvent, VerticesAtRoundResponse,
+    MetricsRangeResponse, MrcAccountRequest, MrcAccountResponse, MrcHoldersRequest,
+    MrcHoldersResponse, MrcMetadataResponse, NativeEventFilter, NativeEventsFilter,
+    NativeEventsResponse, NativeReceiptResponse, OperatorCapabilitiesResponse, PeerSummary,
+    PeerSummaryAggregate, PendingRewardsResponse, PendingTxSummary, PrecompileDescriptor,
+    RedemptionQueueResponse, RegistryRecord, RichListResponse, RoundInfo, SearchResponse,
+    StorageProofBatch, SyncStatus, TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt,
+    TransactionView, TxFeedResponse, TxStatusResponse, TypedNativeEventsResponse,
+    TypedNativeReceiptEvent, VerticesAtRoundResponse,
 };
 
 /// Result from building and submitting an encrypted MRV deploy envelope.
@@ -510,6 +511,23 @@ impl RpcClient {
             None => json!([asset_id]),
         };
         self.call("lyth_mrcMetadata", params).await
+    }
+
+    /// `lyth_mrcAccount` — exact current-state native MRC account lookup.
+    pub async fn lyth_mrc_account(
+        &self,
+        account: &str,
+        spend_limit: Option<u32>,
+    ) -> Result<MrcAccountResponse, SdkError> {
+        let request = MrcAccountRequest {
+            account: account.to_owned(),
+            spend_limit,
+        };
+        let params = match request.spend_limit {
+            Some(spend_limit) => json!([request.account, spend_limit]),
+            None => json!([request.account]),
+        };
+        self.call("lyth_mrcAccount", params).await
     }
 
     /// `lyth_mrcHolders` — top holders for a native MRC asset/token key.
@@ -1659,6 +1677,84 @@ mod tests {
         assert_eq!(requests[0]["params"], json!([asset_id, token_id]));
         assert_eq!(requests[1]["method"], "lyth_mrcMetadata");
         assert_eq!(requests[1]["params"], json!([asset_id]));
+    }
+
+    #[tokio::test]
+    async fn lyth_mrc_account_decodes_account_rows_and_params() {
+        let account = "monos1effvdw0d05a35j69wwxplhmctpcclx382n60yf";
+        let controller = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+        let recovery = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+        let asset_id = format!("0x{}", "bb".repeat(32));
+        let policy_hash = format!("0x{}", "44".repeat(32));
+        let (endpoint, server) = spawn_rpc_server(vec![
+            json!({
+                "schemaVersion": 1,
+                "account": account,
+                "spendLimit": 2,
+                "smartAccount": {
+                    "kind": "smart_account",
+                    "account": account,
+                    "controller": controller,
+                    "recovery": recovery,
+                    "policyHash": null,
+                    "nonce": "7",
+                    "updatedAtBlock": 91
+                },
+                "policyAccount": null,
+                "policySpends": [
+                    {
+                        "account": account,
+                        "assetId": asset_id,
+                        "window": "3600",
+                        "amount": "1000",
+                        "spent": "250",
+                        "updatedAtBlock": 92
+                    }
+                ]
+            }),
+            json!({
+                "schemaVersion": 1,
+                "account": account,
+                "spendLimit": 50,
+                "smartAccount": null,
+                "policyAccount": {
+                    "kind": "policy_account",
+                    "account": account,
+                    "controller": controller,
+                    "recovery": null,
+                    "policyHash": policy_hash,
+                    "nonce": null,
+                    "updatedAtBlock": 90
+                },
+                "policySpends": []
+            }),
+        ]);
+
+        let client = RpcClient::new(endpoint).unwrap();
+        let limited = client.lyth_mrc_account(account, Some(2)).await.unwrap();
+        assert_eq!(limited.account, account);
+        assert_eq!(limited.spend_limit, 2);
+        let smart = limited.smart_account.as_ref().expect("smart account");
+        assert_eq!(smart.controller, controller);
+        assert_eq!(smart.recovery.as_deref(), Some(recovery));
+        assert_eq!(smart.policy_hash, None);
+        assert_eq!(smart.nonce.as_deref(), Some("7"));
+        assert_eq!(limited.policy_account, None);
+        assert_eq!(limited.policy_spends[0].asset_id, asset_id);
+        assert_eq!(limited.policy_spends[0].spent, "250");
+
+        let defaulted = client.lyth_mrc_account(account, None).await.unwrap();
+        assert_eq!(defaulted.spend_limit, 50);
+        let policy = defaulted.policy_account.as_ref().expect("policy account");
+        assert_eq!(policy.policy_hash.as_deref(), Some(policy_hash.as_str()));
+        assert!(defaulted.policy_spends.is_empty());
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0]["method"], "lyth_mrcAccount");
+        assert_eq!(requests[0]["params"], json!([account, 2]));
+        assert_eq!(requests[1]["method"], "lyth_mrcAccount");
+        assert_eq!(requests[1]["params"], json!([account]));
     }
 
     #[tokio::test]

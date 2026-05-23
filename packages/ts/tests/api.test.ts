@@ -688,15 +688,18 @@ describe("ApiClient", () => {
     const marketId = `0x${"55".repeat(32)}`;
     const assetId = `0x${"bb".repeat(32)}`;
     const mrcTokenId = `0x${"cc".repeat(32)}`;
+    const account = "0x1111111111111111111111111111111111111111";
+    const mrcAccount = "monos1effvdw0d05a35j69wwxplhmctpcclx382n60yf";
 
     await client.search("0xabc", 5);
     await client.stats();
     await client.transactions(25, "0x1234");
-    await client.addressProfile("0x1111111111111111111111111111111111111111");
-    await client.addressFlow("0x1111111111111111111111111111111111111111", 75);
+    await client.addressProfile(account);
+    await client.addressFlow(account, 75);
     await client.addressPendingRewards("mono1wallet", 99);
     await client.assetMrcMetadata(assetId, mrcTokenId);
     await client.assetMrcMetadata(assetId);
+    await client.mrcAccount(mrcAccount, 2);
     await client.mrcAssetHolders("mrc4626", assetId, 10);
     await client.markets(10);
     await client.market(marketId);
@@ -714,6 +717,7 @@ describe("ApiClient", () => {
       "https://rpc.example/api/v1/addresses/mono1wallet/pending-rewards?block=0x63",
       `https://rpc.example/api/v1/assets/${assetId}/metadata?mrcTokenId=${mrcTokenId}`,
       `https://rpc.example/api/v1/assets/${assetId}/metadata`,
+      `https://rpc.example/api/v1/mrc/accounts/${mrcAccount}?limit=2`,
       `https://rpc.example/api/v1/mrc/mrc4626/${assetId}/holders?limit=10`,
       "https://rpc.example/api/v1/markets?limit=10",
       `https://rpc.example/api/v1/markets/${marketId}`,
@@ -723,6 +727,65 @@ describe("ApiClient", () => {
       `https://rpc.example/api/v1/service-probes/0x${"12".repeat(32)}/0x100`,
     ]);
     expect(calls.every((c) => c.method === "GET")).toBe(true);
+  });
+
+  it("wraps REST MRC account route and decodes policy spend rows", async () => {
+    const account = "monos1effvdw0d05a35j69wwxplhmctpcclx382n60yf";
+    const controller = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+    const recovery = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+    const assetId = `0x${"bb".repeat(32)}`;
+    const policyHash = `0x${"44".repeat(32)}`;
+    const { fetch, calls } = mockGet(
+      apiEnvelope({
+        schemaVersion: 1,
+        account,
+        spendLimit: 2,
+        smartAccount: {
+          kind: "smart_account",
+          account,
+          controller,
+          recovery,
+          policyHash: null,
+          nonce: "7",
+          updatedAtBlock: 91,
+        },
+        policyAccount: {
+          kind: "policy_account",
+          account,
+          controller,
+          recovery: null,
+          policyHash,
+          nonce: null,
+          updatedAtBlock: 90,
+        },
+        policySpends: [
+          {
+            account,
+            assetId,
+            window: "3600",
+            amount: "1000",
+            spent: "250",
+            updatedAtBlock: 92,
+          },
+        ],
+      }),
+    );
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    const response = await client.mrcAccount(account, 2);
+
+    expect(response.data.smartAccount?.controller).toBe(controller);
+    expect(response.data.smartAccount?.recovery).toBe(recovery);
+    expect(response.data.smartAccount?.policyHash).toBeNull();
+    expect(response.data.smartAccount?.nonce).toBe("7");
+    expect(response.data.policyAccount?.policyHash).toBe(policyHash);
+    expect(response.data.policySpends[0]).toMatchObject({ assetId, spent: "250" });
+    expect(calls).toEqual([
+      {
+        url: `https://rpc.example/api/v1/mrc/accounts/${account}?limit=2`,
+        method: "GET",
+      },
+    ]);
   });
 
   it("wraps REST MRC holder route and decodes rich-list holder rows", async () => {
