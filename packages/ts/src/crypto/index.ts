@@ -65,7 +65,12 @@ export {
   bincodeSignedTransaction,
   encodeTransactionForHash,
 } from "./tx.js";
-export type { NativeEvmTxFields } from "./tx.js";
+export type {
+  NativeEvmTxFields,
+  NativeTxExtension,
+  NativeTxExtensionDescriptor,
+  NativeTxExtensionLike,
+} from "./tx.js";
 export {
   buildEncryptedSubmission,
   fetchEncryptionKey,

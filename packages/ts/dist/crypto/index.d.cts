@@ -1,4 +1,5 @@
-import { i as RpcClient } from '../client-j_paTTo6.cjs';
+import { i as NativeEvmTxFields, j as RpcClient } from '../tx-wljMwlpW.cjs';
+export { bs as NativeTxExtension, bt as NativeTxExtensionDescriptor, bu as NativeTxExtensionLike, bv as bincodeSignedTransaction, bw as encodeTransactionForHash } from '../tx-wljMwlpW.cjs';
 
 declare class BincodeWriter {
     #private;
@@ -18,19 +19,6 @@ declare function concatBytes(...chunks: Uint8Array[]): Uint8Array;
 declare function bytesToHex(bytes: Uint8Array): string;
 declare function hexToBytes(hex: string, label?: string): Uint8Array;
 declare function expectBytes(value: Uint8Array | readonly number[], len: number, label: string): Uint8Array;
-
-interface NativeEvmTxFields {
-    chainId: bigint | number | string;
-    nonce: bigint | number | string;
-    maxPriorityFeePerGas: bigint | number | string;
-    maxFeePerGas: bigint | number | string;
-    gasLimit: bigint | number | string;
-    to: Uint8Array | readonly number[] | string | null;
-    value: bigint | number | string;
-    input?: Uint8Array | readonly number[] | string;
-}
-declare function encodeTransactionForHash(fields: NativeEvmTxFields, tag: 0x01 | 0x02): Uint8Array;
-declare function bincodeSignedTransaction(fields: NativeEvmTxFields, signature: Uint8Array | readonly number[], publicKey: Uint8Array | readonly number[]): Uint8Array;
 
 declare const ML_DSA_65_SEED_LEN = 32;
 declare const ML_DSA_65_SIGNING_KEY_LEN = 4032;
@@ -163,4 +151,4 @@ declare function buildEncryptedSubmission(args: {
 }): Promise<EncryptedSubmission>;
 declare function submitEncryptedEnvelope(client: RpcClient, envelopeWireHex: string): Promise<string>;
 
-export { BincodeWriter, DKG_AEAD_TAG_LEN, DKG_NONCE_LEN, type DecryptHint, ENUM_VARIANT_INDEX_ML_DSA_65, type EncryptedEnvelope, type EncryptedSubmission, type EncryptionKey, ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SEED_LEN, ML_DSA_65_SIGNATURE_LEN, ML_DSA_65_SIGNING_KEY_LEN, ML_KEM_768_CIPHERTEXT_LEN, ML_KEM_768_ENCAPSULATION_KEY_LEN, ML_KEM_768_SHARED_SECRET_LEN, MempoolClass, MlDsa65Backend, type NativeEvmTxFields, type NonceAad, PQM1_ALGO_TAG_FALCON512_RESERVED, PQM1_ALGO_TAG_MLDSA65, PQM1_ALGO_TAG_MLDSA87_RESERVED, PQM1_ALGO_TAG_SLHDSA128S_RESERVED, PQM1_ENTROPY_LEN, PQM1_PAYLOAD_LEN, PQM1_V1_MLDSA65_DOMAIN_TAG, PQM1_V1_MNEMONIC_WORDS, PQM1_VERSION_V1, Pqm1Error, type Pqm1ErrorKind, type Pqm1Payload, type Pqm1Rng, STANDARD_ALGO_NUMBER_ML_DSA_65, assemblePqm1Payload, bincodeDecryptHint, bincodeEncryptedEnvelope, bincodeNonceAad, bincodeSignedTransaction, buildEncryptedEnvelope, buildEncryptedSubmission, bytesToHex, concatBytes, derivePqm1MlDsa65SeedFromPayload, encodeMlDsa65Opaque, encodeTransactionForHash, encryptInnerTx, expectBytes, fetchEncryptionKey, generatePqm1Mnemonic, hexToBytes, mlDsa65AddressFromPublicKey, outerSigDigest, parsePqm1Payload, pqm1MnemonicToAddress, pqm1MnemonicToMlDsa65Backend, pqm1MnemonicToMlDsa65Seed, pqm1MnemonicToPayload, pqm1PayloadToMnemonic, submitEncryptedEnvelope };
+export { BincodeWriter, DKG_AEAD_TAG_LEN, DKG_NONCE_LEN, type DecryptHint, ENUM_VARIANT_INDEX_ML_DSA_65, type EncryptedEnvelope, type EncryptedSubmission, type EncryptionKey, ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SEED_LEN, ML_DSA_65_SIGNATURE_LEN, ML_DSA_65_SIGNING_KEY_LEN, ML_KEM_768_CIPHERTEXT_LEN, ML_KEM_768_ENCAPSULATION_KEY_LEN, ML_KEM_768_SHARED_SECRET_LEN, MempoolClass, MlDsa65Backend, NativeEvmTxFields, type NonceAad, PQM1_ALGO_TAG_FALCON512_RESERVED, PQM1_ALGO_TAG_MLDSA65, PQM1_ALGO_TAG_MLDSA87_RESERVED, PQM1_ALGO_TAG_SLHDSA128S_RESERVED, PQM1_ENTROPY_LEN, PQM1_PAYLOAD_LEN, PQM1_V1_MLDSA65_DOMAIN_TAG, PQM1_V1_MNEMONIC_WORDS, PQM1_VERSION_V1, Pqm1Error, type Pqm1ErrorKind, type Pqm1Payload, type Pqm1Rng, STANDARD_ALGO_NUMBER_ML_DSA_65, assemblePqm1Payload, bincodeDecryptHint, bincodeEncryptedEnvelope, bincodeNonceAad, buildEncryptedEnvelope, buildEncryptedSubmission, bytesToHex, concatBytes, derivePqm1MlDsa65SeedFromPayload, encodeMlDsa65Opaque, encryptInnerTx, expectBytes, fetchEncryptionKey, generatePqm1Mnemonic, hexToBytes, mlDsa65AddressFromPublicKey, outerSigDigest, parsePqm1Payload, pqm1MnemonicToAddress, pqm1MnemonicToMlDsa65Backend, pqm1MnemonicToMlDsa65Seed, pqm1MnemonicToPayload, pqm1PayloadToMnemonic, submitEncryptedEnvelope };

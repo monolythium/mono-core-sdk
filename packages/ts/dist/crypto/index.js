@@ -143,8 +143,7 @@ function encodeTransactionForHash(fields, tag) {
     n.input,
     new Uint8Array(4),
     // access_list length
-    new Uint8Array(4)
-    // extensions length
+    encodeExtensionsForHash(n.extensions)
   );
 }
 function bincodeSignedTransaction(fields, signature, publicKey) {
@@ -161,7 +160,8 @@ function bincodeSignedTransaction(fields, signature, publicKey) {
   w.rawBytes(uint256Le(n.value, "value"));
   w.bytes(n.input);
   w.u64(0n);
-  w.u64(0n);
+  w.u64(BigInt(n.extensions.length));
+  for (const ext of n.extensions) bincodeTypedExtensionInto(w, ext);
   bincodeMlDsa65OpaqueInto(w, sig);
   bincodeMlDsa65OpaqueInto(w, pk);
   return w.toBytes();
@@ -175,7 +175,8 @@ function normalizeTxFields(fields) {
     gasLimit: parseBigint(fields.gasLimit, "gasLimit"),
     to: normalizeTo(fields.to),
     value: parseBigint(fields.value, "value"),
-    input: normalizeBytes(fields.input ?? new Uint8Array(0), "input")
+    input: normalizeBytes(fields.input ?? new Uint8Array(0), "input"),
+    extensions: normalizeExtensions(fields.extensions)
   };
 }
 function normalizeTo(value) {
@@ -186,6 +187,30 @@ function normalizeTo(value) {
 function normalizeBytes(value, label) {
   if (typeof value === "string") return hexToBytes(value, label);
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+function normalizeExtensions(value) {
+  if (value === void 0) return [];
+  return value.map((ext, index) => {
+    if (!Number.isInteger(ext.kind) || ext.kind < 0 || ext.kind > 255) {
+      throw new Error(`extensions[${index}].kind out of u8 range`);
+    }
+    const body = normalizeBytes("bodyHex" in ext ? ext.bodyHex : ext.body, `extensions[${index}].body`);
+    if (body.length > 4294967295) {
+      throw new Error(`extensions[${index}].body exceeds u32 length`);
+    }
+    return { kind: ext.kind, body };
+  });
+}
+function encodeExtensionsForHash(extensions) {
+  const chunks = [bigintToBeBytes(BigInt(extensions.length), 4, "extensions.length")];
+  for (const ext of extensions) {
+    chunks.push(
+      Uint8Array.of(ext.kind),
+      bigintToBeBytes(BigInt(ext.body.length), 4, "extension.body.length"),
+      ext.body
+    );
+  }
+  return concatBytes(...chunks);
 }
 function uint256Le(value, label) {
   if (value < 0n || value >= 1n << 256n) throw new Error(`${label} out of u256 range`);
@@ -201,6 +226,10 @@ function bincodeMlDsa65OpaqueInto(w, raw) {
   w.enumVariant(ENUM_VARIANT_INDEX_ML_DSA_65);
   w.u16(STANDARD_ALGO_NUMBER_ML_DSA_65);
   w.bytes(raw);
+}
+function bincodeTypedExtensionInto(w, ext) {
+  w.u8(ext.kind);
+  w.bytes(ext.body);
 }
 
 // src/crypto/ml-dsa.ts

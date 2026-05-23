@@ -12,6 +12,7 @@ import {
   bincodeNonceAad,
   buildEncryptedEnvelope,
   bytesToHex,
+  bincodeSignedTransaction,
   derivePqm1MlDsa65SeedFromPayload,
   encodeTransactionForHash,
   generatePqm1Mnemonic,
@@ -60,6 +61,35 @@ describe("crypto subpath", () => {
     expect(c[0]).toBe(0x02);
     expect(bytesToHex(a)).not.toBe(bytesToHex(b));
     expect(bytesToHex(a)).not.toBe(bytesToHex(c));
+  });
+
+  it("signs over typed native tx extensions and serializes them in bincode wire bytes", () => {
+    const base = {
+      chainId: 69420n,
+      nonce: 7n,
+      maxPriorityFeePerGas: 1n,
+      maxFeePerGas: 2n,
+      gasLimit: 30_000n,
+      to: null,
+      value: 3n,
+      input: "0x13000000",
+    };
+    const noExtension = encodeTransactionForHash(base, 0x01);
+    const withMrvExtension = encodeTransactionForHash(
+      { ...base, extensions: [{ kind: 0x30, bodyHex: "0x01" }] },
+      0x01,
+    );
+
+    expect(bytesToHex(noExtension).endsWith("0000000000000000")).toBe(true);
+    expect(bytesToHex(withMrvExtension).endsWith("0000000000000001300000000101")).toBe(true);
+    expect(bytesToHex(withMrvExtension)).not.toBe(bytesToHex(noExtension));
+
+    const wire = bincodeSignedTransaction(
+      { ...base, extensions: [{ kind: 0x30, body: [0x01] }] },
+      new Uint8Array(ML_DSA_65_SIGNATURE_LEN).fill(0x55),
+      new Uint8Array(ML_DSA_65_PUBLIC_KEY_LEN).fill(0x66),
+    );
+    expect(bytesToHex(wire)).toContain("000000000000000001000000000000003001000000000000000105000000");
   });
 
   it("builds an encrypted envelope around signed tx bytes", async () => {
