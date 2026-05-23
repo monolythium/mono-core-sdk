@@ -40,12 +40,19 @@ pub use consts::{burn_addr_hex, BURN_ADDR};
 pub use error::SdkError;
 pub use mrv::{
     assert_mrv_call_native_submission_plan, assert_mrv_deploy_native_submission_plan,
-    assert_mrv_fee_display_conformance, build_mrv_call_native_signed_submission,
-    build_mrv_deploy_native_signed_submission, build_mrv_native_signed_submission,
-    check_mrv_fee_display_conformance, format_lyth, format_lythoshi, parse_lyth_to_lythoshi,
-    LythFormatOptions, MrvCallNativeSignedSubmission, MrvDeployNativeSignedSubmission,
-    MrvFeeDisplayConformanceInput, MrvFeeDisplayConformanceReport, MrvNativeSignedSubmission,
-    LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MRV_STRUCTURED_FEE_FIELDS, NATIVE_LYTH_DECIMALS,
+    assert_mrv_fee_display_conformance, bincode_mrv_encrypted_decrypt_hint,
+    bincode_mrv_encrypted_nonce_aad, build_mrv_call_native_encrypted_submission,
+    build_mrv_call_native_signed_submission, build_mrv_deploy_native_encrypted_submission,
+    build_mrv_deploy_native_signed_submission, build_mrv_native_encrypted_submission,
+    build_mrv_native_signed_submission, check_mrv_fee_display_conformance, format_lyth,
+    format_lythoshi, mrv_encrypted_outer_signature_digest, parse_lyth_to_lythoshi,
+    LythFormatOptions, MrvCallNativeEncryptedSubmission, MrvCallNativeSignedSubmission,
+    MrvDeployNativeEncryptedSubmission, MrvDeployNativeSignedSubmission, MrvEncryptedDecryptHint,
+    MrvEncryptedNonceAad, MrvEncryptionKey, MrvFeeDisplayConformanceInput,
+    MrvFeeDisplayConformanceReport, MrvMempoolClass, MrvNativeEncryptedSubmission,
+    MrvNativeSignedSubmission, DKG_AEAD_TAG_LEN, DKG_NONCE_LEN, LYTHOSHI_PER_LYTH, LYTH_DECIMALS,
+    ML_KEM_768_CIPHERTEXT_LEN, ML_KEM_768_ENCAPSULATION_KEY_LEN, ML_KEM_768_SHARED_SECRET_LEN,
+    MRV_ENCRYPTION_ALGO_ML_KEM_768, MRV_STRUCTURED_FEE_FIELDS, NATIVE_LYTH_DECIMALS,
 };
 
 /// Crate version, sourced from `Cargo.toml`.

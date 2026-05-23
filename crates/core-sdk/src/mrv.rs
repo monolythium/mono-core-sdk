@@ -5,14 +5,21 @@
 
 use std::collections::BTreeSet;
 
+use chacha20poly1305::{
+    aead::{Aead, KeyInit, Payload},
+    ChaCha20Poly1305, Key, Nonce,
+};
+use ml_kem::{kem::TryKeyInit, ml_kem_768::EncapsulationKey as MlKem768EncapsulationKey};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use thiserror::Error;
+use zeroize::Zeroize;
 
 use crate::address::{
     address_to_hex, address_to_typed_bech32, hex_to_address, typed_bech32_to_address,
     typed_bech32_to_address_kind, AddressKind,
 };
+use crate::types::EncryptionKeyResponse;
 
 #[cfg(feature = "ts-bindings")]
 use ts_rs::TS;
@@ -57,13 +64,29 @@ pub const MRV_STRUCTURED_FEE_FIELDS: [&str; 7] = [
 pub const ML_DSA_65_PUBLIC_KEY_LEN: usize = 1_952;
 /// ML-DSA-65 signature byte length for native transaction envelopes.
 pub const ML_DSA_65_SIGNATURE_LEN: usize = 3_309;
+/// Supported encrypted-mempool key algorithm tag.
+pub const MRV_ENCRYPTION_ALGO_ML_KEM_768: &str = "ml-kem-768";
+/// ML-KEM-768 encapsulation key byte length.
+pub const ML_KEM_768_ENCAPSULATION_KEY_LEN: usize = 1_184;
+/// ML-KEM-768 ciphertext byte length.
+pub const ML_KEM_768_CIPHERTEXT_LEN: usize = 1_088;
+/// ML-KEM-768 shared secret byte length.
+pub const ML_KEM_768_SHARED_SECRET_LEN: usize = 32;
+/// DKG encrypted-mempool AEAD nonce byte length.
+pub const DKG_NONCE_LEN: usize = 12;
+/// ChaCha20-Poly1305 authentication tag byte length.
+pub const DKG_AEAD_TAG_LEN: usize = 16;
 const STANDARD_ALGO_NUMBER_ML_DSA_65: u16 = 1_001;
-const ENUM_VARIANT_INDEX_ML_DSA_65: u32 = 5;
+// Core builds with wallet-side classical variants cfg-gated out, so the
+// bincode variant index for PublicKey::MlDsa65 and Signature::MlDsa65 is 2.
+const ENUM_VARIANT_INDEX_ML_DSA_65: u32 = 2;
 const TX_HASH_TAG_SIGNING: u8 = 0x01;
 const TX_HASH_TAG_IDENTITY: u8 = 0x02;
 
 const MRV_CODE_HASH_DOMAIN: &[u8] = b"MONO_MRV_CODE_V1";
 const MRV_CONTRACT_ADDRESS_DOMAIN: &[u8] = b"mono:riscv:contract-address:v1";
+const ML_DSA_65_ADDRESS_DERIVATION_DOMAIN: &[u8] = b"MONO_ADDRESS_BLAKE3_20_V1";
+const DKG_AEAD_DOMAIN_TAG: &[u8] = b"protocore/v2/mempool/dkg-mlkem768/1";
 const MONO_SYSCALL_MODULE: &str = "mono";
 
 /// Formatting options for app-facing LYTH display.
@@ -1319,6 +1342,200 @@ pub struct MrvCallNativeSignedSubmission {
     pub submission: MrvNativeSignedSubmission,
 }
 
+/// Cluster encryption key used by `lyth_submitEncrypted`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvEncryptionKey {
+    /// KEM algorithm tag. The bounded MRV helper currently accepts
+    /// [`MRV_ENCRYPTION_ALGO_ML_KEM_768`].
+    #[serde(default = "default_mrv_encryption_algo")]
+    pub algo: String,
+    /// Cluster encryption epoch.
+    pub epoch: u64,
+    /// ML-KEM-768 encapsulation key as `0x`-hex.
+    #[serde(rename = "encapsulationKey")]
+    pub encapsulation_key: String,
+}
+
+impl MrvEncryptionKey {
+    /// Build an ML-KEM-768 encryption key object from raw key bytes.
+    #[must_use]
+    pub fn ml_kem_768(epoch: u64, encapsulation_key: &[u8]) -> Self {
+        Self {
+            algo: MRV_ENCRYPTION_ALGO_ML_KEM_768.to_owned(),
+            epoch,
+            encapsulation_key: hex_encode(encapsulation_key),
+        }
+    }
+}
+
+impl From<EncryptionKeyResponse> for MrvEncryptionKey {
+    fn from(value: EncryptionKeyResponse) -> Self {
+        Self {
+            algo: value.algo,
+            epoch: value.epoch,
+            encapsulation_key: value.encapsulation_key,
+        }
+    }
+}
+
+/// Encrypted mempool class committed in the nonce AAD.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum MrvMempoolClass {
+    /// Simple transfer.
+    Transfer = 0,
+    /// Contract deploy/call.
+    ContractCall = 1,
+    /// Privacy operation.
+    PrivacyOp = 2,
+    /// CLOB operation.
+    ClobOp = 3,
+    /// Agent operation.
+    AgentOp = 4,
+    /// Governance operation.
+    GovernanceOp = 5,
+    /// RWA operation.
+    RwaOp = 6,
+}
+
+impl MrvMempoolClass {
+    const fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Transfer),
+            1 => Some(Self::ContractCall),
+            2 => Some(Self::PrivacyOp),
+            3 => Some(Self::ClobOp),
+            4 => Some(Self::AgentOp),
+            5 => Some(Self::GovernanceOp),
+            6 => Some(Self::RwaOp),
+            _ => None,
+        }
+    }
+
+    const fn as_u32(self) -> u32 {
+        self as u32
+    }
+}
+
+impl Serialize for MrvMempoolClass {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_u32(self.as_u32())
+    }
+}
+
+impl<'de> Deserialize<'de> for MrvMempoolClass {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = u32::deserialize(deserializer)?;
+        Self::from_u32(value)
+            .ok_or_else(|| serde::de::Error::custom("invalid encrypted mempool class"))
+    }
+}
+
+/// Nonce AAD committed by the encrypted mempool envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MrvEncryptedNonceAad {
+    /// Sender address bytes derived from the ML-DSA-65 public key.
+    pub sender: [u8; 20],
+    /// Sender nonce.
+    pub nonce: u64,
+    /// Chain id.
+    pub chain_id: u64,
+    /// Encrypted mempool class.
+    pub class: MrvMempoolClass,
+    /// Declared max execution-unit price in lythoshi.
+    pub max_execution_unit_price_lythoshi: u128,
+    /// Priority tip in lythoshi.
+    pub priority_tip_lythoshi: u128,
+    /// Execution-unit ceiling.
+    pub execution_unit_limit: u64,
+}
+
+/// Decrypt hint committed by the encrypted mempool envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MrvEncryptedDecryptHint {
+    /// Cluster encryption epoch.
+    pub epoch: u64,
+    /// Decryption scheme id. `0` is the current ML-KEM-768 DKG scheme.
+    pub scheme: u16,
+}
+
+/// Encrypted MRV native submission material ready for `lyth_submitEncrypted`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvNativeEncryptedSubmission {
+    /// `0x`-hex bincode encrypted envelope bytes.
+    #[serde(rename = "envelopeWireHex")]
+    pub envelope_wire_hex: String,
+    /// Keccak-256 digest that the outer ML-DSA-65 signature signs.
+    #[serde(rename = "outerSignatureDigestHex")]
+    pub outer_signature_digest_hex: String,
+    /// Keccak-256 digest that the external ML-DSA-65 inner signer signed.
+    #[serde(rename = "innerSighashHex")]
+    pub inner_sighash_hex: String,
+    /// Canonical signed inner transaction hash.
+    #[serde(rename = "innerTxHashHex")]
+    pub inner_tx_hash_hex: String,
+    /// Byte length of the signed inner transaction wire payload.
+    #[serde(rename = "innerWireBytes")]
+    pub inner_wire_bytes: usize,
+    /// Byte length of the encrypted envelope wire payload.
+    #[serde(rename = "envelopeWireBytes")]
+    pub envelope_wire_bytes: usize,
+}
+
+/// Fully-built MRV deploy plan plus encrypted envelope submission material.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvDeployNativeEncryptedSubmission {
+    /// Validated native deploy request.
+    pub request: MrvDeployRequest,
+    /// MRV v1 transaction extension descriptor.
+    pub extension: MrvTransactionExtension,
+    /// Deterministic contract address when artifact hash, signer, and nonce are known.
+    #[serde(
+        rename = "expectedContractAddress",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub expected_contract_address: Option<String>,
+    /// Application-facing native transaction summary with v4.1 names.
+    #[serde(rename = "nativeTx")]
+    pub native_tx: MrvNativeTxFacade,
+    /// Application-facing native fee preview with v4.1 names.
+    #[serde(rename = "feePreview")]
+    pub fee_preview: MrvNativeFeePreview,
+    /// Sign-ready transaction fields for the current native transaction adapter.
+    pub tx: MrvNativeTxFields,
+    /// Encrypted submission material.
+    pub submission: MrvNativeEncryptedSubmission,
+}
+
+/// Fully-built MRV call plan plus encrypted envelope submission material.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvCallNativeEncryptedSubmission {
+    /// Validated native call request.
+    pub request: MrvCallRequest,
+    /// MRV v1 transaction extension descriptor.
+    pub extension: MrvTransactionExtension,
+    /// Application-facing native transaction summary with v4.1 names.
+    #[serde(rename = "nativeTx")]
+    pub native_tx: MrvNativeTxFacade,
+    /// Application-facing native fee preview with v4.1 names.
+    #[serde(rename = "feePreview")]
+    pub fee_preview: MrvNativeFeePreview,
+    /// Sign-ready transaction fields for the current native transaction adapter.
+    pub tx: MrvNativeTxFields,
+    /// Encrypted submission material.
+    pub submission: MrvNativeEncryptedSubmission,
+}
+
 /// Errors returned by MRV SDK validation helpers.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum MrvValidationError {
@@ -1503,6 +1720,35 @@ pub enum MrvValidationError {
     /// Native submission plan failed MRV-specific guardrails.
     #[error("invalid MRV native submission plan: {0}")]
     InvalidNativeSubmission(&'static str),
+
+    /// Encrypted submission key used an unsupported algorithm.
+    #[error("unsupported MRV encryption key algorithm {found}")]
+    UnsupportedEncryptionKeyAlgorithm {
+        /// Supplied algorithm tag.
+        found: String,
+    },
+
+    /// Encrypted submission key failed ML-KEM validation.
+    #[error("invalid MRV encryption key: {0}")]
+    InvalidEncryptionKey(&'static str),
+
+    /// OS randomness failed while sealing an encrypted submission.
+    #[error("MRV encrypted submission randomness failed: {reason}")]
+    CryptoRandom {
+        /// RNG failure.
+        reason: String,
+    },
+
+    /// AEAD sealing failed while encrypting the signed inner transaction.
+    #[error("MRV encrypted submission sealing failed")]
+    EncryptionFailed,
+
+    /// The caller-supplied outer signature callback failed.
+    #[error("MRV encrypted submission outer signature failed: {reason}")]
+    OuterSignatureFailed {
+        /// Signer/backend failure.
+        reason: String,
+    },
 }
 
 /// Compute the MRV code-section BLAKE3 hash as `0x`-hex.
@@ -2008,6 +2254,187 @@ pub fn build_mrv_call_native_signed_submission(
     })
 }
 
+/// Build encrypted native submission material for a sign-ready native
+/// transaction.
+///
+/// The caller supplies the already-produced inner ML-DSA-65 signature/public
+/// key and a callback that signs the outer envelope digest. This helper never
+/// handles private key material.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when transaction fields, cryptographic input
+/// lengths, the ML-KEM key, encryption, or the outer signature callback fail.
+pub fn build_mrv_native_encrypted_submission<F>(
+    tx: &MrvNativeTxFields,
+    inner_signature: &[u8],
+    public_key: &[u8],
+    encryption_key: &MrvEncryptionKey,
+    mempool_class: Option<MrvMempoolClass>,
+    sign_outer_digest: F,
+) -> Result<MrvNativeEncryptedSubmission, MrvValidationError>
+where
+    F: FnOnce(&[u8; 32]) -> Result<Vec<u8>, MrvValidationError>,
+{
+    expect_len("signature", inner_signature, ML_DSA_65_SIGNATURE_LEN)?;
+    expect_len("publicKey", public_key, ML_DSA_65_PUBLIC_KEY_LEN)?;
+
+    let sender = ml_dsa65_address_bytes(public_key)?;
+    let nonce_aad = mrv_encrypted_nonce_aad_from_tx(tx, sender, mempool_class)?;
+    let decrypt_hint = MrvEncryptedDecryptHint {
+        epoch: encryption_key.epoch,
+        scheme: 0,
+    };
+    let signed_inner_tx_wire =
+        encode_mrv_signed_native_tx_bincode(tx, inner_signature, public_key)?;
+    let ciphertext =
+        encrypt_mrv_signed_inner_tx(&signed_inner_tx_wire, &nonce_aad, encryption_key)?;
+    let outer_signature_digest =
+        mrv_encrypted_outer_signature_digest(&nonce_aad, &ciphertext, &decrypt_hint, public_key)?;
+    let outer_signature = sign_outer_digest(&outer_signature_digest)?;
+    expect_len("outerSignature", &outer_signature, ML_DSA_65_SIGNATURE_LEN)?;
+    let envelope_wire = encode_mrv_encrypted_envelope_bincode(
+        &nonce_aad,
+        &ciphertext,
+        &decrypt_hint,
+        public_key,
+        &outer_signature,
+        &sender,
+    )?;
+
+    Ok(MrvNativeEncryptedSubmission {
+        envelope_wire_hex: hex_encode(&envelope_wire),
+        outer_signature_digest_hex: hex_encode(&outer_signature_digest),
+        inner_sighash_hex: hex_encode(&mrv_native_tx_sighash(tx)?),
+        inner_tx_hash_hex: hex_encode(&mrv_native_tx_hash(tx, inner_signature, public_key)?),
+        inner_wire_bytes: signed_inner_tx_wire.len(),
+        envelope_wire_bytes: envelope_wire.len(),
+    })
+}
+
+/// Validate an MRV deploy plan and build encrypted envelope submission
+/// material.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the plan guardrails fail, the request
+/// `from` address does not match the supplied ML-DSA-65 public key, or
+/// encrypted envelope construction fails.
+pub fn build_mrv_deploy_native_encrypted_submission<F>(
+    plan: &MrvDeployNativeTxPlan,
+    inner_signature: &[u8],
+    public_key: &[u8],
+    encryption_key: &MrvEncryptionKey,
+    mempool_class: Option<MrvMempoolClass>,
+    sign_outer_digest: F,
+) -> Result<MrvDeployNativeEncryptedSubmission, MrvValidationError>
+where
+    F: FnOnce(&[u8; 32]) -> Result<Vec<u8>, MrvValidationError>,
+{
+    assert_mrv_deploy_native_submission_plan(plan)?;
+    validate_mrv_submission_sender(plan.request.from.as_deref(), public_key)?;
+    let submission = build_mrv_native_encrypted_submission(
+        &plan.tx,
+        inner_signature,
+        public_key,
+        encryption_key,
+        mempool_class,
+        sign_outer_digest,
+    )?;
+    Ok(MrvDeployNativeEncryptedSubmission {
+        request: plan.request.clone(),
+        extension: plan.extension.clone(),
+        expected_contract_address: plan.expected_contract_address.clone(),
+        native_tx: plan.native_tx.clone(),
+        fee_preview: plan.fee_preview.clone(),
+        tx: plan.tx.clone(),
+        submission,
+    })
+}
+
+/// Validate an MRV call plan and build encrypted envelope submission material.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the plan guardrails fail, the request
+/// `from` address does not match the supplied ML-DSA-65 public key, or
+/// encrypted envelope construction fails.
+pub fn build_mrv_call_native_encrypted_submission<F>(
+    plan: &MrvCallNativeTxPlan,
+    inner_signature: &[u8],
+    public_key: &[u8],
+    encryption_key: &MrvEncryptionKey,
+    mempool_class: Option<MrvMempoolClass>,
+    sign_outer_digest: F,
+) -> Result<MrvCallNativeEncryptedSubmission, MrvValidationError>
+where
+    F: FnOnce(&[u8; 32]) -> Result<Vec<u8>, MrvValidationError>,
+{
+    assert_mrv_call_native_submission_plan(plan)?;
+    validate_mrv_submission_sender(plan.request.from.as_deref(), public_key)?;
+    let submission = build_mrv_native_encrypted_submission(
+        &plan.tx,
+        inner_signature,
+        public_key,
+        encryption_key,
+        mempool_class,
+        sign_outer_digest,
+    )?;
+    Ok(MrvCallNativeEncryptedSubmission {
+        request: plan.request.clone(),
+        extension: plan.extension.clone(),
+        native_tx: plan.native_tx.clone(),
+        fee_preview: plan.fee_preview.clone(),
+        tx: plan.tx.clone(),
+        submission,
+    })
+}
+
+/// Encode encrypted nonce AAD using the current bincode wire shape.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] only if an internal bounded length cannot fit
+/// the bincode length field.
+pub fn bincode_mrv_encrypted_nonce_aad(
+    aad: &MrvEncryptedNonceAad,
+) -> Result<Vec<u8>, MrvValidationError> {
+    let mut out = Vec::new();
+    push_bincode_bytes(&mut out, "nonceAad.sender", &aad.sender)?;
+    push_u64_le(&mut out, aad.nonce);
+    push_u64_le(&mut out, aad.chain_id);
+    out.extend_from_slice(&aad.class.as_u32().to_le_bytes());
+    out.extend_from_slice(&aad.max_execution_unit_price_lythoshi.to_le_bytes());
+    out.extend_from_slice(&aad.priority_tip_lythoshi.to_le_bytes());
+    push_u64_le(&mut out, aad.execution_unit_limit);
+    Ok(out)
+}
+
+/// Encode encrypted-envelope decrypt hint using the current bincode wire
+/// shape.
+#[must_use]
+pub fn bincode_mrv_encrypted_decrypt_hint(hint: &MrvEncryptedDecryptHint) -> Vec<u8> {
+    let mut out = Vec::new();
+    push_u64_le(&mut out, hint.epoch);
+    out.extend_from_slice(&hint.scheme.to_le_bytes());
+    out
+}
+
+/// Compute the Keccak-256 digest signed by the encrypted envelope's outer
+/// signature.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the sender public key length is wrong.
+pub fn mrv_encrypted_outer_signature_digest(
+    nonce_aad: &MrvEncryptedNonceAad,
+    ciphertext: &[u8],
+    decrypt_hint: &MrvEncryptedDecryptHint,
+    sender_public_key: &[u8],
+) -> Result<[u8; 32], MrvValidationError> {
+    expect_len("senderPubkey", sender_public_key, ML_DSA_65_PUBLIC_KEY_LEN)?;
+    let mut preimage = bincode_mrv_encrypted_nonce_aad(nonce_aad)?;
+    preimage.extend_from_slice(ciphertext);
+    preimage.extend_from_slice(&bincode_mrv_encrypted_decrypt_hint(decrypt_hint));
+    preimage.extend_from_slice(sender_public_key);
+    Ok(keccak32(&preimage))
+}
+
 /// Encode the canonical transaction preimage that native transaction signers
 /// hash before signing.
 ///
@@ -2473,6 +2900,169 @@ fn assert_mrv_v1_extension(
         return Err(MrvValidationError::InvalidNativeSubmission(field));
     }
     Ok(())
+}
+
+fn default_mrv_encryption_algo() -> String {
+    MRV_ENCRYPTION_ALGO_ML_KEM_768.to_owned()
+}
+
+fn validate_mrv_submission_sender(
+    from: Option<&str>,
+    public_key: &[u8],
+) -> Result<(), MrvValidationError> {
+    let Some(from) = from else {
+        return Ok(());
+    };
+    let expected = ml_dsa65_address_bytes(public_key)?;
+    let actual =
+        mrv_bech32_to_address_kind(from, MrvAddressKind::User).map_err(|err| match err {
+            MrvValidationError::InvalidAddress { reason, .. } => {
+                MrvValidationError::InvalidAddress {
+                    field: "from",
+                    reason,
+                }
+            }
+            other => other,
+        })?;
+    if actual != expected {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "request.from must match ML-DSA-65 public key",
+        ));
+    }
+    Ok(())
+}
+
+fn mrv_encrypted_nonce_aad_from_tx(
+    tx: &MrvNativeTxFields,
+    sender: [u8; 20],
+    mempool_class: Option<MrvMempoolClass>,
+) -> Result<MrvEncryptedNonceAad, MrvValidationError> {
+    let input = decode_hex("input", &tx.input)?;
+    if let Some(to) = &tx.to {
+        hex_to_address(to).map_err(|err| MrvValidationError::InvalidAddress {
+            field: "to",
+            reason: err.to_string(),
+        })?;
+    }
+    let class = mempool_class.unwrap_or_else(|| {
+        if tx.to.is_some() && input.is_empty() {
+            MrvMempoolClass::Transfer
+        } else {
+            MrvMempoolClass::ContractCall
+        }
+    });
+    Ok(MrvEncryptedNonceAad {
+        sender,
+        nonce: tx.nonce,
+        chain_id: tx.chain_id,
+        class,
+        max_execution_unit_price_lythoshi: parse_u128_decimal("maxFeePerGas", &tx.max_fee_per_gas)?,
+        priority_tip_lythoshi: parse_u128_decimal(
+            "maxPriorityFeePerGas",
+            &tx.max_priority_fee_per_gas,
+        )?,
+        execution_unit_limit: tx.gas_limit,
+    })
+}
+
+fn ml_dsa65_address_bytes(public_key: &[u8]) -> Result<[u8; 20], MrvValidationError> {
+    expect_len("publicKey", public_key, ML_DSA_65_PUBLIC_KEY_LEN)?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(ML_DSA_65_ADDRESS_DERIVATION_DOMAIN);
+    hasher.update(&STANDARD_ALGO_NUMBER_ML_DSA_65.to_be_bytes());
+    hasher.update(public_key);
+    let digest = hasher.finalize();
+    let mut out = [0u8; 20];
+    out.copy_from_slice(&digest.as_bytes()[..20]);
+    Ok(out)
+}
+
+fn validate_mrv_encryption_key(
+    encryption_key: &MrvEncryptionKey,
+) -> Result<Vec<u8>, MrvValidationError> {
+    if encryption_key.algo != MRV_ENCRYPTION_ALGO_ML_KEM_768 {
+        return Err(MrvValidationError::UnsupportedEncryptionKeyAlgorithm {
+            found: encryption_key.algo.clone(),
+        });
+    }
+    let encapsulation_key = decode_hex("encapsulationKey", &encryption_key.encapsulation_key)?;
+    expect_len(
+        "encapsulationKey",
+        &encapsulation_key,
+        ML_KEM_768_ENCAPSULATION_KEY_LEN,
+    )?;
+    Ok(encapsulation_key)
+}
+
+fn encrypt_mrv_signed_inner_tx(
+    signed_inner_tx_bincode: &[u8],
+    nonce_aad: &MrvEncryptedNonceAad,
+    encryption_key: &MrvEncryptionKey,
+) -> Result<Vec<u8>, MrvValidationError> {
+    let encapsulation_key = validate_mrv_encryption_key(encryption_key)?;
+    let ek = MlKem768EncapsulationKey::new_from_slice(&encapsulation_key).map_err(|_| {
+        MrvValidationError::InvalidEncryptionKey("ML-KEM-768 encapsulation key failed validation")
+    })?;
+
+    let mut kem_random = [0u8; ML_KEM_768_SHARED_SECRET_LEN];
+    getrandom::fill(&mut kem_random).map_err(|err| MrvValidationError::CryptoRandom {
+        reason: err.to_string(),
+    })?;
+    let mut kem_random_array: ml_kem::B32 = kem_random.into();
+    let (kem_ciphertext, mut shared_secret) = ek.encapsulate_deterministic(&kem_random_array);
+    kem_random.zeroize();
+    kem_random_array.zeroize();
+
+    let mut nonce = [0u8; DKG_NONCE_LEN];
+    getrandom::fill(&mut nonce).map_err(|err| MrvValidationError::CryptoRandom {
+        reason: err.to_string(),
+    })?;
+    let aead_aad = mrv_encrypted_aead_aad(nonce_aad)?;
+    let cipher = ChaCha20Poly1305::new(Key::from_slice(shared_secret.as_ref()));
+    let aead_ciphertext = cipher
+        .encrypt(
+            Nonce::from_slice(&nonce),
+            Payload {
+                msg: signed_inner_tx_bincode,
+                aad: &aead_aad,
+            },
+        )
+        .map_err(|_| MrvValidationError::EncryptionFailed)?;
+    shared_secret.zeroize();
+
+    let mut out =
+        Vec::with_capacity(ML_KEM_768_CIPHERTEXT_LEN + DKG_NONCE_LEN + aead_ciphertext.len());
+    out.extend_from_slice(kem_ciphertext.as_ref());
+    out.extend_from_slice(&nonce);
+    out.extend_from_slice(&aead_ciphertext);
+    Ok(out)
+}
+
+fn mrv_encrypted_aead_aad(nonce_aad: &MrvEncryptedNonceAad) -> Result<Vec<u8>, MrvValidationError> {
+    let encoded = bincode_mrv_encrypted_nonce_aad(nonce_aad)?;
+    let mut out = Vec::with_capacity(DKG_AEAD_DOMAIN_TAG.len() + encoded.len());
+    out.extend_from_slice(DKG_AEAD_DOMAIN_TAG);
+    out.extend_from_slice(&encoded);
+    Ok(out)
+}
+
+fn encode_mrv_encrypted_envelope_bincode(
+    nonce_aad: &MrvEncryptedNonceAad,
+    ciphertext: &[u8],
+    decrypt_hint: &MrvEncryptedDecryptHint,
+    sender_public_key: &[u8],
+    outer_signature: &[u8],
+    sender: &[u8; 20],
+) -> Result<Vec<u8>, MrvValidationError> {
+    expect_len("senderPubkey", sender_public_key, ML_DSA_65_PUBLIC_KEY_LEN)?;
+    expect_len("outerSignature", outer_signature, ML_DSA_65_SIGNATURE_LEN)?;
+    let mut out = bincode_mrv_encrypted_nonce_aad(nonce_aad)?;
+    push_bincode_bytes(&mut out, "ciphertext", ciphertext)?;
+    out.extend_from_slice(&bincode_mrv_encrypted_decrypt_hint(decrypt_hint));
+    push_ml_dsa65_opaque(&mut out, sender_public_key)?;
+    push_ml_dsa65_opaque(&mut out, outer_signature)?;
+    push_bincode_bytes(&mut out, "sender", sender)?;
+    Ok(out)
 }
 
 fn push_u256_be(out: &mut Vec<u8>, value: u128) {
@@ -3444,6 +4034,176 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_envelope_bincode_matches_core_wire_shape() {
+        let aad = MrvEncryptedNonceAad {
+            sender: [0x11; 20],
+            nonce: 7,
+            chain_id: 69_420,
+            class: MrvMempoolClass::ContractCall,
+            max_execution_unit_price_lythoshi: 25,
+            priority_tip_lythoshi: 1,
+            execution_unit_limit: 100_000,
+        };
+        let hint = MrvEncryptedDecryptHint {
+            epoch: 9,
+            scheme: 0,
+        };
+        let ciphertext =
+            vec![0x44; ML_KEM_768_CIPHERTEXT_LEN + DKG_NONCE_LEN + 4 + DKG_AEAD_TAG_LEN];
+        let public_key = vec![0x66; ML_DSA_65_PUBLIC_KEY_LEN];
+        let outer_signature = vec![0x55; ML_DSA_65_SIGNATURE_LEN];
+
+        assert_eq!(
+            hex_encode(&bincode_mrv_encrypted_nonce_aad(&aad).unwrap()),
+            concat!(
+                "0x14000000000000001111111111111111111111111111111111111111",
+                "07000000000000002c0f010000000000010000001900000000000000",
+                "000000000000000001000000000000000000000000000000a086010000000000"
+            )
+        );
+        assert_eq!(
+            hex_encode(&bincode_mrv_encrypted_decrypt_hint(&hint)),
+            "0x09000000000000000000"
+        );
+        assert_eq!(
+            hex_encode(
+                &mrv_encrypted_outer_signature_digest(&aad, &ciphertext, &hint, &public_key)
+                    .unwrap()
+            ),
+            "0x2b6f8b37424dbc1b320af40dc1fffcfb93da6e302bafb906f81b362c972af075"
+        );
+
+        let wire = encode_mrv_encrypted_envelope_bincode(
+            &aad,
+            &ciphertext,
+            &hint,
+            &public_key,
+            &outer_signature,
+            &aad.sender,
+        )
+        .unwrap();
+        assert_eq!(wire.len(), 6_543);
+        let expected_prefix = format!(
+            "{}{}",
+            concat!(
+                "0x14000000000000001111111111111111111111111111111111111111",
+                "07000000000000002c0f010000000000010000001900000000000000",
+                "000000000000000001000000000000000000000000000000a086010000000000",
+                "6004000000000000",
+            ),
+            "44".repeat(84)
+        );
+        assert_eq!(hex_encode(&wire[..180]), expected_prefix);
+        let expected_suffix = format!(
+            "{}{}{}",
+            "0x",
+            "55".repeat(52),
+            "14000000000000001111111111111111111111111111111111111111"
+        );
+        assert_eq!(hex_encode(&wire[wire.len() - 80..]), expected_suffix);
+    }
+
+    #[test]
+    fn encrypted_submission_builds_envelope_for_guarded_plan() {
+        use ml_kem::{kem::KeyExport, DecapsulationKey, MlKem768};
+
+        let sig = vec![0x55; ML_DSA_65_SIGNATURE_LEN];
+        let public_key = vec![0x66; ML_DSA_65_PUBLIC_KEY_LEN];
+        let sender = ml_dsa65_address_bytes(&public_key).unwrap();
+        let user = mrv_address_to_bech32(MrvAddressKind::User, sender);
+        let plan = build_mrv_deploy_native_tx_plan(
+            &[0x13, 0x00, 0x00, 0x00],
+            None,
+            MrvNativeTxBuildOptions::new(69_420, 7, 100_000, 25)
+                .from(user)
+                .priority_tip_lythoshi(1),
+        )
+        .unwrap();
+        let seed: ml_kem::Seed = [0x42; 64].into();
+        let dk = DecapsulationKey::<MlKem768>::from_seed(seed);
+        let encryption_key =
+            MrvEncryptionKey::ml_kem_768(9, dk.encapsulation_key().to_bytes().as_ref());
+
+        let submission = build_mrv_deploy_native_encrypted_submission(
+            &plan,
+            &sig,
+            &public_key,
+            &encryption_key,
+            Some(MrvMempoolClass::ContractCall),
+            |digest| {
+                assert_eq!(digest.len(), 32);
+                Ok(vec![0x77; ML_DSA_65_SIGNATURE_LEN])
+            },
+        )
+        .unwrap();
+
+        assert_eq!(submission.request.artifact_bytes, "0x13000000");
+        assert!(submission.submission.envelope_wire_hex.starts_with("0x"));
+        assert_eq!(
+            submission.submission.envelope_wire_bytes,
+            submission.submission.envelope_wire_hex.len() / 2 - 1
+        );
+        assert_eq!(submission.submission.inner_wire_bytes, 5_448);
+        assert_eq!(
+            submission.submission.inner_sighash_hex,
+            "0xb680eb3b3e67b441d22c4ac441c9355809cac860dc2c0773ed47e49f273725c3"
+        );
+        assert_eq!(
+            submission.submission.inner_tx_hash_hex,
+            "0x0f826159573ebe870876d03e9b54541fbbb652de4642552abc9a65a481781789"
+        );
+        assert_eq!(submission.submission.outer_signature_digest_hex.len(), 66);
+    }
+
+    #[test]
+    fn encrypted_submission_rejects_sender_and_key_mismatch() {
+        use ml_kem::{kem::KeyExport, DecapsulationKey, MlKem768};
+
+        let sig = vec![0x55; ML_DSA_65_SIGNATURE_LEN];
+        let public_key = vec![0x66; ML_DSA_65_PUBLIC_KEY_LEN];
+        let wrong_user = mrv_address_to_bech32(MrvAddressKind::User, [0x11; 20]);
+        let plan = build_mrv_deploy_native_tx_plan(
+            &[0x13, 0x00, 0x00, 0x00],
+            None,
+            MrvNativeTxBuildOptions::new(69_420, 7, 100_000, 25).from(wrong_user),
+        )
+        .unwrap();
+        let seed: ml_kem::Seed = [0x43; 64].into();
+        let dk = DecapsulationKey::<MlKem768>::from_seed(seed);
+        let mut encryption_key =
+            MrvEncryptionKey::ml_kem_768(9, dk.encapsulation_key().to_bytes().as_ref());
+
+        assert!(matches!(
+            build_mrv_deploy_native_encrypted_submission(
+                &plan,
+                &sig,
+                &public_key,
+                &encryption_key,
+                None,
+                |_| Ok(vec![0x77; ML_DSA_65_SIGNATURE_LEN]),
+            ),
+            Err(MrvValidationError::InvalidNativeSubmission(
+                "request.from must match ML-DSA-65 public key"
+            ))
+        ));
+
+        encryption_key.algo = "x25519".to_owned();
+        let mut no_from_plan = plan;
+        no_from_plan.request.from = None;
+        assert!(matches!(
+            build_mrv_deploy_native_encrypted_submission(
+                &no_from_plan,
+                &sig,
+                &public_key,
+                &encryption_key,
+                None,
+                |_| Ok(vec![0x77; ML_DSA_65_SIGNATURE_LEN]),
+            ),
+            Err(MrvValidationError::UnsupportedEncryptionKeyAlgorithm { .. })
+        ));
+    }
+
+    #[test]
     fn native_tx_encoding_commits_to_mrv_extensions() {
         let contract = mrv_address_to_bech32(MrvAddressKind::Contract, [0x22; 20]);
         let plan = build_mrv_call_native_tx_plan(
@@ -3471,12 +4231,12 @@ mod tests {
 
         let wire = encode_mrv_signed_native_tx_bincode(&plan.tx, &sig, &public_key).unwrap();
         assert!(hex_encode(&wire)
-            .contains("000000000000000001000000000000003001000000000000000105000000"));
+            .contains("000000000000000001000000000000003001000000000000000102000000"));
         assert!(encode_mrv_signed_native_tx_bincode(&plan.tx, &sig[..10], &public_key).is_err());
     }
 
     #[test]
-    fn native_tx_encoding_matches_typescript_golden_vector() {
+    fn native_tx_encoding_matches_core_golden_vector() {
         let plan = build_mrv_deploy_native_tx_plan(
             &[0x13, 0x00, 0x00, 0x00],
             None,
@@ -3512,7 +4272,7 @@ mod tests {
         assert_eq!(wire.len(), 5_448);
         assert_eq!(
             hex_encode(&wire[..160]),
-            "0x2c0f010000000000070000000000000001000000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000000000000000a086010000000000000000000000000000000000000000000000000000000000000000000000000000040000000000000013000000000000000000000001000000000000003001000000000000000105"
+            "0x2c0f010000000000070000000000000001000000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000000000000000a086010000000000000000000000000000000000000000000000000000000000000000000000000000040000000000000013000000000000000000000001000000000000003001000000000000000102"
         );
         assert_eq!(
             hex_encode(&wire[wire.len() - 80..]),
