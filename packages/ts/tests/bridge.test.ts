@@ -5,21 +5,27 @@ import {
   BRIDGE_SELECTORS,
   BRIDGE_SUBMIT_API_BLOCKED_REASON,
   BridgePrecompileError,
+  BridgeRouteCatalogueError,
   PRECOMPILE_ADDRESSES,
   assessBridgeRoute,
   bridgeAddressHex,
   bridgeQuoteSubmitReadiness,
   bridgeRoutesReadiness,
   bridgeTransferCandidates,
+  buildBridgeRouteCatalogue,
   encodeLockBridgeConfigCalldata,
   encodeSetBridgeRouteFinalityCalldata,
   encodeSetBridgeResumeCooldownCalldata,
+  exportBridgeRouteCatalogueJson,
   isBridgeAdminLockedRevert,
   isBridgeCooldownZeroRevert,
   isBridgeFinalityZeroRevert,
   isBridgeResumeCooldownActiveRevert,
+  parseBridgeRouteCatalogueJson,
   rankBridgeRoutes,
   selectBridgeTransferRoute,
+  validateBridgeRouteCatalogue,
+  type BridgeRouteCatalogueRoute,
   type BridgeRouteDisclosure,
   type BridgeRoutesRequest,
   type BridgeTransferIntent,
@@ -44,6 +50,31 @@ function route(routeId: string): BridgeRouteDisclosure {
     circuitBreaker: "armed",
     insuranceAtomic: "50000000000",
     lastIncidentDate: null,
+  };
+}
+
+function catalogueRoute(routeId: string): BridgeRouteCatalogueRoute {
+  return {
+    tokenId: `0x${"10".repeat(32)}`,
+    routeId,
+    bridgeId: `0x${"b1".repeat(32)}`,
+    wrappedAsset: `0x${"a5".repeat(20)}`,
+    bridge: "Chainlink CCIP",
+    asset: "USDC",
+    sourceChain: "Ethereum",
+    destinationChain: "Mono",
+    verifier: {
+      model: "CCIP DON",
+      participantCount: 16,
+      threshold: 11,
+    },
+    drainCapAtomic: "250000000000",
+    finalityBlocks: 64,
+    cooldownSeconds: 1_800,
+    adminControl: "consensusOnly",
+    circuitBreaker: "armed",
+    insuranceAtomic: "1000000000000",
+    updatedAtBlock: 7,
   };
 }
 
@@ -89,6 +120,98 @@ describe("bridge route disclosure helpers", () => {
       "0x0000000000000000000000000000000000001008",
     );
     expect(bridgeAddressHex()).toBe("0x0000000000000000000000000000000000001008");
+  });
+
+  it("builds and exports a mono-core CLI bridge route catalogue envelope", () => {
+    const catalogue = buildBridgeRouteCatalogue([catalogueRoute("ccip-usdc-mainnet")]);
+
+    expect(validateBridgeRouteCatalogue(catalogue)).toEqual({
+      accepted: true,
+      routeCount: 1,
+      blockedReasons: [],
+    });
+
+    const exported = exportBridgeRouteCatalogueJson(catalogue);
+    const decoded = JSON.parse(exported) as { routes: BridgeRouteCatalogueRoute[] };
+    expect(decoded.routes[0]).toMatchObject({
+      tokenId: `0x${"10".repeat(32)}`,
+      routeId: "ccip-usdc-mainnet",
+      updatedAtBlock: 7,
+    });
+    expect(decoded.routes[0].lastIncidentDate).toBeUndefined();
+    expect(parseBridgeRouteCatalogueJson(exported)).toEqual(catalogue);
+
+    const raw = exportBridgeRouteCatalogueJson(catalogue, { envelope: false });
+    expect(Array.isArray(JSON.parse(raw))).toBe(true);
+    expect(parseBridgeRouteCatalogueJson(raw)).toEqual(catalogue);
+  });
+
+  it("parses raw bridge route catalogues with CLI field aliases", () => {
+    const raw = JSON.stringify([
+      {
+        token_id: `0x${"10".repeat(32)}`,
+        route_id: "ccip-usdc-mainnet",
+        bridge_id: `0x${"b1".repeat(32)}`,
+        wrapped_asset: `0x${"a5".repeat(20)}`,
+        bridge: "Chainlink CCIP",
+        asset: "USDC",
+        source_chain: "Ethereum",
+        destination_chain: "Mono",
+        verifier: {
+          model: "CCIP DON",
+          participant_count: 16,
+          threshold: 11,
+        },
+        drain_cap_atomic: "250000000000",
+        finality_blocks: 64,
+        cooldown_seconds: 1_800,
+        admin_control: "consensus_only",
+        circuit_breaker: "armed",
+        insurance_atomic: "1000000000000",
+        updated_at_block: 7,
+        last_incident_date: "2026-05-23",
+      },
+    ]);
+
+    const parsed = parseBridgeRouteCatalogueJson(raw);
+    expect(parsed.routes[0]).toMatchObject({
+      routeId: "ccip-usdc-mainnet",
+      adminControl: "consensusOnly",
+      lastIncidentDate: "2026-05-23",
+    });
+    expect(parsed.routes[0].verifier.participantCount).toBe(16);
+  });
+
+  it("rejects invalid bridge route catalogue import payloads", () => {
+    const first = {
+      ...catalogueRoute("duplicate"),
+      drainCapAtomic: "0",
+      finalityBlocks: 0,
+      lastIncidentDate: "20260523",
+    };
+    const second = {
+      ...catalogueRoute("duplicate"),
+      wrappedAsset: "0x1234",
+    };
+    const validation = validateBridgeRouteCatalogue([first, second]);
+
+    expect(validation.accepted).toBe(false);
+    expect(validation.blockedReasons.some((reason) => reason.includes("duplicate"))).toBe(true);
+    expect(validation.blockedReasons.some((reason) => reason.includes("drainCapAtomic"))).toBe(
+      true,
+    );
+    expect(validation.blockedReasons.some((reason) => reason.includes("finalityBlocks"))).toBe(
+      true,
+    );
+    expect(validation.blockedReasons.some((reason) => reason.includes("lastIncidentDate"))).toBe(
+      true,
+    );
+    expect(validation.blockedReasons.some((reason) => reason.includes("wrappedAsset"))).toBe(
+      true,
+    );
+    expect(() => exportBridgeRouteCatalogueJson([first, second])).toThrow(
+      BridgeRouteCatalogueError,
+    );
   });
 
   it("encodes lockBridgeConfig(bytes32) calldata", () => {

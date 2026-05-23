@@ -39,6 +39,16 @@ export class BridgePrecompileError extends Error {
   }
 }
 
+export class BridgeRouteCatalogueError extends Error {
+  readonly blockedReasons: string[];
+
+  constructor(blockedReasons: readonly string[]) {
+    super(`invalid bridge route catalogue: ${blockedReasons.join("; ")}`);
+    this.name = "BridgeRouteCatalogueError";
+    this.blockedReasons = [...blockedReasons];
+  }
+}
+
 export function bridgeAddressHex(): string {
   return PRECOMPILE_ADDRESSES.BRIDGE.toLowerCase();
 }
@@ -114,6 +124,51 @@ export interface BridgeRouteDisclosure {
   circuitBreaker: BridgeCircuitBreakerState;
   insuranceAtomic: string;
   lastIncidentDate?: string | null;
+}
+
+export interface BridgeRouteCatalogueRoute {
+  tokenId: string;
+  routeId: string;
+  bridgeId: string;
+  wrappedAsset: string;
+  bridge: string;
+  asset: string;
+  sourceChain: string;
+  destinationChain: string;
+  verifier: BridgeVerifierDisclosure;
+  drainCapAtomic: string;
+  finalityBlocks: number;
+  cooldownSeconds: number;
+  adminControl: BridgeAdminControl;
+  circuitBreaker: BridgeCircuitBreakerState;
+  insuranceAtomic: string;
+  updatedAtBlock: number;
+  lastIncidentDate?: string | null;
+}
+
+export interface BridgeRouteCatalogue {
+  routes: BridgeRouteCatalogueRoute[];
+}
+
+export type BridgeRouteCataloguePayload =
+  | BridgeRouteCatalogue
+  | readonly BridgeRouteCatalogueRoute[];
+
+export interface BridgeRouteCatalogueValidation {
+  accepted: boolean;
+  routeCount: number;
+  blockedReasons: string[];
+}
+
+export interface BridgeRouteCatalogueJsonOptions {
+  /**
+   * Export as `{ routes: [...] }` by default. Set false for mono-core's raw-array import form.
+   */
+  envelope?: boolean;
+  /**
+   * JSON.stringify spacing. Defaults to two spaces to match CLI fixture style.
+   */
+  space?: number | string;
 }
 
 export interface BridgeRouteAssessment {
@@ -398,6 +453,225 @@ export function bridgeRoutesReadiness(request: BridgeRoutesRequest): BridgeRoute
   };
 }
 
+export function buildBridgeRouteCatalogue(
+  routes: readonly BridgeRouteCatalogueRoute[],
+): BridgeRouteCatalogue {
+  return { routes: routes.map(cloneBridgeRouteCatalogueRoute) };
+}
+
+export function parseBridgeRouteCatalogueJson(json: string): BridgeRouteCatalogue {
+  const decoded = JSON.parse(json) as unknown;
+  return normalizeBridgeRouteCatalogue(decoded);
+}
+
+export function normalizeBridgeRouteCatalogue(payload: unknown): BridgeRouteCatalogue {
+  const validation = validateBridgeRouteCatalogue(payload);
+  if (!validation.accepted) {
+    throw new BridgeRouteCatalogueError(validation.blockedReasons);
+  }
+  const routes = routeArrayFromCataloguePayload(payload);
+  if (routes == null) {
+    throw new BridgeRouteCatalogueError(["route catalogue must be an array or { routes: [...] }"]);
+  }
+  return { routes: routes.map((route) => coerceBridgeRouteCatalogueRoute(route)) };
+}
+
+export function validateBridgeRouteCatalogue(payload: unknown): BridgeRouteCatalogueValidation {
+  const routes = routeArrayFromCataloguePayload(payload);
+  const blockedReasons: string[] = [];
+
+  if (routes == null) {
+    return {
+      accepted: false,
+      routeCount: 0,
+      blockedReasons: ["route catalogue must be an array or { routes: [...] }"],
+    };
+  }
+  if (routes.length === 0) {
+    blockedReasons.push("bridge route import must contain at least one route");
+  }
+
+  const seen = new Set<string>();
+  routes.forEach((route, idx) =>
+    validateBridgeRouteCatalogueRoute(idx, route, seen, blockedReasons),
+  );
+
+  return {
+    accepted: blockedReasons.length === 0,
+    routeCount: routes.length,
+    blockedReasons,
+  };
+}
+
+export function exportBridgeRouteCatalogueJson(
+  payload: BridgeRouteCataloguePayload,
+  options: BridgeRouteCatalogueJsonOptions = {},
+): string {
+  const catalogue = normalizeBridgeRouteCatalogue(payload);
+  const value = options.envelope === false ? catalogue.routes : catalogue;
+  return JSON.stringify(value, null, options.space ?? 2);
+}
+
+type JsonRecord = Record<string, unknown>;
+
+const MAX_U256 = (1n << 256n) - 1n;
+
+function routeArrayFromCataloguePayload(payload: unknown): readonly unknown[] | null {
+  if (Array.isArray(payload)) return payload;
+  if (isRecord(payload) && Array.isArray(payload.routes)) return payload.routes;
+  return null;
+}
+
+function validateBridgeRouteCatalogueRoute(
+  idx: number,
+  value: unknown,
+  seen: Set<string>,
+  blockedReasons: string[],
+): void {
+  const prefix = `routes[${idx}]`;
+  if (!isRecord(value)) {
+    blockedReasons.push(`${prefix} must be an object`);
+    return;
+  }
+
+  const tokenId = validateHexBytes(
+    `${prefix}.tokenId`,
+    field(value, "tokenId", "token_id"),
+    32,
+    blockedReasons,
+  );
+  const routeId = validateTextField(
+    `${prefix}.routeId`,
+    field(value, "routeId", "route_id"),
+    96,
+    blockedReasons,
+  );
+  if (tokenId != null && routeId != null) {
+    const key = `${tokenId}:${routeId}`;
+    if (seen.has(key)) {
+      blockedReasons.push(`${prefix}.routeId duplicate (tokenId, routeId) in bridge route import`);
+    } else {
+      seen.add(key);
+    }
+  }
+
+  validateHexBytes(
+    `${prefix}.bridgeId`,
+    field(value, "bridgeId", "bridge_id"),
+    32,
+    blockedReasons,
+  );
+  validateHexBytes(
+    `${prefix}.wrappedAsset`,
+    field(value, "wrappedAsset", "wrapped_asset"),
+    20,
+    blockedReasons,
+  );
+  validateTextField(`${prefix}.bridge`, value.bridge, 64, blockedReasons);
+  validateTextField(`${prefix}.asset`, value.asset, 64, blockedReasons);
+  validateTextField(
+    `${prefix}.sourceChain`,
+    field(value, "sourceChain", "source_chain"),
+    64,
+    blockedReasons,
+  );
+  validateTextField(
+    `${prefix}.destinationChain`,
+    field(value, "destinationChain", "destination_chain"),
+    64,
+    blockedReasons,
+  );
+
+  const verifier = value.verifier;
+  if (!isRecord(verifier)) {
+    blockedReasons.push(`${prefix}.verifier must be an object`);
+  } else {
+    validateTextField(`${prefix}.verifier.model`, verifier.model, 64, blockedReasons);
+    const participantCount = field(verifier, "participantCount", "participant_count");
+    if (!isU16(participantCount) || participantCount === 0) {
+      blockedReasons.push(`${prefix}.verifier.participantCount must be non-zero`);
+    }
+    if (!isU16(verifier.threshold) || verifier.threshold === 0) {
+      blockedReasons.push(`${prefix}.verifier.threshold must be in 1..=participantCount`);
+    } else if (isU16(participantCount) && verifier.threshold > participantCount) {
+      blockedReasons.push(`${prefix}.verifier.threshold must be in 1..=participantCount`);
+    }
+  }
+
+  if (!decimalStringIsPositiveU256(field(value, "drainCapAtomic", "drain_cap_atomic"))) {
+    blockedReasons.push(`${prefix}.drainCapAtomic must be a non-zero decimal u256`);
+  }
+  if (!isSafeIntegerAtLeast(field(value, "finalityBlocks", "finality_blocks"), 1)) {
+    blockedReasons.push(`${prefix}.finalityBlocks must be non-zero`);
+  }
+  if (!isSafeIntegerAtLeast(field(value, "cooldownSeconds", "cooldown_seconds"), 1)) {
+    blockedReasons.push(`${prefix}.cooldownSeconds must be non-zero`);
+  }
+  if (parseBridgeAdminControl(field(value, "adminControl", "admin_control")) == null) {
+    blockedReasons.push(
+      `${prefix}.adminControl expected none, consensusOnly, operatorKey, or unknown`,
+    );
+  }
+  if (parseBridgeCircuitBreaker(field(value, "circuitBreaker", "circuit_breaker")) == null) {
+    blockedReasons.push(`${prefix}.circuitBreaker expected armed, paused, disabled, or unknown`);
+  }
+  if (!decimalStringIsPositiveU256(field(value, "insuranceAtomic", "insurance_atomic"))) {
+    blockedReasons.push(`${prefix}.insuranceAtomic must be a non-zero decimal u256`);
+  }
+  if (!isSafeIntegerAtLeast(field(value, "updatedAtBlock", "updated_at_block"), 0)) {
+    blockedReasons.push(`${prefix}.updatedAtBlock must be a non-negative safe integer`);
+  }
+
+  const incident = field(value, "lastIncidentDate", "last_incident_date");
+  if (incident !== undefined && incident !== null) {
+    if (typeof incident !== "string" || !incidentDateIsValid(incident)) {
+      blockedReasons.push(`${prefix}.lastIncidentDate must be YYYY-MM-DD`);
+    }
+  }
+}
+
+function coerceBridgeRouteCatalogueRoute(value: unknown): BridgeRouteCatalogueRoute {
+  if (!isRecord(value) || !isRecord(value.verifier)) {
+    throw new BridgeRouteCatalogueError(["route catalogue validation did not normalize an object"]);
+  }
+  const lastIncidentDate = field(value, "lastIncidentDate", "last_incident_date");
+  const route: BridgeRouteCatalogueRoute = {
+    tokenId: stringField(value, "tokenId", "token_id"),
+    routeId: stringField(value, "routeId", "route_id").trim(),
+    bridgeId: stringField(value, "bridgeId", "bridge_id"),
+    wrappedAsset: stringField(value, "wrappedAsset", "wrapped_asset"),
+    bridge: stringField(value, "bridge").trim(),
+    asset: stringField(value, "asset").trim(),
+    sourceChain: stringField(value, "sourceChain", "source_chain").trim(),
+    destinationChain: stringField(value, "destinationChain", "destination_chain").trim(),
+    verifier: {
+      model: stringField(value.verifier, "model").trim(),
+      participantCount: numberField(value.verifier, "participantCount", "participant_count"),
+      threshold: numberField(value.verifier, "threshold"),
+    },
+    drainCapAtomic: stringField(value, "drainCapAtomic", "drain_cap_atomic").trim(),
+    finalityBlocks: numberField(value, "finalityBlocks", "finality_blocks"),
+    cooldownSeconds: numberField(value, "cooldownSeconds", "cooldown_seconds"),
+    adminControl: parseBridgeAdminControl(field(value, "adminControl", "admin_control"))!,
+    circuitBreaker: parseBridgeCircuitBreaker(field(value, "circuitBreaker", "circuit_breaker"))!,
+    insuranceAtomic: stringField(value, "insuranceAtomic", "insurance_atomic").trim(),
+    updatedAtBlock: numberField(value, "updatedAtBlock", "updated_at_block"),
+  };
+  if (typeof lastIncidentDate === "string") {
+    route.lastIncidentDate = lastIncidentDate.trim();
+  } else if (lastIncidentDate === null) {
+    route.lastIncidentDate = null;
+  }
+  return route;
+}
+
+function cloneBridgeRouteCatalogueRoute(route: BridgeRouteCatalogueRoute): BridgeRouteCatalogueRoute {
+  return {
+    ...route,
+    verifier: { ...route.verifier },
+  };
+}
+
 function bridgeRouteCandidate(
   intent: BridgeTransferIntent,
   intentReasons: readonly string[],
@@ -513,6 +787,124 @@ function normalizedDecimalDigits(value: string): string | null {
 
 function trimmedEq(left: string, right: string): boolean {
   return left.trim() === right.trim();
+}
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function field(record: JsonRecord, camel: string, snake?: string): unknown {
+  if (Object.prototype.hasOwnProperty.call(record, camel)) return record[camel];
+  if (snake != null && Object.prototype.hasOwnProperty.call(record, snake)) return record[snake];
+  return undefined;
+}
+
+function stringField(record: JsonRecord, camel: string, snake?: string): string {
+  return field(record, camel, snake) as string;
+}
+
+function numberField(record: JsonRecord, camel: string, snake?: string): number {
+  return field(record, camel, snake) as number;
+}
+
+function validateTextField(
+  name: string,
+  value: unknown,
+  maxLen: number,
+  blockedReasons: string[],
+): string | null {
+  if (typeof value !== "string") {
+    blockedReasons.push(`${name} must be 1..=${maxLen} bytes`);
+    return null;
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || utf8ByteLength(trimmed) > maxLen) {
+    blockedReasons.push(`${name} must be 1..=${maxLen} bytes`);
+    return null;
+  }
+  return trimmed;
+}
+
+function validateHexBytes(
+  name: string,
+  value: unknown,
+  expectedBytes: number,
+  blockedReasons: string[],
+): string | null {
+  if (typeof value !== "string") {
+    blockedReasons.push(`${name} must be ${expectedBytes} bytes of hex`);
+    return null;
+  }
+  const trimmed = value.trim();
+  const body = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed;
+  if (body.length !== expectedBytes * 2 || !/^[0-9a-fA-F]+$/.test(body)) {
+    blockedReasons.push(`${name} must be ${expectedBytes} bytes of hex`);
+    return null;
+  }
+  return body.toLowerCase();
+}
+
+function isU16(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0xffff;
+}
+
+function isSafeIntegerAtLeast(value: unknown, minimum: number): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= minimum;
+}
+
+function decimalStringIsPositiveU256(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (!/^[0-9]+$/.test(trimmed)) return false;
+  const parsed = BigInt(trimmed);
+  return parsed > 0n && parsed <= MAX_U256;
+}
+
+function parseBridgeAdminControl(value: unknown): BridgeAdminControl | null {
+  if (typeof value !== "string") return null;
+  switch (enumKey(value)) {
+    case "none":
+      return "none";
+    case "consensusonly":
+      return "consensusOnly";
+    case "operatorkey":
+      return "operatorKey";
+    case "unknown":
+      return "unknown";
+    default:
+      return null;
+  }
+}
+
+function parseBridgeCircuitBreaker(value: unknown): BridgeCircuitBreakerState | null {
+  if (typeof value !== "string") return null;
+  switch (enumKey(value)) {
+    case "armed":
+      return "armed";
+    case "paused":
+      return "paused";
+    case "disabled":
+      return "disabled";
+    case "unknown":
+      return "unknown";
+    default:
+      return null;
+  }
+}
+
+function enumKey(value: string): string {
+  return [...value]
+    .filter((c) => c !== "_" && c !== "-")
+    .join("")
+    .toLowerCase();
+}
+
+function incidentDateIsValid(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
+}
+
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).length;
 }
 
 function expectLength(value: Uint8Array, len: number, name: string): Uint8Array {
