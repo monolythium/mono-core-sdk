@@ -502,7 +502,7 @@ var TESTNET_69420 = {
 var CHAIN_REGISTRY = {
   "testnet-69420": TESTNET_69420
 };
-var CHAIN_REGISTRY_RAW_BASE = "https://raw.githubusercontent.com/monolythium-vision/chain-registry/master/chains";
+var CHAIN_REGISTRY_RAW_BASE = "https://raw.githubusercontent.com/monolythium/chain-registry/master/chains";
 function getChainInfo(network) {
   const info = CHAIN_REGISTRY[network];
   if (!info) {
@@ -639,7 +639,7 @@ var RpcClient = class _RpcClient {
    * Construct a client from the chain-registry network slug.
    *
    * Defaults to the SDK-bundled registry snapshot from
-   * `monolythium-vision/chain-registry`. Set `probe: true` to walk the
+   * `monolythium/chain-registry`. Set `probe: true` to walk the
    * registry endpoints in order and return the first endpoint whose
    * `eth_chainId` matches the registry chain id.
    */

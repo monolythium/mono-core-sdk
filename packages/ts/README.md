@@ -62,7 +62,7 @@ console.log(latest.data.block.blockHash, txs.data.totalTransactions, activity.da
 ### Chain registry
 
 The SDK vendors the official testnet bootstrap IPs from
-`monolythium-vision/chain-registry` and can optionally fetch the latest raw
+`monolythium/chain-registry` and can optionally fetch the latest raw
 registry TOML at runtime.
 
 ```ts

@@ -93,7 +93,7 @@ describe("chain registry snapshot", () => {
 
   it("fetches latest registry files from the chain-registry master branch", () => {
     expect(CHAIN_REGISTRY_RAW_BASE).toBe(
-      "https://raw.githubusercontent.com/monolythium-vision/chain-registry/master/chains",
+      "https://raw.githubusercontent.com/monolythium/chain-registry/master/chains",
     );
   });
 
