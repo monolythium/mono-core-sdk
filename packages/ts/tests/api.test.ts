@@ -349,6 +349,7 @@ describe("ApiClient", () => {
     await client.transactions(25, "0x1234");
     await client.addressProfile("0x1111111111111111111111111111111111111111");
     await client.addressFlow("0x1111111111111111111111111111111111111111", 75);
+    await client.addressPendingRewards("mono1wallet", 99);
     await client.markets(10);
     await client.market(marketId);
     await client.marketTrades(marketId, 15, "0xabcd");
@@ -362,6 +363,7 @@ describe("ApiClient", () => {
       "https://rpc.example/api/v1/transactions?limit=25&cursor=0x1234",
       "https://rpc.example/api/v1/addresses/0x1111111111111111111111111111111111111111/profile",
       "https://rpc.example/api/v1/addresses/0x1111111111111111111111111111111111111111/flow?limit=75",
+      "https://rpc.example/api/v1/addresses/mono1wallet/pending-rewards?block=0x63",
       "https://rpc.example/api/v1/markets?limit=10",
       `https://rpc.example/api/v1/markets/${marketId}`,
       `https://rpc.example/api/v1/markets/${marketId}/trades?limit=15&cursor=0xabcd`,

@@ -9,6 +9,7 @@
 import { SdkError } from "./error.js";
 import { nativeEventsFromHistory, nativeEventsFromReceipt } from "./native-events.js";
 import type { ClobMarketResponse } from "./bindings/ClobMarketResponse.js";
+import type { PendingRewardsResponse } from "./bindings/PendingRewardsResponse.js";
 import type { BlockSelector } from "./types.js";
 import { encodeBlockSelector } from "./types.js";
 import type {
@@ -539,6 +540,15 @@ export class ApiClient {
 
   async addressActivityKind(address: string): Promise<ApiEnvelope<ApiAddressActivityKindData>> {
     return this.get(`/addresses/${encodePathSegment(address)}/activity-kind`);
+  }
+
+  async addressPendingRewards(
+    address: string,
+    block?: BlockSelector | null,
+  ): Promise<ApiEnvelope<PendingRewardsResponse>> {
+    return this.get(`/addresses/${encodePathSegment(address)}/pending-rewards`, {
+      block: block == null ? undefined : encodeBlockSelector(block),
+    });
   }
 
   async clusters(page = 0, limit = 25): Promise<ApiEnvelope<ApiClustersData>> {

@@ -17,8 +17,8 @@ use crate::types::{
     AddressProfileResponse, BlockSelector, ChainStatsResponse, ClobMarketResponse,
     ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse, ClobTradesResponse,
     NativeEventFilter, NativeEventsFilter, NativeEventsResponse, NativeReceiptFee,
-    NativeReceiptResponse, SearchResponse, TxFeedResponse, TypedNativeEventsResponse,
-    TypedNativeReceiptEvent,
+    NativeReceiptResponse, PendingRewardsResponse, SearchResponse, TxFeedResponse,
+    TypedNativeEventsResponse, TypedNativeReceiptEvent,
 };
 
 /// Typed HTTP API client for `/api/v1`.
@@ -262,6 +262,17 @@ impl ApiClient {
         address: &str,
     ) -> Result<ApiEnvelope<ApiAddressActivityKindData>, SdkError> {
         self.get(&format!("addresses/{address}/activity-kind"), &[])
+            .await
+    }
+
+    /// `/api/v1/addresses/{address}/pending-rewards`.
+    pub async fn address_pending_rewards(
+        &self,
+        address: &str,
+        block: Option<BlockSelector>,
+    ) -> Result<ApiEnvelope<PendingRewardsResponse>, SdkError> {
+        let query = block.map_or_else(Vec::new, |block| vec![("block", block_path(block))]);
+        self.get(&format!("addresses/{address}/pending-rewards"), &query)
             .await
     }
 
@@ -828,6 +839,20 @@ mod tests {
         assert_eq!(
             url.as_str(),
             "https://rpc.example/api/v1/markets/0xabc/ohlc?fromBlock=90&toBlock=100&bucketBlocks=10"
+        );
+    }
+
+    #[test]
+    fn build_url_encodes_pending_rewards_block_query() {
+        let url = build_url(
+            "https://rpc.example/api/v1",
+            "addresses/mono1wallet/pending-rewards",
+            &[("block", "0x63".to_owned())],
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://rpc.example/api/v1/addresses/mono1wallet/pending-rewards?block=0x63"
         );
     }
 
