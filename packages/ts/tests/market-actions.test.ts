@@ -4,6 +4,7 @@ import {
   CLOB_SELECTORS,
   MarketActionError,
   PRECOMPILE_ADDRESSES,
+  addressToTypedBech32,
   buildCancelSpotOrderPlan,
   buildPlaceSpotLimitOrderPlan,
   buildPlaceSpotMarketOrderExPlan,
@@ -11,6 +12,9 @@ import {
   clobAddressHex,
   deriveClobMarketId,
   encodeCancelOrderCalldata,
+  encodeNativeNftBuyListingCall,
+  encodeNativeSpotCancelOrderCall,
+  encodeNativeSpotLimitOrderCall,
   encodePlaceLimitOrderCalldata,
   encodePlaceMarketOrderCalldata,
   encodePlaceMarketOrderExCalldata,
@@ -21,6 +25,17 @@ import { MempoolClass } from "../src/crypto/index.js";
 const baseTokenId = `0x${"a1".repeat(32)}`;
 const quoteTokenId = `0x${"a2".repeat(32)}`;
 const marketId = deriveClobMarketId(baseTokenId, quoteTokenId);
+const rustNativeLimitOrderGolden =
+  `0x0000000001000000${"11".repeat(32)}` +
+  `00000000${"22".repeat(20)}` +
+  "0700000000000000" +
+  "00000000" +
+  "7d000000000000000000000000000000" +
+  "32000000000000000000000000000000" +
+  "e703000000000000";
+const rustNativeCancelOrderGolden = `0x0000000004000000${"33".repeat(32)}00000000${"44".repeat(20)}`;
+const rustNativeBuyListingGolden =
+  `0x0100000001000000${"55".repeat(32)}00000000${"66".repeat(20)}0903000000000000`;
 
 const args: PlaceSpotLimitOrderArgs = {
   marketId,
@@ -157,6 +172,35 @@ describe("native market action builders", () => {
     expect(cancelPlan.params[0].data.startsWith(CLOB_SELECTORS.cancelOrder)).toBe(true);
   });
 
+  it("encodes native market router calls with the mono-core bincode layout", () => {
+    expect(
+      encodeNativeSpotLimitOrderCall({
+        marketId: `0x${"11".repeat(32)}`,
+        owner: addressToTypedBech32("user", `0x${"22".repeat(20)}`),
+        nonce: 7,
+        side: "buy",
+        price: "125",
+        quantity: "50",
+        expiresAtBlock: 999,
+      }),
+    ).toBe(rustNativeLimitOrderGolden);
+
+    expect(
+      encodeNativeSpotCancelOrderCall({
+        orderId: `0x${"33".repeat(32)}`,
+        caller: `0x${"44".repeat(20)}`,
+      }),
+    ).toBe(rustNativeCancelOrderGolden);
+
+    expect(
+      encodeNativeNftBuyListingCall({
+        listingId: `0x${"55".repeat(32)}`,
+        buyer: { kind: "user", address: new Uint8Array(20).fill(0x66) },
+        currentBlock: 777,
+      }),
+    ).toBe(rustNativeBuyListingGolden);
+  });
+
   it("rejects malformed market action inputs", () => {
     expect(() => encodePlaceLimitOrderCalldata({ ...args, marketId: "0x1234" })).toThrow(MarketActionError);
     expect(() =>
@@ -175,5 +219,52 @@ describe("native market action builders", () => {
       encodePlaceMarketOrderExCalldata({ ...args, maxSlippageBps: 250, mode: "rest" as "fill-or-refund" }),
     ).toThrow(/mode/);
     expect(() => encodeCancelOrderCalldata({ orderId: "0x1234" })).toThrow(/orderId/);
+
+    expect(() =>
+      encodeNativeSpotLimitOrderCall({
+        marketId: "0x1234",
+        owner: `0x${"22".repeat(20)}`,
+        nonce: 7,
+        side: "buy",
+        price: "125",
+        quantity: "50",
+        expiresAtBlock: 999,
+      }),
+    ).toThrow(MarketActionError);
+    expect(() =>
+      encodeNativeSpotLimitOrderCall({
+        marketId: `0x${"11".repeat(32)}`,
+        owner: new Uint8Array(19),
+        nonce: 7,
+        side: "buy",
+        price: "125",
+        quantity: "50",
+        expiresAtBlock: 999,
+      }),
+    ).toThrow(/owner/);
+    expect(() =>
+      encodeNativeSpotLimitOrderCall({
+        marketId: `0x${"11".repeat(32)}`,
+        owner: `0x${"22".repeat(20)}`,
+        nonce: 7,
+        side: "buy",
+        price: (1n << 128n).toString(),
+        quantity: "50",
+        expiresAtBlock: 999,
+      }),
+    ).toThrow(/price/);
+    expect(() =>
+      encodeNativeSpotCancelOrderCall({
+        orderId: `0x${"33".repeat(32)}`,
+        caller: { kind: "user", address: addressToTypedBech32("contract", `0x${"44".repeat(20)}`) },
+      }),
+    ).toThrow(/caller/);
+    expect(() =>
+      encodeNativeNftBuyListingCall({
+        listingId: `0x${"55".repeat(32)}`,
+        buyer: `0x${"66".repeat(20)}`,
+        currentBlock: -1,
+      }),
+    ).toThrow(/currentBlock/);
   });
 });
