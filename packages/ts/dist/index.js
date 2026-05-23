@@ -1139,6 +1139,11 @@ var RpcClient = class _RpcClient {
   async lythGetTokenBalances(address) {
     return this.call("lyth_getTokenBalances", [address]);
   }
+  /** `lyth_mrcMetadata` — exact current-state native MRC metadata lookup. */
+  async lythMrcMetadata(assetId, tokenId) {
+    const params = tokenId == null ? [assetId] : [assetId, tokenId];
+    return this.call("lyth_mrcMetadata", params);
+  }
   /** `lyth_getAddressLabel` — indexed display/category label for one address. */
   async lythGetAddressLabel(address) {
     const v = await this.call("lyth_getAddressLabel", [address]);
