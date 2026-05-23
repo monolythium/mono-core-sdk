@@ -119,6 +119,19 @@ export type {
   VertexAtRound,
   VerticesAtRoundResponse,
 } from "./client.js";
+export {
+  consumeNativeEvents,
+  isNativeDecodedEvent,
+  nativeEventMatches,
+  nativeEventsFromReceipt,
+  parseNativeDecodedEvent,
+} from "./native-events.js";
+export type {
+  NativeDecodedEvent,
+  NativeEventConsumer,
+  NativeEventFilter,
+  TypedNativeReceiptEvent,
+} from "./native-events.js";
 export type { ClobMarketRecord } from "./bindings/ClobMarketRecord.js";
 export type { ClobMarketResponse } from "./bindings/ClobMarketResponse.js";
 export * from "./mrv.js";

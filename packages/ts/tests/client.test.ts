@@ -14,6 +14,15 @@ import {
   parseQuantity,
   parseQuantityBig,
 } from "../src/index.js";
+import type { NativeDecodedEvent } from "../src/index.js";
+
+interface AgentEscrowCreatedEvent extends NativeDecodedEvent {
+  family: "agent";
+  event_name: "agent.escrow.created";
+  amount_lythoshi: string;
+  agent_address: string;
+  contract_address: string;
+}
 
 interface CapturedCall {
   method: string;
@@ -340,6 +349,77 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(receipt.events[0].decoded).toEqual(decoded);
     expect(receipt.events[0].decodedJson).toBe(JSON.stringify(decoded));
     expect(calls[0].method).toBe("lyth_nativeReceipt");
+    expect(calls[0].params).toEqual([txHash]);
+  });
+
+  it("lythNativeReceiptEvents consumes typed native events from lyth_nativeReceipt", async () => {
+    const txHash = `0x${"22".repeat(32)}`;
+    const eventTopic = `0x${"11".repeat(32)}`;
+    const decoded: AgentEscrowCreatedEvent = {
+      block_height: 100,
+      tx_index: 0,
+      sequence: 0,
+      family: "agent",
+      event_name: "agent.escrow.created",
+      payload_hash: `0x${"44".repeat(32)}`,
+      amount_lythoshi: "440000000000",
+      agent_address: "mono1agentconsumer",
+      contract_address: "monoc1escrowcontract",
+    };
+    const { fetch, calls } = mockFetch({
+      txHash,
+      blockHash: `0x${"33".repeat(32)}`,
+      blockHeight: 100,
+      txIndex: 0,
+      schema: "riscv.receipt.v1",
+      artifactHash: `0x${"aa".repeat(32)}`,
+      counters: { cycles: 44, syscallUnits: 3, stateIoUnits: 2 },
+      fee: {
+        total_lythoshi: decoded.amount_lythoshi,
+        total_lyth: "4,400",
+        cycles_used: 44,
+        base_price_per_cycle_lythoshi: "10000000000",
+        state_io_units: 2,
+        state_io_price_per_unit_lythoshi: "0",
+        priority_tip_lythoshi: "0",
+      },
+      reverted: false,
+      nativeDeltaCount: 0,
+      eventCount: 1,
+      events: [
+        {
+          blockHeight: 100,
+          txIndex: 0,
+          logIndex: 0,
+          address: decoded.contract_address,
+          eventTopic,
+          decoded: null,
+          decodedJson: JSON.stringify(decoded),
+        },
+      ],
+      source: {
+        chainProvider: "mock_chain",
+        indexerProvider: "native_events",
+        metadataLogIndex: 0xffff_ffff,
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const events = await client.lythNativeReceiptEvents<AgentEscrowCreatedEvent>(txHash, {
+      family: "agent",
+      eventName: "agent.escrow.created",
+      address: decoded.contract_address,
+      eventTopic,
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0].address).toBe("monoc1escrowcontract");
+    expect(events[0].decoded.amount_lythoshi).toBe("440000000000");
+    expect(events[0].decoded.agent_address.startsWith("mono1")).toBe(true);
+    expect(events[0].decoded.contract_address.startsWith("monoc1")).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].method).toBe("lyth_nativeReceipt");
+    expect(calls[0].method).not.toBe("lyth_nativeEvents");
     expect(calls[0].params).toEqual([txHash]);
   });
 

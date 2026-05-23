@@ -20,21 +20,21 @@ use crate::mrv::{
     MrvValidationError,
 };
 use crate::types::{
-    AccountPolicy, AccountProofResponse, AddressActivityEntry, AddressActivityKindResponse,
-    AddressFlowResponse, AddressLabelRecord, AddressProfileResponse, AgentReputationResponse,
-    AssetPolicy, BlockHeader, BlockSelector, BlsCertificateResponse, CallRequest,
-    CapabilitiesResponse, ChainStatsResponse, CheckpointRecord, ClobMarketResponse,
+    native_events_from_receipt, AccountPolicy, AccountProofResponse, AddressActivityEntry,
+    AddressActivityKindResponse, AddressFlowResponse, AddressLabelRecord, AddressProfileResponse,
+    AgentReputationResponse, AssetPolicy, BlockHeader, BlockSelector, BlsCertificateResponse,
+    CallRequest, CapabilitiesResponse, ChainStatsResponse, CheckpointRecord, ClobMarketResponse,
     ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse, ClobTradesResponse,
     ClusterDelegatorsResponse, ClusterEntityResponse, ClusterResignationsResponse,
     DagParentsResponse, DagSyncStatus, DecodeTxResponse, DelegationCapResponse,
     DelegationHistoryRecord, DelegationsResponse, EncryptionKeyResponse, EntityRatchetResponse,
     FeeHistoryResponse, GapRecordsResponse, IndexerStatus, LythUpgradeStatusResponse,
     MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse,
-    MetricsRangeResponse, NativeReceiptResponse, OperatorCapabilitiesResponse, PeerSummary,
-    PeerSummaryAggregate, PendingTxSummary, PrecompileDescriptor, RegistryRecord, RichListResponse,
-    RoundInfo, SearchResponse, StorageProofBatch, SyncStatus, TokenBalanceRecord,
+    MetricsRangeResponse, NativeEventFilter, NativeReceiptResponse, OperatorCapabilitiesResponse,
+    PeerSummary, PeerSummaryAggregate, PendingTxSummary, PrecompileDescriptor, RegistryRecord,
+    RichListResponse, RoundInfo, SearchResponse, StorageProofBatch, SyncStatus, TokenBalanceRecord,
     TpmAttestationResponse, TransactionReceipt, TransactionView, TxFeedResponse, TxStatusResponse,
-    VerticesAtRoundResponse,
+    TypedNativeReceiptEvent, VerticesAtRoundResponse,
 };
 
 /// Result from building and submitting an encrypted MRV deploy envelope.
@@ -553,6 +553,22 @@ impl RpcClient {
         tx_hash: &str,
     ) -> Result<NativeReceiptResponse, SdkError> {
         self.call("lyth_nativeReceipt", json!([tx_hash])).await
+    }
+
+    /// Typed native event rows from `lyth_nativeReceipt`.
+    ///
+    /// This helper consumes the existing receipt RPC surface; it does not
+    /// require a separate `lyth_nativeEvents` node method.
+    pub async fn lyth_native_receipt_events<TDecoded>(
+        &self,
+        tx_hash: &str,
+        filter: NativeEventFilter<'_>,
+    ) -> Result<Vec<TypedNativeReceiptEvent<TDecoded>>, SdkError>
+    where
+        TDecoded: DeserializeOwned,
+    {
+        let receipt = self.lyth_native_receipt(tx_hash).await?;
+        Ok(native_events_from_receipt::<TDecoded>(&receipt, filter)?)
     }
 
     /// `lyth_gapRecords` — retained ingestion/indexing gaps for a block range.

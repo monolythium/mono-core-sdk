@@ -10,6 +10,7 @@
 
 use std::collections::BTreeMap;
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "ts-bindings")]
@@ -270,6 +271,159 @@ pub struct NativeReceiptResponse {
     pub events: Vec<NativeReceiptEvent>,
     /// Provider/source metadata for the response.
     pub source: NativeReceiptSource,
+}
+
+/// Common typed payload envelope emitted by the native event projector.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NativeDecodedEvent {
+    pub block_height: u64,
+    pub tx_index: u32,
+    pub sequence: u32,
+    pub family: String,
+    pub event_name: String,
+    pub payload_hash: Hash,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+
+/// Optional filters applied to native receipt event rows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeEventFilter<'a> {
+    pub address: Option<&'a str>,
+    pub event_topic: Option<&'a str>,
+    pub family: Option<&'a str>,
+    pub event_name: Option<&'a str>,
+}
+
+impl<'a> NativeEventFilter<'a> {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            address: None,
+            event_topic: None,
+            family: None,
+            event_name: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn address(mut self, address: &'a str) -> Self {
+        self.address = Some(address);
+        self
+    }
+
+    #[must_use]
+    pub const fn event_topic(mut self, event_topic: &'a str) -> Self {
+        self.event_topic = Some(event_topic);
+        self
+    }
+
+    #[must_use]
+    pub const fn family(mut self, family: &'a str) -> Self {
+        self.family = Some(family);
+        self
+    }
+
+    #[must_use]
+    pub const fn event_name(mut self, event_name: &'a str) -> Self {
+        self.event_name = Some(event_name);
+        self
+    }
+}
+
+/// Native receipt event row with a caller-selected typed decoded payload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypedNativeReceiptEvent<TDecoded> {
+    pub block_height: u64,
+    pub tx_index: u32,
+    pub log_index: u32,
+    pub address: String,
+    pub event_topic: Hash,
+    pub decoded: TDecoded,
+    pub decoded_json: String,
+}
+
+impl<TDecoded> TypedNativeReceiptEvent<TDecoded>
+where
+    TDecoded: DeserializeOwned,
+{
+    /// Build a typed native event row from a native receipt event.
+    ///
+    /// The node normally provides `decoded` as a structured JSON value;
+    /// `decodedJson` is accepted as a fallback for consumers that persist
+    /// only the raw projector payload.
+    pub fn from_receipt_event(event: &NativeReceiptEvent) -> serde_json::Result<Self> {
+        Ok(Self {
+            block_height: event.block_height,
+            tx_index: event.tx_index,
+            log_index: event.log_index,
+            address: event.address.clone(),
+            event_topic: event.event_topic.clone(),
+            decoded: decode_native_event_payload(event)?,
+            decoded_json: event.decoded_json.clone(),
+        })
+    }
+}
+
+/// Decode a native receipt event payload into a caller-selected type.
+pub fn decode_native_event_payload<TDecoded>(
+    event: &NativeReceiptEvent,
+) -> serde_json::Result<TDecoded>
+where
+    TDecoded: DeserializeOwned,
+{
+    serde_json::from_value(event.decoded.clone())
+        .or_else(|_| serde_json::from_str(&event.decoded_json))
+}
+
+/// Return whether a native receipt event matches the supplied filter.
+#[must_use]
+pub fn native_event_matches(event: &NativeReceiptEvent, filter: NativeEventFilter<'_>) -> bool {
+    if let Some(address) = filter.address {
+        if event.address != address {
+            return false;
+        }
+    }
+    if let Some(event_topic) = filter.event_topic {
+        if event.event_topic != event_topic {
+            return false;
+        }
+    }
+    if filter.family.is_none() && filter.event_name.is_none() {
+        return true;
+    }
+
+    let Ok(decoded) = decode_native_event_payload::<NativeDecodedEvent>(event) else {
+        return false;
+    };
+    if let Some(family) = filter.family {
+        if decoded.family != family {
+            return false;
+        }
+    }
+    if let Some(event_name) = filter.event_name {
+        if decoded.event_name != event_name {
+            return false;
+        }
+    }
+    true
+}
+
+/// Decode and filter typed native event rows from a native receipt.
+pub fn native_events_from_receipt<TDecoded>(
+    receipt: &NativeReceiptResponse,
+    filter: NativeEventFilter<'_>,
+) -> serde_json::Result<Vec<TypedNativeReceiptEvent<TDecoded>>>
+where
+    TDecoded: DeserializeOwned,
+{
+    receipt
+        .events
+        .iter()
+        .filter(|event| native_event_matches(event, filter))
+        .map(TypedNativeReceiptEvent::from_receipt_event)
+        .collect()
 }
 
 /// Ethereum-shaped transaction view returned by `eth_getTransactionByHash`.
@@ -2127,6 +2281,97 @@ mod tests {
             serde_json::json!("agent.escrow.created")
         );
         assert_eq!(receipt.events[0].decoded_json, decoded.to_string());
+    }
+
+    #[test]
+    fn native_receipt_events_decode_typed_payloads_for_consumers() {
+        #[derive(Debug, Deserialize)]
+        struct AgentEscrowCreatedEvent {
+            block_height: u64,
+            tx_index: u32,
+            sequence: u32,
+            family: String,
+            event_name: String,
+            payload_hash: String,
+            amount_lythoshi: String,
+            agent_address: String,
+            contract_address: String,
+        }
+
+        let decoded = serde_json::json!({
+            "block_height": 100,
+            "tx_index": 0,
+            "sequence": 0,
+            "family": "agent",
+            "event_name": "agent.escrow.created",
+            "payload_hash": format!("0x{}", "44".repeat(32)),
+            "amount_lythoshi": "440000000000",
+            "agent_address": "mono1agentconsumer",
+            "contract_address": "monoc1escrowcontract"
+        });
+        let receipt = NativeReceiptResponse {
+            tx_hash: format!("0x{}", "11".repeat(32)),
+            block_hash: format!("0x{}", "22".repeat(32)),
+            block_height: 100,
+            tx_index: 0,
+            schema: "riscv.receipt.v1".to_owned(),
+            artifact_hash: format!("0x{}", "aa".repeat(32)),
+            counters: NativeReceiptCounters {
+                cycles: 44,
+                syscall_units: 3,
+                state_io_units: 2,
+            },
+            fee: NativeReceiptFee {
+                total_lythoshi: "440000000000".to_owned(),
+                total_lyth: "4,400".to_owned(),
+                cycles_used: 44,
+                base_price_per_cycle_lythoshi: "10000000000".to_owned(),
+                state_io_units: 2,
+                state_io_price_per_unit_lythoshi: "0".to_owned(),
+                priority_tip_lythoshi: "0".to_owned(),
+            },
+            reverted: false,
+            native_delta_count: 0,
+            event_count: 1,
+            events: vec![NativeReceiptEvent {
+                block_height: 100,
+                tx_index: 0,
+                log_index: 0,
+                address: "monoc1escrowcontract".to_owned(),
+                event_topic: format!("0x{}", "33".repeat(32)),
+                decoded: serde_json::Value::Null,
+                decoded_json: decoded.to_string(),
+            }],
+            source: NativeReceiptSource {
+                chain_provider: "mock_chain".to_owned(),
+                indexer_provider: "native_events".to_owned(),
+                metadata_log_index: u32::MAX,
+            },
+        };
+
+        let events: Vec<TypedNativeReceiptEvent<AgentEscrowCreatedEvent>> =
+            native_events_from_receipt(
+                &receipt,
+                NativeEventFilter::new()
+                    .family("agent")
+                    .event_name("agent.escrow.created"),
+            )
+            .unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].address, "monoc1escrowcontract");
+        assert_eq!(events[0].decoded.block_height, 100);
+        assert_eq!(events[0].decoded.tx_index, 0);
+        assert_eq!(events[0].decoded.sequence, 0);
+        assert_eq!(events[0].decoded.family, "agent");
+        assert_eq!(events[0].decoded.event_name, "agent.escrow.created");
+        assert_eq!(
+            events[0].decoded.payload_hash,
+            format!("0x{}", "44".repeat(32))
+        );
+        assert_eq!(events[0].decoded.amount_lythoshi, "440000000000");
+        assert!(events[0].decoded.agent_address.starts_with("mono1"));
+        assert!(events[0].decoded.contract_address.starts_with("monoc1"));
     }
 
     #[test]

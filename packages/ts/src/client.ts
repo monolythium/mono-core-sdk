@@ -9,6 +9,7 @@
 
 import { addressToBech32, parseAddress } from "./address.js";
 import { SdkError } from "./error.js";
+import { nativeEventsFromReceipt } from "./native-events.js";
 import {
   isConcreteServiceProbeStatus,
   isSinglePublicServiceProbeMask,
@@ -62,6 +63,11 @@ import type {
 } from "./bindings/index.js";
 import type { BlockSelector } from "./types.js";
 import { encodeBlockSelector } from "./types.js";
+import type {
+  NativeDecodedEvent,
+  NativeEventFilter,
+  TypedNativeReceiptEvent,
+} from "./native-events.js";
 
 /** Optional per-client configuration. */
 export interface RpcClientOptions {
@@ -130,13 +136,13 @@ export interface NativeReceiptFee {
   priority_tip_lythoshi: string;
 }
 
-export interface NativeReceiptEvent {
+export interface NativeReceiptEvent<TDecoded = unknown> {
   blockHeight: number;
   txIndex: number;
   logIndex: number;
   address: string;
   eventTopic: string;
-  decoded: unknown;
+  decoded: TDecoded;
   decodedJson: string;
 }
 
@@ -146,7 +152,7 @@ export interface NativeReceiptSource {
   metadataLogIndex: number;
 }
 
-export interface NativeReceiptResponse {
+export interface NativeReceiptResponse<TDecoded = unknown> {
   txHash: string;
   blockHash: string;
   blockHeight: number;
@@ -158,7 +164,7 @@ export interface NativeReceiptResponse {
   reverted: boolean;
   nativeDeltaCount: number;
   eventCount: number;
-  events: NativeReceiptEvent[];
+  events: Array<NativeReceiptEvent<TDecoded>>;
   source: NativeReceiptSource;
 }
 
@@ -1012,8 +1018,24 @@ export class RpcClient {
   }
 
   /** `lyth_nativeReceipt` — native RISC-V receipt metadata and typed native event rows. */
-  async lythNativeReceipt(txHash: string): Promise<NativeReceiptResponse> {
+  async lythNativeReceipt<TDecoded = unknown>(
+    txHash: string,
+  ): Promise<NativeReceiptResponse<TDecoded>> {
     return this.call("lyth_nativeReceipt", [txHash]);
+  }
+
+  /**
+   * Typed native event rows from `lyth_nativeReceipt`.
+   *
+   * This helper intentionally consumes the existing receipt RPC surface;
+   * it does not require a separate `lyth_nativeEvents` node method.
+   */
+  async lythNativeReceiptEvents<TDecoded extends NativeDecodedEvent = NativeDecodedEvent>(
+    txHash: string,
+    filter: NativeEventFilter = {},
+  ): Promise<Array<TypedNativeReceiptEvent<TDecoded>>> {
+    const receipt = await this.lythNativeReceipt(txHash);
+    return nativeEventsFromReceipt<TDecoded>(receipt, filter);
   }
 
   /** `lyth_gapRecords` — retained ingestion/indexing gaps for a block range. */

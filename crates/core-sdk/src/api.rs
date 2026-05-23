@@ -13,9 +13,10 @@ use serde_json::Value;
 
 use crate::error::SdkError;
 use crate::types::{
-    AddressFlowResponse, AddressProfileResponse, BlockSelector, ChainStatsResponse,
-    ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse,
-    ClobTradesResponse, NativeReceiptResponse, SearchResponse, TxFeedResponse,
+    native_events_from_receipt, AddressFlowResponse, AddressProfileResponse, BlockSelector,
+    ChainStatsResponse, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse,
+    ClobOrderBookResponse, ClobTradesResponse, NativeEventFilter, NativeReceiptResponse,
+    SearchResponse, TxFeedResponse, TypedNativeReceiptEvent,
 };
 
 /// Typed HTTP API client for `/api/v1`.
@@ -166,6 +167,29 @@ impl ApiClient {
     ) -> Result<ApiEnvelope<NativeReceiptResponse>, SdkError> {
         self.get(&format!("transactions/{hash}/native-receipt"), &[])
             .await
+    }
+
+    /// Typed native event rows from `/transactions/{hash}/native-receipt`.
+    ///
+    /// This helper consumes the existing native receipt API route and
+    /// returns its envelope metadata with `data` replaced by the filtered
+    /// event rows.
+    pub async fn transaction_native_receipt_events<TDecoded>(
+        &self,
+        hash: &str,
+        filter: NativeEventFilter<'_>,
+    ) -> Result<ApiEnvelope<Vec<TypedNativeReceiptEvent<TDecoded>>>, SdkError>
+    where
+        TDecoded: DeserializeOwned,
+    {
+        let receipt = self.transaction_native_receipt(hash).await?;
+        Ok(ApiEnvelope {
+            schema_version: receipt.schema_version,
+            chain_id: receipt.chain_id,
+            genesis_hash: receipt.genesis_hash,
+            latest: receipt.latest,
+            data: native_events_from_receipt::<TDecoded>(&receipt.data, filter)?,
+        })
     }
 
     /// `/api/v1/addresses/{address}/profile`.
