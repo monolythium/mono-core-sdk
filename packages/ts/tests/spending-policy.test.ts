@@ -18,8 +18,8 @@ import {
 const args: SpendingPolicyArgs = {
   subAccount: "0x1111111111111111111111111111111111111111",
   principal: "0x2222222222222222222222222222222222222222",
-  dailyCapWei: 100n,
-  perTxCapWei: 7n,
+  dailyCapLythoshi: 100n,
+  perTxCapLythoshi: 7n,
   allowRoot: `0x${"aa".repeat(32)}`,
   denyRoot: `0x${"bb".repeat(32)}`,
 };

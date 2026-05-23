@@ -27,8 +27,8 @@ export const SPENDING_POLICY_SELECTORS = {
 export interface SpendingPolicyArgs {
   subAccount: string | Uint8Array | readonly number[];
   principal: string | Uint8Array | readonly number[];
-  dailyCapWei: bigint | number | string;
-  perTxCapWei: bigint | number | string;
+  dailyCapLythoshi: bigint | number | string;
+  perTxCapLythoshi: bigint | number | string;
   allowRoot: string | Uint8Array | readonly number[];
   denyRoot: string | Uint8Array | readonly number[];
 }
@@ -57,8 +57,8 @@ export function composeClaimBoundMessage(
     precompileAddress,
     normalized.subAccount,
     normalized.principal,
-    uint128Bytes(normalized.dailyCapWei, "dailyCapWei"),
-    uint128Bytes(normalized.perTxCapWei, "perTxCapWei"),
+    uint128Bytes(normalized.dailyCapLythoshi, "dailyCapLythoshi"),
+    uint128Bytes(normalized.perTxCapLythoshi, "perTxCapLythoshi"),
     normalized.allowRoot,
     normalized.denyRoot,
     uint64Bytes(opts?.expectedPolicyVersion ?? 0n, "expectedPolicyVersion"),
@@ -134,8 +134,8 @@ export function encodeDisableCalldata(subAccount: string | Uint8Array | readonly
 interface NormalizedSpendingPolicyArgs {
   subAccount: Uint8Array;
   principal: Uint8Array;
-  dailyCapWei: bigint;
-  perTxCapWei: bigint;
+  dailyCapLythoshi: bigint;
+  perTxCapLythoshi: bigint;
   allowRoot: Uint8Array;
   denyRoot: Uint8Array;
 }
@@ -144,8 +144,8 @@ function normalizeArgs(args: SpendingPolicyArgs): NormalizedSpendingPolicyArgs {
   return {
     subAccount: toAddressBytes(args.subAccount),
     principal: toAddressBytes(args.principal),
-    dailyCapWei: toBigint(args.dailyCapWei, "dailyCapWei"),
-    perTxCapWei: toBigint(args.perTxCapWei, "perTxCapWei"),
+    dailyCapLythoshi: toBigint(args.dailyCapLythoshi, "dailyCapLythoshi"),
+    perTxCapLythoshi: toBigint(args.perTxCapLythoshi, "perTxCapLythoshi"),
     allowRoot: expectLength(toBytes(args.allowRoot), 32, "allowRoot"),
     denyRoot: expectLength(toBytes(args.denyRoot), 32, "denyRoot"),
   };
@@ -155,8 +155,8 @@ function encodePolicyWords(args: NormalizedSpendingPolicyArgs): Uint8Array {
   return concatBytes(
     encodeAddressWord(args.subAccount),
     encodeAddressWord(args.principal),
-    encodeUint128Word(args.dailyCapWei),
-    encodeUint128Word(args.perTxCapWei),
+    encodeUint128Word(args.dailyCapLythoshi),
+    encodeUint128Word(args.perTxCapLythoshi),
     args.allowRoot,
     args.denyRoot,
   );

@@ -1162,8 +1162,8 @@ declare const SPENDING_POLICY_SELECTORS: {
 interface SpendingPolicyArgs {
     subAccount: string | Uint8Array | readonly number[];
     principal: string | Uint8Array | readonly number[];
-    dailyCapWei: bigint | number | string;
-    perTxCapWei: bigint | number | string;
+    dailyCapLythoshi: bigint | number | string;
+    perTxCapLythoshi: bigint | number | string;
     allowRoot: string | Uint8Array | readonly number[];
     denyRoot: string | Uint8Array | readonly number[];
 }
