@@ -29,10 +29,10 @@ use monolythium_core_sdk::types::{
     DecodeTxPqAttestation, DecodeTxResponse, DelegationCapResponse, DelegationHistoryRecord,
     DelegationRow, DelegationsResponse, EncryptionKeyResponse, EntityRatchetResponse,
     FeeHistoryResponse, GapRange, GapRecord, GapRecordsResponse, IndexerStatus, MempoolSnapshot,
-    MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse, PeerSummary,
-    PendingTxSummary, PrecompileDescriptor, RegistryRecord, RichListHolder, RichListResponse,
-    RoundInfo, StorageProofBatch, SyncStatus, TokenBalanceRecord, TpmAttestationResponse,
-    TransactionReceipt, TransactionView,
+    MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse, NativeReceiptFee,
+    PeerSummary, PendingTxSummary, PrecompileDescriptor, RegistryRecord, RichListHolder,
+    RichListResponse, RoundInfo, StorageProofBatch, SyncStatus, TokenBalanceRecord,
+    TpmAttestationResponse, TransactionReceipt, TransactionView,
 };
 use ts_rs::TS;
 
@@ -90,6 +90,7 @@ fn export_bindings() {
     MeshSignedTxResponse::export_all_to(&out).expect("MeshSignedTxResponse");
     MeshTxIntent::export_all_to(&out).expect("MeshTxIntent");
     MeshUnsignedTxResponse::export_all_to(&out).expect("MeshUnsignedTxResponse");
+    NativeReceiptFee::export_all_to(&out).expect("NativeReceiptFee");
     PeerSummary::export_all_to(&out).expect("PeerSummary");
     PendingTxSummary::export_all_to(&out).expect("PendingTxSummary");
     PrecompileDescriptor::export_all_to(&out).expect("PrecompileDescriptor");

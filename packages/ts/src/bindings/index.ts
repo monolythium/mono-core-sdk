@@ -80,6 +80,7 @@ export type { MrvSyscallImport } from "./MrvSyscallImport.js";
 export type { MrvTransactionExtension } from "./MrvTransactionExtension.js";
 export type { MrvTypedAddress } from "./MrvTypedAddress.js";
 export type { MrvValidatedArtifactMetadata } from "./MrvValidatedArtifactMetadata.js";
+export type { NativeReceiptFee } from "./NativeReceiptFee.js";
 export type { OperatorCapabilitiesResponse } from "./OperatorCapabilitiesResponse.js";
 export type { OperatorSurfaceCapability } from "./OperatorSurfaceCapability.js";
 export type { PeerSummary } from "./PeerSummary.js";

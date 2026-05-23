@@ -15,8 +15,8 @@ use crate::error::SdkError;
 use crate::types::{
     native_events_from_receipt, AddressFlowResponse, AddressProfileResponse, BlockSelector,
     ChainStatsResponse, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse,
-    ClobOrderBookResponse, ClobTradesResponse, NativeEventFilter, NativeReceiptResponse,
-    SearchResponse, TxFeedResponse, TypedNativeReceiptEvent,
+    ClobOrderBookResponse, ClobTradesResponse, NativeEventFilter, NativeReceiptFee,
+    NativeReceiptResponse, SearchResponse, TxFeedResponse, TypedNativeReceiptEvent,
 };
 
 /// Typed HTTP API client for `/api/v1`.
@@ -535,9 +535,9 @@ pub struct ApiBlockHeader {
     pub parent_hash: String,
     pub state_root: String,
     pub timestamp: u64,
-    pub gas_used: u64,
-    pub gas_limit: u64,
-    pub base_fee_per_gas: String,
+    pub execution_units_used: u64,
+    pub execution_unit_limit: u64,
+    pub base_price_per_cycle_lythoshi: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -558,10 +558,11 @@ pub struct ApiTransactionView {
     pub from: String,
     pub to: Option<String>,
     pub nonce: u64,
-    pub value: String,
-    pub max_fee_per_gas: String,
-    pub max_priority_fee_per_gas: String,
-    pub gas_limit: u64,
+    pub value_lythoshi: String,
+    pub max_execution_fee_lythoshi: String,
+    pub priority_tip_lythoshi: String,
+    pub execution_unit_limit: u64,
+    pub fee: NativeReceiptFee,
     pub input: String,
     pub signed_envelope: String,
 }
@@ -574,7 +575,7 @@ pub struct ApiTransactionReceipt {
     pub block_height: u64,
     pub tx_index: u32,
     pub status: u8,
-    pub gas_used: u64,
+    pub execution_units_used: u64,
     pub logs: Vec<ApiLogEntry>,
 }
 
