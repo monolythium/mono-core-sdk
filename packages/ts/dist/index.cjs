@@ -4613,6 +4613,22 @@ function encodeNativeSpotCancelOrderCall(args) {
   monoAddressInto(w, args.caller, "caller");
   return bytesToHex4(w.toBytes());
 }
+function encodeNativeNftCreateListingCall(args) {
+  const w = new BincodeWriter();
+  w.enumVariant(1);
+  w.enumVariant(0);
+  monoAddressInto(w, args.seller, "seller");
+  w.u64(uint64(args.nonce, "nonce"));
+  w.enumVariant(normalizeNftAssetStandard(args.standard));
+  w.rawBytes(bytes32FromHex(args.collectionId, "collectionId"));
+  w.rawBytes(bytes32FromHex(args.tokenId, "tokenId"));
+  w.u128(positiveU128Decimal(args.quantity, "quantity"));
+  w.rawBytes(bytes32FromHex(args.paymentAsset, "paymentAsset"));
+  w.u128(positiveU128Decimal(args.price, "price"));
+  listingKindInto(w, args.kind);
+  w.u64(uint64(args.expiresAtBlock, "expiresAtBlock"));
+  return bytesToHex4(w.toBytes());
+}
 function encodeNativeNftBuyListingCall(args) {
   const w = new BincodeWriter();
   w.enumVariant(1);
@@ -4620,6 +4636,14 @@ function encodeNativeNftBuyListingCall(args) {
   w.rawBytes(bytes32FromHex(args.listingId, "listingId"));
   monoAddressInto(w, args.buyer, "buyer");
   w.u64(uint64(args.currentBlock, "currentBlock"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeNftCancelListingCall(args) {
+  const w = new BincodeWriter();
+  w.enumVariant(1);
+  w.enumVariant(2);
+  w.rawBytes(bytes32FromHex(args.listingId, "listingId"));
+  monoAddressInto(w, args.caller, "caller");
   return bytesToHex4(w.toBytes());
 }
 function buildNativeMarketModuleCallEnvelope(input, maxCycles) {
@@ -4661,8 +4685,14 @@ function buildNativeSpotLimitOrderForwarderInput(args, maxCycles) {
 function buildNativeSpotCancelOrderForwarderInput(args, maxCycles) {
   return encodeNativeMarketModuleForwarderInput(buildNativeSpotCancelOrderModuleCall(args, maxCycles));
 }
+function buildNativeNftCreateListingForwarderInput(args, maxCycles) {
+  return encodeNativeMarketModuleForwarderInput(buildNativeNftCreateListingModuleCall(args, maxCycles));
+}
 function buildNativeNftBuyListingForwarderInput(args, maxCycles) {
   return encodeNativeMarketModuleForwarderInput(buildNativeNftBuyListingModuleCall(args, maxCycles));
+}
+function buildNativeNftCancelListingForwarderInput(args, maxCycles) {
+  return encodeNativeMarketModuleForwarderInput(buildNativeNftCancelListingModuleCall(args, maxCycles));
 }
 function buildNativeSpotLimitOrderModuleCall(args, maxCycles) {
   return buildNativeMarketModuleCallEnvelope(encodeNativeSpotLimitOrderCall(args), maxCycles);
@@ -4670,8 +4700,14 @@ function buildNativeSpotLimitOrderModuleCall(args, maxCycles) {
 function buildNativeSpotCancelOrderModuleCall(args, maxCycles) {
   return buildNativeMarketModuleCallEnvelope(encodeNativeSpotCancelOrderCall(args), maxCycles);
 }
+function buildNativeNftCreateListingModuleCall(args, maxCycles) {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeNftCreateListingCall(args), maxCycles);
+}
 function buildNativeNftBuyListingModuleCall(args, maxCycles) {
   return buildNativeMarketModuleCallEnvelope(encodeNativeNftBuyListingCall(args), maxCycles);
+}
+function buildNativeNftCancelListingModuleCall(args, maxCycles) {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeNftCancelListingCall(args), maxCycles);
 }
 function buildPlaceSpotLimitOrderPlan(args) {
   return {
@@ -4787,6 +4823,29 @@ function normalizeMarketOrderMode(mode) {
   if (mode === "fill-or-refund") return 0;
   if (mode === "fill-or-rest-at-cap") return 1;
   throw new MarketActionError("mode must be 'fill-or-refund' or 'fill-or-rest-at-cap'");
+}
+function normalizeNftAssetStandard(standard) {
+  if (standard === "mrc721") return 0;
+  if (standard === "mrc1155") return 1;
+  throw new MarketActionError("standard must be 'mrc721' or 'mrc1155'");
+}
+function listingKindInto(w, kind) {
+  if (kind === "fixed-price") {
+    w.enumVariant(0);
+    return;
+  }
+  if (typeof kind === "object" && kind !== null && "english" in kind) {
+    const english = kind.english;
+    if (typeof english !== "object" || english === null) {
+      throw new MarketActionError("kind.english must be an object");
+    }
+    w.enumVariant(1);
+    w.u128(positiveU128Decimal(english.reserve, "kind.english.reserve"));
+    w.u64(uint64(english.endBlock, "kind.english.endBlock"));
+    w.u16(Number(uint16Bps(english.minBidIncrementBps, "kind.english.minBidIncrementBps")));
+    return;
+  }
+  throw new MarketActionError("kind must be 'fixed-price' or an english auction");
 }
 function positiveDecimal(value, name) {
   if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) {
@@ -5209,6 +5268,10 @@ exports.buildMrvDeployRequest = buildMrvDeployRequest;
 exports.buildNativeMarketModuleCallEnvelope = buildNativeMarketModuleCallEnvelope;
 exports.buildNativeNftBuyListingForwarderInput = buildNativeNftBuyListingForwarderInput;
 exports.buildNativeNftBuyListingModuleCall = buildNativeNftBuyListingModuleCall;
+exports.buildNativeNftCancelListingForwarderInput = buildNativeNftCancelListingForwarderInput;
+exports.buildNativeNftCancelListingModuleCall = buildNativeNftCancelListingModuleCall;
+exports.buildNativeNftCreateListingForwarderInput = buildNativeNftCreateListingForwarderInput;
+exports.buildNativeNftCreateListingModuleCall = buildNativeNftCreateListingModuleCall;
 exports.buildNativeSpotCancelOrderForwarderInput = buildNativeSpotCancelOrderForwarderInput;
 exports.buildNativeSpotCancelOrderModuleCall = buildNativeSpotCancelOrderModuleCall;
 exports.buildNativeSpotLimitOrderForwarderInput = buildNativeSpotLimitOrderForwarderInput;
@@ -5240,6 +5303,8 @@ exports.encodeLookupPubkeyCalldata = encodeLookupPubkeyCalldata;
 exports.encodeMrvDeployPayload = encodeMrvDeployPayload;
 exports.encodeNativeMarketModuleForwarderInput = encodeNativeMarketModuleForwarderInput;
 exports.encodeNativeNftBuyListingCall = encodeNativeNftBuyListingCall;
+exports.encodeNativeNftCancelListingCall = encodeNativeNftCancelListingCall;
+exports.encodeNativeNftCreateListingCall = encodeNativeNftCreateListingCall;
 exports.encodeNativeSpotCancelOrderCall = encodeNativeSpotCancelOrderCall;
 exports.encodeNativeSpotLimitOrderCall = encodeNativeSpotLimitOrderCall;
 exports.encodePlaceLimitOrderCalldata = encodePlaceLimitOrderCalldata;
