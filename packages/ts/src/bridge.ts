@@ -10,12 +10,14 @@ import { PRECOMPILE_ADDRESSES } from "./consts.js";
 export const BRIDGE_SELECTORS = {
   lockBridgeConfig: "0x8956feb3",
   setBridgeResumeCooldown: "0x1a3a0672",
+  setBridgeRouteFinality: "0x8a061e99",
 } as const;
 
 export const BRIDGE_REVERT_TAGS = {
   bridgeAdminLocked: "0xf807",
   bridgeResumeCooldownActive: "0xf808",
   bridgeCooldownZero: "0xfd08",
+  bridgeFinalityZero: "0xfd09",
 } as const;
 
 export type BridgeBytesInput = string | Uint8Array | readonly number[];
@@ -57,6 +59,19 @@ export function encodeSetBridgeResumeCooldownCalldata(
   );
 }
 
+export function encodeSetBridgeRouteFinalityCalldata(
+  bridgeId: BridgeBytesInput,
+  finalityBlocks: bigint | number | string,
+): string {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(BRIDGE_SELECTORS.setBridgeRouteFinality),
+      expectLength(toBytes(bridgeId), 32, "bridgeId"),
+      uint64Word(finalityBlocks, "finalityBlocks"),
+    ),
+  );
+}
+
 export function isBridgeAdminLockedRevert(data: BridgeBytesInput): boolean {
   return bytesToHex(toBytes(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeAdminLocked;
 }
@@ -67,6 +82,10 @@ export function isBridgeResumeCooldownActiveRevert(data: BridgeBytesInput): bool
 
 export function isBridgeCooldownZeroRevert(data: BridgeBytesInput): boolean {
   return bytesToHex(toBytes(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeCooldownZero;
+}
+
+export function isBridgeFinalityZeroRevert(data: BridgeBytesInput): boolean {
+  return bytesToHex(toBytes(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeFinalityZero;
 }
 
 export interface BridgeVerifierDisclosure {

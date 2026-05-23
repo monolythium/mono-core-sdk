@@ -445,12 +445,14 @@ var PRECOMPILE_ADDRESSES = {
 // src/bridge.ts
 var BRIDGE_SELECTORS = {
   lockBridgeConfig: "0x8956feb3",
-  setBridgeResumeCooldown: "0x1a3a0672"
+  setBridgeResumeCooldown: "0x1a3a0672",
+  setBridgeRouteFinality: "0x8a061e99"
 };
 var BRIDGE_REVERT_TAGS = {
   bridgeAdminLocked: "0xf807",
   bridgeResumeCooldownActive: "0xf808",
-  bridgeCooldownZero: "0xfd08"
+  bridgeCooldownZero: "0xfd08",
+  bridgeFinalityZero: "0xfd09"
 };
 var BridgePrecompileError = class extends Error {
   constructor(message) {
@@ -478,6 +480,15 @@ function encodeSetBridgeResumeCooldownCalldata(bridgeId, cooldownBlocks) {
     )
   );
 }
+function encodeSetBridgeRouteFinalityCalldata(bridgeId, finalityBlocks) {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(BRIDGE_SELECTORS.setBridgeRouteFinality),
+      expectLength(toBytes(bridgeId), 32, "bridgeId"),
+      uint64Word(finalityBlocks, "finalityBlocks")
+    )
+  );
+}
 function isBridgeAdminLockedRevert(data) {
   return bytesToHex(toBytes(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeAdminLocked;
 }
@@ -486,6 +497,9 @@ function isBridgeResumeCooldownActiveRevert(data) {
 }
 function isBridgeCooldownZeroRevert(data) {
   return bytesToHex(toBytes(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeCooldownZero;
+}
+function isBridgeFinalityZeroRevert(data) {
+  return bytesToHex(toBytes(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeFinalityZero;
 }
 function assessBridgeRoute(route) {
   const blockedReasons = [];
@@ -4050,6 +4064,7 @@ exports.encodeLookupPubkeyCalldata = encodeLookupPubkeyCalldata;
 exports.encodeRegisterPubkeyCalldata = encodeRegisterPubkeyCalldata;
 exports.encodeReportServiceProbeCalldata = encodeReportServiceProbeCalldata;
 exports.encodeSetBridgeResumeCooldownCalldata = encodeSetBridgeResumeCooldownCalldata;
+exports.encodeSetBridgeRouteFinalityCalldata = encodeSetBridgeRouteFinalityCalldata;
 exports.encodeSetPolicyCalldata = encodeSetPolicyCalldata;
 exports.encodeSetPolicyClaimCalldata = encodeSetPolicyClaimCalldata;
 exports.fetchChainInfoLatest = fetchChainInfoLatest;
@@ -4063,6 +4078,7 @@ exports.getRpcEndpoints = getRpcEndpoints;
 exports.hexToAddressBytes = hexToAddressBytes;
 exports.isBridgeAdminLockedRevert = isBridgeAdminLockedRevert;
 exports.isBridgeCooldownZeroRevert = isBridgeCooldownZeroRevert;
+exports.isBridgeFinalityZeroRevert = isBridgeFinalityZeroRevert;
 exports.isBridgeResumeCooldownActiveRevert = isBridgeResumeCooldownActiveRevert;
 exports.isConcreteServiceProbeStatus = isConcreteServiceProbeStatus;
 exports.isNativeDecodedEvent = isNativeDecodedEvent;
