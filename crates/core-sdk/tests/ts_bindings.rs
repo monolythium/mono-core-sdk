@@ -25,16 +25,16 @@ use monolythium_core_sdk::types::{
     BlockHeader, BlockTag, BlsCertificateResponse, CallRequest, CapabilitiesResponse,
     CapabilityDescriptor, CheckpointRecord, ClobMarketRecord, ClobMarketResponse,
     ClusterDelegatorsResponse, ClusterEntityResponse, ClusterResignationRow,
-    ClusterResignationsResponse, DagParent, DagParentsResponse, DagSyncStatus, DecodeTxLog,
-    DecodeTxPqAttestation, DecodeTxResponse, DelegationCapResponse, DelegationHistoryRecord,
-    DelegationRow, DelegationsResponse, EncryptionKeyResponse, EntityRatchetResponse,
-    FeeHistoryResponse, GapRange, GapRecord, GapRecordsResponse, IndexerStatus, MempoolSnapshot,
-    MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse, MrcMetadataRecord,
-    MrcMetadataResponse, NativeReceiptFee, PeerSummary, PendingRewardsResponse, PendingRewardsRow,
-    PendingTxSummary, PrecompileDescriptor, RedemptionQueueResponse, RedemptionQueueTicket,
-    RegistryRecord, RichListHolder, RichListResponse, RoundInfo, StorageProofBatch, SyncStatus,
-    TokenBalanceMrcIdentity, TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt,
-    TransactionView,
+    ClusterResignationsResponse, DagParent, DagParentsResponse, DagSyncStatus, DecodeTxExtension,
+    DecodeTxLog, DecodeTxPqAttestation, DecodeTxResponse, DelegationCapResponse,
+    DelegationHistoryRecord, DelegationRow, DelegationsResponse, EncryptionKeyResponse,
+    EntityRatchetResponse, FeeHistoryResponse, GapRange, GapRecord, GapRecordsResponse,
+    IndexerStatus, MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent,
+    MeshUnsignedTxResponse, MrcMetadataRecord, MrcMetadataResponse, NativeReceiptFee, PeerSummary,
+    PendingRewardsResponse, PendingRewardsRow, PendingTxSummary, PrecompileDescriptor,
+    RedemptionQueueResponse, RedemptionQueueTicket, RegistryRecord, RichListHolder,
+    RichListResponse, RoundInfo, StorageProofBatch, SyncStatus, TokenBalanceMrcIdentity,
+    TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt, TransactionView,
 };
 use ts_rs::TS;
 
@@ -73,6 +73,7 @@ fn export_bindings() {
     DagParent::export_all_to(&out).expect("DagParent");
     DagParentsResponse::export_all_to(&out).expect("DagParentsResponse");
     DagSyncStatus::export_all_to(&out).expect("DagSyncStatus");
+    DecodeTxExtension::export_all_to(&out).expect("DecodeTxExtension");
     DecodeTxLog::export_all_to(&out).expect("DecodeTxLog");
     DecodeTxPqAttestation::export_all_to(&out).expect("DecodeTxPqAttestation");
     DecodeTxResponse::export_all_to(&out).expect("DecodeTxResponse");

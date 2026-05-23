@@ -28,6 +28,7 @@ export type { ClusterResignationsResponse } from "./ClusterResignationsResponse.
 export type { DagParent } from "./DagParent.js";
 export type { DagParentsResponse } from "./DagParentsResponse.js";
 export type { DagSyncStatus } from "./DagSyncStatus.js";
+export type { DecodeTxExtension } from "./DecodeTxExtension.js";
 export type { DecodeTxLog } from "./DecodeTxLog.js";
 export type { DecodeTxPqAttestation } from "./DecodeTxPqAttestation.js";
 export type { DecodeTxResponse } from "./DecodeTxResponse.js";
