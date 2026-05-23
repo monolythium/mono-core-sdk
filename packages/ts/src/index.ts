@@ -223,6 +223,7 @@ export type {
   NativeEventProjection,
   NativeEventConsumer,
   NativeEventFilter,
+  NativeMrcPolicyProjection,
   TypedNativeReceiptEvent,
 } from "./native-events.js";
 export type { ClobMarketRecord } from "./bindings/ClobMarketRecord.js";
@@ -234,6 +235,7 @@ export type { MrcHoldersRequest } from "./bindings/MrcHoldersRequest.js";
 export type { MrcHoldersResponse } from "./bindings/MrcHoldersResponse.js";
 export type { MrcMetadataRecord } from "./bindings/MrcMetadataRecord.js";
 export type { MrcMetadataResponse } from "./bindings/MrcMetadataResponse.js";
+export type { MrcPolicyRecord } from "./bindings/MrcPolicyRecord.js";
 export type { MrcPolicySpendRecord } from "./bindings/MrcPolicySpendRecord.js";
 export type { RedemptionQueueResponse } from "./bindings/RedemptionQueueResponse.js";
 export type { RedemptionQueueTicket } from "./bindings/RedemptionQueueTicket.js";

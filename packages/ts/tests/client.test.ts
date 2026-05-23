@@ -520,6 +520,7 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
           controller,
           recovery,
           policyHash: null,
+          policy: null,
           nonce: "7",
           updatedAtBlock: 91,
         },
@@ -529,6 +530,12 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
           controller,
           recovery: null,
           policyHash,
+          policy: {
+            enabled: true,
+            perActionLimit: "20",
+            windowLimit: "100",
+            allowedAssets: [assetId],
+          },
           nonce: null,
           updatedAtBlock: 90,
         },
@@ -560,8 +567,15 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(limited.smartAccount?.controller).toBe(controller);
     expect(limited.smartAccount?.recovery).toBe(recovery);
     expect(limited.smartAccount?.policyHash).toBeNull();
+    expect(limited.smartAccount?.policy).toBeNull();
     expect(limited.smartAccount?.nonce).toBe("7");
     expect(limited.policyAccount?.policyHash).toBe(policyHash);
+    expect(limited.policyAccount?.policy).toMatchObject({
+      enabled: true,
+      perActionLimit: "20",
+      windowLimit: "100",
+      allowedAssets: [assetId],
+    });
     expect(limited.policySpends[0]).toMatchObject({ assetId, spent: "250" });
     expect(defaulted.spendLimit).toBe(50);
     expect(defaulted.policySpends).toEqual([]);
@@ -1044,6 +1058,77 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(events[0].decoded.primary_id).toBe(decoded.primary_id);
     expect(events[0].decoded.account).toBe("mono1vaultdepositor");
     expect(events[0].decoded.counterparty).toBe("mono1vaultreceiver");
+  });
+
+  it("lythNativeReceiptEvents preserves MRC policy account bodies", async () => {
+    const txHash = `0x${"24".repeat(32)}`;
+    const eventTopic = `0x${"13".repeat(32)}`;
+    const assetId = `0x${"44".repeat(32)}`;
+    const decoded: NativeDecodedEvent = {
+      block_height: 100,
+      tx_index: 0,
+      sequence: 0,
+      family: "mrc",
+      event_name: "mrc.policy_account.updated",
+      payload_hash: `0x${"46".repeat(32)}`,
+      policy: {
+        enabled: true,
+        per_action_limit: 20,
+        window_limit: "100",
+        allowed_assets: [assetId],
+      },
+    };
+    const { fetch } = mockFetch({
+      txHash,
+      blockHash: `0x${"33".repeat(32)}`,
+      blockHeight: 100,
+      txIndex: 0,
+      schema: "riscv.receipt.v1",
+      artifactHash: `0x${"aa".repeat(32)}`,
+      receiptCommitment: `0x${"bb".repeat(32)}`,
+      counters: { cycles: 44, syscallUnits: 3, stateIoUnits: 2 },
+      fee: {
+        total_lythoshi: "0",
+        total_lyth: "0",
+        cycles_used: 44,
+        base_price_per_cycle_lythoshi: "10000000000",
+        state_io_units: 2,
+        state_io_price_per_unit_lythoshi: "0",
+        priority_tip_lythoshi: "0",
+      },
+      reverted: false,
+      nativeDeltaCount: 0,
+      eventCount: 1,
+      events: [
+        {
+          blockHeight: 100,
+          txIndex: 0,
+          logIndex: 0,
+          address: "monos1nativeeventemitter",
+          eventTopic,
+          decoded: null,
+          decodedJson: JSON.stringify(decoded),
+        },
+      ],
+      source: {
+        chainProvider: "mock_chain",
+        indexerProvider: "native_events",
+        metadataLogIndex: 0xffff_ffff,
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const events = await client.lythNativeReceiptEvents(txHash, {
+      family: "mrc",
+      eventName: "mrc.policy_account.updated",
+    });
+
+    expect(events[0].decoded.policy).toMatchObject({
+      enabled: true,
+      per_action_limit: 20,
+      window_limit: "100",
+      allowed_assets: [assetId],
+    });
   });
 
   it("lythNativeEvents sends historical filters and decodes typed rows", async () => {

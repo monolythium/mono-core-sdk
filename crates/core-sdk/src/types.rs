@@ -9,6 +9,7 @@
 //! to them transparently.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use crate::bridge::BridgeRouteDisclosure;
 use serde::de::DeserializeOwned;
@@ -724,6 +725,8 @@ pub struct NativeDecodedEvent {
         skip_serializing_if = "Option::is_none"
     )]
     pub nft_standard: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<NativeMrcPolicyProjection>,
     #[serde(default, alias = "royaltyBps", skip_serializing_if = "Option::is_none")]
     pub royalty_bps: Option<u16>,
     #[serde(
@@ -774,6 +777,40 @@ pub struct NativeDecodedEvent {
 /// Alias matching mono-core's native event projection naming.
 pub type NativeEventProjection = NativeDecodedEvent;
 
+/// Canonical policy body projected from native MRC policy-account events.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeMrcPolicyProjection {
+    /// Whether the policy currently allows spending.
+    pub enabled: bool,
+    /// Maximum spend per action, retained as a lossless decimal string.
+    #[serde(deserialize_with = "deserialize_lossless_string")]
+    pub per_action_limit: String,
+    /// Maximum spend inside one window, retained as a lossless decimal string.
+    #[serde(deserialize_with = "deserialize_lossless_string")]
+    pub window_limit: String,
+    /// Allowed MRC asset ids.
+    #[serde(deserialize_with = "deserialize_hash_vec_from_array_or_hexes")]
+    pub allowed_assets: Vec<Hash>,
+}
+
+fn deserialize_lossless_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Number(n) => Ok(n.to_string()),
+        serde_json::Value::Bool(b) => Ok(b.to_string()),
+        serde_json::Value::Null | serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            Err(serde::de::Error::custom(
+                "expected string, number, or bool for lossless scalar",
+            ))
+        }
+    }
+}
+
 fn deserialize_optional_lossless_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -791,6 +828,41 @@ where
             )),
         })
         .transpose()
+}
+
+fn deserialize_hash_vec_from_array_or_hexes<'de, D>(deserializer: D) -> Result<Vec<Hash>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let values = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    values
+        .into_iter()
+        .map(hash_from_array_or_hex)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(serde::de::Error::custom)
+}
+
+fn hash_from_array_or_hex(value: serde_json::Value) -> Result<Hash, String> {
+    match value {
+        serde_json::Value::String(raw) => Ok(raw),
+        serde_json::Value::Array(values) => {
+            if values.len() != 32 {
+                return Err(format!("expected 32 byte array, got {}", values.len()));
+            }
+            let mut out = String::with_capacity(66);
+            out.push_str("0x");
+            for (idx, value) in values.into_iter().enumerate() {
+                let n = value
+                    .as_u64()
+                    .ok_or_else(|| format!("byte {idx} is not an unsigned integer"))?;
+                let byte =
+                    u8::try_from(n).map_err(|_| format!("byte {idx} is outside the u8 range"))?;
+                write!(&mut out, "{byte:02x}").map_err(|err| err.to_string())?;
+            }
+            Ok(out)
+        }
+        other => Err(format!("expected hex string or 32 byte array, got {other}")),
+    }
 }
 
 /// Native event family emitted by the RISC-V market module.
@@ -1808,6 +1880,22 @@ pub struct MrcMetadataResponse {
     pub metadata: Option<MrcMetadataRecord>,
 }
 
+/// Canonical MRC policy-account spending policy body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrcPolicyRecord.ts"))]
+pub struct MrcPolicyRecord {
+    /// Whether the policy currently allows spending.
+    pub enabled: bool,
+    /// Maximum amount per action as decimal text.
+    pub per_action_limit: String,
+    /// Maximum amount inside one window as decimal text.
+    pub window_limit: String,
+    /// Assets allowed by this policy.
+    pub allowed_assets: Vec<Hash>,
+}
+
 /// Current-state smart/policy account row folded from native MRC account events.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1826,6 +1914,9 @@ pub struct MrcAccountRecord {
     /// Active policy hash, when this row is a policy account.
     #[serde(default)]
     pub policy_hash: Option<Hash>,
+    /// Active policy body, when this row is a policy account and the node has indexed it.
+    #[serde(default)]
+    pub policy: Option<MrcPolicyRecord>,
     /// Account nonce as decimal text, or `null` when the row has no nonce.
     #[serde(default)]
     pub nonce: Option<String>,
@@ -3967,6 +4058,12 @@ mod tests {
                 "controller": controller,
                 "recovery": null,
                 "policyHash": policy_hash,
+                "policy": {
+                    "enabled": true,
+                    "perActionLimit": "20",
+                    "windowLimit": "100",
+                    "allowedAssets": [asset_id]
+                },
                 "nonce": null,
                 "updatedAtBlock": 90
             },
@@ -3990,6 +4087,7 @@ mod tests {
         assert_eq!(smart.kind, "smart_account");
         assert_eq!(smart.recovery.as_deref(), Some(recovery));
         assert_eq!(smart.policy_hash, None);
+        assert_eq!(smart.policy, None);
         assert_eq!(smart.nonce.as_deref(), Some("7"));
         assert_eq!(smart.updated_at_block, 91);
         let policy = response
@@ -3999,6 +4097,11 @@ mod tests {
         assert_eq!(policy.kind, "policy_account");
         assert_eq!(policy.recovery, None);
         assert_eq!(policy.policy_hash.as_deref(), Some(policy_hash.as_str()));
+        let policy_body = policy.policy.as_ref().expect("policy body");
+        assert!(policy_body.enabled);
+        assert_eq!(policy_body.per_action_limit, "20");
+        assert_eq!(policy_body.window_limit, "100");
+        assert_eq!(policy_body.allowed_assets, vec![asset_id.clone()]);
         assert_eq!(response.policy_spends[0].asset_id, asset_id);
         assert_eq!(response.policy_spends[0].window, "3600");
         assert_eq!(response.policy_spends[0].spent, "250");
@@ -4865,6 +4968,48 @@ mod tests {
         assert_eq!(typed.decoded.primary_id, vault_id);
         assert!(typed.decoded.account.starts_with("mono1"));
         assert!(typed.decoded.counterparty.starts_with("mono1"));
+    }
+
+    #[test]
+    fn native_event_projection_decodes_optional_mrc_policy_body() {
+        let asset_id = format!("0x{}", "44".repeat(32));
+        let array_asset_id = vec![0x66_u8; 32];
+        let decoded: NativeEventProjection = serde_json::from_value(serde_json::json!({
+            "block_height": 101,
+            "tx_index": 0,
+            "sequence": 2,
+            "family": "mrc",
+            "event_name": "mrc.policy_account.updated",
+            "policy": {
+                "enabled": true,
+                "per_action_limit": 20,
+                "window_limit": "100",
+                "allowed_assets": [asset_id.clone(), array_asset_id]
+            },
+            "payload_hash": format!("0x{}", "44".repeat(32))
+        }))
+        .unwrap();
+
+        let policy = decoded.policy.as_ref().expect("policy body");
+        assert!(policy.enabled);
+        assert_eq!(policy.per_action_limit, "20");
+        assert_eq!(policy.window_limit, "100");
+        assert_eq!(
+            policy.allowed_assets,
+            vec![asset_id, format!("0x{}", "66".repeat(32))]
+        );
+
+        let legacy: NativeEventProjection = serde_json::from_value(serde_json::json!({
+            "block_height": 101,
+            "tx_index": 0,
+            "sequence": 3,
+            "family": "mrc",
+            "event_name": "mrc.policy_account.created",
+            "policy": null,
+            "payload_hash": format!("0x{}", "55".repeat(32))
+        }))
+        .unwrap();
+        assert_eq!(legacy.policy, None);
     }
 
     #[test]

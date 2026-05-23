@@ -1732,6 +1732,12 @@ mod tests {
                     "controller": controller,
                     "recovery": null,
                     "policyHash": policy_hash,
+                    "policy": {
+                        "enabled": true,
+                        "perActionLimit": "20",
+                        "windowLimit": "100",
+                        "allowedAssets": [asset_id]
+                    },
                     "nonce": null,
                     "updatedAtBlock": 90
                 },
@@ -1756,6 +1762,10 @@ mod tests {
         assert_eq!(defaulted.spend_limit, 50);
         let policy = defaulted.policy_account.as_ref().expect("policy account");
         assert_eq!(policy.policy_hash.as_deref(), Some(policy_hash.as_str()));
+        let policy_body = policy.policy.as_ref().expect("policy body");
+        assert!(policy_body.enabled);
+        assert_eq!(policy_body.per_action_limit, "20");
+        assert_eq!(policy_body.allowed_assets, vec![asset_id]);
         assert!(defaulted.policy_spends.is_empty());
 
         let requests = server.join().unwrap();
