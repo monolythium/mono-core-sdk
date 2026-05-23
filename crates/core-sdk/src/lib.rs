@@ -40,10 +40,12 @@ pub use consts::{burn_addr_hex, BURN_ADDR};
 pub use error::SdkError;
 pub use mrv::{
     assert_mrv_call_native_submission_plan, assert_mrv_deploy_native_submission_plan,
-    assert_mrv_fee_display_conformance, check_mrv_fee_display_conformance, format_lyth,
-    format_lythoshi, parse_lyth_to_lythoshi, LythFormatOptions, MrvFeeDisplayConformanceInput,
-    MrvFeeDisplayConformanceReport, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MRV_STRUCTURED_FEE_FIELDS,
-    NATIVE_LYTH_DECIMALS,
+    assert_mrv_fee_display_conformance, build_mrv_call_native_signed_submission,
+    build_mrv_deploy_native_signed_submission, build_mrv_native_signed_submission,
+    check_mrv_fee_display_conformance, format_lyth, format_lythoshi, parse_lyth_to_lythoshi,
+    LythFormatOptions, MrvCallNativeSignedSubmission, MrvDeployNativeSignedSubmission,
+    MrvFeeDisplayConformanceInput, MrvFeeDisplayConformanceReport, MrvNativeSignedSubmission,
+    LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MRV_STRUCTURED_FEE_FIELDS, NATIVE_LYTH_DECIMALS,
 };
 
 /// Crate version, sourced from `Cargo.toml`.
