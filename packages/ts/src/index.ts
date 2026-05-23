@@ -22,7 +22,10 @@ export {
   bridgeAddressHex,
   bridgeTransferCandidates,
   encodeLockBridgeConfigCalldata,
+  encodeSetBridgeResumeCooldownCalldata,
   isBridgeAdminLockedRevert,
+  isBridgeCooldownZeroRevert,
+  isBridgeResumeCooldownActiveRevert,
   rankBridgeRoutes,
   selectBridgeTransferRoute,
 } from "./bridge.js";

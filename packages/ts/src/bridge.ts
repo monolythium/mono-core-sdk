@@ -9,10 +9,13 @@ import { PRECOMPILE_ADDRESSES } from "./consts.js";
 
 export const BRIDGE_SELECTORS = {
   lockBridgeConfig: "0x8956feb3",
+  setBridgeResumeCooldown: "0x1a3a0672",
 } as const;
 
 export const BRIDGE_REVERT_TAGS = {
   bridgeAdminLocked: "0xf807",
+  bridgeResumeCooldownActive: "0xf808",
+  bridgeCooldownZero: "0xfd08",
 } as const;
 
 export type BridgeBytesInput = string | Uint8Array | readonly number[];
@@ -41,8 +44,29 @@ export function encodeLockBridgeConfigCalldata(bridgeId: BridgeBytesInput): stri
   );
 }
 
+export function encodeSetBridgeResumeCooldownCalldata(
+  bridgeId: BridgeBytesInput,
+  cooldownBlocks: bigint | number | string,
+): string {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(BRIDGE_SELECTORS.setBridgeResumeCooldown),
+      expectLength(toBytes(bridgeId), 32, "bridgeId"),
+      uint64Word(cooldownBlocks, "cooldownBlocks"),
+    ),
+  );
+}
+
 export function isBridgeAdminLockedRevert(data: BridgeBytesInput): boolean {
   return bytesToHex(toBytes(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeAdminLocked;
+}
+
+export function isBridgeResumeCooldownActiveRevert(data: BridgeBytesInput): boolean {
+  return bytesToHex(toBytes(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeResumeCooldownActive;
+}
+
+export function isBridgeCooldownZeroRevert(data: BridgeBytesInput): boolean {
+  return bytesToHex(toBytes(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeCooldownZero;
 }
 
 export interface BridgeVerifierDisclosure {
@@ -365,6 +389,34 @@ function expectLength(value: Uint8Array, len: number, name: string): Uint8Array 
     throw new BridgePrecompileError(`${name} must be ${len} bytes, got ${value.length}`);
   }
   return value;
+}
+
+function uint64Word(value: bigint | number | string, name: string): Uint8Array {
+  const n = toBigint(value, name);
+  if (n < 0n || n > 0xffff_ffff_ffff_ffffn) {
+    throw new BridgePrecompileError(`${name} must fit uint64`);
+  }
+  const out = new Uint8Array(32);
+  let rest = n;
+  for (let i = 31; i >= 24; i--) {
+    out[i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  return out;
+}
+
+function toBigint(value: bigint | number | string, name: string): bigint {
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number") {
+    if (!Number.isInteger(value) || !Number.isSafeInteger(value)) {
+      throw new BridgePrecompileError(`${name} must be a safe integer`);
+    }
+    return BigInt(value);
+  }
+  if (!/^(0x[0-9a-fA-F]+|[0-9]+)$/.test(value)) {
+    throw new BridgePrecompileError(`${name} must be an integer string`);
+  }
+  return BigInt(value);
 }
 
 function toBytes(value: BridgeBytesInput): Uint8Array {

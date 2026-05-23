@@ -16,16 +16,40 @@ use ts_rs::TS;
 /// `lockBridgeConfig(bytes32)`.
 pub const SIGHASH_LOCK_BRIDGE_CONFIG: &str = "lockBridgeConfig(bytes32)";
 
+/// `setBridgeResumeCooldown(bytes32,uint64)`.
+pub const SIGHASH_SET_BRIDGE_RESUME_COOLDOWN: &str = "setBridgeResumeCooldown(bytes32,uint64)";
+
 /// Bridge-config revert namespace byte.
 pub const BRIDGE_CONFIG_REVERT_NAMESPACE: u8 = 0xF8;
 
+/// Bridge calldata-shape revert namespace byte.
+pub const BRIDGE_CALLDATA_REVERT_NAMESPACE: u8 = 0xFD;
+
 /// Stable revert payload for a locked Mono-side bridge admin surface.
 pub const REVERT_BRIDGE_ADMIN_LOCKED: [u8; 2] = [BRIDGE_CONFIG_REVERT_NAMESPACE, 0x07];
+
+/// Stable revert payload for a route still inside its resume cooldown.
+pub const REVERT_BRIDGE_RESUME_COOLDOWN_ACTIVE: [u8; 2] = [BRIDGE_CONFIG_REVERT_NAMESPACE, 0x08];
+
+/// Stable revert payload for a zero bridge resume cooldown.
+pub const REVERT_BRIDGE_COOLDOWN_ZERO: [u8; 2] = [BRIDGE_CALLDATA_REVERT_NAMESPACE, 0x08];
 
 /// Return true when a revert payload is the stable bridge-admin lock tag.
 #[must_use]
 pub fn is_bridge_admin_locked_revert(data: &[u8]) -> bool {
     data == REVERT_BRIDGE_ADMIN_LOCKED
+}
+
+/// Return true when a revert payload is the stable bridge-resume cooldown tag.
+#[must_use]
+pub fn is_bridge_resume_cooldown_active_revert(data: &[u8]) -> bool {
+    data == REVERT_BRIDGE_RESUME_COOLDOWN_ACTIVE
+}
+
+/// Return true when a revert payload is the stable zero-cooldown tag.
+#[must_use]
+pub fn is_bridge_cooldown_zero_revert(data: &[u8]) -> bool {
+    data == REVERT_BRIDGE_COOLDOWN_ZERO
 }
 
 /// Return the first four bytes of `keccak256(sighash)`.
@@ -41,12 +65,31 @@ pub fn selector_lock_bridge_config() -> [u8; 4] {
     selector_for(SIGHASH_LOCK_BRIDGE_CONFIG)
 }
 
+/// Selector for `setBridgeResumeCooldown(bytes32,uint64)`.
+#[must_use]
+pub fn selector_set_bridge_resume_cooldown() -> [u8; 4] {
+    selector_for(SIGHASH_SET_BRIDGE_RESUME_COOLDOWN)
+}
+
 /// Encode `lockBridgeConfig(bytes32)` calldata.
 #[must_use]
 pub fn encode_lock_bridge_config_calldata(bridge_id: [u8; 32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(4 + 32);
     out.extend_from_slice(&selector_lock_bridge_config());
     out.extend_from_slice(&bridge_id);
+    out
+}
+
+/// Encode `setBridgeResumeCooldown(bytes32,uint64)` calldata.
+#[must_use]
+pub fn encode_set_bridge_resume_cooldown_calldata(
+    bridge_id: [u8; 32],
+    cooldown_blocks: u64,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(4 + 64);
+    out.extend_from_slice(&selector_set_bridge_resume_cooldown());
+    out.extend_from_slice(&bridge_id);
+    encode_u256_word(&mut out, cooldown_blocks);
     out
 }
 
@@ -67,10 +110,27 @@ pub fn encode_lock_bridge_config_calldata_hex(bridge_id: [u8; 32]) -> String {
     calldata_to_hex(&encode_lock_bridge_config_calldata(bridge_id))
 }
 
+/// Encode `setBridgeResumeCooldown(bytes32,uint64)` calldata as lower-case hex.
+#[must_use]
+pub fn encode_set_bridge_resume_cooldown_calldata_hex(
+    bridge_id: [u8; 32],
+    cooldown_blocks: u64,
+) -> String {
+    calldata_to_hex(&encode_set_bridge_resume_cooldown_calldata(
+        bridge_id,
+        cooldown_blocks,
+    ))
+}
+
 /// Return the bridge precompile address as lower-case hex.
 #[must_use]
 pub fn bridge_address_hex() -> String {
     crate::address::address_to_hex(precompile_addresses::BRIDGE)
+}
+
+fn encode_u256_word(out: &mut Vec<u8>, value: u64) {
+    out.extend_from_slice(&[0u8; 24]);
+    out.extend_from_slice(&value.to_be_bytes());
 }
 
 /// Mono-side administrative control over route configuration.
@@ -680,16 +740,27 @@ mod tests {
     }
 
     #[test]
-    fn lock_bridge_config_selector_matches_mono_core() {
+    fn bridge_config_selectors_match_mono_core() {
         assert_eq!(selector_lock_bridge_config(), [0x89, 0x56, 0xfe, 0xb3]);
+        assert_eq!(
+            selector_set_bridge_resume_cooldown(),
+            [0x1a, 0x3a, 0x06, 0x72]
+        );
     }
 
     #[test]
-    fn bridge_admin_locked_revert_tag_matches_mono_core() {
+    fn bridge_revert_tags_match_mono_core() {
         assert_eq!(BRIDGE_CONFIG_REVERT_NAMESPACE, 0xF8);
+        assert_eq!(BRIDGE_CALLDATA_REVERT_NAMESPACE, 0xFD);
         assert_eq!(REVERT_BRIDGE_ADMIN_LOCKED, [0xF8, 0x07]);
+        assert_eq!(REVERT_BRIDGE_RESUME_COOLDOWN_ACTIVE, [0xF8, 0x08]);
+        assert_eq!(REVERT_BRIDGE_COOLDOWN_ZERO, [0xFD, 0x08]);
         assert!(is_bridge_admin_locked_revert(&[0xF8, 0x07]));
         assert!(!is_bridge_admin_locked_revert(&[0xF8, 0x06]));
+        assert!(is_bridge_resume_cooldown_active_revert(&[0xF8, 0x08]));
+        assert!(!is_bridge_resume_cooldown_active_revert(&[0xF8, 0x07]));
+        assert!(is_bridge_cooldown_zero_revert(&[0xFD, 0x08]));
+        assert!(!is_bridge_cooldown_zero_revert(&[0xF8, 0x08]));
     }
 
     #[test]
@@ -702,6 +773,25 @@ mod tests {
         assert_eq!(
             encode_lock_bridge_config_calldata_hex(bridge_id),
             format!("0x8956feb3{}", "ab".repeat(32))
+        );
+    }
+
+    #[test]
+    fn set_bridge_resume_cooldown_calldata_has_canonical_layout() {
+        let bridge_id = [0xabu8; 32];
+        let calldata = encode_set_bridge_resume_cooldown_calldata(bridge_id, 42);
+
+        assert_eq!(calldata.len(), 68);
+        assert_eq!(&calldata[..4], &selector_set_bridge_resume_cooldown());
+        assert_eq!(&calldata[4..36], &bridge_id);
+        assert_eq!(&calldata[36..60], &[0u8; 24]);
+        assert_eq!(&calldata[60..68], &42_u64.to_be_bytes());
+        assert_eq!(
+            encode_set_bridge_resume_cooldown_calldata_hex(bridge_id, 42),
+            format!(
+                "0x1a3a0672{}000000000000000000000000000000000000000000000000000000000000002a",
+                "ab".repeat(32)
+            )
         );
     }
 
