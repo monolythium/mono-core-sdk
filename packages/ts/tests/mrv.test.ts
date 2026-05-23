@@ -18,6 +18,7 @@ import {
   buildMrvDeployRequest,
   checkMrvFeeDisplayConformance,
   deriveMrvContractAddress,
+  formatNativeReceiptFeeDisplay,
   formatLyth,
   formatLythoshi,
   mrvAddressToBech32,
@@ -185,6 +186,37 @@ describe("MRV/RISC-V SDK helpers", () => {
         "default surface must not expose speed-up or cancel controls",
       ]),
     );
+  });
+
+  it("formats native receipt fee objects for app default surfaces", () => {
+    const fee = {
+      total_lythoshi: "825000000000",
+      total_lyth: "8,250",
+      cycles_used: 47,
+      base_price_per_cycle_lythoshi: "10000000000",
+      state_io_units: 2,
+      state_io_price_per_unit_lythoshi: "40000000000",
+      priority_tip_lythoshi: "15000000000",
+    };
+
+    const display = formatNativeReceiptFeeDisplay(fee);
+    expect(display).toEqual({
+      defaultFeeText: "Network fee: 8,250 LYTH",
+      detailTexts: [
+        "cycles 47, state I/O 2, total 825000000000 lythoshi",
+        "cycle price 10000000000 lythoshi, state I/O price 40000000000 lythoshi, priority tip 15000000000 lythoshi",
+      ],
+      totalLythoshi: "825000000000",
+      totalLyth: "8,250",
+    });
+    expect(() =>
+      assertMrvFeeDisplayConformance({
+        expectedTotalLythoshi: fee.total_lythoshi,
+        defaultFeeText: display.defaultFeeText,
+        detailTexts: display.detailTexts,
+        structuredFee: fee,
+      }),
+    ).not.toThrow();
   });
 
   it("validates artifact metadata and resolves syscalls", () => {

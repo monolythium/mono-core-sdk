@@ -48,6 +48,7 @@ import type { RpcClient } from "./client.js";
 import type { MempoolClass } from "./crypto/envelope.js";
 import type { MlDsa65Backend } from "./crypto/ml-dsa.js";
 import type { NativeEvmTxFields, NativeTxExtensionLike } from "./crypto/tx.js";
+import type { NativeReceiptFee } from "./client.js";
 
 export type MrvBytesLike = string | Uint8Array | readonly number[];
 export type MrvDecimalLike = string | number | bigint;
@@ -220,6 +221,13 @@ export interface MrvFeeDisplayConformanceReport {
   expectedDefaultFeeText: string;
 }
 
+export interface NativeReceiptFeeDisplay {
+  defaultFeeText: string;
+  detailTexts: string[];
+  totalLythoshi: string;
+  totalLyth: string;
+}
+
 export function formatLyth(lythoshi: MrvDecimalLike, options: LythFormatOptions = {}): string {
   const amount = BigInt(normalizeDecimalLike("lythoshi", lythoshi));
   const whole = amount / LYTHOSHI_PER_LYTH;
@@ -319,6 +327,30 @@ export function assertMrvFeeDisplayConformance(input: MrvFeeDisplayConformanceIn
   if (!report.passed) {
     throw new MrvValidationError(`fee display conformance failed: ${report.failures.join("; ")}`);
   }
+}
+
+export function formatNativeReceiptFeeDisplay(
+  fee: Pick<
+    NativeReceiptFee,
+    | "total_lythoshi"
+    | "cycles_used"
+    | "state_io_units"
+    | "base_price_per_cycle_lythoshi"
+    | "state_io_price_per_unit_lythoshi"
+    | "priority_tip_lythoshi"
+  >,
+): NativeReceiptFeeDisplay {
+  const totalLythoshi = normalizeDecimalLike("fee.total_lythoshi", fee.total_lythoshi);
+  const totalLyth = formatLyth(totalLythoshi, { includeUnit: false });
+  return {
+    defaultFeeText: `Network fee: ${totalLyth} LYTH`,
+    detailTexts: [
+      `cycles ${fee.cycles_used}, state I/O ${fee.state_io_units}, total ${totalLythoshi} lythoshi`,
+      `cycle price ${fee.base_price_per_cycle_lythoshi} lythoshi, state I/O price ${fee.state_io_price_per_unit_lythoshi} lythoshi, priority tip ${fee.priority_tip_lythoshi} lythoshi`,
+    ],
+    totalLythoshi,
+    totalLyth,
+  };
 }
 
 export function mrvCodeHashHex(code: MrvBytesLike): string {
