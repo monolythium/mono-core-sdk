@@ -9,6 +9,7 @@
 
 import { addressToBech32, parseAddress } from "./address.js";
 import { SdkError } from "./error.js";
+import type { BridgeRouteDisclosure } from "./bridge.js";
 import {
   nativeEventsFromHistory,
   nativeEventsFromReceipt,
@@ -275,6 +276,7 @@ export interface AddressProfileResponse {
     updatedAtBlock: number;
     mrc?: TokenBalanceMrcIdentity | null;
   }>;
+  bridgeRouteDisclosures?: BridgeRouteDisclosure[] | null;
 }
 
 export interface AddressFlowResponse {

@@ -10,6 +10,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::bridge::BridgeRouteDisclosure;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -969,6 +970,36 @@ pub struct TokenBalanceRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-bindings", ts(optional = nullable))]
     pub mrc: Option<TokenBalanceMrcIdentity>,
+    /// Optional single bridge route disclosure associated with this asset row.
+    #[serde(
+        rename = "bridgeRouteDisclosure",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "ts-bindings",
+        ts(
+            rename = "bridgeRouteDisclosure",
+            type = "import(\"../bridge.js\").BridgeRouteDisclosure | null",
+            optional
+        )
+    )]
+    pub bridge_route_disclosure: Option<BridgeRouteDisclosure>,
+    /// Optional bridge route disclosures associated with this asset row.
+    #[serde(
+        rename = "bridgeRouteDisclosures",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "ts-bindings",
+        ts(
+            rename = "bridgeRouteDisclosures",
+            type = "import(\"../bridge.js\").BridgeRouteDisclosure[] | null",
+            optional
+        )
+    )]
+    pub bridge_route_disclosures: Option<Vec<BridgeRouteDisclosure>>,
 }
 
 /// Current-state metadata folded from native MRC creation/metadata events.
@@ -2360,6 +2391,12 @@ pub struct AddressProfileResponse {
     pub activity: AddressProfileActivity,
     #[serde(rename = "tokenBalances")]
     pub token_balances: Vec<AddressProfileTokenBalance>,
+    #[serde(
+        rename = "bridgeRouteDisclosures",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub bridge_route_disclosures: Option<Vec<BridgeRouteDisclosure>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2657,6 +2694,32 @@ pub struct PeerSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bridge::{
+        assess_bridge_route, BridgeAdminControl, BridgeCircuitBreakerState,
+        BridgeVerifierDisclosure,
+    };
+
+    fn bridge_route(route_id: &str) -> BridgeRouteDisclosure {
+        BridgeRouteDisclosure {
+            route_id: route_id.to_owned(),
+            bridge: "CCIP".to_owned(),
+            asset: "USDC".to_owned(),
+            source_chain: "Ethereum".to_owned(),
+            destination_chain: "Mono".to_owned(),
+            verifier: BridgeVerifierDisclosure {
+                model: "DON".to_owned(),
+                participant_count: 7,
+                threshold: 5,
+            },
+            drain_cap_atomic: "100000000".to_owned(),
+            finality_blocks: 12,
+            cooldown_seconds: 3_600,
+            admin_control: BridgeAdminControl::ConsensusOnly,
+            circuit_breaker: BridgeCircuitBreakerState::Armed,
+            insurance_atomic: "500000000".to_owned(),
+            last_incident_date: None,
+        }
+    }
 
     #[test]
     fn call_request_uses_v41_rust_fields_with_legacy_wire_keys() {
@@ -2758,6 +2821,46 @@ mod tests {
     }
 
     #[test]
+    fn token_balance_record_decodes_optional_bridge_route_disclosures() {
+        let legacy: TokenBalanceRecord = serde_json::from_value(serde_json::json!({
+            "tokenId": format!("0x{}", "11".repeat(32)),
+            "balance": "0",
+            "updatedAtBlock": 90
+        }))
+        .unwrap();
+        assert_eq!(legacy.bridge_route_disclosure, None);
+        assert_eq!(legacy.bridge_route_disclosures, None);
+        let legacy_wire = serde_json::to_value(&legacy).unwrap();
+        assert!(legacy_wire.get("bridgeRouteDisclosure").is_none());
+        assert!(legacy_wire.get("bridgeRouteDisclosures").is_none());
+
+        let direct_route = bridge_route("ccip-usdc-eth");
+        let listed_route = bridge_route("layerzero-usdc-eth");
+        let with_disclosures: TokenBalanceRecord = serde_json::from_value(serde_json::json!({
+            "tokenId": format!("0x{}", "22".repeat(32)),
+            "balance": "1000",
+            "updatedAtBlock": 91,
+            "bridgeRouteDisclosure": direct_route,
+            "bridgeRouteDisclosures": [listed_route]
+        }))
+        .unwrap();
+
+        let direct = with_disclosures
+            .bridge_route_disclosure
+            .as_ref()
+            .expect("direct bridge disclosure");
+        assert_eq!(direct.route_id, "ccip-usdc-eth");
+        assert!(assess_bridge_route(direct).accepted);
+
+        let listed = with_disclosures
+            .bridge_route_disclosures
+            .as_ref()
+            .expect("listed bridge disclosures");
+        assert_eq!(listed[0].route_id, "layerzero-usdc-eth");
+        assert!(assess_bridge_route(&listed[0]).accepted);
+    }
+
+    #[test]
     fn mrc_metadata_response_decodes_nullable_metadata_scopes() {
         let asset_id = format!("0x{}", "bb".repeat(32));
         let token_id = format!("0x{}", "cc".repeat(32));
@@ -2839,6 +2942,37 @@ mod tests {
         assert_eq!(mrc.standard, "mrc721");
         assert_eq!(mrc.asset_id, format!("0x{}", "bb".repeat(32)));
         assert_eq!(response.token_balances[1].mrc, None);
+        assert_eq!(response.bridge_route_disclosures, None);
+    }
+
+    #[test]
+    fn address_profile_response_decodes_bridge_route_disclosures() {
+        let response: AddressProfileResponse = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "address": "0x1111111111111111111111111111111111111111",
+            "account": {
+                "nativeBalance": "10",
+                "nonce": 1,
+                "codeHash": format!("0x{}", "00".repeat(32)),
+                "isContract": false
+            },
+            "label": null,
+            "activity": {
+                "kind": "found",
+                "retention": null,
+                "latest": null
+            },
+            "tokenBalances": [],
+            "bridgeRouteDisclosures": [bridge_route("ccip-usdc-eth")]
+        }))
+        .unwrap();
+
+        let disclosures = response
+            .bridge_route_disclosures
+            .as_ref()
+            .expect("profile bridge disclosures");
+        assert_eq!(disclosures[0].route_id, "ccip-usdc-eth");
+        assert!(assess_bridge_route(&disclosures[0]).accepted);
     }
 
     #[test]
