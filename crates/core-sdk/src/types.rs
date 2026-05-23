@@ -187,6 +187,25 @@ pub struct NativeReceiptCounters {
     pub state_io_units: u64,
 }
 
+/// Structured native fee object attached to a RISC-V/native receipt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeReceiptFee {
+    /// Total fee in lythoshi.
+    pub total_lythoshi: String,
+    /// Total fee formatted as LYTH numeric text without the unit suffix.
+    pub total_lyth: String,
+    /// Execution cycles charged by the receipt.
+    pub cycles_used: u64,
+    /// Base price per execution cycle in lythoshi.
+    pub base_price_per_cycle_lythoshi: String,
+    /// Authenticated state I/O units charged by the receipt.
+    pub state_io_units: u64,
+    /// State I/O unit price in lythoshi.
+    pub state_io_price_per_unit_lythoshi: String,
+    /// Priority tip in lythoshi.
+    pub priority_tip_lythoshi: String,
+}
+
 /// One decoded native event row inside a native receipt response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -238,6 +257,8 @@ pub struct NativeReceiptResponse {
     pub artifact_hash: Hash,
     /// Execution counters reported by the RISC-V runner.
     pub counters: NativeReceiptCounters,
+    /// Structured native fee object derived from receipt counters.
+    pub fee: NativeReceiptFee,
     /// True when execution failed through the typed revert path.
     pub reverted: bool,
     /// Count of native state deltas carried by the receipt.
@@ -2051,6 +2072,15 @@ mod tests {
                 "syscallUnits": 3,
                 "stateIoUnits": 2
             },
+            "fee": {
+                "total_lythoshi": "440000000000",
+                "total_lyth": "4,400",
+                "cycles_used": 44,
+                "base_price_per_cycle_lythoshi": "10000000000",
+                "state_io_units": 2,
+                "state_io_price_per_unit_lythoshi": "0",
+                "priority_tip_lythoshi": "0"
+            },
             "reverted": false,
             "nativeDeltaCount": 0,
             "eventCount": 1,
@@ -2077,6 +2107,13 @@ mod tests {
         assert_eq!(receipt.counters.cycles, 44);
         assert_eq!(receipt.counters.syscall_units, 3);
         assert_eq!(receipt.counters.state_io_units, 2);
+        assert_eq!(receipt.fee.total_lythoshi, "440000000000");
+        assert_eq!(receipt.fee.total_lyth, "4,400");
+        assert_eq!(receipt.fee.cycles_used, 44);
+        assert_eq!(receipt.fee.base_price_per_cycle_lythoshi, "10000000000");
+        assert_eq!(receipt.fee.state_io_units, 2);
+        assert_eq!(receipt.fee.state_io_price_per_unit_lythoshi, "0");
+        assert_eq!(receipt.fee.priority_tip_lythoshi, "0");
         assert!(!receipt.reverted);
         assert_eq!(receipt.native_delta_count, 0);
         assert_eq!(receipt.event_count, 1);

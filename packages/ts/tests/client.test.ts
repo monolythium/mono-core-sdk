@@ -294,6 +294,15 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
       schema: "riscv.receipt.v1",
       artifactHash: `0x${"aa".repeat(32)}`,
       counters: { cycles: 44, syscallUnits: 3, stateIoUnits: 2 },
+      fee: {
+        total_lythoshi: "440000000000",
+        total_lyth: "4,400",
+        cycles_used: 44,
+        base_price_per_cycle_lythoshi: "10000000000",
+        state_io_units: 2,
+        state_io_price_per_unit_lythoshi: "0",
+        priority_tip_lythoshi: "0",
+      },
       reverted: false,
       nativeDeltaCount: 0,
       eventCount: 1,
@@ -320,6 +329,10 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
 
     expect(receipt.artifactHash).toBe(`0x${"aa".repeat(32)}`);
     expect(receipt.counters).toEqual({ cycles: 44, syscallUnits: 3, stateIoUnits: 2 });
+    expect(receipt.fee.total_lythoshi).toBe("440000000000");
+    expect(receipt.fee.total_lyth).toBe("4,400");
+    expect(receipt.fee.cycles_used).toBe(44);
+    expect(receipt.fee.state_io_units).toBe(2);
     expect(receipt.nativeDeltaCount).toBe(0);
     expect(receipt.eventCount).toBe(1);
     expect(receipt.events[0].address).toBe("monoc1nativeeventemitter");

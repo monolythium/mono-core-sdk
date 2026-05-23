@@ -129,6 +129,15 @@ describe("ApiClient", () => {
         schema: "riscv.receipt.v1",
         artifactHash: `0x${"aa".repeat(32)}`,
         counters: { cycles: 44, syscallUnits: 3, stateIoUnits: 2 },
+        fee: {
+          total_lythoshi: "440000000000",
+          total_lyth: "4,400",
+          cycles_used: 44,
+          base_price_per_cycle_lythoshi: "10000000000",
+          state_io_units: 2,
+          state_io_price_per_unit_lythoshi: "0",
+          priority_tip_lythoshi: "0",
+        },
         reverted: false,
         nativeDeltaCount: 0,
         eventCount: 1,
@@ -156,6 +165,10 @@ describe("ApiClient", () => {
 
     expect(receipt.data.artifactHash).toBe(`0x${"aa".repeat(32)}`);
     expect(receipt.data.counters.stateIoUnits).toBe(2);
+    expect(receipt.data.fee.total_lythoshi).toBe("440000000000");
+    expect(receipt.data.fee.total_lyth).toBe("4,400");
+    expect(receipt.data.fee.cycles_used).toBe(44);
+    expect(receipt.data.fee.state_io_units).toBe(2);
     expect(receipt.data.eventCount).toBe(1);
     expect(receipt.data.events[0].decoded).toEqual(decoded);
     expect(receipt.data.events[0].decodedJson).toBe(JSON.stringify(decoded));

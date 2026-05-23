@@ -82,6 +82,7 @@ export type {
   MetricsRangeStatus,
   NativeReceiptCounters,
   NativeReceiptEvent,
+  NativeReceiptFee,
   NativeReceiptResponse,
   NativeReceiptSource,
   NetworkClientOptions,
