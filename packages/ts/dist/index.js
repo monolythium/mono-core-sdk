@@ -269,6 +269,11 @@ var ApiClient = class {
       mrcTokenId: mrcTokenId ?? void 0
     });
   }
+  async mrcAccount(account, limit) {
+    return this.get(`/mrc/accounts/${encodePathSegment(account)}`, {
+      limit: limit ?? void 0
+    });
+  }
   async mrcHolders(standard, assetId, tokenId, limit) {
     return this.get(
       `/mrc/${encodePathSegment(standard)}/${encodePathSegment(assetId)}/${encodePathSegment(
@@ -1891,6 +1896,13 @@ var RpcClient = class _RpcClient {
   async lythMrcMetadata(assetId, tokenId) {
     const params = tokenId == null ? [assetId] : [assetId, tokenId];
     return this.call("lyth_mrcMetadata", params);
+  }
+  /** `lyth_mrcAccount` — exact current-state native MRC account lookup. */
+  async lythMrcAccount(account, spendLimit) {
+    const request = { account };
+    if (spendLimit != null) request.spendLimit = spendLimit;
+    const params = request.spendLimit == null ? [request.account] : [request.account, request.spendLimit];
+    return this.call("lyth_mrcAccount", params);
   }
   /** `lyth_mrcHolders` — top holders for a native MRC asset/token key. */
   async lythMrcHolders(standard, assetId, tokenId, limit) {

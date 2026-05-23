@@ -210,6 +210,7 @@ export {
 } from "./native-events.js";
 export type {
   NativeDecodedEvent,
+  NativeEventProjection,
   NativeEventConsumer,
   NativeEventFilter,
   TypedNativeReceiptEvent,

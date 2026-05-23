@@ -9,6 +9,7 @@ import type {
   AddressProfileResponse,
   BridgeRouteDisclosure,
   NativeDecodedEvent,
+  NativeEventProjection,
   NoEvmReceiptProof,
 } from "../src/index.js";
 
@@ -23,8 +24,16 @@ interface AgentEscrowCreatedEvent extends NativeDecodedEvent {
 interface NativeMarketSaleEvent extends NativeDecodedEvent {
   family: "market";
   event_name: "market.nft.sale_settled";
+  market_surface: "nft";
+  market_asset_id: string;
+  market_related_asset_id: string;
   listing_id: string;
   price: string;
+  quantity: string;
+  remaining: string;
+  status: "filled";
+  nft_standard: "mrc1155";
+  royalty_bps: number;
 }
 
 function bridgeRoute(routeId: string): BridgeRouteDisclosure {
@@ -625,15 +634,26 @@ describe("ApiClient", () => {
   it("wraps native market event API query params", async () => {
     const eventTopic = `0x${"11".repeat(32)}`;
     const listingId = `0x${"bb".repeat(32)}`;
+    const marketAssetId = `0x${"41".repeat(32)}`;
+    const marketRelatedAssetId = `0x${"42".repeat(32)}`;
     const decoded: NativeMarketSaleEvent = {
       block_height: 110,
       tx_index: 0,
       sequence: 0,
       family: "market",
       event_name: "market.nft.sale_settled",
+      market_surface: "nft",
+      market_asset_id: marketAssetId,
+      market_related_asset_id: marketRelatedAssetId,
       payload_hash: `0x${"44".repeat(32)}`,
       listing_id: listingId,
       price: "900",
+      quantity: "2",
+      remaining: "0",
+      status: "filled",
+      nft_standard: "mrc1155",
+      royalty_bps: 500,
+      listing_kind: "fixed_price",
     };
     const { fetch, calls } = mockGet(
       apiEnvelope({
@@ -674,6 +694,13 @@ describe("ApiClient", () => {
     expect(response.data.filters.family).toBe("market");
     expect(response.data.events[0].decoded.family).toBe("market");
     expect(response.data.events[0].decoded.listing_id).toBe(listingId);
+    const projection: NativeEventProjection = response.data.events[0].decoded;
+    expect(projection.market_surface).toBe("nft");
+    expect(projection.market_asset_id).toBe(marketAssetId);
+    expect(projection.market_related_asset_id).toBe(marketRelatedAssetId);
+    expect(projection.nft_standard).toBe("mrc1155");
+    expect(projection.royalty_bps).toBe(500);
+    expect(projection.quantity).toBe("2");
     expect(calls).toEqual([
       {
         url: "https://rpc.example/api/v1/native-events?fromBlock=110&toBlock=120&limit=5&family=market&eventName=market.nft.sale_settled",

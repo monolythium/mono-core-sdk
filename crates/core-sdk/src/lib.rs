@@ -96,9 +96,10 @@ pub use types::{
     compute_no_evm_receipts_root, compute_no_evm_target_receipt_hash,
     decode_no_evm_receipt_transcript, native_market_events_filter,
     native_market_events_from_receipt, native_market_receipt_event_filter,
-    verify_no_evm_receipt_proof, NoEvmReceiptProof, NoEvmReceiptProofError,
-    NoEvmReceiptProofVerification, NATIVE_MARKET_EVENT_FAMILY, NO_EVM_RECEIPT_CODEC,
-    NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM,
+    verify_no_evm_receipt_proof, NativeDecodedEvent, NativeEventProjection, NoEvmReceiptProof,
+    NoEvmReceiptProofError, NoEvmReceiptProofVerification, NATIVE_MARKET_EVENT_FAMILY,
+    NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE,
+    NO_EVM_RECEIPT_ROOT_ALGORITHM,
 };
 
 /// Crate version, sourced from `Cargo.toml`.

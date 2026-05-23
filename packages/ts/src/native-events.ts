@@ -12,9 +12,42 @@ export interface NativeDecodedEvent {
   sequence: number;
   family: string;
   event_name: string;
+  market_surface?: string | null;
+  marketSurface?: string | null;
+  market_asset_id?: string | null;
+  marketAssetId?: string | null;
+  market_related_asset_id?: string | null;
+  marketRelatedAssetId?: string | null;
+  market_order_id?: string | null;
+  marketOrderId?: string | null;
+  market_related_order_id?: string | null;
+  marketRelatedOrderId?: string | null;
+  price?: string | null;
+  quantity?: string | null;
+  remaining?: string | null;
+  side?: string | null;
+  status?: string | null;
+  nft_standard?: string | null;
+  nftStandard?: string | null;
+  royalty_bps?: number | null;
+  royaltyBps?: number | null;
+  listing_kind?: unknown;
+  listingKind?: unknown;
+  expires_at_block?: number | null;
+  expiresAtBlock?: number | null;
+  tick_size?: string | null;
+  tickSize?: string | null;
+  lot_size?: string | null;
+  lotSize?: string | null;
+  min_quantity?: string | null;
+  minQuantity?: string | null;
+  min_notional?: string | null;
+  minNotional?: string | null;
   payload_hash: string;
   [field: string]: unknown;
 }
+
+export type NativeEventProjection = NativeDecodedEvent;
 
 export const NATIVE_MARKET_EVENT_FAMILY = "market" as const;
 
