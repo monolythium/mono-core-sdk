@@ -444,10 +444,13 @@ var PRECOMPILE_ADDRESSES = {
 
 // src/bridge.ts
 var BRIDGE_SELECTORS = {
-  lockBridgeConfig: "0x8956feb3"
+  lockBridgeConfig: "0x8956feb3",
+  setBridgeResumeCooldown: "0x1a3a0672"
 };
 var BRIDGE_REVERT_TAGS = {
-  bridgeAdminLocked: "0xf807"
+  bridgeAdminLocked: "0xf807",
+  bridgeResumeCooldownActive: "0xf808",
+  bridgeCooldownZero: "0xfd08"
 };
 var BridgePrecompileError = class extends Error {
   constructor(message) {
@@ -466,8 +469,23 @@ function encodeLockBridgeConfigCalldata(bridgeId) {
     )
   );
 }
+function encodeSetBridgeResumeCooldownCalldata(bridgeId, cooldownBlocks) {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(BRIDGE_SELECTORS.setBridgeResumeCooldown),
+      expectLength(toBytes(bridgeId), 32, "bridgeId"),
+      uint64Word(cooldownBlocks, "cooldownBlocks")
+    )
+  );
+}
 function isBridgeAdminLockedRevert(data) {
   return bytesToHex(toBytes(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeAdminLocked;
+}
+function isBridgeResumeCooldownActiveRevert(data) {
+  return bytesToHex(toBytes(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeResumeCooldownActive;
+}
+function isBridgeCooldownZeroRevert(data) {
+  return bytesToHex(toBytes(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeCooldownZero;
 }
 function assessBridgeRoute(route) {
   const blockedReasons = [];
@@ -668,6 +686,32 @@ function expectLength(value, len, name) {
     throw new BridgePrecompileError(`${name} must be ${len} bytes, got ${value.length}`);
   }
   return value;
+}
+function uint64Word(value, name) {
+  const n = toBigint(value, name);
+  if (n < 0n || n > 0xffffffffffffffffn) {
+    throw new BridgePrecompileError(`${name} must fit uint64`);
+  }
+  const out = new Uint8Array(32);
+  let rest = n;
+  for (let i = 31; i >= 24; i--) {
+    out[i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  return out;
+}
+function toBigint(value, name) {
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number") {
+    if (!Number.isInteger(value) || !Number.isSafeInteger(value)) {
+      throw new BridgePrecompileError(`${name} must be a safe integer`);
+    }
+    return BigInt(value);
+  }
+  if (!/^(0x[0-9a-fA-F]+|[0-9]+)$/.test(value)) {
+    throw new BridgePrecompileError(`${name} must be an integer string`);
+  }
+  return BigInt(value);
 }
 function toBytes(value) {
   if (typeof value === "string") {
@@ -3340,15 +3384,15 @@ function encodeCompleteRedemptionCalldata(index) {
   return bytesToHex5(
     concatBytes5(
       hexToBytes5(DELEGATION_SELECTORS.completeRedemption),
-      uint64Word(index, "index")
+      uint64Word2(index, "index")
     )
   );
 }
 function isRedemptionPrincipalUnavailableRevert(data) {
   return bytesToHex5(toBytes3(data)).toLowerCase() === DELEGATION_REVERT_TAGS.redemptionPrincipalUnavailable;
 }
-function uint64Word(value, name) {
-  const n = toBigint(value, name);
+function uint64Word2(value, name) {
+  const n = toBigint2(value, name);
   if (n < 0n || n > 0xffffffffffffffffn) {
     throw new DelegationPrecompileError(`${name} must fit uint64`);
   }
@@ -3360,7 +3404,7 @@ function uint64Word(value, name) {
   }
   return out;
 }
-function toBigint(value, name) {
+function toBigint2(value, name) {
   if (typeof value === "bigint") return value;
   if (typeof value === "number") {
     if (!Number.isInteger(value) || !Number.isSafeInteger(value)) {
@@ -3498,8 +3542,8 @@ function normalizeArgs(args) {
   return {
     subAccount: toAddressBytes(args.subAccount),
     principal: toAddressBytes(args.principal),
-    dailyCapLythoshi: toBigint2(args.dailyCapLythoshi, "dailyCapLythoshi"),
-    perTxCapLythoshi: toBigint2(args.perTxCapLythoshi, "perTxCapLythoshi"),
+    dailyCapLythoshi: toBigint3(args.dailyCapLythoshi, "dailyCapLythoshi"),
+    perTxCapLythoshi: toBigint3(args.perTxCapLythoshi, "perTxCapLythoshi"),
     allowRoot: expectLength4(toBytes4(args.allowRoot), 32, "allowRoot"),
     denyRoot: expectLength4(toBytes4(args.denyRoot), 32, "denyRoot")
   };
@@ -3564,7 +3608,7 @@ function expectLength4(value, len, name) {
   }
   return value;
 }
-function toBigint2(value, name) {
+function toBigint3(value, name) {
   const n = typeof value === "bigint" ? value : BigInt(value);
   if (n < 0n) {
     throw new SpendingPolicyError(`${name} must be non-negative`);
@@ -3572,7 +3616,7 @@ function toBigint2(value, name) {
   return n;
 }
 function uint64Bytes(value, name) {
-  const n = toBigint2(value, name);
+  const n = toBigint3(value, name);
   if (n > 0xffffffffffffffffn) {
     throw new SpendingPolicyError(`${name} exceeds uint64`);
   }
@@ -4005,6 +4049,7 @@ exports.encodeLockBridgeConfigCalldata = encodeLockBridgeConfigCalldata;
 exports.encodeLookupPubkeyCalldata = encodeLookupPubkeyCalldata;
 exports.encodeRegisterPubkeyCalldata = encodeRegisterPubkeyCalldata;
 exports.encodeReportServiceProbeCalldata = encodeReportServiceProbeCalldata;
+exports.encodeSetBridgeResumeCooldownCalldata = encodeSetBridgeResumeCooldownCalldata;
 exports.encodeSetPolicyCalldata = encodeSetPolicyCalldata;
 exports.encodeSetPolicyClaimCalldata = encodeSetPolicyClaimCalldata;
 exports.fetchChainInfoLatest = fetchChainInfoLatest;
@@ -4017,6 +4062,8 @@ exports.getP2pSeeds = getP2pSeeds;
 exports.getRpcEndpoints = getRpcEndpoints;
 exports.hexToAddressBytes = hexToAddressBytes;
 exports.isBridgeAdminLockedRevert = isBridgeAdminLockedRevert;
+exports.isBridgeCooldownZeroRevert = isBridgeCooldownZeroRevert;
+exports.isBridgeResumeCooldownActiveRevert = isBridgeResumeCooldownActiveRevert;
 exports.isConcreteServiceProbeStatus = isConcreteServiceProbeStatus;
 exports.isNativeDecodedEvent = isNativeDecodedEvent;
 exports.isRedemptionPrincipalUnavailableRevert = isRedemptionPrincipalUnavailableRevert;

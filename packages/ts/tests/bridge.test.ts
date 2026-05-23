@@ -8,7 +8,10 @@ import {
   bridgeAddressHex,
   bridgeTransferCandidates,
   encodeLockBridgeConfigCalldata,
+  encodeSetBridgeResumeCooldownCalldata,
   isBridgeAdminLockedRevert,
+  isBridgeCooldownZeroRevert,
+  isBridgeResumeCooldownActiveRevert,
   rankBridgeRoutes,
   selectBridgeTransferRoute,
   type BridgeRouteDisclosure,
@@ -51,13 +54,22 @@ describe("bridge route disclosure helpers", () => {
   it("exports bridge admin selectors and revert tags pinned to mono-core", () => {
     expect(BRIDGE_SELECTORS).toEqual({
       lockBridgeConfig: "0x8956feb3",
+      setBridgeResumeCooldown: "0x1a3a0672",
     });
     expect(BRIDGE_REVERT_TAGS).toEqual({
       bridgeAdminLocked: "0xf807",
+      bridgeResumeCooldownActive: "0xf808",
+      bridgeCooldownZero: "0xfd08",
     });
     expect(isBridgeAdminLockedRevert("0xf807")).toBe(true);
     expect(isBridgeAdminLockedRevert(new Uint8Array([0xf8, 0x07]))).toBe(true);
     expect(isBridgeAdminLockedRevert("0xf806")).toBe(false);
+    expect(isBridgeResumeCooldownActiveRevert("0xf808")).toBe(true);
+    expect(isBridgeResumeCooldownActiveRevert(new Uint8Array([0xf8, 0x08]))).toBe(true);
+    expect(isBridgeResumeCooldownActiveRevert("0xf807")).toBe(false);
+    expect(isBridgeCooldownZeroRevert("0xfd08")).toBe(true);
+    expect(isBridgeCooldownZeroRevert(new Uint8Array([0xfd, 0x08]))).toBe(true);
+    expect(isBridgeCooldownZeroRevert("0xf808")).toBe(false);
   });
 
   it("exports the bridge precompile address", () => {
@@ -77,11 +89,46 @@ describe("bridge route disclosure helpers", () => {
     expect(encodeLockBridgeConfigCalldata(new Uint8Array(32).fill(0xab))).toBe(calldata);
   });
 
+  it("encodes setBridgeResumeCooldown(bytes32,uint64) calldata", () => {
+    const bridgeId = `0x${"ab".repeat(32)}`;
+    const calldata = encodeSetBridgeResumeCooldownCalldata(bridgeId, 42);
+
+    expect(calldata).toBe(
+      `0x1a3a0672${"ab".repeat(32)}000000000000000000000000000000000000000000000000000000000000002a`,
+    );
+    expect(calldata.startsWith(BRIDGE_SELECTORS.setBridgeResumeCooldown)).toBe(true);
+    expect((calldata.length - 2) / 2).toBe(4 + 32 + 32);
+    expect(encodeSetBridgeResumeCooldownCalldata(new Uint8Array(32).fill(0xab), "0x2a")).toBe(
+      encodeSetBridgeResumeCooldownCalldata(bridgeId, 42n),
+    );
+  });
+
   it("rejects malformed lockBridgeConfig bridge ids", () => {
     expect(() => encodeLockBridgeConfigCalldata("0x123")).toThrow(BridgePrecompileError);
     expect(() => encodeLockBridgeConfigCalldata(`0x${"ab".repeat(31)}`)).toThrow(
       BridgePrecompileError,
     );
+  });
+
+  it("rejects malformed setBridgeResumeCooldown arguments", () => {
+    expect(() => encodeSetBridgeResumeCooldownCalldata("0x123", 42)).toThrow(
+      BridgePrecompileError,
+    );
+    expect(() => encodeSetBridgeResumeCooldownCalldata(`0x${"ab".repeat(31)}`, 42)).toThrow(
+      BridgePrecompileError,
+    );
+    expect(() => encodeSetBridgeResumeCooldownCalldata(new Uint8Array(32), -1)).toThrow(
+      BridgePrecompileError,
+    );
+    expect(() =>
+      encodeSetBridgeResumeCooldownCalldata(new Uint8Array(32), Number.MAX_SAFE_INTEGER + 1),
+    ).toThrow(BridgePrecompileError);
+    expect(() => encodeSetBridgeResumeCooldownCalldata(new Uint8Array(32), "nope")).toThrow(
+      BridgePrecompileError,
+    );
+    expect(() =>
+      encodeSetBridgeResumeCooldownCalldata(new Uint8Array(32), 0x1_0000_0000_0000_0000n),
+    ).toThrow(BridgePrecompileError);
   });
 
   it("accepts a floor-compliant disclosed route", () => {
