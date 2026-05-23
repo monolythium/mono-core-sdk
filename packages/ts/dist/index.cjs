@@ -4502,6 +4502,11 @@ function wordToBigint(word) {
   return out;
 }
 var CLOB_MARKET_ID_DOMAIN_TAG = 193;
+var NATIVE_MARKET_MODULE_ADDRESS_BYTES = "0x4d41524b45545f4e41544956455f4d4f445f5631";
+var NATIVE_MARKET_MODULE_ADDRESS = addressToTypedBech32(
+  "systemModule",
+  NATIVE_MARKET_MODULE_ADDRESS_BYTES
+);
 var CLOB_SELECTORS = {
   /**
    * `placeLimitOrder(bytes32,bytes32,uint8,uint256,uint256,uint64)`
@@ -4616,6 +4621,26 @@ function encodeNativeNftBuyListingCall(args) {
   monoAddressInto(w, args.buyer, "buyer");
   w.u64(uint64(args.currentBlock, "currentBlock"));
   return bytesToHex4(w.toBytes());
+}
+function buildNativeMarketModuleCallEnvelope(input, maxCycles) {
+  return {
+    module: "market",
+    call: {
+      to: NATIVE_MARKET_MODULE_ADDRESS,
+      input: normalizeHexBytes(input, "input"),
+      valueLythoshi: "0",
+      maxCycles: uint64(maxCycles, "maxCycles").toString(10)
+    }
+  };
+}
+function buildNativeSpotLimitOrderModuleCall(args, maxCycles) {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeSpotLimitOrderCall(args), maxCycles);
+}
+function buildNativeSpotCancelOrderModuleCall(args, maxCycles) {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeSpotCancelOrderCall(args), maxCycles);
+}
+function buildNativeNftBuyListingModuleCall(args, maxCycles) {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeNftBuyListingCall(args), maxCycles);
 }
 function buildPlaceSpotLimitOrderPlan(args) {
   return {
@@ -4774,6 +4799,18 @@ function positiveU128Decimal(value, name) {
     throw new MarketActionError(`${name} must fit uint128`);
   }
   return n;
+}
+function normalizeHexBytes(value, name) {
+  if (typeof value !== "string" || !value.startsWith("0x")) {
+    throw new MarketActionError(`${name} must be 0x-prefixed hex bytes`);
+  }
+  try {
+    hexToBytes3(value, name);
+  } catch (error) {
+    const detail = error instanceof Error ? `: ${error.message}` : "";
+    throw new MarketActionError(`${name} must be 0x-prefixed hex bytes${detail}`);
+  }
+  return value.toLowerCase();
 }
 function monoAddressInto(w, input, name) {
   const { kind, bytes } = normalizeNativeMarketAddress(input, name);
@@ -5084,6 +5121,8 @@ exports.MonolythiumSigner = MonolythiumSigner;
 exports.MrvValidationError = MrvValidationError;
 exports.NATIVE_LYTH_DECIMALS = NATIVE_LYTH_DECIMALS;
 exports.NATIVE_MARKET_EVENT_FAMILY = NATIVE_MARKET_EVENT_FAMILY;
+exports.NATIVE_MARKET_MODULE_ADDRESS = NATIVE_MARKET_MODULE_ADDRESS;
+exports.NATIVE_MARKET_MODULE_ADDRESS_BYTES = NATIVE_MARKET_MODULE_ADDRESS_BYTES;
 exports.NODE_REGISTRY_CAPABILITIES = NODE_REGISTRY_CAPABILITIES;
 exports.NODE_REGISTRY_CAPABILITY_MASK = NODE_REGISTRY_CAPABILITY_MASK;
 exports.NODE_REGISTRY_PUBLIC_SERVICE_MASK = NODE_REGISTRY_PUBLIC_SERVICE_MASK;
@@ -5132,6 +5171,10 @@ exports.buildMrvDeployPayloadPlan = buildMrvDeployPayloadPlan;
 exports.buildMrvDeployPayloadRequest = buildMrvDeployPayloadRequest;
 exports.buildMrvDeployPlan = buildMrvDeployPlan;
 exports.buildMrvDeployRequest = buildMrvDeployRequest;
+exports.buildNativeMarketModuleCallEnvelope = buildNativeMarketModuleCallEnvelope;
+exports.buildNativeNftBuyListingModuleCall = buildNativeNftBuyListingModuleCall;
+exports.buildNativeSpotCancelOrderModuleCall = buildNativeSpotCancelOrderModuleCall;
+exports.buildNativeSpotLimitOrderModuleCall = buildNativeSpotLimitOrderModuleCall;
 exports.buildPlaceSpotLimitOrderPlan = buildPlaceSpotLimitOrderPlan;
 exports.buildPlaceSpotMarketOrderExPlan = buildPlaceSpotMarketOrderExPlan;
 exports.buildPlaceSpotMarketOrderPlan = buildPlaceSpotMarketOrderPlan;
