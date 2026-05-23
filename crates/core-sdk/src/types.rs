@@ -1279,6 +1279,129 @@ pub struct NativeAgentStateSource {
     pub projection: String,
 }
 
+/// Current-state native agent issuer registry row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeAgentIssuerStateRecord.ts")
+)]
+pub struct NativeAgentIssuerStateRecord {
+    pub issuer_id: Hash,
+    pub issuer: Address,
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "string | null", optional))]
+    pub metadata_hash: Option<Hash>,
+    pub updated_at_block: u64,
+}
+
+/// Current-state native agent attestation row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeAgentAttestationStateRecord.ts")
+)]
+pub struct NativeAgentAttestationStateRecord {
+    pub attestation_id: Hash,
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "string | null", optional))]
+    pub issuer_id: Option<Hash>,
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "string | null", optional))]
+    pub issuer: Option<Address>,
+    pub subject: Address,
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "string | null", optional))]
+    pub schema_hash: Option<Hash>,
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "string | null", optional))]
+    pub payload_hash: Option<Hash>,
+    pub active: bool,
+    pub updated_at_block: u64,
+}
+
+/// Current-state native agent consent row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeAgentConsentStateRecord.ts")
+)]
+pub struct NativeAgentConsentStateRecord {
+    pub consent_id: Hash,
+    pub subject: Address,
+    pub grantee: Address,
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "string | null", optional))]
+    pub scope_hash: Option<Hash>,
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number | null", optional))]
+    pub expires_at: Option<u64>,
+    pub active: bool,
+    pub updated_at_block: u64,
+}
+
+/// Current-state native agent service-discovery row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeAgentServiceStateRecord.ts")
+)]
+pub struct NativeAgentServiceStateRecord {
+    pub service_id: Hash,
+    pub provider: Address,
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "string | null", optional))]
+    pub category_hash: Option<Hash>,
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "string | null", optional))]
+    pub metadata_hash: Option<Hash>,
+    pub active: bool,
+    pub updated_at_block: u64,
+}
+
+/// Current-state native agent provider availability row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeAgentAvailabilityStateRecord.ts")
+)]
+pub struct NativeAgentAvailabilityStateRecord {
+    pub provider: Address,
+    pub max_concurrent: u32,
+    pub open_requests: u32,
+    pub paused: bool,
+    pub updated_at_block: u64,
+}
+
+/// Current-state native agent arbiter registry row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeAgentArbiterStateRecord.ts")
+)]
+pub struct NativeAgentArbiterStateRecord {
+    pub arbiter_id: Hash,
+    pub arbiter: Address,
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number | null", optional))]
+    pub tier: Option<u16>,
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "string | null", optional))]
+    pub metadata_hash: Option<Hash>,
+    pub updated_at_block: u64,
+}
+
 /// Current-state native agent spending-policy aggregate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1350,6 +1473,29 @@ pub struct NativeAgentEscrowStateRecord {
     pub updated_at_block: u64,
 }
 
+/// Native agent reputation review row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "NativeAgentReputationReviewStateRecord.ts")
+)]
+pub struct NativeAgentReputationReviewStateRecord {
+    pub review_id: Hash,
+    pub reviewer: Address,
+    pub subject: Address,
+    pub category_id: u32,
+    pub speed_score: u8,
+    pub quality_score: u8,
+    pub communication_score: u8,
+    pub accuracy_score: u8,
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "string | null", optional))]
+    pub payload_hash: Option<Hash>,
+    pub updated_at_block: u64,
+}
+
 /// Typed response returned by `lyth_nativeAgentState` and
 /// `/api/v1/native-agent-state`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1363,6 +1509,20 @@ pub struct NativeAgentStateResponse {
     pub schema_version: u32,
     pub limit: u32,
     pub filters: NativeAgentStateResponseFilters,
+    #[serde(default)]
+    pub issuers: Vec<NativeAgentIssuerStateRecord>,
+    #[serde(default)]
+    pub attestations: Vec<NativeAgentAttestationStateRecord>,
+    #[serde(default)]
+    pub consents: Vec<NativeAgentConsentStateRecord>,
+    #[serde(default)]
+    pub services: Vec<NativeAgentServiceStateRecord>,
+    #[serde(default)]
+    pub availability: Vec<NativeAgentAvailabilityStateRecord>,
+    #[serde(default)]
+    pub arbiters: Vec<NativeAgentArbiterStateRecord>,
+    #[serde(default)]
+    pub reputation_reviews: Vec<NativeAgentReputationReviewStateRecord>,
     pub spending_policies: Vec<NativeAgentPolicyStateRecord>,
     pub policy_spends: Vec<NativeAgentPolicySpendStateRecord>,
     pub escrows: Vec<NativeAgentEscrowStateRecord>,

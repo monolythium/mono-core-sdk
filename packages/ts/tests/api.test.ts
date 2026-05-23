@@ -709,15 +709,28 @@ describe("ApiClient", () => {
     ]);
   });
 
-  it("nativeAgentState sends query params and decodes policy, spend, and escrow rows", async () => {
+  it("nativeAgentState sends query params and decodes native agent state rows", async () => {
     const policyId = `0x${"aa".repeat(32)}`;
     const escrowId = `0x${"bb".repeat(32)}`;
     const assetId = `0x${"cc".repeat(32)}`;
     const termsHash = `0x${"dd".repeat(32)}`;
+    const issuerId = `0x${"11".repeat(32)}`;
+    const attestationId = `0x${"12".repeat(32)}`;
+    const consentId = `0x${"13".repeat(32)}`;
+    const serviceId = `0x${"14".repeat(32)}`;
+    const arbiterId = `0x${"15".repeat(32)}`;
+    const reviewId = `0x${"16".repeat(32)}`;
+    const schemaHash = `0x${"17".repeat(32)}`;
+    const payloadHash = `0x${"18".repeat(32)}`;
+    const scopeHash = `0x${"19".repeat(32)}`;
+    const categoryHash = `0x${"1a".repeat(32)}`;
+    const metadataHash = `0x${"1b".repeat(32)}`;
     const owner = "mono1agentowner000000000000000000000000000000";
     const controller = "mono1agentcontroller000000000000000000000000";
     const provider = "mono1agentprovider0000000000000000000000000";
     const arbiter = "mono1agentarbiter00000000000000000000000000";
+    const grantee = "mono1agentgrantee00000000000000000000000000";
+    const reviewer = "mono1agentreviewer0000000000000000000000000";
     const { fetch, calls } = mockGet(
       apiEnvelope({
         schemaVersion: 1,
@@ -728,6 +741,79 @@ describe("ApiClient", () => {
           account: owner,
           includePolicySpends: true,
         },
+        issuers: [
+          {
+            issuerId,
+            issuer: provider,
+            metadataHash,
+            updatedAtBlock: 45,
+          },
+        ],
+        attestations: [
+          {
+            attestationId,
+            issuerId,
+            issuer: provider,
+            subject: owner,
+            schemaHash,
+            payloadHash,
+            active: true,
+            updatedAtBlock: 46,
+          },
+        ],
+        consents: [
+          {
+            consentId,
+            subject: owner,
+            grantee,
+            scopeHash,
+            expiresAt: 10_000,
+            active: true,
+            updatedAtBlock: 47,
+          },
+        ],
+        services: [
+          {
+            serviceId,
+            provider,
+            categoryHash,
+            metadataHash,
+            active: true,
+            updatedAtBlock: 48,
+          },
+        ],
+        availability: [
+          {
+            provider,
+            maxConcurrent: 8,
+            openRequests: 2,
+            paused: false,
+            updatedAtBlock: 49,
+          },
+        ],
+        arbiters: [
+          {
+            arbiterId,
+            arbiter,
+            tier: 2,
+            metadataHash,
+            updatedAtBlock: 50,
+          },
+        ],
+        reputationReviews: [
+          {
+            reviewId,
+            reviewer,
+            subject: provider,
+            categoryId: 7,
+            speedScore: 9,
+            qualityScore: 8,
+            communicationScore: 10,
+            accuracyScore: 9,
+            payloadHash,
+            updatedAtBlock: 51,
+          },
+        ],
         spendingPolicies: [
           {
             policyId,
@@ -789,6 +875,27 @@ describe("ApiClient", () => {
     expect(response.data.spendingPolicies[0].controller).toBe(controller);
     expect(response.data.policySpends[0].amount).toBe("25");
     expect(response.data.escrows[0].status).toBe("accepted");
+    expect(response.data.issuers[0]).toMatchObject({ issuerId, issuer: provider, metadataHash });
+    expect(response.data.attestations[0]).toMatchObject({
+      attestationId,
+      issuerId,
+      subject: owner,
+      active: true,
+    });
+    expect(response.data.consents[0]).toMatchObject({ consentId, grantee, expiresAt: 10_000 });
+    expect(response.data.services[0]).toMatchObject({ serviceId, categoryHash, active: true });
+    expect(response.data.availability[0]).toMatchObject({
+      provider,
+      maxConcurrent: 8,
+      openRequests: 2,
+      paused: false,
+    });
+    expect(response.data.arbiters[0]).toMatchObject({ arbiterId, tier: 2 });
+    expect(response.data.reputationReviews[0]).toMatchObject({
+      reviewId,
+      categoryId: 7,
+      communicationScore: 10,
+    });
     expect(response.data.filters.account).toBe(owner);
     expect(calls).toEqual([
       {
@@ -796,6 +903,41 @@ describe("ApiClient", () => {
         method: "GET",
       },
     ]);
+  });
+
+  it("nativeAgentState defaults additive arrays for older responses", async () => {
+    const { fetch } = mockGet(
+      apiEnvelope({
+        schemaVersion: 1,
+        limit: 0,
+        filters: {
+          policyId: null,
+          escrowId: null,
+          account: null,
+          includePolicySpends: false,
+        },
+        spendingPolicies: [],
+        policySpends: [],
+        escrows: [],
+        source: {
+          indexerProvider: "native_agent_state",
+          projection: "native_agent_state",
+        },
+      }),
+    );
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    const response = await client.nativeAgentState();
+
+    expect([
+      response.data.issuers,
+      response.data.attestations,
+      response.data.consents,
+      response.data.services,
+      response.data.availability,
+      response.data.arbiters,
+      response.data.reputationReviews,
+    ]).toEqual([[], [], [], [], [], [], []]);
   });
 
   it("nativeMarketState sends query params and decodes spot, listing, and royalty rows", async () => {

@@ -1393,6 +1393,10 @@ mod tests {
         let escrow_id = format!("0x{}", "bb".repeat(32));
         let asset_id = format!("0x{}", "cc".repeat(32));
         let terms_hash = format!("0x{}", "dd".repeat(32));
+        let issuer_id = format!("0x{}", "11".repeat(32));
+        let service_id = format!("0x{}", "14".repeat(32));
+        let review_id = format!("0x{}", "16".repeat(32));
+        let metadata_hash = format!("0x{}", "1b".repeat(32));
         let owner = "mono1agentowner000000000000000000000000000000";
         let controller = "mono1agentcontroller000000000000000000000000";
         let provider = "mono1agentprovider0000000000000000000000000";
@@ -1417,6 +1421,42 @@ mod tests {
                     "account": owner,
                     "includePolicySpends": true
                 },
+                "issuers": [{
+                    "issuerId": issuer_id,
+                    "issuer": owner,
+                    "metadataHash": metadata_hash,
+                    "updatedAtBlock": 45
+                }],
+                "attestations": [],
+                "consents": [],
+                "services": [{
+                    "serviceId": service_id,
+                    "provider": provider,
+                    "categoryHash": format!("0x{}", "1a".repeat(32)),
+                    "metadataHash": metadata_hash,
+                    "active": true,
+                    "updatedAtBlock": 48
+                }],
+                "availability": [{
+                    "provider": provider,
+                    "maxConcurrent": 8,
+                    "openRequests": 2,
+                    "paused": false,
+                    "updatedAtBlock": 49
+                }],
+                "arbiters": [],
+                "reputationReviews": [{
+                    "reviewId": review_id,
+                    "reviewer": owner,
+                    "subject": provider,
+                    "categoryId": 7,
+                    "speedScore": 9,
+                    "qualityScore": 8,
+                    "communicationScore": 10,
+                    "accuracyScore": 9,
+                    "payloadHash": format!("0x{}", "18".repeat(32)),
+                    "updatedAtBlock": 51
+                }],
                 "spendingPolicies": [{
                     "policyId": policy_id,
                     "owner": owner,
@@ -1473,6 +1513,10 @@ mod tests {
             .await
             .unwrap();
 
+        assert_eq!(response.data.issuers[0].issuer_id, issuer_id);
+        assert_eq!(response.data.services[0].service_id, service_id);
+        assert_eq!(response.data.availability[0].open_requests, 2);
+        assert_eq!(response.data.reputation_reviews[0].review_id, review_id);
         assert_eq!(response.data.spending_policies[0].controller, controller);
         assert_eq!(response.data.policy_spends[0].amount, "25");
         assert_eq!(response.data.escrows[0].status, "accepted");

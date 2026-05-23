@@ -310,10 +310,83 @@ export interface NativeAgentEscrowStateRecord {
   updatedAtBlock: number;
 }
 
+export interface NativeAgentIssuerStateRecord {
+  issuerId: string;
+  issuer: string;
+  metadataHash?: string | null;
+  updatedAtBlock: number;
+}
+
+export interface NativeAgentAttestationStateRecord {
+  attestationId: string;
+  issuerId?: string | null;
+  issuer?: string | null;
+  subject: string;
+  schemaHash?: string | null;
+  payloadHash?: string | null;
+  active: boolean;
+  updatedAtBlock: number;
+}
+
+export interface NativeAgentConsentStateRecord {
+  consentId: string;
+  subject: string;
+  grantee: string;
+  scopeHash?: string | null;
+  expiresAt?: number | null;
+  active: boolean;
+  updatedAtBlock: number;
+}
+
+export interface NativeAgentServiceStateRecord {
+  serviceId: string;
+  provider: string;
+  categoryHash?: string | null;
+  metadataHash?: string | null;
+  active: boolean;
+  updatedAtBlock: number;
+}
+
+export interface NativeAgentAvailabilityStateRecord {
+  provider: string;
+  maxConcurrent: number;
+  openRequests: number;
+  paused: boolean;
+  updatedAtBlock: number;
+}
+
+export interface NativeAgentArbiterStateRecord {
+  arbiterId: string;
+  arbiter: string;
+  tier?: number | null;
+  metadataHash?: string | null;
+  updatedAtBlock: number;
+}
+
+export interface NativeAgentReputationReviewStateRecord {
+  reviewId: string;
+  reviewer: string;
+  subject: string;
+  categoryId: number;
+  speedScore: number;
+  qualityScore: number;
+  communicationScore: number;
+  accuracyScore: number;
+  payloadHash?: string | null;
+  updatedAtBlock: number;
+}
+
 export interface NativeAgentStateResponse {
   schemaVersion: number;
   limit: number;
   filters: NativeAgentStateResponseFilters;
+  issuers: NativeAgentIssuerStateRecord[];
+  attestations: NativeAgentAttestationStateRecord[];
+  consents: NativeAgentConsentStateRecord[];
+  services: NativeAgentServiceStateRecord[];
+  availability: NativeAgentAvailabilityStateRecord[];
+  arbiters: NativeAgentArbiterStateRecord[];
+  reputationReviews: NativeAgentReputationReviewStateRecord[];
   spendingPolicies: NativeAgentPolicyStateRecord[];
   policySpends: NativeAgentPolicySpendStateRecord[];
   escrows: NativeAgentEscrowStateRecord[];
@@ -1418,7 +1491,10 @@ export class RpcClient {
   async lythNativeAgentState(
     filter: NativeAgentStateFilter = {},
   ): Promise<NativeAgentStateResponse> {
-    return this.call("lyth_nativeAgentState", [nativeAgentStateFilterParams(filter)]);
+    const response = await this.call("lyth_nativeAgentState", [
+      nativeAgentStateFilterParams(filter),
+    ]);
+    return decodeNativeAgentStateResponse(response);
   }
 
   /** `lyth_nativeMarketState` — current-state native spot and NFT market rows. */
@@ -2068,6 +2144,168 @@ function parseStringNullable(value: unknown): string | null {
   return value === null || value === undefined ? null : String(value);
 }
 
+function parseStringField(value: unknown, label: string): string {
+  if (value === null || value === undefined) {
+    throw SdkError.malformed(`${label} is missing`);
+  }
+  return String(value);
+}
+
+function parseBooleanField(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") {
+    throw SdkError.malformed(`${label} must be a boolean`);
+  }
+  return value;
+}
+
+function parseRpcUint(value: unknown, label: string, max: number, typeName: string): number {
+  const parsed = parseRpcNumber(value, label);
+  if (parsed > max) {
+    throw SdkError.malformed(`${label} must be a ${typeName}`);
+  }
+  return parsed;
+}
+
+function parseRpcUintNullable(
+  value: unknown,
+  label: string,
+  max: number,
+  typeName: string,
+): number | null {
+  return value === null || value === undefined ? null : parseRpcUint(value, label, max, typeName);
+}
+
+function decodeNativeAgentStateArray<T>(
+  row: Record<string, unknown>,
+  key: string,
+  decode: (value: unknown, label: string) => T,
+  defaultMissing: boolean,
+): T[] {
+  const value = row[key];
+  if (value === undefined && defaultMissing) return [];
+  if (!Array.isArray(value)) {
+    throw SdkError.malformed(`native agent state ${key} must be an array`);
+  }
+  return value.map((item, index) => decode(item, `native agent state ${key}[${index}]`));
+}
+
+function decodeNativeAgentExistingStateRecord<T>(value: unknown, label: string): T {
+  return expectObject(value, label) as unknown as T;
+}
+
+function decodeNativeAgentIssuerStateRecord(
+  value: unknown,
+  label: string,
+): NativeAgentIssuerStateRecord {
+  const row = expectObject(value, label);
+  return {
+    issuerId: parseStringField(row["issuerId"], `${label}.issuerId`),
+    issuer: parseStringField(row["issuer"], `${label}.issuer`),
+    metadataHash: parseStringNullable(row["metadataHash"]),
+    updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`),
+  };
+}
+
+function decodeNativeAgentAttestationStateRecord(
+  value: unknown,
+  label: string,
+): NativeAgentAttestationStateRecord {
+  const row = expectObject(value, label);
+  return {
+    attestationId: parseStringField(row["attestationId"], `${label}.attestationId`),
+    issuerId: parseStringNullable(row["issuerId"]),
+    issuer: parseStringNullable(row["issuer"]),
+    subject: parseStringField(row["subject"], `${label}.subject`),
+    schemaHash: parseStringNullable(row["schemaHash"]),
+    payloadHash: parseStringNullable(row["payloadHash"]),
+    active: parseBooleanField(row["active"], `${label}.active`),
+    updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`),
+  };
+}
+
+function decodeNativeAgentConsentStateRecord(
+  value: unknown,
+  label: string,
+): NativeAgentConsentStateRecord {
+  const row = expectObject(value, label);
+  return {
+    consentId: parseStringField(row["consentId"], `${label}.consentId`),
+    subject: parseStringField(row["subject"], `${label}.subject`),
+    grantee: parseStringField(row["grantee"], `${label}.grantee`),
+    scopeHash: parseStringNullable(row["scopeHash"]),
+    expiresAt: parseRpcNumberNullable(row["expiresAt"], `${label}.expiresAt`),
+    active: parseBooleanField(row["active"], `${label}.active`),
+    updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`),
+  };
+}
+
+function decodeNativeAgentServiceStateRecord(
+  value: unknown,
+  label: string,
+): NativeAgentServiceStateRecord {
+  const row = expectObject(value, label);
+  return {
+    serviceId: parseStringField(row["serviceId"], `${label}.serviceId`),
+    provider: parseStringField(row["provider"], `${label}.provider`),
+    categoryHash: parseStringNullable(row["categoryHash"]),
+    metadataHash: parseStringNullable(row["metadataHash"]),
+    active: parseBooleanField(row["active"], `${label}.active`),
+    updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`),
+  };
+}
+
+function decodeNativeAgentAvailabilityStateRecord(
+  value: unknown,
+  label: string,
+): NativeAgentAvailabilityStateRecord {
+  const row = expectObject(value, label);
+  return {
+    provider: parseStringField(row["provider"], `${label}.provider`),
+    maxConcurrent: parseRpcUint(row["maxConcurrent"], `${label}.maxConcurrent`, 0xffffffff, "uint32"),
+    openRequests: parseRpcUint(row["openRequests"], `${label}.openRequests`, 0xffffffff, "uint32"),
+    paused: parseBooleanField(row["paused"], `${label}.paused`),
+    updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`),
+  };
+}
+
+function decodeNativeAgentArbiterStateRecord(
+  value: unknown,
+  label: string,
+): NativeAgentArbiterStateRecord {
+  const row = expectObject(value, label);
+  return {
+    arbiterId: parseStringField(row["arbiterId"], `${label}.arbiterId`),
+    arbiter: parseStringField(row["arbiter"], `${label}.arbiter`),
+    tier: parseRpcUintNullable(row["tier"], `${label}.tier`, 0xffff, "uint16"),
+    metadataHash: parseStringNullable(row["metadataHash"]),
+    updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`),
+  };
+}
+
+function decodeNativeAgentReputationReviewStateRecord(
+  value: unknown,
+  label: string,
+): NativeAgentReputationReviewStateRecord {
+  const row = expectObject(value, label);
+  return {
+    reviewId: parseStringField(row["reviewId"], `${label}.reviewId`),
+    reviewer: parseStringField(row["reviewer"], `${label}.reviewer`),
+    subject: parseStringField(row["subject"], `${label}.subject`),
+    categoryId: parseRpcUint(row["categoryId"], `${label}.categoryId`, 0xffffffff, "uint32"),
+    speedScore: parseRpcUint(row["speedScore"], `${label}.speedScore`, 0xff, "uint8"),
+    qualityScore: parseRpcUint(row["qualityScore"], `${label}.qualityScore`, 0xff, "uint8"),
+    communicationScore: parseRpcUint(
+      row["communicationScore"],
+      `${label}.communicationScore`,
+      0xff,
+      "uint8",
+    ),
+    accuracyScore: parseRpcUint(row["accuracyScore"], `${label}.accuracyScore`, 0xff, "uint8"),
+    payloadHash: parseStringNullable(row["payloadHash"]),
+    updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`),
+  };
+}
+
 function expectObject(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw SdkError.malformed(`${label} must be an object`);
@@ -2349,6 +2587,82 @@ export function nativeAgentStateFilterParams(
   if (filter.includePolicySpends != null) out.includePolicySpends = filter.includePolicySpends;
   if (filter.limit != null) out.limit = encodeRpcU64Number(filter.limit, "limit");
   return out;
+}
+
+export function decodeNativeAgentStateResponse(value: unknown): NativeAgentStateResponse {
+  const row = expectObject(value, "native agent state response");
+  return {
+    schemaVersion: parseRpcNumber(row["schemaVersion"], "native agent state schemaVersion"),
+    limit: parseRpcNumber(row["limit"], "native agent state limit"),
+    filters: expectObject(
+      row["filters"],
+      "native agent state filters",
+    ) as unknown as NativeAgentStateResponseFilters,
+    issuers: decodeNativeAgentStateArray(
+      row,
+      "issuers",
+      decodeNativeAgentIssuerStateRecord,
+      true,
+    ),
+    attestations: decodeNativeAgentStateArray(
+      row,
+      "attestations",
+      decodeNativeAgentAttestationStateRecord,
+      true,
+    ),
+    consents: decodeNativeAgentStateArray(
+      row,
+      "consents",
+      decodeNativeAgentConsentStateRecord,
+      true,
+    ),
+    services: decodeNativeAgentStateArray(
+      row,
+      "services",
+      decodeNativeAgentServiceStateRecord,
+      true,
+    ),
+    availability: decodeNativeAgentStateArray(
+      row,
+      "availability",
+      decodeNativeAgentAvailabilityStateRecord,
+      true,
+    ),
+    arbiters: decodeNativeAgentStateArray(
+      row,
+      "arbiters",
+      decodeNativeAgentArbiterStateRecord,
+      true,
+    ),
+    reputationReviews: decodeNativeAgentStateArray(
+      row,
+      "reputationReviews",
+      decodeNativeAgentReputationReviewStateRecord,
+      true,
+    ),
+    spendingPolicies: decodeNativeAgentStateArray(
+      row,
+      "spendingPolicies",
+      decodeNativeAgentExistingStateRecord<NativeAgentPolicyStateRecord>,
+      false,
+    ),
+    policySpends: decodeNativeAgentStateArray(
+      row,
+      "policySpends",
+      decodeNativeAgentExistingStateRecord<NativeAgentPolicySpendStateRecord>,
+      false,
+    ),
+    escrows: decodeNativeAgentStateArray(
+      row,
+      "escrows",
+      decodeNativeAgentExistingStateRecord<NativeAgentEscrowStateRecord>,
+      false,
+    ),
+    source: expectObject(
+      row["source"],
+      "native agent state source",
+    ) as unknown as NativeAgentStateSource,
+  };
 }
 
 export function nativeMarketStateFilterParams(

@@ -39,8 +39,11 @@ use monolythium_core_sdk::types::{
     IndexerStatus, MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent,
     MeshUnsignedTxResponse, MrcAccountRecord, MrcAccountRequest, MrcAccountResponse,
     MrcHoldersRequest, MrcHoldersResponse, MrcMetadataRecord, MrcMetadataResponse, MrcPolicyRecord,
-    MrcPolicySpendRecord, NativeAgentEscrowStateRecord, NativeAgentPolicySpendStateRecord,
-    NativeAgentPolicyStateRecord, NativeAgentStateFilter, NativeAgentStateResponse,
+    MrcPolicySpendRecord, NativeAgentArbiterStateRecord, NativeAgentAttestationStateRecord,
+    NativeAgentAvailabilityStateRecord, NativeAgentConsentStateRecord,
+    NativeAgentEscrowStateRecord, NativeAgentIssuerStateRecord, NativeAgentPolicySpendStateRecord,
+    NativeAgentPolicyStateRecord, NativeAgentReputationReviewStateRecord,
+    NativeAgentServiceStateRecord, NativeAgentStateFilter, NativeAgentStateResponse,
     NativeAgentStateResponseFilters, NativeAgentStateSource, NativeCollectionRoyaltyStateRecord,
     NativeMarketStateFilter, NativeMarketStateResponse, NativeMarketStateResponseFilters,
     NativeMarketStateSource, NativeModuleForwarderDescriptor, NativeNftListingStateRecord,
@@ -133,10 +136,20 @@ fn export_bindings() {
     MrcMetadataResponse::export_all_to(&out).expect("MrcMetadataResponse");
     MrcPolicyRecord::export_all_to(&out).expect("MrcPolicyRecord");
     MrcPolicySpendRecord::export_all_to(&out).expect("MrcPolicySpendRecord");
+    NativeAgentIssuerStateRecord::export_all_to(&out).expect("NativeAgentIssuerStateRecord");
+    NativeAgentAttestationStateRecord::export_all_to(&out)
+        .expect("NativeAgentAttestationStateRecord");
+    NativeAgentConsentStateRecord::export_all_to(&out).expect("NativeAgentConsentStateRecord");
+    NativeAgentServiceStateRecord::export_all_to(&out).expect("NativeAgentServiceStateRecord");
+    NativeAgentAvailabilityStateRecord::export_all_to(&out)
+        .expect("NativeAgentAvailabilityStateRecord");
+    NativeAgentArbiterStateRecord::export_all_to(&out).expect("NativeAgentArbiterStateRecord");
     NativeAgentEscrowStateRecord::export_all_to(&out).expect("NativeAgentEscrowStateRecord");
     NativeAgentPolicySpendStateRecord::export_all_to(&out)
         .expect("NativeAgentPolicySpendStateRecord");
     NativeAgentPolicyStateRecord::export_all_to(&out).expect("NativeAgentPolicyStateRecord");
+    NativeAgentReputationReviewStateRecord::export_all_to(&out)
+        .expect("NativeAgentReputationReviewStateRecord");
     NativeAgentStateFilter::export_all_to(&out).expect("NativeAgentStateFilter");
     NativeAgentStateResponse::export_all_to(&out).expect("NativeAgentStateResponse");
     NativeAgentStateResponseFilters::export_all_to(&out).expect("NativeAgentStateResponseFilters");

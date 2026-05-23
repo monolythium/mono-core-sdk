@@ -1029,7 +1029,10 @@ var RpcClient = class _RpcClient {
   }
   /** `lyth_nativeAgentState` — current-state native agent policy and escrow rows. */
   async lythNativeAgentState(filter = {}) {
-    return this.call("lyth_nativeAgentState", [nativeAgentStateFilterParams(filter)]);
+    const response = await this.call("lyth_nativeAgentState", [
+      nativeAgentStateFilterParams(filter)
+    ]);
+    return decodeNativeAgentStateResponse(response);
   }
   /** `lyth_nativeMarketState` — current-state native spot and NFT market rows. */
   async lythNativeMarketState(filter = {}) {
@@ -1473,6 +1476,124 @@ function parseRpcBigintNullable(value, label) {
 function parseStringNullable(value) {
   return value === null || value === void 0 ? null : String(value);
 }
+function parseStringField(value, label) {
+  if (value === null || value === void 0) {
+    throw SdkError.malformed(`${label} is missing`);
+  }
+  return String(value);
+}
+function parseBooleanField(value, label) {
+  if (typeof value !== "boolean") {
+    throw SdkError.malformed(`${label} must be a boolean`);
+  }
+  return value;
+}
+function parseRpcUint(value, label, max, typeName) {
+  const parsed = parseRpcNumber(value, label);
+  if (parsed > max) {
+    throw SdkError.malformed(`${label} must be a ${typeName}`);
+  }
+  return parsed;
+}
+function parseRpcUintNullable(value, label, max, typeName) {
+  return value === null || value === void 0 ? null : parseRpcUint(value, label, max, typeName);
+}
+function decodeNativeAgentStateArray(row, key, decode, defaultMissing) {
+  const value = row[key];
+  if (value === void 0 && defaultMissing) return [];
+  if (!Array.isArray(value)) {
+    throw SdkError.malformed(`native agent state ${key} must be an array`);
+  }
+  return value.map((item, index) => decode(item, `native agent state ${key}[${index}]`));
+}
+function decodeNativeAgentExistingStateRecord(value, label) {
+  return expectObject(value, label);
+}
+function decodeNativeAgentIssuerStateRecord(value, label) {
+  const row = expectObject(value, label);
+  return {
+    issuerId: parseStringField(row["issuerId"], `${label}.issuerId`),
+    issuer: parseStringField(row["issuer"], `${label}.issuer`),
+    metadataHash: parseStringNullable(row["metadataHash"]),
+    updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`)
+  };
+}
+function decodeNativeAgentAttestationStateRecord(value, label) {
+  const row = expectObject(value, label);
+  return {
+    attestationId: parseStringField(row["attestationId"], `${label}.attestationId`),
+    issuerId: parseStringNullable(row["issuerId"]),
+    issuer: parseStringNullable(row["issuer"]),
+    subject: parseStringField(row["subject"], `${label}.subject`),
+    schemaHash: parseStringNullable(row["schemaHash"]),
+    payloadHash: parseStringNullable(row["payloadHash"]),
+    active: parseBooleanField(row["active"], `${label}.active`),
+    updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`)
+  };
+}
+function decodeNativeAgentConsentStateRecord(value, label) {
+  const row = expectObject(value, label);
+  return {
+    consentId: parseStringField(row["consentId"], `${label}.consentId`),
+    subject: parseStringField(row["subject"], `${label}.subject`),
+    grantee: parseStringField(row["grantee"], `${label}.grantee`),
+    scopeHash: parseStringNullable(row["scopeHash"]),
+    expiresAt: parseRpcNumberNullable(row["expiresAt"], `${label}.expiresAt`),
+    active: parseBooleanField(row["active"], `${label}.active`),
+    updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`)
+  };
+}
+function decodeNativeAgentServiceStateRecord(value, label) {
+  const row = expectObject(value, label);
+  return {
+    serviceId: parseStringField(row["serviceId"], `${label}.serviceId`),
+    provider: parseStringField(row["provider"], `${label}.provider`),
+    categoryHash: parseStringNullable(row["categoryHash"]),
+    metadataHash: parseStringNullable(row["metadataHash"]),
+    active: parseBooleanField(row["active"], `${label}.active`),
+    updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`)
+  };
+}
+function decodeNativeAgentAvailabilityStateRecord(value, label) {
+  const row = expectObject(value, label);
+  return {
+    provider: parseStringField(row["provider"], `${label}.provider`),
+    maxConcurrent: parseRpcUint(row["maxConcurrent"], `${label}.maxConcurrent`, 4294967295, "uint32"),
+    openRequests: parseRpcUint(row["openRequests"], `${label}.openRequests`, 4294967295, "uint32"),
+    paused: parseBooleanField(row["paused"], `${label}.paused`),
+    updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`)
+  };
+}
+function decodeNativeAgentArbiterStateRecord(value, label) {
+  const row = expectObject(value, label);
+  return {
+    arbiterId: parseStringField(row["arbiterId"], `${label}.arbiterId`),
+    arbiter: parseStringField(row["arbiter"], `${label}.arbiter`),
+    tier: parseRpcUintNullable(row["tier"], `${label}.tier`, 65535, "uint16"),
+    metadataHash: parseStringNullable(row["metadataHash"]),
+    updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`)
+  };
+}
+function decodeNativeAgentReputationReviewStateRecord(value, label) {
+  const row = expectObject(value, label);
+  return {
+    reviewId: parseStringField(row["reviewId"], `${label}.reviewId`),
+    reviewer: parseStringField(row["reviewer"], `${label}.reviewer`),
+    subject: parseStringField(row["subject"], `${label}.subject`),
+    categoryId: parseRpcUint(row["categoryId"], `${label}.categoryId`, 4294967295, "uint32"),
+    speedScore: parseRpcUint(row["speedScore"], `${label}.speedScore`, 255, "uint8"),
+    qualityScore: parseRpcUint(row["qualityScore"], `${label}.qualityScore`, 255, "uint8"),
+    communicationScore: parseRpcUint(
+      row["communicationScore"],
+      `${label}.communicationScore`,
+      255,
+      "uint8"
+    ),
+    accuracyScore: parseRpcUint(row["accuracyScore"], `${label}.accuracyScore`, 255, "uint8"),
+    payloadHash: parseStringNullable(row["payloadHash"]),
+    updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`)
+  };
+}
 function expectObject(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw SdkError.malformed(`${label} must be an object`);
@@ -1731,6 +1852,81 @@ function nativeAgentStateFilterParams(filter) {
   if (filter.limit != null) out.limit = encodeRpcU64Number(filter.limit, "limit");
   return out;
 }
+function decodeNativeAgentStateResponse(value) {
+  const row = expectObject(value, "native agent state response");
+  return {
+    schemaVersion: parseRpcNumber(row["schemaVersion"], "native agent state schemaVersion"),
+    limit: parseRpcNumber(row["limit"], "native agent state limit"),
+    filters: expectObject(
+      row["filters"],
+      "native agent state filters"
+    ),
+    issuers: decodeNativeAgentStateArray(
+      row,
+      "issuers",
+      decodeNativeAgentIssuerStateRecord,
+      true
+    ),
+    attestations: decodeNativeAgentStateArray(
+      row,
+      "attestations",
+      decodeNativeAgentAttestationStateRecord,
+      true
+    ),
+    consents: decodeNativeAgentStateArray(
+      row,
+      "consents",
+      decodeNativeAgentConsentStateRecord,
+      true
+    ),
+    services: decodeNativeAgentStateArray(
+      row,
+      "services",
+      decodeNativeAgentServiceStateRecord,
+      true
+    ),
+    availability: decodeNativeAgentStateArray(
+      row,
+      "availability",
+      decodeNativeAgentAvailabilityStateRecord,
+      true
+    ),
+    arbiters: decodeNativeAgentStateArray(
+      row,
+      "arbiters",
+      decodeNativeAgentArbiterStateRecord,
+      true
+    ),
+    reputationReviews: decodeNativeAgentStateArray(
+      row,
+      "reputationReviews",
+      decodeNativeAgentReputationReviewStateRecord,
+      true
+    ),
+    spendingPolicies: decodeNativeAgentStateArray(
+      row,
+      "spendingPolicies",
+      decodeNativeAgentExistingStateRecord,
+      false
+    ),
+    policySpends: decodeNativeAgentStateArray(
+      row,
+      "policySpends",
+      decodeNativeAgentExistingStateRecord,
+      false
+    ),
+    escrows: decodeNativeAgentStateArray(
+      row,
+      "escrows",
+      decodeNativeAgentExistingStateRecord,
+      false
+    ),
+    source: expectObject(
+      row["source"],
+      "native agent state source"
+    )
+  };
+}
 function nativeMarketStateFilterParams(filter) {
   const out = {};
   if (filter.marketId != null) out.marketId = filter.marketId;
@@ -1964,7 +2160,14 @@ var ApiClient = class {
     };
   }
   async nativeAgentState(filter = {}) {
-    return this.get("/native-agent-state", nativeAgentStateFilterParams(filter));
+    const response = await this.get(
+      "/native-agent-state",
+      nativeAgentStateFilterParams(filter)
+    );
+    return {
+      ...response,
+      data: decodeNativeAgentStateResponse(response.data)
+    };
   }
   async nativeMarketState(filter = {}) {
     return this.get("/native-market-state", nativeMarketStateFilterParams(filter));
@@ -5828,6 +6031,7 @@ exports.computeNoEvmTargetReceiptHash = computeNoEvmTargetReceiptHash;
 exports.consumeNativeEvents = consumeNativeEvents;
 exports.decodeHasPubkeyReturn = decodeHasPubkeyReturn;
 exports.decodeLookupPubkeyReturn = decodeLookupPubkeyReturn;
+exports.decodeNativeAgentStateResponse = decodeNativeAgentStateResponse;
 exports.decodeNoEvmReceiptTranscript = decodeNoEvmReceiptTranscript;
 exports.delegationAddressHex = delegationAddressHex;
 exports.deriveClobMarketId = deriveClobMarketId;
