@@ -4646,6 +4646,36 @@ function encodeNativeNftCancelListingCall(args) {
   monoAddressInto(w, args.caller, "caller");
   return bytesToHex4(w.toBytes());
 }
+function encodeNativeNftPlaceAuctionBidCall(args) {
+  const w = new BincodeWriter();
+  w.enumVariant(1);
+  w.enumVariant(5);
+  w.rawBytes(bytes32FromHex(args.listingId, "listingId"));
+  monoAddressInto(w, args.bidder, "bidder");
+  w.u128(positiveU128Decimal(args.amount, "amount"));
+  w.u64(uint64(args.currentBlock, "currentBlock"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeNftSettleAuctionCall(args) {
+  const w = new BincodeWriter();
+  w.enumVariant(1);
+  w.enumVariant(6);
+  w.rawBytes(bytes32FromHex(args.listingId, "listingId"));
+  w.u64(uint64(args.currentBlock, "currentBlock"));
+  return bytesToHex4(w.toBytes());
+}
+function encodeNativeNftSweepExpiredListingsCall(args) {
+  const listingIds = normalizeListingIds(args.listingIds, "listingIds");
+  const w = new BincodeWriter();
+  w.enumVariant(1);
+  w.enumVariant(3);
+  w.u64(BigInt(listingIds.length));
+  for (const listingId of listingIds) {
+    w.rawBytes(listingId);
+  }
+  w.u64(uint64(args.currentBlock, "currentBlock"));
+  return bytesToHex4(w.toBytes());
+}
 function buildNativeMarketModuleCallEnvelope(input, maxCycles) {
   return {
     module: "market",
@@ -4694,6 +4724,15 @@ function buildNativeNftBuyListingForwarderInput(args, maxCycles) {
 function buildNativeNftCancelListingForwarderInput(args, maxCycles) {
   return encodeNativeMarketModuleForwarderInput(buildNativeNftCancelListingModuleCall(args, maxCycles));
 }
+function buildNativeNftPlaceAuctionBidForwarderInput(args, maxCycles) {
+  return encodeNativeMarketModuleForwarderInput(buildNativeNftPlaceAuctionBidModuleCall(args, maxCycles));
+}
+function buildNativeNftSettleAuctionForwarderInput(args, maxCycles) {
+  return encodeNativeMarketModuleForwarderInput(buildNativeNftSettleAuctionModuleCall(args, maxCycles));
+}
+function buildNativeNftSweepExpiredListingsForwarderInput(args, maxCycles) {
+  return encodeNativeMarketModuleForwarderInput(buildNativeNftSweepExpiredListingsModuleCall(args, maxCycles));
+}
 function buildNativeSpotLimitOrderModuleCall(args, maxCycles) {
   return buildNativeMarketModuleCallEnvelope(encodeNativeSpotLimitOrderCall(args), maxCycles);
 }
@@ -4708,6 +4747,15 @@ function buildNativeNftBuyListingModuleCall(args, maxCycles) {
 }
 function buildNativeNftCancelListingModuleCall(args, maxCycles) {
   return buildNativeMarketModuleCallEnvelope(encodeNativeNftCancelListingCall(args), maxCycles);
+}
+function buildNativeNftPlaceAuctionBidModuleCall(args, maxCycles) {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeNftPlaceAuctionBidCall(args), maxCycles);
+}
+function buildNativeNftSettleAuctionModuleCall(args, maxCycles) {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeNftSettleAuctionCall(args), maxCycles);
+}
+function buildNativeNftSweepExpiredListingsModuleCall(args, maxCycles) {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeNftSweepExpiredListingsCall(args), maxCycles);
 }
 function buildPlaceSpotLimitOrderPlan(args) {
   return {
@@ -4846,6 +4894,15 @@ function listingKindInto(w, kind) {
     return;
   }
   throw new MarketActionError("kind must be 'fixed-price' or an english auction");
+}
+function normalizeListingIds(listingIds, name) {
+  if (!Array.isArray(listingIds)) {
+    throw new MarketActionError(`${name} must be an array`);
+  }
+  if (listingIds.length === 0 || listingIds.length > 64) {
+    throw new MarketActionError(`${name} must contain 1 to 64 listing ids`);
+  }
+  return listingIds.map((listingId, i) => bytes32FromHex(listingId, `${name}[${i}]`));
 }
 function positiveDecimal(value, name) {
   if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) {
@@ -5272,6 +5329,12 @@ exports.buildNativeNftCancelListingForwarderInput = buildNativeNftCancelListingF
 exports.buildNativeNftCancelListingModuleCall = buildNativeNftCancelListingModuleCall;
 exports.buildNativeNftCreateListingForwarderInput = buildNativeNftCreateListingForwarderInput;
 exports.buildNativeNftCreateListingModuleCall = buildNativeNftCreateListingModuleCall;
+exports.buildNativeNftPlaceAuctionBidForwarderInput = buildNativeNftPlaceAuctionBidForwarderInput;
+exports.buildNativeNftPlaceAuctionBidModuleCall = buildNativeNftPlaceAuctionBidModuleCall;
+exports.buildNativeNftSettleAuctionForwarderInput = buildNativeNftSettleAuctionForwarderInput;
+exports.buildNativeNftSettleAuctionModuleCall = buildNativeNftSettleAuctionModuleCall;
+exports.buildNativeNftSweepExpiredListingsForwarderInput = buildNativeNftSweepExpiredListingsForwarderInput;
+exports.buildNativeNftSweepExpiredListingsModuleCall = buildNativeNftSweepExpiredListingsModuleCall;
 exports.buildNativeSpotCancelOrderForwarderInput = buildNativeSpotCancelOrderForwarderInput;
 exports.buildNativeSpotCancelOrderModuleCall = buildNativeSpotCancelOrderModuleCall;
 exports.buildNativeSpotLimitOrderForwarderInput = buildNativeSpotLimitOrderForwarderInput;
@@ -5305,6 +5368,9 @@ exports.encodeNativeMarketModuleForwarderInput = encodeNativeMarketModuleForward
 exports.encodeNativeNftBuyListingCall = encodeNativeNftBuyListingCall;
 exports.encodeNativeNftCancelListingCall = encodeNativeNftCancelListingCall;
 exports.encodeNativeNftCreateListingCall = encodeNativeNftCreateListingCall;
+exports.encodeNativeNftPlaceAuctionBidCall = encodeNativeNftPlaceAuctionBidCall;
+exports.encodeNativeNftSettleAuctionCall = encodeNativeNftSettleAuctionCall;
+exports.encodeNativeNftSweepExpiredListingsCall = encodeNativeNftSweepExpiredListingsCall;
 exports.encodeNativeSpotCancelOrderCall = encodeNativeSpotCancelOrderCall;
 exports.encodeNativeSpotLimitOrderCall = encodeNativeSpotLimitOrderCall;
 exports.encodePlaceLimitOrderCalldata = encodePlaceLimitOrderCalldata;

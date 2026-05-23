@@ -182,6 +182,31 @@ export interface EncodeNativeNftCancelListingArgs {
   caller: NativeMarketAddressInput;
 }
 
+export interface EncodeNativeNftPlaceAuctionBidArgs {
+  /** 32-byte native NFT auction listing id. */
+  listingId: string;
+  /** Bidder MonoAddress; 0x addresses and raw 20-byte inputs default to user kind. */
+  bidder: NativeMarketAddressInput;
+  /** Positive integer decimal string encoded as native MrcAmount/u128. */
+  amount: string;
+  /** Current block attached to the native auction bid call. */
+  currentBlock: string | number | bigint;
+}
+
+export interface EncodeNativeNftSettleAuctionArgs {
+  /** 32-byte native NFT auction listing id. */
+  listingId: string;
+  /** Current block attached to the native auction settlement call. */
+  currentBlock: string | number | bigint;
+}
+
+export interface EncodeNativeNftSweepExpiredListingsArgs {
+  /** Candidate 32-byte native NFT listing ids; mono-core accepts 1..64 ids. */
+  listingIds: readonly string[];
+  /** Current block attached to the native listing sweep call. */
+  currentBlock: string | number | bigint;
+}
+
 export interface NativeMarketModuleContractCall {
   /** Stable typed system-module address (`MARKET_NATIVE_MOD_V1`). */
   to: string;
@@ -346,6 +371,39 @@ export function encodeNativeNftCancelListingCall(args: EncodeNativeNftCancelList
   return bytesToHex(w.toBytes());
 }
 
+export function encodeNativeNftPlaceAuctionBidCall(args: EncodeNativeNftPlaceAuctionBidArgs): string {
+  const w = new BincodeWriter();
+  w.enumVariant(1); // NativeMarketCall::Nft
+  w.enumVariant(5); // NftMarketCall::PlaceAuctionBid
+  w.rawBytes(bytes32FromHex(args.listingId, "listingId"));
+  monoAddressInto(w, args.bidder, "bidder");
+  w.u128(positiveU128Decimal(args.amount, "amount"));
+  w.u64(uint64(args.currentBlock, "currentBlock"));
+  return bytesToHex(w.toBytes());
+}
+
+export function encodeNativeNftSettleAuctionCall(args: EncodeNativeNftSettleAuctionArgs): string {
+  const w = new BincodeWriter();
+  w.enumVariant(1); // NativeMarketCall::Nft
+  w.enumVariant(6); // NftMarketCall::SettleAuction
+  w.rawBytes(bytes32FromHex(args.listingId, "listingId"));
+  w.u64(uint64(args.currentBlock, "currentBlock"));
+  return bytesToHex(w.toBytes());
+}
+
+export function encodeNativeNftSweepExpiredListingsCall(args: EncodeNativeNftSweepExpiredListingsArgs): string {
+  const listingIds = normalizeListingIds(args.listingIds, "listingIds");
+  const w = new BincodeWriter();
+  w.enumVariant(1); // NativeMarketCall::Nft
+  w.enumVariant(3); // NftMarketCall::SweepExpiredListings
+  w.u64(BigInt(listingIds.length));
+  for (const listingId of listingIds) {
+    w.rawBytes(listingId);
+  }
+  w.u64(uint64(args.currentBlock, "currentBlock"));
+  return bytesToHex(w.toBytes());
+}
+
 export function buildNativeMarketModuleCallEnvelope(
   input: string,
   maxCycles: string | number | bigint,
@@ -421,6 +479,27 @@ export function buildNativeNftCancelListingForwarderInput(
   return encodeNativeMarketModuleForwarderInput(buildNativeNftCancelListingModuleCall(args, maxCycles));
 }
 
+export function buildNativeNftPlaceAuctionBidForwarderInput(
+  args: EncodeNativeNftPlaceAuctionBidArgs,
+  maxCycles: string | number | bigint,
+): NativeMarketForwarderInput {
+  return encodeNativeMarketModuleForwarderInput(buildNativeNftPlaceAuctionBidModuleCall(args, maxCycles));
+}
+
+export function buildNativeNftSettleAuctionForwarderInput(
+  args: EncodeNativeNftSettleAuctionArgs,
+  maxCycles: string | number | bigint,
+): NativeMarketForwarderInput {
+  return encodeNativeMarketModuleForwarderInput(buildNativeNftSettleAuctionModuleCall(args, maxCycles));
+}
+
+export function buildNativeNftSweepExpiredListingsForwarderInput(
+  args: EncodeNativeNftSweepExpiredListingsArgs,
+  maxCycles: string | number | bigint,
+): NativeMarketForwarderInput {
+  return encodeNativeMarketModuleForwarderInput(buildNativeNftSweepExpiredListingsModuleCall(args, maxCycles));
+}
+
 export function buildNativeSpotLimitOrderModuleCall(
   args: EncodeNativeSpotLimitOrderArgs,
   maxCycles: string | number | bigint,
@@ -454,6 +533,27 @@ export function buildNativeNftCancelListingModuleCall(
   maxCycles: string | number | bigint,
 ): NativeMarketModuleCallEnvelope {
   return buildNativeMarketModuleCallEnvelope(encodeNativeNftCancelListingCall(args), maxCycles);
+}
+
+export function buildNativeNftPlaceAuctionBidModuleCall(
+  args: EncodeNativeNftPlaceAuctionBidArgs,
+  maxCycles: string | number | bigint,
+): NativeMarketModuleCallEnvelope {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeNftPlaceAuctionBidCall(args), maxCycles);
+}
+
+export function buildNativeNftSettleAuctionModuleCall(
+  args: EncodeNativeNftSettleAuctionArgs,
+  maxCycles: string | number | bigint,
+): NativeMarketModuleCallEnvelope {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeNftSettleAuctionCall(args), maxCycles);
+}
+
+export function buildNativeNftSweepExpiredListingsModuleCall(
+  args: EncodeNativeNftSweepExpiredListingsArgs,
+  maxCycles: string | number | bigint,
+): NativeMarketModuleCallEnvelope {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeNftSweepExpiredListingsCall(args), maxCycles);
 }
 
 export function buildPlaceSpotLimitOrderPlan(args: PlaceSpotLimitOrderArgs): MarketTransactionPlan {
@@ -636,6 +736,16 @@ function listingKindInto(w: BincodeWriter, kind: NativeNftListingKind): void {
     return;
   }
   throw new MarketActionError("kind must be 'fixed-price' or an english auction");
+}
+
+function normalizeListingIds(listingIds: readonly string[], name: string): Uint8Array[] {
+  if (!Array.isArray(listingIds)) {
+    throw new MarketActionError(`${name} must be an array`);
+  }
+  if (listingIds.length === 0 || listingIds.length > 64) {
+    throw new MarketActionError(`${name} must contain 1 to 64 listing ids`);
+  }
+  return listingIds.map((listingId, i) => bytes32FromHex(listingId, `${name}[${i}]`));
 }
 
 function positiveDecimal(value: string, name: string): bigint {
