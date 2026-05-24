@@ -252,6 +252,7 @@ export {
   verifyNoEvmFinalityEvidenceThreshold,
   verifyNoEvmArchiveProofSignatures,
   verifyNoEvmReceiptProof,
+  verifyNoEvmReceiptProofTrust,
 } from "./receipt-proof.js";
 export type {
   NoEvmBlsFinalityVerification,
@@ -259,8 +260,13 @@ export type {
   NoEvmArchiveSignatureVerificationIssue,
   NoEvmArchiveSignatureVerificationIssueCode,
   NoEvmArchiveTrustedSigner,
+  NoEvmReceiptFinalityTrustPolicy,
   NoEvmReceiptProofErrorCode,
   NoEvmReceiptProofVerification,
+  NoEvmReceiptTrustIssue,
+  NoEvmReceiptTrustIssueCode,
+  NoEvmReceiptTrustPolicy,
+  NoEvmReceiptTrustVerification,
   NoEvmReceiptTrustedBlsSigner,
 } from "./receipt-proof.js";
 export {
@@ -305,8 +311,10 @@ export {
   fetchChainInfoLatest,
   fetchChainRegistryLatest,
   getChainInfo,
+  getNoEvmReceiptTrustPolicy,
   getP2pSeeds,
   getRpcEndpoints,
+  noEvmReceiptTrustPolicyFromChainInfo,
   parseChainRegistryToml,
 } from "./registry.js";
 export type {
@@ -315,6 +323,11 @@ export type {
   ExplorerEndpoint,
   NetworkSlug,
   P2pSeed,
+  ReceiptProofTrustArchivePolicy,
+  ReceiptProofTrustArchiveSigner,
+  ReceiptProofTrustFinalityPolicy,
+  ReceiptProofTrustFinalitySigner,
+  ReceiptProofTrustPolicy,
   RpcEndpoint,
 } from "./registry.js";
 export { SdkError } from "./error.js";

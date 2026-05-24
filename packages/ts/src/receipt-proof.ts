@@ -94,6 +94,8 @@ export interface NoEvmReceiptProofVerification {
 export interface NoEvmArchiveTrustedSigner {
   publicKey: Uint8Array | readonly number[];
   signerId?: string;
+  validFromHeight?: number | bigint;
+  validToHeight?: number | bigint;
 }
 
 export type NoEvmArchiveSignatureVerificationIssueCode =
@@ -122,6 +124,8 @@ export interface NoEvmArchiveSignatureVerification {
 export interface NoEvmReceiptTrustedBlsSigner {
   authorityIndex: number;
   publicKey: Uint8Array | readonly number[];
+  validFromRound?: number | bigint;
+  validToRound?: number | bigint;
 }
 
 export interface NoEvmBlsFinalityVerification {
@@ -135,6 +139,59 @@ export interface NoEvmBlsFinalityVerification {
   acceptedSignatureCount: number;
   requiredSignatureCount: number;
   verified: boolean;
+}
+
+export type NoEvmReceiptFinalityTrustPolicy =
+  | {
+      mode: "cluster";
+      chainId?: number | bigint;
+      clusterPublicKey: Uint8Array | readonly number[];
+      committeeSize: number;
+      threshold: number;
+      validFromRound?: number | bigint;
+      validToRound?: number | bigint;
+    }
+  | {
+      mode: "multisig";
+      chainId?: number | bigint;
+      trustedSigners: readonly NoEvmReceiptTrustedBlsSigner[];
+      threshold: number;
+      validFromRound?: number | bigint;
+      validToRound?: number | bigint;
+    };
+
+export interface NoEvmReceiptTrustPolicy {
+  chainId?: number | bigint;
+  archive?: {
+    trustedSigners: readonly NoEvmArchiveTrustedSigner[];
+    threshold: number;
+    validFromHeight?: number | bigint;
+    validToHeight?: number | bigint;
+  };
+  finality?: NoEvmReceiptFinalityTrustPolicy;
+}
+
+export type NoEvmReceiptTrustIssueCode =
+  | "missing_receipt_proof"
+  | "missing_archive_proof"
+  | "archive_policy_not_valid_at_height"
+  | "archive_verification_failed"
+  | "missing_finality_evidence"
+  | "missing_finality_chain_id"
+  | "finality_policy_not_valid_at_round"
+  | "finality_verification_failed";
+
+export interface NoEvmReceiptTrustIssue {
+  code: NoEvmReceiptTrustIssueCode;
+  message: string;
+}
+
+export interface NoEvmReceiptTrustVerification {
+  verified: boolean;
+  receiptProof: NoEvmReceiptProofVerification | null;
+  archiveSignatures: NoEvmArchiveSignatureVerification | null;
+  finalityEvidence: NoEvmBlsFinalityVerification | null;
+  issues: NoEvmReceiptTrustIssue[];
 }
 
 export function decodeNoEvmReceiptTranscript(proof: NoEvmReceiptProof): Uint8Array[] {
@@ -445,6 +502,143 @@ export function verifyNoEvmFinalityEvidenceMultisig(
     allSignersTrusted,
     signatureValid,
   });
+}
+
+export function verifyNoEvmReceiptProofTrust(
+  proof: NoEvmReceiptProof | null | undefined,
+  policy: NoEvmReceiptTrustPolicy,
+): NoEvmReceiptTrustVerification {
+  const receiptProof = verifyNoEvmReceiptProof(proof);
+  const issues: NoEvmReceiptTrustIssue[] = [];
+  let archiveSignatures: NoEvmArchiveSignatureVerification | null = null;
+  let finalityEvidence: NoEvmBlsFinalityVerification | null = null;
+
+  if (receiptProof == null) {
+    issues.push({
+      code: "missing_receipt_proof",
+      message: "native receipt proof is required for trust verification",
+    });
+  }
+
+  if (policy.archive != null) {
+    const archiveProof = proof == null ? null : (proof as NoEvmCompactReceiptProof).archiveProof;
+    if (archiveProof == null) {
+      issues.push({
+        code: "missing_archive_proof",
+        message: "native receipt proof does not carry archive signature material",
+      });
+    } else {
+      const proofBlockHeight = proof!.blockHeight;
+      const blockHeight = BigInt(proofBlockHeight);
+      const archivePolicyValid = isWithinOptionalBounds(
+        blockHeight,
+        policy.archive.validFromHeight,
+        policy.archive.validToHeight,
+      );
+      const activeTrustedSigners = policy.archive.trustedSigners.filter((signer) =>
+        isWithinOptionalBounds(blockHeight, signer.validFromHeight, signer.validToHeight),
+      );
+      if (!archivePolicyValid) {
+        issues.push({
+          code: "archive_policy_not_valid_at_height",
+          message: `archive trust policy is not valid at block height ${proofBlockHeight}`,
+        });
+      }
+      archiveSignatures = verifyNoEvmArchiveProofSignatures(
+        archiveProof,
+        activeTrustedSigners,
+        policy.archive.threshold,
+      );
+      if (!archiveSignatures.verified) {
+        issues.push({
+          code: "archive_verification_failed",
+          message: "archive signature material did not satisfy the trusted policy",
+        });
+      }
+    }
+  }
+
+  if (policy.finality != null) {
+    const proofFinality = proof == null ? null : proof.finalityEvidence;
+    if (proofFinality == null) {
+      issues.push({
+        code: "missing_finality_evidence",
+        message: "native receipt proof does not carry BLS finality evidence",
+      });
+    } else {
+      const chainId = policy.finality.chainId ?? policy.chainId;
+      if (chainId == null) {
+        issues.push({
+          code: "missing_finality_chain_id",
+          message: "finality trust policy requires a chain id",
+        });
+      } else if (policy.finality.mode === "cluster") {
+        const round = BigInt(proofFinality.round);
+        const finalityPolicyValid = isWithinOptionalBounds(
+          round,
+          policy.finality.validFromRound,
+          policy.finality.validToRound,
+        );
+        if (!finalityPolicyValid) {
+          issues.push({
+            code: "finality_policy_not_valid_at_round",
+            message: `finality trust policy is not valid at round ${proofFinality.round}`,
+          });
+        }
+        finalityEvidence = verifyNoEvmFinalityEvidenceThreshold(proofFinality, {
+          chainId,
+          clusterPublicKey: policy.finality.clusterPublicKey,
+          committeeSize: policy.finality.committeeSize,
+          threshold: policy.finality.threshold,
+        });
+      } else {
+        const round = BigInt(proofFinality.round);
+        const finalityPolicyValid = isWithinOptionalBounds(
+          round,
+          policy.finality.validFromRound,
+          policy.finality.validToRound,
+        );
+        const activeTrustedSigners = policy.finality.trustedSigners.filter((signer) =>
+          isWithinOptionalBounds(round, signer.validFromRound, signer.validToRound),
+        );
+        if (!finalityPolicyValid) {
+          issues.push({
+            code: "finality_policy_not_valid_at_round",
+            message: `finality trust policy is not valid at round ${proofFinality.round}`,
+          });
+        }
+        finalityEvidence = verifyNoEvmFinalityEvidenceMultisig(proofFinality, {
+          chainId,
+          trustedSigners: activeTrustedSigners,
+          threshold: policy.finality.threshold,
+        });
+      }
+      if (finalityEvidence != null && !finalityEvidence.verified) {
+        issues.push({
+          code: "finality_verification_failed",
+          message: "BLS finality evidence did not satisfy the trusted policy",
+        });
+      }
+    }
+  }
+
+  return {
+    verified: receiptProof != null && issues.length === 0,
+    receiptProof,
+    archiveSignatures,
+    finalityEvidence,
+    issues,
+  };
+}
+
+function isWithinOptionalBounds(
+  value: bigint,
+  validFrom: number | bigint | undefined,
+  validTo: number | bigint | undefined,
+): boolean {
+  if (validFrom != null && value < BigInt(validFrom)) return false;
+  if (validTo != null && value > BigInt(validTo)) return false;
+  return true;
 }
 
 function verifyBoundedReceiptProof(proof: NoEvmReceiptProof): NoEvmReceiptProofVerification {

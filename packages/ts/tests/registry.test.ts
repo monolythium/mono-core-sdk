@@ -6,10 +6,14 @@ import {
   TESTNET_69420,
   fetchChainInfoLatest,
   getP2pSeeds,
+  getNoEvmReceiptTrustPolicy,
   getRpcEndpoints,
+  noEvmReceiptTrustPolicyFromChainInfo,
   parseChainRegistryToml,
 } from "../src/index.js";
 
+const ARCHIVE_PUBLIC_KEY = `0x${"11".repeat(1952)}`;
+const BLS_PUBLIC_KEY = `0x${"22".repeat(48)}`;
 const TESTNET_TOML = `
 chain_id     = 69420
 network      = "testnet-69420"
@@ -89,6 +93,45 @@ describe("chain registry snapshot", () => {
       tier: "official",
     });
     expect(parsed.p2p[0].multiaddr).toContain("/ip4/178.105.15.216/");
+  });
+
+  it("parses optional native receipt trust policy metadata without trusting by default", () => {
+    expect(getNoEvmReceiptTrustPolicy("testnet-69420")).toBeNull();
+
+    const parsed = parseChainRegistryToml(`
+${TESTNET_TOML}
+[receipt_proof_trust.archive]
+signature_threshold = 1
+valid_from_height = 0
+
+[[receipt_proof_trust.archive.signers]]
+public_key = "${ARCHIVE_PUBLIC_KEY}"
+signer_id = "0x${"33".repeat(20)}"
+notes = "fixture signer"
+
+[receipt_proof_trust.finality]
+mode = "cluster"
+threshold = 5
+committee_size = 7
+cluster_public_key = "${BLS_PUBLIC_KEY}"
+valid_from_round = 0
+`);
+
+    expect(parsed.receipt_proof_trust?.archive?.signature_threshold).toBe(1);
+    expect(parsed.receipt_proof_trust?.archive?.signers[0]?.public_key).toBe(ARCHIVE_PUBLIC_KEY);
+    expect(parsed.receipt_proof_trust?.finality?.mode).toBe("cluster");
+
+    const policy = noEvmReceiptTrustPolicyFromChainInfo(parsed);
+    expect(policy?.chainId).toBe(69420);
+    expect(policy?.archive?.threshold).toBe(1);
+    expect(policy?.archive?.trustedSigners[0]?.publicKey).toHaveLength(1952);
+    expect(policy?.archive?.trustedSigners[0]?.signerId).toBe(`0x${"33".repeat(20)}`);
+    expect(policy?.finality?.mode).toBe("cluster");
+    if (policy?.finality?.mode === "cluster") {
+      expect(policy.finality.clusterPublicKey).toHaveLength(48);
+      expect(policy.finality.committeeSize).toBe(7);
+      expect(policy.finality.chainId).toBe(69420);
+    }
   });
 
   it("fetches latest registry files from the chain-registry master branch", () => {

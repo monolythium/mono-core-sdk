@@ -1623,6 +1623,7 @@ function isIdentifier(value) {
 }
 
 // src/registry.ts
+var BLS_PUBLIC_KEY_BYTE_LENGTH = 48;
 var TESTNET_69420 = {
   chain_id: 69420,
   network: "testnet-69420",
@@ -1718,6 +1719,99 @@ function getRpcEndpoints(network) {
 function getP2pSeeds(network) {
   return getChainInfo(network).p2p;
 }
+function getNoEvmReceiptTrustPolicy(network, registry = CHAIN_REGISTRY) {
+  const info = registry[network];
+  if (!info) {
+    throw new Error(`unknown Monolythium network: ${network}`);
+  }
+  return noEvmReceiptTrustPolicyFromChainInfo(info);
+}
+function noEvmReceiptTrustPolicyFromChainInfo(info) {
+  const trust = info.receipt_proof_trust;
+  if (trust == null || trust.archive == null && trust.finality == null) return null;
+  const policy = { chainId: info.chain_id };
+  if (trust.archive != null) {
+    policy.archive = {
+      threshold: assertSafeIntegerAtLeast(
+        trust.archive.signature_threshold,
+        1,
+        "receipt_proof_trust.archive.signature_threshold"
+      ),
+      validFromHeight: trust.archive.valid_from_height,
+      validToHeight: trust.archive.valid_to_height,
+      trustedSigners: trust.archive.signers.map((signer, index) => ({
+        publicKey: decodeFixedHex(
+          signer.public_key,
+          ML_DSA_65_PUBLIC_KEY_LEN,
+          `receipt_proof_trust.archive.signers[${index}].public_key`
+        ),
+        signerId: signer.signer_id,
+        validFromHeight: signer.valid_from_height,
+        validToHeight: signer.valid_to_height
+      }))
+    };
+  }
+  if (trust.finality != null) {
+    const threshold = assertSafeIntegerAtLeast(
+      trust.finality.threshold,
+      1,
+      "receipt_proof_trust.finality.threshold"
+    );
+    const chainId = trust.finality.chain_id ?? info.chain_id;
+    if (trust.finality.mode === "cluster") {
+      if (trust.finality.cluster_public_key == null) {
+        throw new Error(
+          "receipt_proof_trust.finality.cluster_public_key is required for cluster mode"
+        );
+      }
+      policy.finality = {
+        mode: "cluster",
+        chainId,
+        threshold,
+        validFromRound: trust.finality.valid_from_round,
+        validToRound: trust.finality.valid_to_round,
+        committeeSize: assertSafeIntegerAtLeast(
+          trust.finality.committee_size,
+          1,
+          "receipt_proof_trust.finality.committee_size"
+        ),
+        clusterPublicKey: decodeFixedHex(
+          trust.finality.cluster_public_key,
+          BLS_PUBLIC_KEY_BYTE_LENGTH,
+          "receipt_proof_trust.finality.cluster_public_key"
+        )
+      };
+    } else if (trust.finality.mode === "multisig") {
+      const signers = trust.finality.signers ?? [];
+      policy.finality = {
+        mode: "multisig",
+        chainId,
+        threshold,
+        validFromRound: trust.finality.valid_from_round,
+        validToRound: trust.finality.valid_to_round,
+        trustedSigners: signers.map((signer, index) => ({
+          authorityIndex: assertSafeIntegerAtLeast(
+            signer.authority_index,
+            0,
+            `receipt_proof_trust.finality.signers[${index}].authority_index`
+          ),
+          publicKey: decodeFixedHex(
+            signer.public_key,
+            BLS_PUBLIC_KEY_BYTE_LENGTH,
+            `receipt_proof_trust.finality.signers[${index}].public_key`
+          ),
+          validFromRound: signer.valid_from_round,
+          validToRound: signer.valid_to_round
+        }))
+      };
+    } else {
+      throw new Error(
+        `unsupported receipt_proof_trust.finality.mode: ${String(trust.finality.mode)}`
+      );
+    }
+  }
+  return policy;
+}
 async function fetchChainInfoLatest(network, options = {}) {
   const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
   const rawBaseUrl = options.rawBaseUrl ?? CHAIN_REGISTRY_RAW_BASE;
@@ -1758,15 +1852,71 @@ function parseChainRegistryToml(input) {
       info.explorer.push({ url: "", name: "" });
       continue;
     }
+    if (line === "[receipt_proof_trust.archive]") {
+      section = "receipt_proof_trust.archive";
+      ensureReceiptProofTrust(info).archive ??= { signature_threshold: 0, signers: [] };
+      continue;
+    }
+    if (line === "[[receipt_proof_trust.archive.signers]]") {
+      section = "receipt_proof_trust.archive.signers";
+      const trust = ensureReceiptProofTrust(info);
+      trust.archive ??= { signature_threshold: 0, signers: [] };
+      trust.archive.signers.push({ public_key: "" });
+      continue;
+    }
+    if (line === "[receipt_proof_trust.finality]") {
+      section = "receipt_proof_trust.finality";
+      ensureReceiptProofTrust(info).finality ??= {
+        mode: "cluster",
+        threshold: 0
+      };
+      continue;
+    }
+    if (line === "[[receipt_proof_trust.finality.signers]]") {
+      section = "receipt_proof_trust.finality.signers";
+      const trust = ensureReceiptProofTrust(info);
+      trust.finality ??= {
+        mode: "multisig",
+        threshold: 0,
+        signers: []
+      };
+      trust.finality.signers ??= [];
+      trust.finality.signers.push({ authority_index: 0, public_key: "" });
+      continue;
+    }
     const match = /^([A-Za-z0-9_]+)\s*=\s*(.+)$/.exec(line);
     if (!match) continue;
     const [, key, rawValue] = match;
     const value = parseTomlScalar(rawValue);
     if (section === "root") {
       info[key] = value;
-    } else {
+    } else if (section === "rpc" || section === "p2p" || section === "explorer") {
       const list = info[section];
       const target = list[list.length - 1];
+      target[key] = value;
+    } else if (section === "receipt_proof_trust.archive") {
+      const trust = ensureReceiptProofTrust(info);
+      trust.archive ??= { signature_threshold: 0, signers: [] };
+      trust.archive[key] = value;
+    } else if (section === "receipt_proof_trust.archive.signers") {
+      const archive = ensureReceiptProofTrust(info).archive ??= {
+        signature_threshold: 0,
+        signers: []
+      };
+      const target = archive.signers[archive.signers.length - 1];
+      target[key] = value;
+    } else if (section === "receipt_proof_trust.finality") {
+      const trust = ensureReceiptProofTrust(info);
+      trust.finality ??= { mode: "cluster", threshold: 0 };
+      trust.finality[key] = value;
+    } else {
+      const finality = ensureReceiptProofTrust(info).finality ??= {
+        mode: "multisig",
+        threshold: 0,
+        signers: []
+      };
+      finality.signers ??= [];
+      const target = finality.signers[finality.signers.length - 1];
       target[key] = value;
     }
   }
@@ -1790,6 +1940,9 @@ function parseChainRegistryToml(input) {
     p2p: info.p2p
   };
   if (info.explorer.length > 0) out.explorer = info.explorer;
+  if (info.receipt_proof_trust) {
+    out.receipt_proof_trust = normalizeReceiptProofTrust(info.receipt_proof_trust);
+  }
   return out;
 }
 function parseTomlScalar(raw) {
@@ -1801,6 +1954,201 @@ function parseTomlScalar(raw) {
   if (value === "false") return false;
   if (/^-?\d+$/.test(value)) return Number(value);
   return value;
+}
+function ensureReceiptProofTrust(info) {
+  info.receipt_proof_trust ??= {};
+  return info.receipt_proof_trust;
+}
+function normalizeReceiptProofTrust(trust) {
+  const out = {};
+  if (trust.archive == null || trust.finality == null) {
+    throw new Error("receipt_proof_trust must include both archive and finality policies");
+  }
+  if (trust.archive != null) {
+    const threshold = assertSafeIntegerAtLeast(
+      trust.archive.signature_threshold,
+      1,
+      "receipt_proof_trust.archive.signature_threshold"
+    );
+    if (trust.archive.signers.length === 0 || trust.archive.signers.some((s) => !s.public_key)) {
+      throw new Error("receipt_proof_trust.archive.signers must contain complete signer rows");
+    }
+    if (threshold > trust.archive.signers.length) {
+      throw new Error("receipt_proof_trust.archive.signature_threshold exceeds signer count");
+    }
+    assertOptionalRange(
+      trust.archive.valid_from_height,
+      trust.archive.valid_to_height,
+      "receipt_proof_trust.archive"
+    );
+    assertUniqueStrings(
+      trust.archive.signers.map((signer) => signer.public_key),
+      "receipt_proof_trust.archive.signers.public_key"
+    );
+    assertUniqueStrings(
+      trust.archive.signers.flatMap((signer) => signer.signer_id ? [signer.signer_id] : []),
+      "receipt_proof_trust.archive.signers.signer_id"
+    );
+    out.archive = {
+      signature_threshold: threshold,
+      valid_from_height: optionalSafeInteger(trust.archive.valid_from_height),
+      valid_to_height: optionalSafeInteger(trust.archive.valid_to_height),
+      signers: trust.archive.signers.map((signer) => {
+        assertOptionalRange(
+          signer.valid_from_height,
+          signer.valid_to_height,
+          "receipt_proof_trust.archive.signers"
+        );
+        return {
+          public_key: assertString(
+            signer.public_key,
+            "receipt_proof_trust.archive.signers.public_key"
+          ),
+          signer_id: optionalString(signer.signer_id),
+          valid_from_height: optionalSafeInteger(signer.valid_from_height),
+          valid_to_height: optionalSafeInteger(signer.valid_to_height),
+          notes: optionalString(signer.notes)
+        };
+      })
+    };
+  }
+  if (trust.finality != null) {
+    const mode = trust.finality.mode;
+    if (mode !== "cluster" && mode !== "multisig") {
+      throw new Error(`unsupported receipt_proof_trust.finality.mode: ${String(mode)}`);
+    }
+    const finality = {
+      mode,
+      chain_id: optionalSafeInteger(trust.finality.chain_id),
+      threshold: assertSafeIntegerAtLeast(
+        trust.finality.threshold,
+        1,
+        "receipt_proof_trust.finality.threshold"
+      ),
+      valid_from_round: optionalSafeInteger(trust.finality.valid_from_round),
+      valid_to_round: optionalSafeInteger(trust.finality.valid_to_round)
+    };
+    assertOptionalRange(
+      trust.finality.valid_from_round,
+      trust.finality.valid_to_round,
+      "receipt_proof_trust.finality"
+    );
+    if (mode === "cluster") {
+      finality.committee_size = assertSafeIntegerAtLeast(
+        trust.finality.committee_size,
+        1,
+        "receipt_proof_trust.finality.committee_size"
+      );
+      if (finality.threshold > finality.committee_size) {
+        throw new Error("receipt_proof_trust.finality.threshold exceeds committee_size");
+      }
+      finality.cluster_public_key = assertString(
+        trust.finality.cluster_public_key,
+        "receipt_proof_trust.finality.cluster_public_key"
+      );
+      if ((trust.finality.signers ?? []).length > 0) {
+        throw new Error("receipt_proof_trust.finality.signers are invalid in cluster mode");
+      }
+    } else {
+      const signers = trust.finality.signers ?? [];
+      if (signers.length === 0 || signers.some((s) => !s.public_key)) {
+        throw new Error("receipt_proof_trust.finality.signers must contain complete signer rows");
+      }
+      if (finality.threshold > signers.length) {
+        throw new Error("receipt_proof_trust.finality.threshold exceeds signer count");
+      }
+      if (trust.finality.committee_size != null || trust.finality.cluster_public_key != null) {
+        throw new Error("receipt_proof_trust.finality cluster fields are invalid in multisig mode");
+      }
+      assertUniqueNumbers(
+        signers.map((signer) => signer.authority_index),
+        "receipt_proof_trust.finality.signers.authority_index"
+      );
+      assertUniqueStrings(
+        signers.map((signer) => signer.public_key),
+        "receipt_proof_trust.finality.signers.public_key"
+      );
+      finality.signers = signers.map((signer) => {
+        assertOptionalRange(
+          signer.valid_from_round,
+          signer.valid_to_round,
+          "receipt_proof_trust.finality.signers"
+        );
+        return {
+          authority_index: assertSafeIntegerAtLeast(
+            signer.authority_index,
+            0,
+            "receipt_proof_trust.finality.signers.authority_index"
+          ),
+          public_key: assertString(
+            signer.public_key,
+            "receipt_proof_trust.finality.signers.public_key"
+          ),
+          valid_from_round: optionalSafeInteger(signer.valid_from_round),
+          valid_to_round: optionalSafeInteger(signer.valid_to_round),
+          notes: optionalString(signer.notes)
+        };
+      });
+    }
+    out.finality = finality;
+  }
+  return out;
+}
+function decodeFixedHex(value, expectedLength, field2) {
+  const bytes = hexToBytes2(assertString(value, field2), field2);
+  if (bytes.length !== expectedLength) {
+    throw new Error(`${field2} must be ${expectedLength} bytes, got ${bytes.length}`);
+  }
+  return bytes;
+}
+function assertString(value, field2) {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${field2} must be a non-empty string`);
+  }
+  return value;
+}
+function optionalString(value) {
+  return value === void 0 ? void 0 : assertString(value, "optional string field");
+}
+function optionalSafeInteger(value) {
+  if (value === void 0) return void 0;
+  if (!Number.isSafeInteger(value) || Number(value) < 0) {
+    throw new Error("optional integer field must be a non-negative safe integer");
+  }
+  return Number(value);
+}
+function assertSafeIntegerAtLeast(value, min, field2) {
+  if (!Number.isSafeInteger(value) || Number(value) < min) {
+    throw new Error(`${field2} must be a safe integer >= ${min}`);
+  }
+  return Number(value);
+}
+function assertOptionalRange(from, to, field2) {
+  const start = optionalSafeInteger(from);
+  const end = optionalSafeInteger(to);
+  if (start != null && end != null && end < start) {
+    throw new Error(`${field2} valid_to must be >= valid_from`);
+  }
+}
+function assertUniqueStrings(values, field2) {
+  const seen = /* @__PURE__ */ new Set();
+  for (const value of values) {
+    const normalized = assertString(value, field2).toLowerCase();
+    if (seen.has(normalized)) {
+      throw new Error(`${field2} values must be unique`);
+    }
+    seen.add(normalized);
+  }
+}
+function assertUniqueNumbers(values, field2) {
+  const seen = /* @__PURE__ */ new Set();
+  for (const value of values) {
+    const normalized = assertSafeIntegerAtLeast(value, 0, field2);
+    if (seen.has(normalized)) {
+      throw new Error(`${field2} values must be unique`);
+    }
+    seen.add(normalized);
+  }
 }
 
 // src/types.ts
@@ -2559,21 +2907,21 @@ function nativeEventsFilterParams(filter) {
     ...optionalRpcNumber("limit", filter.limit),
     ...optionalRpcNumber("txIndex", filter.txIndex),
     ...optionalRpcNumber("logIndex", filter.logIndex),
-    ...optionalString("address", filter.address),
-    ...optionalString("eventTopic", filter.eventTopic),
-    ...optionalString("family", filter.family),
-    ...optionalString("eventName", filter.eventName),
-    ...optionalString("primaryId", filter.primaryId),
-    ...optionalString("relatedId", filter.relatedId),
-    ...optionalString("tokenId", filter.tokenId),
-    ...optionalString("account", filter.account),
-    ...optionalString("counterparty", filter.counterparty)
+    ...optionalString2("address", filter.address),
+    ...optionalString2("eventTopic", filter.eventTopic),
+    ...optionalString2("family", filter.family),
+    ...optionalString2("eventName", filter.eventName),
+    ...optionalString2("primaryId", filter.primaryId),
+    ...optionalString2("relatedId", filter.relatedId),
+    ...optionalString2("tokenId", filter.tokenId),
+    ...optionalString2("account", filter.account),
+    ...optionalString2("counterparty", filter.counterparty)
   };
 }
 function optionalRpcNumber(key, value) {
   return value == null ? {} : { [key]: encodeRpcU64Number(value, key) };
 }
-function optionalString(key, value) {
+function optionalString2(key, value) {
   return value == null ? {} : { [key]: value };
 }
 function parseRpcBigint(value, label) {
@@ -4350,7 +4698,7 @@ var NODE_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPT_NODE_DOMAIN);
 var UINT32_MAX = 4294967295;
 var HASH_BYTE_LENGTH = 32;
 var ARCHIVE_SIGNATURE_SIGNER_ID_BYTE_LENGTH = 20;
-var BLS_PUBLIC_KEY_BYTE_LENGTH = 48;
+var BLS_PUBLIC_KEY_BYTE_LENGTH2 = 48;
 var BLS_SIGNATURE_BYTE_LENGTH = 96;
 var BLS_DST = "BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
 var HEX_RE = /^[0-9a-fA-F]*$/u;
@@ -4534,7 +4882,7 @@ function verifyNoEvmFinalityEvidenceThreshold(finalityEvidence, options) {
   validateFinalityThreshold(options.threshold, options.committeeSize);
   const clusterPublicKey = expectBlsBytes(
     options.clusterPublicKey,
-    BLS_PUBLIC_KEY_BYTE_LENGTH,
+    BLS_PUBLIC_KEY_BYTE_LENGTH2,
     "clusterPublicKey"
   );
   const signature = decodeFinalitySignature(finalityEvidence);
@@ -4593,7 +4941,7 @@ function verifyNoEvmFinalityEvidenceMultisig(finalityEvidence, options) {
       signer.authorityIndex,
       expectBlsBytes(
         signer.publicKey,
-        BLS_PUBLIC_KEY_BYTE_LENGTH,
+        BLS_PUBLIC_KEY_BYTE_LENGTH2,
         `trustedSigners[${index}].publicKey`
       )
     );
@@ -4615,6 +4963,130 @@ function verifyNoEvmFinalityEvidenceMultisig(finalityEvidence, options) {
     allSignersTrusted,
     signatureValid
   });
+}
+function verifyNoEvmReceiptProofTrust(proof, policy) {
+  const receiptProof = verifyNoEvmReceiptProof(proof);
+  const issues = [];
+  let archiveSignatures = null;
+  let finalityEvidence = null;
+  if (receiptProof == null) {
+    issues.push({
+      code: "missing_receipt_proof",
+      message: "native receipt proof is required for trust verification"
+    });
+  }
+  if (policy.archive != null) {
+    const archiveProof = proof == null ? null : proof.archiveProof;
+    if (archiveProof == null) {
+      issues.push({
+        code: "missing_archive_proof",
+        message: "native receipt proof does not carry archive signature material"
+      });
+    } else {
+      const proofBlockHeight = proof.blockHeight;
+      const blockHeight = BigInt(proofBlockHeight);
+      const archivePolicyValid = isWithinOptionalBounds(
+        blockHeight,
+        policy.archive.validFromHeight,
+        policy.archive.validToHeight
+      );
+      const activeTrustedSigners = policy.archive.trustedSigners.filter(
+        (signer) => isWithinOptionalBounds(blockHeight, signer.validFromHeight, signer.validToHeight)
+      );
+      if (!archivePolicyValid) {
+        issues.push({
+          code: "archive_policy_not_valid_at_height",
+          message: `archive trust policy is not valid at block height ${proofBlockHeight}`
+        });
+      }
+      archiveSignatures = verifyNoEvmArchiveProofSignatures(
+        archiveProof,
+        activeTrustedSigners,
+        policy.archive.threshold
+      );
+      if (!archiveSignatures.verified) {
+        issues.push({
+          code: "archive_verification_failed",
+          message: "archive signature material did not satisfy the trusted policy"
+        });
+      }
+    }
+  }
+  if (policy.finality != null) {
+    const proofFinality = proof == null ? null : proof.finalityEvidence;
+    if (proofFinality == null) {
+      issues.push({
+        code: "missing_finality_evidence",
+        message: "native receipt proof does not carry BLS finality evidence"
+      });
+    } else {
+      const chainId = policy.finality.chainId ?? policy.chainId;
+      if (chainId == null) {
+        issues.push({
+          code: "missing_finality_chain_id",
+          message: "finality trust policy requires a chain id"
+        });
+      } else if (policy.finality.mode === "cluster") {
+        const round = BigInt(proofFinality.round);
+        const finalityPolicyValid = isWithinOptionalBounds(
+          round,
+          policy.finality.validFromRound,
+          policy.finality.validToRound
+        );
+        if (!finalityPolicyValid) {
+          issues.push({
+            code: "finality_policy_not_valid_at_round",
+            message: `finality trust policy is not valid at round ${proofFinality.round}`
+          });
+        }
+        finalityEvidence = verifyNoEvmFinalityEvidenceThreshold(proofFinality, {
+          chainId,
+          clusterPublicKey: policy.finality.clusterPublicKey,
+          committeeSize: policy.finality.committeeSize,
+          threshold: policy.finality.threshold
+        });
+      } else {
+        const round = BigInt(proofFinality.round);
+        const finalityPolicyValid = isWithinOptionalBounds(
+          round,
+          policy.finality.validFromRound,
+          policy.finality.validToRound
+        );
+        const activeTrustedSigners = policy.finality.trustedSigners.filter(
+          (signer) => isWithinOptionalBounds(round, signer.validFromRound, signer.validToRound)
+        );
+        if (!finalityPolicyValid) {
+          issues.push({
+            code: "finality_policy_not_valid_at_round",
+            message: `finality trust policy is not valid at round ${proofFinality.round}`
+          });
+        }
+        finalityEvidence = verifyNoEvmFinalityEvidenceMultisig(proofFinality, {
+          chainId,
+          trustedSigners: activeTrustedSigners,
+          threshold: policy.finality.threshold
+        });
+      }
+      if (finalityEvidence != null && !finalityEvidence.verified) {
+        issues.push({
+          code: "finality_verification_failed",
+          message: "BLS finality evidence did not satisfy the trusted policy"
+        });
+      }
+    }
+  }
+  return {
+    verified: receiptProof != null && issues.length === 0,
+    receiptProof,
+    archiveSignatures,
+    finalityEvidence,
+    issues
+  };
+}
+function isWithinOptionalBounds(value, validFrom, validTo) {
+  if (validFrom != null && value < BigInt(validFrom)) return false;
+  if (validTo != null && value > BigInt(validTo)) return false;
+  return true;
 }
 function verifyBoundedReceiptProof(proof) {
   validateCommonProofMetadata(proof);
@@ -7196,6 +7668,6 @@ function translateBlockOut(header) {
 // src/index.ts
 var version = "0.1.0";
 
-export { ADDRESS_HRP, ADDRESS_KIND_HRPS, API_STREAM_TOPICS, AddressError, AgentActionError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, CLOB_MARKET_ID_DOMAIN_TAG, CLOB_SELECTORS, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DelegationPrecompileError, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MarketActionError, MonolythiumProvider, MonolythiumSigner, MrvValidationError, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NATIVE_MARKET_MODULE_ADDRESS, NATIVE_MARKET_MODULE_ADDRESS_BYTES, NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_FINALITY_EVIDENCE_SCHEMA, NO_EVM_FINALITY_EVIDENCE_SOURCE, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NoEvmReceiptProofError, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, assertNativeMarketOrderBookStreamPayload, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bridgeAddressHex, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildBridgeRouteCatalogue, buildCancelSpotOrderPlan, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildNativeMarketModuleCallEnvelope, buildNativeNftBuyListingForwarderInput, buildNativeNftBuyListingModuleCall, buildNativeNftCancelListingForwarderInput, buildNativeNftCancelListingModuleCall, buildNativeNftCreateListingForwarderInput, buildNativeNftCreateListingModuleCall, buildNativeNftPlaceAuctionBidForwarderInput, buildNativeNftPlaceAuctionBidModuleCall, buildNativeNftSettleAuctionForwarderInput, buildNativeNftSettleAuctionModuleCall, buildNativeNftSweepExpiredListingsForwarderInput, buildNativeNftSweepExpiredListingsModuleCall, buildNativeSpotCancelOrderForwarderInput, buildNativeSpotCancelOrderModuleCall, buildNativeSpotLimitOrderForwarderInput, buildNativeSpotLimitOrderModuleCall, buildPlaceSpotLimitOrderPlan, buildPlaceSpotMarketOrderExPlan, buildPlaceSpotMarketOrderPlan, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, clobAddressHex, compareNativeDevVersions, composeClaimBoundMessage, computeNoEvmReceiptsRoot, computeNoEvmRoundFinalityMessage, computeNoEvmTargetReceiptHash, consumeNativeEvents, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNativeAgentStateResponse, decodeNativeMarketOrderBookDeltasResponse, decodeNativeReceiptResponse, decodeNoEvmReceiptTranscript, decodeTxFeedResponse, delegationAddressHex, deriveClobMarketId, deriveMrvContractAddress, encodeBlockSelector, encodeCancelOrderCalldata, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeNativeMarketModuleForwarderInput, encodeNativeNftBuyListingCall, encodeNativeNftCancelListingCall, encodeNativeNftCreateListingCall, encodeNativeNftPlaceAuctionBidCall, encodeNativeNftSettleAuctionCall, encodeNativeNftSweepExpiredListingsCall, encodeNativeSpotCancelOrderCall, encodeNativeSpotLimitOrderCall, encodePlaceLimitOrderCalldata, encodePlaceMarketOrderCalldata, encodePlaceMarketOrderExCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, getChainInfo, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isNativeMarketOrderBookStreamPayload, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeAgentStateFilterParams, nativeDevSchemaFieldNames, nativeDevUiStrings, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nativeMarketStateFilterParams, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseLythToLythoshi, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, rankBridgeRoutes, resolveStudioHostStatus, selectBridgeTransferRoute, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, verifyNoEvmArchiveProofSignatures, verifyNoEvmFinalityEvidenceMultisig, verifyNoEvmFinalityEvidenceThreshold, verifyNoEvmReceiptProof, version };
+export { ADDRESS_HRP, ADDRESS_KIND_HRPS, API_STREAM_TOPICS, AddressError, AgentActionError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, CLOB_MARKET_ID_DOMAIN_TAG, CLOB_SELECTORS, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DelegationPrecompileError, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MarketActionError, MonolythiumProvider, MonolythiumSigner, MrvValidationError, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NATIVE_MARKET_MODULE_ADDRESS, NATIVE_MARKET_MODULE_ADDRESS_BYTES, NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_FINALITY_EVIDENCE_SCHEMA, NO_EVM_FINALITY_EVIDENCE_SOURCE, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NoEvmReceiptProofError, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, assertNativeMarketOrderBookStreamPayload, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bridgeAddressHex, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildBridgeRouteCatalogue, buildCancelSpotOrderPlan, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildNativeMarketModuleCallEnvelope, buildNativeNftBuyListingForwarderInput, buildNativeNftBuyListingModuleCall, buildNativeNftCancelListingForwarderInput, buildNativeNftCancelListingModuleCall, buildNativeNftCreateListingForwarderInput, buildNativeNftCreateListingModuleCall, buildNativeNftPlaceAuctionBidForwarderInput, buildNativeNftPlaceAuctionBidModuleCall, buildNativeNftSettleAuctionForwarderInput, buildNativeNftSettleAuctionModuleCall, buildNativeNftSweepExpiredListingsForwarderInput, buildNativeNftSweepExpiredListingsModuleCall, buildNativeSpotCancelOrderForwarderInput, buildNativeSpotCancelOrderModuleCall, buildNativeSpotLimitOrderForwarderInput, buildNativeSpotLimitOrderModuleCall, buildPlaceSpotLimitOrderPlan, buildPlaceSpotMarketOrderExPlan, buildPlaceSpotMarketOrderPlan, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, clobAddressHex, compareNativeDevVersions, composeClaimBoundMessage, computeNoEvmReceiptsRoot, computeNoEvmRoundFinalityMessage, computeNoEvmTargetReceiptHash, consumeNativeEvents, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNativeAgentStateResponse, decodeNativeMarketOrderBookDeltasResponse, decodeNativeReceiptResponse, decodeNoEvmReceiptTranscript, decodeTxFeedResponse, delegationAddressHex, deriveClobMarketId, deriveMrvContractAddress, encodeBlockSelector, encodeCancelOrderCalldata, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeNativeMarketModuleForwarderInput, encodeNativeNftBuyListingCall, encodeNativeNftCancelListingCall, encodeNativeNftCreateListingCall, encodeNativeNftPlaceAuctionBidCall, encodeNativeNftSettleAuctionCall, encodeNativeNftSweepExpiredListingsCall, encodeNativeSpotCancelOrderCall, encodeNativeSpotLimitOrderCall, encodePlaceLimitOrderCalldata, encodePlaceMarketOrderCalldata, encodePlaceMarketOrderExCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, getChainInfo, getNoEvmReceiptTrustPolicy, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isNativeMarketOrderBookStreamPayload, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeAgentStateFilterParams, nativeDevSchemaFieldNames, nativeDevUiStrings, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nativeMarketStateFilterParams, noEvmReceiptTrustPolicyFromChainInfo, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseLythToLythoshi, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, rankBridgeRoutes, resolveStudioHostStatus, selectBridgeTransferRoute, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, verifyNoEvmArchiveProofSignatures, verifyNoEvmFinalityEvidenceMultisig, verifyNoEvmFinalityEvidenceThreshold, verifyNoEvmReceiptProof, verifyNoEvmReceiptProofTrust, version };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map
