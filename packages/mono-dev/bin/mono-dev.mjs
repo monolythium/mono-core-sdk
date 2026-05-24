@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { createInterface } from "node:readline";
 import {
   buildArtifact,
   createProject,
@@ -26,7 +27,7 @@ try {
         ok: true,
         component: "mono-dev",
         version: "0.1.0",
-        capabilities: ["templates", "project-new", "build", "validate", "test", "simulate", "trace", "deploy-plan", "verify-bundle"],
+        capabilities: ["templates", "project-new", "build", "validate", "test", "simulate", "trace", "deploy-plan", "verify-bundle", "sidecar-ipc"],
       });
       break;
     case "templates":
@@ -114,6 +115,9 @@ try {
     }
     case "sidecar-status":
       print({ status: "ready", protocol: "mono.native-dev.ipc.v1", signing: "not-available", submission: "not-available" });
+      break;
+    case "sidecar":
+      runSidecar();
       break;
     default:
       process.stderr.write(help());
@@ -210,5 +214,106 @@ mono-dev call-plan [project-root]
 mono-dev mrc-token-plan
 mono-dev verify-bundle [project-root-or-artifact]
 mono-dev sidecar-status
+mono-dev sidecar
 `;
+}
+
+function runSidecar() {
+  const protocolVersion = "mono.native-dev.ipc.v1";
+  const projectId = `sidecar-${process.pid}`;
+  printIpc({
+    direction: "sidecar_to_host",
+    kind: "ready",
+    protocolVersion,
+    devkitVersion: "0.1.0",
+  });
+
+  const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  lines.on("line", (line) => {
+    let message;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      printIpc({
+        direction: "sidecar_to_host",
+        kind: "project_event",
+        projectId,
+        event: "simulation_finished",
+        summary: "Ignored malformed host IPC message.",
+      });
+      return;
+    }
+    if (message.protocolVersion && message.protocolVersion !== protocolVersion) {
+      printIpc({
+        direction: "sidecar_to_host",
+        kind: "project_event",
+        projectId,
+        event: "simulation_finished",
+        summary: "Ignored host IPC message with unsupported protocol.",
+      });
+      return;
+    }
+    if (message.kind === "host_context") {
+      printIpc({
+        direction: "sidecar_to_host",
+        kind: "project_event",
+        projectId,
+        event: message.selectedProjectRoot ? "opened" : "created",
+        summary: message.selectedProjectRoot
+          ? `Workspace context accepted: ${message.selectedProjectRoot}`
+          : `Host context accepted for ${message.activeNetwork?.name ?? "native development"}.`,
+      });
+      return;
+    }
+    if (message.kind === "approval_result") {
+      printIpc({
+        direction: "sidecar_to_host",
+        kind: "project_event",
+        projectId,
+        event: "simulation_finished",
+        summary: message.approved
+          ? `Wallet approved request ${message.requestId}.`
+          : `Wallet rejected request ${message.requestId}.`,
+      });
+      return;
+    }
+    if (message.kind === "request_preview_approval") {
+      const artifactHash = "0".repeat(64);
+      printIpc({
+        direction: "sidecar_to_host",
+        kind: "approval_request",
+        request: {
+          id: `preview-${Date.now()}`,
+          kind: "mrv_deploy",
+          createdAt: new Date().toISOString(),
+          origin: "mono_devkit",
+          networkId: message.networkId ?? "local-dev",
+          authorityAddress: message.authorityAddress ?? "mono1devkitpreview00000000000000",
+          title: "Review MRV deploy plan",
+          summary: "Preview request emitted by Mono DevKit sidecar.",
+          riskLabels: [{ id: "preview", title: "Preview request", severity: "info", detail: "No signing happens in DevKit." }],
+          payload: {
+            expectedContractAddress: `monoc1${"1".repeat(38)}`,
+            artifactHash,
+            abiHash: "2".repeat(64),
+            valueLythoshi: "0",
+            executionUnitLimit: "1250000",
+            maxExecutionFeeLythoshi: "10000000",
+          },
+        },
+      });
+      return;
+    }
+    printIpc({
+      direction: "sidecar_to_host",
+      kind: "project_event",
+      projectId,
+      event: "simulation_finished",
+      summary: `Ignored unsupported host message kind: ${String(message.kind ?? "unknown")}.`,
+    });
+  });
+}
+
+function printIpc(value) {
+  process.stdout.write(`${JSON.stringify(value)}\n`);
 }
