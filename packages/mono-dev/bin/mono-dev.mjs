@@ -81,7 +81,7 @@ try {
       const artifact = rootOrArtifact.endsWith(".json") ? readJson(rootOrArtifact) : buildRoot(rootOrArtifact);
       print(createDeployPlan({
         networkId: flag("network", args, "local-dev"),
-        authorityAddress: flag("authority", args, "mono1devkitpreview00000000000000"),
+        authorityAddress: flag("authority", args, "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4"),
         artifact,
       }));
       break;
@@ -107,7 +107,7 @@ try {
       const artifact = rootOrArtifact.endsWith(".json") ? readJson(rootOrArtifact) : buildRoot(rootOrArtifact);
       const plan = createDeployPlan({
         networkId: flag("network", args, "local-dev"),
-        authorityAddress: flag("authority", args, "mono1devkitpreview00000000000000"),
+        authorityAddress: flag("authority", args, "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4"),
         artifact,
       });
       print(createVerificationBundle(artifact, plan, rootOrArtifact.endsWith(".json") ? {} : readSources(rootOrArtifact)));
@@ -288,12 +288,12 @@ function runSidecar() {
           createdAt: new Date().toISOString(),
           origin: "mono_devkit",
           networkId: message.networkId ?? "local-dev",
-          authorityAddress: message.authorityAddress ?? "mono1devkitpreview00000000000000",
+          authorityAddress: message.authorityAddress ?? "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4",
           title: "Review MRV deploy plan",
           summary: "Preview request emitted by Mono DevKit sidecar.",
           riskLabels: [{ id: "preview", title: "Preview request", severity: "info", detail: "No signing happens in DevKit." }],
           payload: {
-            expectedContractAddress: `monoc1${"1".repeat(38)}`,
+            expectedContractAddress: "monoc1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqxk4v02",
             artifactHash,
             abiHash: "2".repeat(64),
             valueLythoshi: "0",
