@@ -9,9 +9,9 @@ export type NativeReceiptFee = {
  */
 total_lythoshi: string,
 /**
- * Total fee formatted as LYTH numeric text without the unit suffix.
+ * Optional total fee formatted as LYTH numeric text without the unit suffix.
  */
-total_lyth: string,
+total_lyth?: string,
 /**
  * Execution cycles charged by the receipt.
  */

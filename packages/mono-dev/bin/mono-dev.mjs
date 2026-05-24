@@ -259,6 +259,7 @@ function runSidecar() {
       printIpc({
         direction: "sidecar_to_host",
         kind: "project_event",
+        protocolVersion,
         projectId,
         event: message.selectedProjectRoot ? "opened" : "created",
         summary: message.selectedProjectRoot
@@ -271,6 +272,7 @@ function runSidecar() {
       printIpc({
         direction: "sidecar_to_host",
         kind: "project_event",
+        protocolVersion,
         projectId,
         event: "simulation_finished",
         summary: message.approved
@@ -279,51 +281,175 @@ function runSidecar() {
       });
       return;
     }
+    if (message.kind === "devkit_command") {
+      handleDevkitCommand({
+        message,
+        hostContext,
+        protocolVersion,
+        projectId,
+      });
+      return;
+    }
     if (message.kind === "request_preview_approval") {
-      const selectedProjectRoot = message.selectedProjectRoot ?? hostContext.selectedProjectRoot;
-      if (!selectedProjectRoot) {
-        printIpc({
-          direction: "sidecar_to_host",
-          kind: "project_event",
-          projectId,
-          event: "simulation_finished",
-          summary: "Preview approval requires a selected project root.",
-        });
-        return;
-      }
-      let plan;
-      try {
-        const artifact = buildRoot(resolve(selectedProjectRoot));
-        plan = createDeployPlan({
-          networkId: message.networkId ?? hostContext.activeNetwork?.networkId ?? "local-dev",
-          authorityAddress: message.authorityAddress ?? "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4",
-          artifact,
-        });
-      } catch (error) {
-        printIpc({
-          direction: "sidecar_to_host",
-          kind: "project_event",
-          projectId,
-          event: "simulation_finished",
-          summary: `Preview approval build failed: ${error instanceof Error ? error.message : String(error)}.`,
-        });
-        return;
-      }
-      printIpc({
-        direction: "sidecar_to_host",
-        kind: "approval_request",
-        request: plan.walletApprovalRequest,
+      handleDevkitCommand({
+        message: { ...message, kind: "devkit_command", command: "deploy_plan", requestId: `preview-${Date.now()}` },
+        hostContext,
+        protocolVersion,
+        projectId,
       });
       return;
     }
     printIpc({
       direction: "sidecar_to_host",
       kind: "project_event",
+      protocolVersion,
       projectId,
       event: "simulation_finished",
       summary: `Ignored unsupported host message kind: ${String(message.kind ?? "unknown")}.`,
     });
   });
+}
+
+function handleDevkitCommand({ message, hostContext, protocolVersion, projectId }) {
+  const command = message.command;
+  const requestId = stringValue(message.requestId, `${command ?? "command"}-${Date.now()}`);
+  const selectedProjectRoot = message.selectedProjectRoot ?? hostContext.selectedProjectRoot;
+  const startedEvent = command === "build" || command === "validate" || command === "test" || command === "simulate" || command === "trace" || command === "deploy_plan"
+    ? "build_started"
+    : "opened";
+  printIpc({
+    direction: "sidecar_to_host",
+    kind: "project_event",
+    protocolVersion,
+    projectId,
+    event: startedEvent,
+    summary: `Started ${formatCommand(command)}.`,
+  });
+  let result;
+  try {
+    result = runDevkitCommand({
+      command,
+      selectedProjectRoot,
+      networkId: message.networkId ?? hostContext.activeNetwork?.networkId ?? "local-dev",
+      authorityAddress: message.authorityAddress ?? "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4",
+    });
+  } catch (error) {
+    const messageText = error instanceof Error ? error.message : String(error);
+    printIpc({
+      direction: "sidecar_to_host",
+      kind: "command_result",
+      protocolVersion,
+      command,
+      requestId,
+      ok: false,
+      preview: true,
+      error: messageText,
+    });
+    printIpc({
+      direction: "sidecar_to_host",
+      kind: "project_event",
+      protocolVersion,
+      projectId,
+      event: finishEvent(command),
+      summary: `${formatCommand(command)} failed: ${messageText}.`,
+    });
+    return;
+  }
+  printIpc({
+    direction: "sidecar_to_host",
+    kind: "command_result",
+    protocolVersion,
+    command,
+    requestId,
+    ok: true,
+    preview: result.preview,
+    output: result.output,
+  });
+  printIpc({
+    direction: "sidecar_to_host",
+    kind: "project_event",
+    protocolVersion,
+    projectId,
+    event: finishEvent(command),
+    summary: `${formatCommand(command)} completed.`,
+  });
+  if (command === "deploy_plan" && result.output?.walletApprovalRequest) {
+    printIpc({
+      direction: "sidecar_to_host",
+      kind: "approval_request",
+      protocolVersion,
+      request: result.output.walletApprovalRequest,
+    });
+  }
+}
+
+function runDevkitCommand({ command, selectedProjectRoot, networkId, authorityAddress }) {
+  if (command === "readiness") {
+    return {
+      preview: false,
+      output: {
+        ok: true,
+        component: "mono-dev",
+        version: "0.1.0",
+        protocolVersion: "mono.native-dev.ipc.v1",
+        capabilities: ["build", "validate", "test", "simulate", "trace", "deploy_plan"],
+      },
+    };
+  }
+  const root = requireProjectRoot(command, selectedProjectRoot);
+  if (command === "build") {
+    const artifact = buildRoot(root);
+    writeJson(join(root, "target", "mono", "artifact.mrv.json"), artifact);
+    return {
+      preview: true,
+      output: { artifactHash: artifact.artifactHash, sourceBundleHash: artifact.sourceBundleHash, syscalls: artifact.syscalls },
+    };
+  }
+  if (command === "validate") {
+    const artifact = buildRoot(root);
+    return { preview: true, output: { ...validateArtifact(artifact), artifactHash: artifact.artifactHash, abiHash: artifact.abiHash } };
+  }
+  if (command === "test") {
+    const artifact = buildRoot(root);
+    return { preview: true, output: { ...validateArtifact(artifact), artifactHash: artifact.artifactHash } };
+  }
+  if (command === "simulate") {
+    return { preview: true, output: simulate(buildRoot(root), "increment") };
+  }
+  if (command === "trace") {
+    return { preview: true, output: simulate(buildRoot(root), "increment").trace };
+  }
+  if (command === "deploy_plan") {
+    const artifact = buildRoot(root);
+    return {
+      preview: true,
+      output: createDeployPlan({
+        networkId,
+        authorityAddress,
+        artifact,
+      }),
+    };
+  }
+  throw new Error(`unsupported DevKit command: ${String(command ?? "unknown")}`);
+}
+
+function requireProjectRoot(command, selectedProjectRoot) {
+  if (!selectedProjectRoot) throw new Error(`${formatCommand(command)} requires a selected project root`);
+  return resolve(selectedProjectRoot);
+}
+
+function finishEvent(command) {
+  if (command === "build" || command === "validate" || command === "deploy_plan") return "build_finished";
+  if (command === "test") return "test_finished";
+  return "simulation_finished";
+}
+
+function formatCommand(command) {
+  return String(command ?? "command").replaceAll("_", " ");
+}
+
+function stringValue(value, fallback) {
+  return typeof value === "string" && value.length > 0 ? value : fallback;
 }
 
 function printIpc(value) {

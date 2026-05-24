@@ -76,6 +76,7 @@ export interface NativeDevSidecarReadyMessage {
 export interface NativeDevSidecarProjectEventMessage {
   direction: "sidecar_to_host";
   kind: "project_event";
+  protocolVersion?: string;
   projectId: string;
   event: "created" | "opened" | "build_started" | "build_finished" | "test_finished" | "simulation_finished";
   summary: string;
@@ -84,7 +85,29 @@ export interface NativeDevSidecarProjectEventMessage {
 export interface NativeDevSidecarApprovalRequestMessage {
   direction: "sidecar_to_host";
   kind: "approval_request";
+  protocolVersion?: string;
   request: NativeDevWalletApprovalRequest;
+}
+
+export type NativeDevCommandName =
+  | "readiness"
+  | "build"
+  | "validate"
+  | "test"
+  | "simulate"
+  | "trace"
+  | "deploy_plan";
+
+export interface NativeDevSidecarCommandResultMessage {
+  direction: "sidecar_to_host";
+  kind: "command_result";
+  protocolVersion?: string;
+  command: NativeDevCommandName;
+  requestId: string;
+  ok: boolean;
+  preview: boolean;
+  output?: unknown;
+  error?: string;
 }
 
 export interface NativeDevHostContextMessage {
@@ -101,17 +124,31 @@ export interface NativeDevHostContextMessage {
 export interface NativeDevHostApprovalResultMessage {
   direction: "host_to_sidecar";
   kind: "approval_result";
+  protocolVersion?: string;
   requestId: string;
   approved: boolean;
   reason?: string;
+}
+
+export interface NativeDevHostCommandMessage {
+  direction: "host_to_sidecar";
+  kind: "devkit_command";
+  protocolVersion?: string;
+  requestId: string;
+  command: NativeDevCommandName;
+  selectedProjectRoot?: string;
+  authorityAddress?: string;
+  networkId?: string;
 }
 
 export type NativeDevIpcMessage =
   | NativeDevSidecarReadyMessage
   | NativeDevSidecarProjectEventMessage
   | NativeDevSidecarApprovalRequestMessage
+  | NativeDevSidecarCommandResultMessage
   | NativeDevHostContextMessage
-  | NativeDevHostApprovalResultMessage;
+  | NativeDevHostApprovalResultMessage
+  | NativeDevHostCommandMessage;
 
 export type NativeDevApprovalKind =
   | "mrv_deploy"
@@ -366,6 +403,9 @@ export function nativeDevSchemaFieldNames(): readonly string[] {
     "readOnlyWalletAddress",
     "requestId",
     "approved",
+    "command",
+    "output",
+    "preview",
     "authorityAddress",
     "expectedContractAddress",
     "artifactHash",

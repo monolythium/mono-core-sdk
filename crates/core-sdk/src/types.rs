@@ -222,8 +222,10 @@ pub struct NativeReceiptCounters {
 pub struct NativeReceiptFee {
     /// Total fee in lythoshi.
     pub total_lythoshi: String,
-    /// Total fee formatted as LYTH numeric text without the unit suffix.
-    pub total_lyth: String,
+    /// Optional total fee formatted as LYTH numeric text without the unit suffix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub total_lyth: Option<String>,
     /// Execution cycles charged by the receipt.
     pub cycles_used: u64,
     /// Base price per execution cycle in lythoshi.
@@ -6229,7 +6231,6 @@ mod tests {
             },
             "fee": {
                 "total_lythoshi": "440000000000",
-                "total_lyth": "4,400",
                 "cycles_used": 44,
                 "base_price_per_cycle_lythoshi": "10000000000",
                 "state_io_units": 2,
@@ -6265,7 +6266,7 @@ mod tests {
         assert_eq!(receipt.counters.syscall_units, 3);
         assert_eq!(receipt.counters.state_io_units, 2);
         assert_eq!(receipt.fee.total_lythoshi, "440000000000");
-        assert_eq!(receipt.fee.total_lyth, "4,400");
+        assert_eq!(receipt.fee.total_lyth, None);
         assert_eq!(receipt.fee.cycles_used, 44);
         assert_eq!(receipt.fee.base_price_per_cycle_lythoshi, "10000000000");
         assert_eq!(receipt.fee.state_io_units, 2);
@@ -6319,7 +6320,6 @@ mod tests {
             },
             "fee": {
                 "total_lythoshi": "440000000000",
-                "total_lyth": "4,400",
                 "cycles_used": 44,
                 "base_price_per_cycle_lythoshi": "10000000000",
                 "state_io_units": 2,
@@ -7245,7 +7245,6 @@ mod tests {
                 "priorityTipLythoshi": "1",
                 "fee": {
                     "total_lythoshi": "21000",
-                    "total_lyth": "0.00021",
                     "cycles_used": 21_000,
                     "base_price_per_cycle_lythoshi": "1",
                     "state_io_units": 0,
@@ -7471,7 +7470,7 @@ mod tests {
             },
             fee: NativeReceiptFee {
                 total_lythoshi: "440000000000".to_owned(),
-                total_lyth: "4,400".to_owned(),
+                total_lyth: Some("4,400".to_owned()),
                 cycles_used: 44,
                 base_price_per_cycle_lythoshi: "10000000000".to_owned(),
                 state_io_units: 2,
@@ -7908,7 +7907,6 @@ mod tests {
             "counters": { "cycles": 1, "syscallUnits": 0, "stateIoUnits": 0 },
             "fee": {
                 "total_lythoshi": "0",
-                "total_lyth": "0",
                 "cycles_used": 1,
                 "base_price_per_cycle_lythoshi": "0",
                 "state_io_units": 0,

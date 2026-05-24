@@ -146,6 +146,30 @@ pub struct NativeDevWalletApprovalRequest {
     pub payload: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeDevCommandName {
+    Readiness,
+    Build,
+    Validate,
+    Test,
+    Simulate,
+    Trace,
+    DeployPlan,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NativeDevSidecarCommandResult {
+    pub command: NativeDevCommandName,
+    pub request_id: String,
+    pub ok: bool,
+    pub preview: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NativeDevMrvDeployPlan {
     pub network_id: String,
@@ -345,6 +369,9 @@ pub fn native_dev_schema_field_names() -> &'static [&'static str] {
         "read_only_wallet_address",
         "request_id",
         "approved",
+        "command",
+        "output",
+        "preview",
         "authority_address",
         "expected_contract_address",
         "artifact_hash",
