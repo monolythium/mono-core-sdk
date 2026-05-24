@@ -6,6 +6,7 @@ var chacha_js = require('@noble/ciphers/chacha.js');
 var sha3_js = require('@noble/hashes/sha3.js');
 var utils_js = require('@noble/hashes/utils.js');
 var mlDsa_js = require('@noble/post-quantum/ml-dsa.js');
+var bls12381_js = require('@noble/curves/bls12-381.js');
 var ethers = require('ethers');
 
 // src/error.ts
@@ -4351,6 +4352,9 @@ var NODE_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPT_NODE_DOMAIN);
 var UINT32_MAX = 4294967295;
 var HASH_BYTE_LENGTH = 32;
 var ARCHIVE_SIGNATURE_SIGNER_ID_BYTE_LENGTH = 20;
+var BLS_PUBLIC_KEY_BYTE_LENGTH = 48;
+var BLS_SIGNATURE_BYTE_LENGTH = 96;
+var BLS_DST = "BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
 var HEX_RE = /^[0-9a-fA-F]*$/u;
 var NoEvmReceiptProofError = class extends Error {
   constructor(code, message) {
@@ -4500,6 +4504,99 @@ function verifyNoEvmArchiveProofSignatures(archiveProof, trustedSigners, thresho
     checkedSignatures: archiveProof.signatures.length,
     issues
   };
+}
+function computeNoEvmRoundFinalityMessage(chainId, round) {
+  const preimage = new Uint8Array(5 + 8 + 8);
+  preimage.set(new TextEncoder().encode("round"), 0);
+  writeU64Le(preimage, 5, chainId, "chainId");
+  writeU64Le(preimage, 13, round, "round");
+  return blake3_js.blake3(preimage);
+}
+function verifyNoEvmFinalityEvidenceThreshold(finalityEvidence, options) {
+  validateFinalityThreshold(options.threshold, options.committeeSize);
+  const clusterPublicKey = expectBlsBytes(
+    options.clusterPublicKey,
+    BLS_PUBLIC_KEY_BYTE_LENGTH,
+    "clusterPublicKey"
+  );
+  const signature = decodeFinalitySignature(finalityEvidence);
+  const signerIndices = signerIndicesFromBitmap(
+    decodeHexBytes(
+      finalityEvidence.certificate.signersBitmap,
+      "finalityEvidence.certificate.signersBitmap"
+    )
+  );
+  const base = finalityVerificationBase(
+    finalityEvidence,
+    signerIndices,
+    options.committeeSize,
+    options.threshold
+  );
+  const message = computeNoEvmRoundFinalityMessage(options.chainId, finalityEvidence.round);
+  const signatureValid = base.signerIndicesInRange && verifyBlsSignature(clusterPublicKey, message, signature);
+  return finalizeBlsFinalityVerification({
+    ...base,
+    allSignersTrusted: base.signerIndicesInRange,
+    signatureValid
+  });
+}
+function verifyNoEvmFinalityEvidenceMultisig(finalityEvidence, options) {
+  validateFinalityThreshold(options.threshold, options.trustedSigners.length);
+  const signature = decodeFinalitySignature(finalityEvidence);
+  const signerIndices = signerIndicesFromBitmap(
+    decodeHexBytes(
+      finalityEvidence.certificate.signersBitmap,
+      "finalityEvidence.certificate.signersBitmap"
+    )
+  );
+  const committeeSize = options.trustedSigners.reduce((max, signer) => Math.max(max, signer.authorityIndex), -1) + 1;
+  const base = finalityVerificationBase(
+    finalityEvidence,
+    signerIndices,
+    committeeSize,
+    options.threshold
+  );
+  const roster = /* @__PURE__ */ new Map();
+  options.trustedSigners.forEach((signer, index) => {
+    assertUint32(signer.authorityIndex, `trustedSigners[${index}].authorityIndex`);
+    if (signer.authorityIndex > 65535) {
+      throw new NoEvmReceiptProofError(
+        "invalid_proof_shape",
+        `trustedSigners[${index}].authorityIndex must fit u16`
+      );
+    }
+    if (roster.has(signer.authorityIndex)) {
+      throw new NoEvmReceiptProofError(
+        "invalid_proof_shape",
+        `trustedSigners contains duplicate authority index ${signer.authorityIndex}`
+      );
+    }
+    roster.set(
+      signer.authorityIndex,
+      expectBlsBytes(
+        signer.publicKey,
+        BLS_PUBLIC_KEY_BYTE_LENGTH,
+        `trustedSigners[${index}].publicKey`
+      )
+    );
+  });
+  const publicKeys = [];
+  let allSignersTrusted = true;
+  signerIndices.forEach((signerIndex) => {
+    const publicKey = roster.get(signerIndex);
+    if (publicKey === void 0) {
+      allSignersTrusted = false;
+    } else {
+      publicKeys.push(publicKey);
+    }
+  });
+  const message = computeNoEvmRoundFinalityMessage(options.chainId, finalityEvidence.round);
+  const signatureValid = allSignersTrusted && publicKeys.length > 0 && verifyBlsAggregateSignature(publicKeys, message, signature);
+  return finalizeBlsFinalityVerification({
+    ...base,
+    allSignersTrusted,
+    signatureValid
+  });
 }
 function verifyBoundedReceiptProof(proof) {
   validateCommonProofMetadata(proof);
@@ -4872,6 +4969,188 @@ function validateOptionalFinalityEvidence(proof) {
       "finalityEvidence.certificate.signerCount must match signerIndices length"
     );
   }
+}
+function validateFinalityEvidenceForVerification(finalityEvidence) {
+  if (!isRecord3(finalityEvidence)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence must be an object"
+    );
+  }
+  assertSupported(
+    finalityEvidence.schema,
+    NO_EVM_FINALITY_EVIDENCE_SCHEMA,
+    "finalityEvidence.schema",
+    "unsupported_schema"
+  );
+  assertSupported(
+    finalityEvidence.source,
+    NO_EVM_FINALITY_EVIDENCE_SOURCE,
+    "finalityEvidence.source",
+    "unsupported_schema"
+  );
+  assertUint32(finalityEvidence.round, "finalityEvidence.round");
+  const certificate = finalityEvidence.certificate;
+  if (!isRecord3(certificate)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate must be an object"
+    );
+  }
+  assertUint32(certificate.round, "finalityEvidence.certificate.round");
+  if (certificate.round !== finalityEvidence.round) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate.round must match finalityEvidence.round"
+    );
+  }
+  decodeHexBytes(certificate.signersBitmap, "finalityEvidence.certificate.signersBitmap");
+  if (!Array.isArray(certificate.signerIndices)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate.signerIndices must be an array"
+    );
+  }
+  certificate.signerIndices.forEach((index, signerIndex) => {
+    assertUint32(index, `finalityEvidence.certificate.signerIndices[${signerIndex}]`);
+    if (index > 65535) {
+      throw new NoEvmReceiptProofError(
+        "invalid_proof_shape",
+        `finalityEvidence.certificate.signerIndices[${signerIndex}] must fit u16`
+      );
+    }
+  });
+  assertUint32(certificate.signerCount, "finalityEvidence.certificate.signerCount");
+  if (certificate.signerCount > 65535) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate.signerCount must fit u16"
+    );
+  }
+}
+function validateFinalityThreshold(threshold, trustedCapacity) {
+  if (!Number.isSafeInteger(threshold) || threshold < 1) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finality evidence threshold must be at least 1"
+    );
+  }
+  if (!Number.isSafeInteger(trustedCapacity) || trustedCapacity < 0 || trustedCapacity > 65535) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finality evidence trusted signer capacity must fit u16"
+    );
+  }
+  if (threshold > trustedCapacity) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      `finality evidence threshold ${threshold} exceeds trusted signer capacity ${trustedCapacity}`
+    );
+  }
+}
+function decodeFinalitySignature(finalityEvidence) {
+  validateFinalityEvidenceForVerification(finalityEvidence);
+  const signature = decodeHexBytes(
+    finalityEvidence.certificate.signature,
+    "finalityEvidence.certificate.signature"
+  );
+  if (signature.length !== BLS_SIGNATURE_BYTE_LENGTH) {
+    throw new NoEvmReceiptProofError(
+      "invalid_hash_length",
+      `finalityEvidence.certificate.signature must be ${BLS_SIGNATURE_BYTE_LENGTH} bytes, got ${signature.length}`
+    );
+  }
+  return signature;
+}
+function signerIndicesFromBitmap(bitmap) {
+  const out = [];
+  bitmap.forEach((byte, byteIndex) => {
+    for (let bitIndex = 0; bitIndex < 8; bitIndex += 1) {
+      if ((byte & 1 << bitIndex) === 0) continue;
+      const signerIndex = byteIndex * 8 + bitIndex;
+      if (signerIndex > 65535) {
+        throw new NoEvmReceiptProofError(
+          "invalid_proof_shape",
+          "finalityEvidence signer bitmap index exceeds u16 authority range"
+        );
+      }
+      out.push(signerIndex);
+    }
+  });
+  return out;
+}
+function finalityVerificationBase(finalityEvidence, bitmapSignerIndices, committeeSize, threshold) {
+  const signerCountMatches = finalityEvidence.certificate.signerCount === finalityEvidence.certificate.signerIndices.length && finalityEvidence.certificate.signerCount === bitmapSignerIndices.length;
+  const signerBitmapMatchesIndices = arraysEqual(
+    finalityEvidence.certificate.signerIndices,
+    bitmapSignerIndices
+  );
+  const signerIndicesInRange = bitmapSignerIndices.every(
+    (signerIndex) => signerIndex < committeeSize
+  );
+  const acceptedSignatureCount = bitmapSignerIndices.length;
+  return {
+    finalityEvidencePresent: true,
+    signerCountMatches,
+    signerBitmapMatchesIndices,
+    signerIndicesInRange,
+    allSignersTrusted: false,
+    thresholdMet: acceptedSignatureCount >= threshold,
+    signatureValid: false,
+    acceptedSignatureCount,
+    requiredSignatureCount: threshold
+  };
+}
+function finalizeBlsFinalityVerification(verification) {
+  return {
+    ...verification,
+    verified: verification.finalityEvidencePresent && verification.signerCountMatches && verification.signerBitmapMatchesIndices && verification.signerIndicesInRange && verification.allSignersTrusted && verification.thresholdMet && verification.signatureValid
+  };
+}
+function verifyBlsSignature(publicKey, message, signature) {
+  try {
+    const hashedMessage = bls12381_js.bls12_381.longSignatures.hash(message, BLS_DST);
+    return bls12381_js.bls12_381.longSignatures.verify(signature, hashedMessage, publicKey);
+  } catch {
+    return false;
+  }
+}
+function verifyBlsAggregateSignature(publicKeys, message, signature) {
+  try {
+    const aggregatePublicKey = bls12381_js.bls12_381.longSignatures.aggregatePublicKeys([...publicKeys]);
+    return verifyBlsSignature(
+      aggregatePublicKey.toBytes(),
+      message,
+      signature
+    );
+  } catch {
+    return false;
+  }
+}
+function expectBlsBytes(value, expectedLength, field2) {
+  const bytes = value instanceof Uint8Array ? value : Uint8Array.from(value);
+  if (bytes.length !== expectedLength) {
+    throw new NoEvmReceiptProofError(
+      "invalid_hash_length",
+      `${field2} must be ${expectedLength} bytes, got ${bytes.length}`
+    );
+  }
+  return bytes;
+}
+function writeU64Le(out, offset, value, field2) {
+  if (typeof value === "number" && (!Number.isSafeInteger(value) || value < 0)) {
+    throw new NoEvmReceiptProofError("invalid_uint32", `${field2} must fit u64`);
+  }
+  const big = typeof value === "bigint" ? value : BigInt(value);
+  if (big < 0n || big > 0xffffffffffffffffn) {
+    throw new NoEvmReceiptProofError("invalid_uint32", `${field2} must fit u64`);
+  }
+  for (let i = 0; i < 8; i += 1) {
+    out[offset + i] = Number(big >> BigInt(i * 8) & 0xffn);
+  }
+}
+function arraysEqual(a, b) {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 function getCompactInclusionProof(proof) {
   const compactProof = proof.compactInclusionProof;
@@ -6768,6 +7047,7 @@ exports.checkMrvStructuredFeeConformance = checkMrvStructuredFeeConformance;
 exports.clobAddressHex = clobAddressHex;
 exports.composeClaimBoundMessage = composeClaimBoundMessage;
 exports.computeNoEvmReceiptsRoot = computeNoEvmReceiptsRoot;
+exports.computeNoEvmRoundFinalityMessage = computeNoEvmRoundFinalityMessage;
 exports.computeNoEvmTargetReceiptHash = computeNoEvmTargetReceiptHash;
 exports.consumeNativeEvents = consumeNativeEvents;
 exports.decodeHasPubkeyReturn = decodeHasPubkeyReturn;
@@ -6902,6 +7182,8 @@ exports.validateMrvArtifactMetadata = validateMrvArtifactMetadata;
 exports.validateMrvCallRequest = validateMrvCallRequest;
 exports.validateMrvDeployRequest = validateMrvDeployRequest;
 exports.verifyNoEvmArchiveProofSignatures = verifyNoEvmArchiveProofSignatures;
+exports.verifyNoEvmFinalityEvidenceMultisig = verifyNoEvmFinalityEvidenceMultisig;
+exports.verifyNoEvmFinalityEvidenceThreshold = verifyNoEvmFinalityEvidenceThreshold;
 exports.verifyNoEvmReceiptProof = verifyNoEvmReceiptProof;
 exports.version = version;
 //# sourceMappingURL=index.cjs.map

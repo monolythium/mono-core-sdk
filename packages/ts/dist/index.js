@@ -4,6 +4,7 @@ import { chacha20poly1305 } from '@noble/ciphers/chacha.js';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { randomBytes } from '@noble/hashes/utils.js';
 import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js';
+import { bls12_381 } from '@noble/curves/bls12-381.js';
 import { JsonRpcApiProvider, Network, AbstractSigner } from 'ethers';
 
 // src/error.ts
@@ -4349,6 +4350,9 @@ var NODE_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPT_NODE_DOMAIN);
 var UINT32_MAX = 4294967295;
 var HASH_BYTE_LENGTH = 32;
 var ARCHIVE_SIGNATURE_SIGNER_ID_BYTE_LENGTH = 20;
+var BLS_PUBLIC_KEY_BYTE_LENGTH = 48;
+var BLS_SIGNATURE_BYTE_LENGTH = 96;
+var BLS_DST = "BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
 var HEX_RE = /^[0-9a-fA-F]*$/u;
 var NoEvmReceiptProofError = class extends Error {
   constructor(code, message) {
@@ -4498,6 +4502,99 @@ function verifyNoEvmArchiveProofSignatures(archiveProof, trustedSigners, thresho
     checkedSignatures: archiveProof.signatures.length,
     issues
   };
+}
+function computeNoEvmRoundFinalityMessage(chainId, round) {
+  const preimage = new Uint8Array(5 + 8 + 8);
+  preimage.set(new TextEncoder().encode("round"), 0);
+  writeU64Le(preimage, 5, chainId, "chainId");
+  writeU64Le(preimage, 13, round, "round");
+  return blake3(preimage);
+}
+function verifyNoEvmFinalityEvidenceThreshold(finalityEvidence, options) {
+  validateFinalityThreshold(options.threshold, options.committeeSize);
+  const clusterPublicKey = expectBlsBytes(
+    options.clusterPublicKey,
+    BLS_PUBLIC_KEY_BYTE_LENGTH,
+    "clusterPublicKey"
+  );
+  const signature = decodeFinalitySignature(finalityEvidence);
+  const signerIndices = signerIndicesFromBitmap(
+    decodeHexBytes(
+      finalityEvidence.certificate.signersBitmap,
+      "finalityEvidence.certificate.signersBitmap"
+    )
+  );
+  const base = finalityVerificationBase(
+    finalityEvidence,
+    signerIndices,
+    options.committeeSize,
+    options.threshold
+  );
+  const message = computeNoEvmRoundFinalityMessage(options.chainId, finalityEvidence.round);
+  const signatureValid = base.signerIndicesInRange && verifyBlsSignature(clusterPublicKey, message, signature);
+  return finalizeBlsFinalityVerification({
+    ...base,
+    allSignersTrusted: base.signerIndicesInRange,
+    signatureValid
+  });
+}
+function verifyNoEvmFinalityEvidenceMultisig(finalityEvidence, options) {
+  validateFinalityThreshold(options.threshold, options.trustedSigners.length);
+  const signature = decodeFinalitySignature(finalityEvidence);
+  const signerIndices = signerIndicesFromBitmap(
+    decodeHexBytes(
+      finalityEvidence.certificate.signersBitmap,
+      "finalityEvidence.certificate.signersBitmap"
+    )
+  );
+  const committeeSize = options.trustedSigners.reduce((max, signer) => Math.max(max, signer.authorityIndex), -1) + 1;
+  const base = finalityVerificationBase(
+    finalityEvidence,
+    signerIndices,
+    committeeSize,
+    options.threshold
+  );
+  const roster = /* @__PURE__ */ new Map();
+  options.trustedSigners.forEach((signer, index) => {
+    assertUint32(signer.authorityIndex, `trustedSigners[${index}].authorityIndex`);
+    if (signer.authorityIndex > 65535) {
+      throw new NoEvmReceiptProofError(
+        "invalid_proof_shape",
+        `trustedSigners[${index}].authorityIndex must fit u16`
+      );
+    }
+    if (roster.has(signer.authorityIndex)) {
+      throw new NoEvmReceiptProofError(
+        "invalid_proof_shape",
+        `trustedSigners contains duplicate authority index ${signer.authorityIndex}`
+      );
+    }
+    roster.set(
+      signer.authorityIndex,
+      expectBlsBytes(
+        signer.publicKey,
+        BLS_PUBLIC_KEY_BYTE_LENGTH,
+        `trustedSigners[${index}].publicKey`
+      )
+    );
+  });
+  const publicKeys = [];
+  let allSignersTrusted = true;
+  signerIndices.forEach((signerIndex) => {
+    const publicKey = roster.get(signerIndex);
+    if (publicKey === void 0) {
+      allSignersTrusted = false;
+    } else {
+      publicKeys.push(publicKey);
+    }
+  });
+  const message = computeNoEvmRoundFinalityMessage(options.chainId, finalityEvidence.round);
+  const signatureValid = allSignersTrusted && publicKeys.length > 0 && verifyBlsAggregateSignature(publicKeys, message, signature);
+  return finalizeBlsFinalityVerification({
+    ...base,
+    allSignersTrusted,
+    signatureValid
+  });
 }
 function verifyBoundedReceiptProof(proof) {
   validateCommonProofMetadata(proof);
@@ -4870,6 +4967,188 @@ function validateOptionalFinalityEvidence(proof) {
       "finalityEvidence.certificate.signerCount must match signerIndices length"
     );
   }
+}
+function validateFinalityEvidenceForVerification(finalityEvidence) {
+  if (!isRecord3(finalityEvidence)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence must be an object"
+    );
+  }
+  assertSupported(
+    finalityEvidence.schema,
+    NO_EVM_FINALITY_EVIDENCE_SCHEMA,
+    "finalityEvidence.schema",
+    "unsupported_schema"
+  );
+  assertSupported(
+    finalityEvidence.source,
+    NO_EVM_FINALITY_EVIDENCE_SOURCE,
+    "finalityEvidence.source",
+    "unsupported_schema"
+  );
+  assertUint32(finalityEvidence.round, "finalityEvidence.round");
+  const certificate = finalityEvidence.certificate;
+  if (!isRecord3(certificate)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate must be an object"
+    );
+  }
+  assertUint32(certificate.round, "finalityEvidence.certificate.round");
+  if (certificate.round !== finalityEvidence.round) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate.round must match finalityEvidence.round"
+    );
+  }
+  decodeHexBytes(certificate.signersBitmap, "finalityEvidence.certificate.signersBitmap");
+  if (!Array.isArray(certificate.signerIndices)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate.signerIndices must be an array"
+    );
+  }
+  certificate.signerIndices.forEach((index, signerIndex) => {
+    assertUint32(index, `finalityEvidence.certificate.signerIndices[${signerIndex}]`);
+    if (index > 65535) {
+      throw new NoEvmReceiptProofError(
+        "invalid_proof_shape",
+        `finalityEvidence.certificate.signerIndices[${signerIndex}] must fit u16`
+      );
+    }
+  });
+  assertUint32(certificate.signerCount, "finalityEvidence.certificate.signerCount");
+  if (certificate.signerCount > 65535) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate.signerCount must fit u16"
+    );
+  }
+}
+function validateFinalityThreshold(threshold, trustedCapacity) {
+  if (!Number.isSafeInteger(threshold) || threshold < 1) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finality evidence threshold must be at least 1"
+    );
+  }
+  if (!Number.isSafeInteger(trustedCapacity) || trustedCapacity < 0 || trustedCapacity > 65535) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finality evidence trusted signer capacity must fit u16"
+    );
+  }
+  if (threshold > trustedCapacity) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      `finality evidence threshold ${threshold} exceeds trusted signer capacity ${trustedCapacity}`
+    );
+  }
+}
+function decodeFinalitySignature(finalityEvidence) {
+  validateFinalityEvidenceForVerification(finalityEvidence);
+  const signature = decodeHexBytes(
+    finalityEvidence.certificate.signature,
+    "finalityEvidence.certificate.signature"
+  );
+  if (signature.length !== BLS_SIGNATURE_BYTE_LENGTH) {
+    throw new NoEvmReceiptProofError(
+      "invalid_hash_length",
+      `finalityEvidence.certificate.signature must be ${BLS_SIGNATURE_BYTE_LENGTH} bytes, got ${signature.length}`
+    );
+  }
+  return signature;
+}
+function signerIndicesFromBitmap(bitmap) {
+  const out = [];
+  bitmap.forEach((byte, byteIndex) => {
+    for (let bitIndex = 0; bitIndex < 8; bitIndex += 1) {
+      if ((byte & 1 << bitIndex) === 0) continue;
+      const signerIndex = byteIndex * 8 + bitIndex;
+      if (signerIndex > 65535) {
+        throw new NoEvmReceiptProofError(
+          "invalid_proof_shape",
+          "finalityEvidence signer bitmap index exceeds u16 authority range"
+        );
+      }
+      out.push(signerIndex);
+    }
+  });
+  return out;
+}
+function finalityVerificationBase(finalityEvidence, bitmapSignerIndices, committeeSize, threshold) {
+  const signerCountMatches = finalityEvidence.certificate.signerCount === finalityEvidence.certificate.signerIndices.length && finalityEvidence.certificate.signerCount === bitmapSignerIndices.length;
+  const signerBitmapMatchesIndices = arraysEqual(
+    finalityEvidence.certificate.signerIndices,
+    bitmapSignerIndices
+  );
+  const signerIndicesInRange = bitmapSignerIndices.every(
+    (signerIndex) => signerIndex < committeeSize
+  );
+  const acceptedSignatureCount = bitmapSignerIndices.length;
+  return {
+    finalityEvidencePresent: true,
+    signerCountMatches,
+    signerBitmapMatchesIndices,
+    signerIndicesInRange,
+    allSignersTrusted: false,
+    thresholdMet: acceptedSignatureCount >= threshold,
+    signatureValid: false,
+    acceptedSignatureCount,
+    requiredSignatureCount: threshold
+  };
+}
+function finalizeBlsFinalityVerification(verification) {
+  return {
+    ...verification,
+    verified: verification.finalityEvidencePresent && verification.signerCountMatches && verification.signerBitmapMatchesIndices && verification.signerIndicesInRange && verification.allSignersTrusted && verification.thresholdMet && verification.signatureValid
+  };
+}
+function verifyBlsSignature(publicKey, message, signature) {
+  try {
+    const hashedMessage = bls12_381.longSignatures.hash(message, BLS_DST);
+    return bls12_381.longSignatures.verify(signature, hashedMessage, publicKey);
+  } catch {
+    return false;
+  }
+}
+function verifyBlsAggregateSignature(publicKeys, message, signature) {
+  try {
+    const aggregatePublicKey = bls12_381.longSignatures.aggregatePublicKeys([...publicKeys]);
+    return verifyBlsSignature(
+      aggregatePublicKey.toBytes(),
+      message,
+      signature
+    );
+  } catch {
+    return false;
+  }
+}
+function expectBlsBytes(value, expectedLength, field2) {
+  const bytes = value instanceof Uint8Array ? value : Uint8Array.from(value);
+  if (bytes.length !== expectedLength) {
+    throw new NoEvmReceiptProofError(
+      "invalid_hash_length",
+      `${field2} must be ${expectedLength} bytes, got ${bytes.length}`
+    );
+  }
+  return bytes;
+}
+function writeU64Le(out, offset, value, field2) {
+  if (typeof value === "number" && (!Number.isSafeInteger(value) || value < 0)) {
+    throw new NoEvmReceiptProofError("invalid_uint32", `${field2} must fit u64`);
+  }
+  const big = typeof value === "bigint" ? value : BigInt(value);
+  if (big < 0n || big > 0xffffffffffffffffn) {
+    throw new NoEvmReceiptProofError("invalid_uint32", `${field2} must fit u64`);
+  }
+  for (let i = 0; i < 8; i += 1) {
+    out[offset + i] = Number(big >> BigInt(i * 8) & 0xffn);
+  }
+}
+function arraysEqual(a, b) {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 function getCompactInclusionProof(proof) {
   const compactProof = proof.compactInclusionProof;
@@ -6629,6 +6908,6 @@ function translateBlockOut(header) {
 // src/index.ts
 var version = "0.1.0";
 
-export { ADDRESS_HRP, ADDRESS_KIND_HRPS, API_STREAM_TOPICS, AddressError, AgentActionError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, CLOB_MARKET_ID_DOMAIN_TAG, CLOB_SELECTORS, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DelegationPrecompileError, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MarketActionError, MonolythiumProvider, MonolythiumSigner, MrvValidationError, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NATIVE_MARKET_MODULE_ADDRESS, NATIVE_MARKET_MODULE_ADDRESS_BYTES, NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_FINALITY_EVIDENCE_SCHEMA, NO_EVM_FINALITY_EVIDENCE_SOURCE, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NoEvmReceiptProofError, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeMarketOrderBookStreamPayload, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bridgeAddressHex, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildBridgeRouteCatalogue, buildCancelSpotOrderPlan, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildNativeMarketModuleCallEnvelope, buildNativeNftBuyListingForwarderInput, buildNativeNftBuyListingModuleCall, buildNativeNftCancelListingForwarderInput, buildNativeNftCancelListingModuleCall, buildNativeNftCreateListingForwarderInput, buildNativeNftCreateListingModuleCall, buildNativeNftPlaceAuctionBidForwarderInput, buildNativeNftPlaceAuctionBidModuleCall, buildNativeNftSettleAuctionForwarderInput, buildNativeNftSettleAuctionModuleCall, buildNativeNftSweepExpiredListingsForwarderInput, buildNativeNftSweepExpiredListingsModuleCall, buildNativeSpotCancelOrderForwarderInput, buildNativeSpotCancelOrderModuleCall, buildNativeSpotLimitOrderForwarderInput, buildNativeSpotLimitOrderModuleCall, buildPlaceSpotLimitOrderPlan, buildPlaceSpotMarketOrderExPlan, buildPlaceSpotMarketOrderPlan, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, clobAddressHex, composeClaimBoundMessage, computeNoEvmReceiptsRoot, computeNoEvmTargetReceiptHash, consumeNativeEvents, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNativeAgentStateResponse, decodeNativeMarketOrderBookDeltasResponse, decodeNativeReceiptResponse, decodeNoEvmReceiptTranscript, decodeTxFeedResponse, delegationAddressHex, deriveClobMarketId, deriveMrvContractAddress, encodeBlockSelector, encodeCancelOrderCalldata, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeNativeMarketModuleForwarderInput, encodeNativeNftBuyListingCall, encodeNativeNftCancelListingCall, encodeNativeNftCreateListingCall, encodeNativeNftPlaceAuctionBidCall, encodeNativeNftSettleAuctionCall, encodeNativeNftSweepExpiredListingsCall, encodeNativeSpotCancelOrderCall, encodeNativeSpotLimitOrderCall, encodePlaceLimitOrderCalldata, encodePlaceMarketOrderCalldata, encodePlaceMarketOrderExCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, getChainInfo, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isNativeMarketOrderBookStreamPayload, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeAgentStateFilterParams, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nativeMarketStateFilterParams, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseLythToLythoshi, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, rankBridgeRoutes, selectBridgeTransferRoute, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, verifyNoEvmArchiveProofSignatures, verifyNoEvmReceiptProof, version };
+export { ADDRESS_HRP, ADDRESS_KIND_HRPS, API_STREAM_TOPICS, AddressError, AgentActionError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, CLOB_MARKET_ID_DOMAIN_TAG, CLOB_SELECTORS, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DelegationPrecompileError, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MarketActionError, MonolythiumProvider, MonolythiumSigner, MrvValidationError, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NATIVE_MARKET_MODULE_ADDRESS, NATIVE_MARKET_MODULE_ADDRESS_BYTES, NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_FINALITY_EVIDENCE_SCHEMA, NO_EVM_FINALITY_EVIDENCE_SOURCE, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NoEvmReceiptProofError, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeMarketOrderBookStreamPayload, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bridgeAddressHex, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildBridgeRouteCatalogue, buildCancelSpotOrderPlan, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildNativeMarketModuleCallEnvelope, buildNativeNftBuyListingForwarderInput, buildNativeNftBuyListingModuleCall, buildNativeNftCancelListingForwarderInput, buildNativeNftCancelListingModuleCall, buildNativeNftCreateListingForwarderInput, buildNativeNftCreateListingModuleCall, buildNativeNftPlaceAuctionBidForwarderInput, buildNativeNftPlaceAuctionBidModuleCall, buildNativeNftSettleAuctionForwarderInput, buildNativeNftSettleAuctionModuleCall, buildNativeNftSweepExpiredListingsForwarderInput, buildNativeNftSweepExpiredListingsModuleCall, buildNativeSpotCancelOrderForwarderInput, buildNativeSpotCancelOrderModuleCall, buildNativeSpotLimitOrderForwarderInput, buildNativeSpotLimitOrderModuleCall, buildPlaceSpotLimitOrderPlan, buildPlaceSpotMarketOrderExPlan, buildPlaceSpotMarketOrderPlan, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, clobAddressHex, composeClaimBoundMessage, computeNoEvmReceiptsRoot, computeNoEvmRoundFinalityMessage, computeNoEvmTargetReceiptHash, consumeNativeEvents, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNativeAgentStateResponse, decodeNativeMarketOrderBookDeltasResponse, decodeNativeReceiptResponse, decodeNoEvmReceiptTranscript, decodeTxFeedResponse, delegationAddressHex, deriveClobMarketId, deriveMrvContractAddress, encodeBlockSelector, encodeCancelOrderCalldata, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeNativeMarketModuleForwarderInput, encodeNativeNftBuyListingCall, encodeNativeNftCancelListingCall, encodeNativeNftCreateListingCall, encodeNativeNftPlaceAuctionBidCall, encodeNativeNftSettleAuctionCall, encodeNativeNftSweepExpiredListingsCall, encodeNativeSpotCancelOrderCall, encodeNativeSpotLimitOrderCall, encodePlaceLimitOrderCalldata, encodePlaceMarketOrderCalldata, encodePlaceMarketOrderExCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, getChainInfo, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isNativeMarketOrderBookStreamPayload, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeAgentStateFilterParams, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nativeMarketStateFilterParams, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseLythToLythoshi, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, rankBridgeRoutes, selectBridgeTransferRoute, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, verifyNoEvmArchiveProofSignatures, verifyNoEvmFinalityEvidenceMultisig, verifyNoEvmFinalityEvidenceThreshold, verifyNoEvmReceiptProof, version };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map
