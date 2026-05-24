@@ -1,16 +1,13 @@
 /**
- * ethers.js v6 compat shim for `@monolythium/core-sdk`.
+ * Legacy ethers.js v6 compat shim for `@monolythium/core-sdk`.
  *
- * Lets existing Solidity tooling — Hardhat, Foundry test scripts,
- * any ethers-based dApp — point at a Monolythium node by swapping
- * its `Provider` and `Signer` for `MonolythiumProvider` and
+ * Lets existing ethers-based migration scripts point at a Monolythium node by
+ * swapping `Provider` and `Signer` instances for `MonolythiumProvider` and
  * `MonolythiumSigner` respectively.
  *
- * **SDK-level compat only.** Per
- * `feedback_no_ethereum_wire_retrofit.md`, the chain's wire format
- * stays Monolythium-native; this shim translates between ethers'
- * expected shapes and the chain's `eth_*` JSON-RPC surface inside
- * the SDK boundary.
+ * **SDK-level compat only.** The current v4.1 app path is native MRV/RISC-V
+ * plus `lyth_*` read surfaces; this shim only translates between ethers'
+ * expected shapes and compatibility JSON-RPC methods inside the SDK boundary.
  *
  * **ethers is a peerDependency.** Install it alongside this SDK if
  * you use the shim:

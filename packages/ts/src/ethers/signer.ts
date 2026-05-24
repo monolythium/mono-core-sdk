@@ -86,11 +86,10 @@ export interface MonolythiumSignerBackend {
  * 2. `new MonolythiumSigner(backend, provider)` — supply any object
  *    implementing `MonolythiumSignerBackend`.
  *
- * The signer is fully spec-compatible with ethers v6 — it can be
- * passed anywhere a `Signer` is accepted (e.g.
- * `new ethers.Contract(address, abi, signer)`), and works with
- * `Contract.deploy`, `Contract.call`, all ContractFactory paths,
- * and `provider.broadcastTransaction(signed)`.
+ * The signer is compatible with ethers v6 migration flows: it can be passed
+ * anywhere a `Signer` is accepted and supports legacy contract deploy/call
+ * helpers plus `provider.broadcastTransaction(signed)`. New v4.1 app paths
+ * should use native MRV/RISC-V builders instead.
  */
 export class MonolythiumSigner extends AbstractSigner<Provider | null> {
   readonly #backend: MonolythiumSignerBackend;

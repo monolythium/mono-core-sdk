@@ -3593,11 +3593,11 @@ declare class RpcClient {
     lythSubscribe(channel: ApiStreamTopic | (string & {})): Promise<unknown>;
     /** `lyth_unsubscribe` — counterpart to `lythSubscribe`. */
     lythUnsubscribe(subId: string): Promise<unknown>;
-    /** `debug_traceTransaction` — revm trace for a confirmed tx. */
+    /** `debug_traceTransaction` — legacy compatibility trace for a confirmed tx. */
     debugTraceTransaction(txHash: string): Promise<unknown>;
-    /** `debug_traceCall` — revm trace for a dry-run. */
+    /** `debug_traceCall` — legacy compatibility trace for a dry-run. */
     debugTraceCall(request: CallRequest, block?: BlockSelector): Promise<unknown>;
-    /** `debug_traceBlockByNumber` — revm traces for an entire block. */
+    /** `debug_traceBlockByNumber` — legacy compatibility traces for an entire block. */
     debugTraceBlockByNumber(block: BlockSelector): Promise<unknown>;
     /** `debug_mempoolDump` — full mempool snapshot. */
     debugMempoolDump(): Promise<MempoolSnapshot>;

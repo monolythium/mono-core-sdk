@@ -1,6 +1,6 @@
 //! Address display helpers.
 //!
-//! Monolythium keeps 20-byte EVM-compatible addresses on the wire, but
+//! Monolythium keeps 20-byte account identifiers on the wire, but
 //! user-facing surfaces display them as `mono1...` bech32m strings.
 
 use bech32::primitives::decode::CheckedHrpstring;

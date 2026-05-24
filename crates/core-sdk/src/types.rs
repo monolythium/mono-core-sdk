@@ -39,8 +39,8 @@ pub type Hash = String;
 /// per the JSON-RPC spec (`"0x0"` instead of `"0x00"`).
 pub type Quantity = String;
 
-/// EVM block tag. Use [`BlockSelector`] when sending to the wire — this
-/// is the strongly-typed half of an `eth_*` block argument.
+/// JSON-RPC block tag. Use [`BlockSelector`] when sending to the wire; passive
+/// compatibility reads still use the `eth_*` block-argument shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
 #[cfg_attr(feature = "ts-bindings", ts(export, export_to = "BlockTag.ts"))]
@@ -60,7 +60,7 @@ pub enum BlockTag {
     Pending,
 }
 
-/// Block selector for `eth_getBlock*`, `eth_call`, etc.
+/// Block selector for block-scoped JSON-RPC reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockSelector {
     /// Resolve via tag.
@@ -3593,7 +3593,11 @@ pub struct SyncStatus {
     pub highest_block: Quantity,
 }
 
-/// Argument shape for `eth_call` / `eth_estimateGas`.
+/// Legacy compatibility call/estimate request shape.
+///
+/// New v4.1 no-EVM app flows should prefer native MRV/RISC-V builders and
+/// `lyth_*` previews. This type remains for raw compatibility RPC methods and
+/// generated TypeScript bindings.
 ///
 /// Every field is optional — the chain rejects payloads that omit
 /// required fields with an `InvalidParams` error.
@@ -3618,7 +3622,7 @@ pub struct CallRequest {
     )]
     #[cfg_attr(feature = "ts-bindings", ts(rename = "gas", optional))]
     pub execution_unit_limit: Option<Quantity>,
-    /// Fee per execution unit on legacy / non-EIP-1559 paths.
+    /// Fee per execution unit on legacy compatibility paths.
     #[serde(
         rename = "gasPrice",
         alias = "feePerExecutionUnit",

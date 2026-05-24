@@ -1629,7 +1629,7 @@ var TESTNET_69420 = {
   chain_id: 69420,
   network: "testnet-69420",
   display_name: "Monolythium Testnet",
-  description: "Live development testnet for Monolythium v4.0 / LythiumDAG-BFT. Foundation-operated. Wipe + regenesis is allowed without notice \u2014 do NOT store value on this network.",
+  description: "Live development testnet for Monolythium v4.1 / LythiumDAG-BFT. Foundation-operated. Wipe + regenesis is allowed without notice \u2014 do NOT store value on this network.",
   genesis_hash: "0x325057e476b7be3730a22c92b9289f4a14a3414a2a081bd279b43eeba36b0075",
   binary_sha: "44a9ec4",
   rpc: [
@@ -2827,15 +2827,15 @@ var RpcClient = class _RpcClient {
   // ---- debug_* ------------------------------------------------------
   // Server-side gated by `RpcConfig::debug_enabled`. When the namespace
   // is disabled, every call surfaces as `SdkError.rpc`.
-  /** `debug_traceTransaction` — revm trace for a confirmed tx. */
+  /** `debug_traceTransaction` — legacy compatibility trace for a confirmed tx. */
   async debugTraceTransaction(txHash) {
     return this.call("debug_traceTransaction", [txHash]);
   }
-  /** `debug_traceCall` — revm trace for a dry-run. */
+  /** `debug_traceCall` — legacy compatibility trace for a dry-run. */
   async debugTraceCall(request, block = "latest") {
     return this.call("debug_traceCall", [request, encodeBlockSelector(block)]);
   }
-  /** `debug_traceBlockByNumber` — revm traces for an entire block. */
+  /** `debug_traceBlockByNumber` — legacy compatibility traces for an entire block. */
   async debugTraceBlockByNumber(block) {
     return this.call("debug_traceBlockByNumber", [encodeBlockSelector(block)]);
   }

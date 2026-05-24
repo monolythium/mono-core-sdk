@@ -2058,12 +2058,12 @@ export class RpcClient {
   // Server-side gated by `RpcConfig::debug_enabled`. When the namespace
   // is disabled, every call surfaces as `SdkError.rpc`.
 
-  /** `debug_traceTransaction` — revm trace for a confirmed tx. */
+  /** `debug_traceTransaction` — legacy compatibility trace for a confirmed tx. */
   async debugTraceTransaction(txHash: string): Promise<unknown> {
     return this.call("debug_traceTransaction", [txHash]);
   }
 
-  /** `debug_traceCall` — revm trace for a dry-run. */
+  /** `debug_traceCall` — legacy compatibility trace for a dry-run. */
   async debugTraceCall(
     request: CallRequest,
     block: BlockSelector = "latest",
@@ -2071,7 +2071,7 @@ export class RpcClient {
     return this.call("debug_traceCall", [request, encodeBlockSelector(block)]);
   }
 
-  /** `debug_traceBlockByNumber` — revm traces for an entire block. */
+  /** `debug_traceBlockByNumber` — legacy compatibility traces for an entire block. */
   async debugTraceBlockByNumber(block: BlockSelector): Promise<unknown> {
     return this.call("debug_traceBlockByNumber", [encodeBlockSelector(block)]);
   }

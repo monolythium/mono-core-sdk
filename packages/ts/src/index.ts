@@ -1,14 +1,14 @@
 /**
- * Official TypeScript SDK for Monolythium v4.0 / LythiumDAG-BFT.
+ * Official TypeScript SDK for Monolythium v4.1 / LythiumDAG-BFT.
  *
  * The wire types in `./bindings/` are generated from Rust by
  * `cargo test --features ts-bindings`; never edit them by hand. The
- * `RpcClient` mirrors the Rust SDK 1:1 and sends `lyth_*` / `eth_*` /
- * `debug_*` JSON-RPC methods (Law §13.2).
+ * `RpcClient` mirrors the Rust SDK 1:1 across current `lyth_*` native methods,
+ * passive compatibility reads, and server-gated legacy/debug methods.
  *
  * The optional `ethers.js` v6 compat shim lives under `./ethers/`
  * and is re-exported below. `ethers` is a peerDependency — install
- * it alongside this SDK when you use the shim.
+ * it alongside this SDK only when you use the legacy compatibility shim.
  */
 
 export const version = "0.1.0";
