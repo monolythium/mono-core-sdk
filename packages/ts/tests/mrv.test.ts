@@ -9,6 +9,7 @@ import {
   RpcClient,
   addressToTypedBech32,
   assertMrvFeeDisplayConformance,
+  assertMrvStructuredFeeConformance,
   assertMrvCallNativeSubmissionPlan,
   assertMrvDeployNativeSubmissionPlan,
   buildMrvCallNativeTxPlan,
@@ -21,6 +22,7 @@ import {
   buildMrvDeployPlan,
   buildMrvDeployRequest,
   checkMrvFeeDisplayConformance,
+  checkMrvStructuredFeeConformance,
   deriveMrvContractAddress,
   encodeMrvDeployPayload,
   formatNativeReceiptFeeDisplay,
@@ -190,6 +192,41 @@ describe("MRV/RISC-V SDK helpers", () => {
         "structuredFee.total_lyth must be 0.0005",
         "default surface must not expose custom fee inputs",
         "default surface must not expose speed-up or cancel controls",
+      ]),
+    );
+  });
+
+  it("rejects legacy EVM fee keys inside structured native fee objects", () => {
+    const fee = {
+      total_lythoshi: "21000",
+      total_lyth: "0.00021",
+      cycles_used: 21_000,
+      base_price_per_cycle_lythoshi: "1",
+      state_io_units: 0,
+      state_io_price_per_unit_lythoshi: "0",
+      priority_tip_lythoshi: "0",
+    };
+
+    expect(() => assertMrvStructuredFeeConformance(fee, { label: "fee" })).not.toThrow();
+
+    const report = checkMrvStructuredFeeConformance(
+      {
+        ...fee,
+        gasPrice: "1",
+        maxFeePerGas: "1",
+        gas: "21000",
+        wei: "21000",
+      },
+      { label: "fee" },
+    );
+
+    expect(report.passed).toBe(false);
+    expect(report.failures).toEqual(
+      expect.arrayContaining([
+        "fee has unexpected field 'gasPrice'",
+        "fee has unexpected field 'maxFeePerGas'",
+        "fee has unexpected field 'gas'",
+        "fee has unexpected field 'wei'",
       ]),
     );
   });

@@ -1,9 +1,9 @@
 'use strict';
 
-var sha3_js = require('@noble/hashes/sha3.js');
 var blake3_js = require('@noble/hashes/blake3.js');
 var mlKem_js = require('@noble/post-quantum/ml-kem.js');
 var chacha_js = require('@noble/ciphers/chacha.js');
+var sha3_js = require('@noble/hashes/sha3.js');
 var utils_js = require('@noble/hashes/utils.js');
 require('@noble/post-quantum/ml-dsa.js');
 var ethers = require('ethers');
@@ -487,6 +487,1137 @@ function expectLength2(value, len, name) {
     throw new NodeRegistryError(`${name} must be ${len} bytes, got ${value.length}`);
   }
   return value;
+}
+
+// src/crypto/bytes.ts
+function concatBytes2(...chunks) {
+  const len = chunks.reduce((n, c) => n + c.length, 0);
+  const out = new Uint8Array(len);
+  let off = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, off);
+    off += chunk.length;
+  }
+  return out;
+}
+function bytesToHex2(bytes) {
+  let out = "0x";
+  for (let i = 0; i < bytes.length; i++) {
+    out += bytes[i].toString(16).padStart(2, "0");
+  }
+  return out;
+}
+function hexToBytes2(hex, label = "hex") {
+  const stripped = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
+  if (stripped.length % 2 !== 0) {
+    throw new Error(`${label} must have even length`);
+  }
+  const out = new Uint8Array(stripped.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    const b = Number.parseInt(stripped.slice(i * 2, i * 2 + 2), 16);
+    if (Number.isNaN(b)) {
+      throw new Error(`${label} contains invalid hex`);
+    }
+    out[i] = b;
+  }
+  return out;
+}
+function expectBytes(value, len, label) {
+  if (value.length !== len) {
+    throw new Error(`${label} must be ${len} bytes, got ${value.length}`);
+  }
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+function parseBigint(value, label) {
+  if (value === void 0) throw new Error(`${label} missing`);
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${label} must be a non-negative safe integer`);
+    return BigInt(value);
+  }
+  if (value.startsWith("0x") || value.startsWith("0X")) return BigInt(value);
+  return BigInt(value);
+}
+
+// src/crypto/bincode.ts
+var BincodeWriter = class {
+  #chunks = [];
+  u8(value) {
+    this.#int(value, 1);
+  }
+  u16(value) {
+    this.#int(value, 2);
+  }
+  u32(value) {
+    this.#int(value, 4);
+  }
+  u64(value) {
+    this.#big(value, 8);
+  }
+  u128(value) {
+    this.#big(value, 16);
+  }
+  enumVariant(value) {
+    this.u32(value);
+  }
+  rawBytes(bytes) {
+    for (const b of bytes) this.#chunks.push(b);
+  }
+  bytes(bytes) {
+    this.u64(BigInt(bytes.length));
+    this.rawBytes(bytes);
+  }
+  optionBytes(bytes) {
+    if (bytes === null) {
+      this.u8(0);
+      return;
+    }
+    this.u8(1);
+    this.rawBytes(bytes);
+  }
+  toBytes() {
+    return Uint8Array.from(this.#chunks);
+  }
+  #int(value, bytes) {
+    if (!Number.isSafeInteger(value) || value < 0 || value >= 2 ** (bytes * 8)) {
+      throw new Error(`integer out of u${bytes * 8} range`);
+    }
+    for (let i = 0; i < bytes; i++) {
+      this.#chunks.push(value >> 8 * i & 255);
+    }
+  }
+  #big(value, bytes) {
+    let v = typeof value === "bigint" ? value : BigInt(value);
+    if (v < 0n || v >= 1n << BigInt(bytes * 8)) {
+      throw new Error(`integer out of u${bytes * 8} range`);
+    }
+    for (let i = 0; i < bytes; i++) {
+      this.#chunks.push(Number(v & 0xffn));
+      v >>= 8n;
+    }
+  }
+};
+var ML_DSA_65_PUBLIC_KEY_LEN = 1952;
+var ML_DSA_65_SIGNATURE_LEN = 3309;
+var STANDARD_ALGO_NUMBER_ML_DSA_65 = 1001;
+var ENUM_VARIANT_INDEX_ML_DSA_65 = 5;
+
+// src/crypto/envelope.ts
+var DKG_AEAD_DOMAIN_TAG = new TextEncoder().encode("protocore/v2/mempool/dkg-mlkem768/1");
+var ML_KEM_768_ENCAPSULATION_KEY_LEN = 1184;
+var DKG_NONCE_LEN = 12;
+var MempoolClass = {
+  Transfer: 0,
+  ContractCall: 1,
+  CLOBOp: 3};
+function bincodeNonceAad(aad) {
+  const w = new BincodeWriter();
+  w.bytes(expectBytes(aad.sender, 20, "NonceAad.sender"));
+  w.u64(aad.nonce);
+  w.u64(aad.chainId);
+  w.enumVariant(aad.class);
+  w.u128(aad.maxFeePerGas);
+  w.u128(aad.maxPriorityFeePerGas);
+  w.u64(aad.gasLimit);
+  return w.toBytes();
+}
+function bincodeDecryptHint(hint) {
+  const w = new BincodeWriter();
+  w.u64(hint.epoch);
+  w.u16(hint.scheme);
+  return w.toBytes();
+}
+function bincodeEncryptedEnvelope(env) {
+  const w = new BincodeWriter();
+  w.rawBytes(bincodeNonceAad(env.nonceAad));
+  w.bytes(env.ciphertext);
+  w.rawBytes(bincodeDecryptHint(env.decryptionHint));
+  bincodeMlDsa65OpaqueInto(w, expectBytes(env.senderPubkey, ML_DSA_65_PUBLIC_KEY_LEN, "senderPubkey"));
+  bincodeMlDsa65OpaqueInto(w, expectBytes(env.outerSignature, ML_DSA_65_SIGNATURE_LEN, "outerSignature"));
+  w.bytes(expectBytes(env.sender, 20, "sender"));
+  return w.toBytes();
+}
+function encryptInnerTx(signedInnerTxBincode, nonceAad, kemEncapsulationKey) {
+  expectBytes(kemEncapsulationKey, ML_KEM_768_ENCAPSULATION_KEY_LEN, "kemEncapsulationKey");
+  const { cipherText: kemCt, sharedSecret } = mlKem_js.ml_kem768.encapsulate(kemEncapsulationKey);
+  const nonce = utils_js.randomBytes(DKG_NONCE_LEN);
+  const cipher = chacha_js.chacha20poly1305(sharedSecret, nonce, aadFor(nonceAad));
+  const aeadCt = cipher.encrypt(signedInnerTxBincode);
+  sharedSecret.fill(0);
+  return concatBytes2(kemCt, nonce, aeadCt);
+}
+function outerSigDigest(nonceAad, ciphertext, decryptionHint, senderPubkey) {
+  const aad = bincodeNonceAad(nonceAad);
+  const hint = bincodeDecryptHint(decryptionHint);
+  return sha3_js.keccak_256(concatBytes2(aad, ciphertext, hint, expectBytes(senderPubkey, ML_DSA_65_PUBLIC_KEY_LEN, "senderPubkey")));
+}
+async function buildEncryptedEnvelope(args) {
+  const ciphertext = encryptInnerTx(args.signedInnerTxBincode, args.nonceAad, args.kemEncapsulationKey);
+  const digest = outerSigDigest(args.nonceAad, ciphertext, args.decryptionHint, args.senderPubkey);
+  const outerSignature = await args.signOuterDigest(digest);
+  const envelope = {
+    nonceAad: args.nonceAad,
+    ciphertext,
+    decryptionHint: args.decryptionHint,
+    senderPubkey: expectBytes(args.senderPubkey, ML_DSA_65_PUBLIC_KEY_LEN, "senderPubkey"),
+    outerSignature: expectBytes(outerSignature, ML_DSA_65_SIGNATURE_LEN, "outerSignature"),
+    sender: expectBytes(args.senderAddress, 20, "senderAddress")
+  };
+  const wireBytes = bincodeEncryptedEnvelope(envelope);
+  return { envelope, wireBytes, wireHex: bytesToHex2(wireBytes) };
+}
+function aadFor(aad) {
+  return concatBytes2(DKG_AEAD_DOMAIN_TAG, bincodeNonceAad(aad));
+}
+function bincodeMlDsa65OpaqueInto(w, raw) {
+  w.enumVariant(ENUM_VARIANT_INDEX_ML_DSA_65);
+  w.u16(STANDARD_ALGO_NUMBER_ML_DSA_65);
+  w.bytes(raw);
+}
+
+// src/crypto/submission.ts
+async function fetchEncryptionKey(client) {
+  const result = await client.call(
+    "lyth_getEncryptionKey",
+    []
+  );
+  return {
+    algo: result.algo ?? "ml-kem-768",
+    epoch: typeof result.epoch === "string" ? BigInt(result.epoch) : BigInt(result.epoch),
+    encapsulationKey: hexToBytes2(result.encapsulationKey, "encapsulationKey")
+  };
+}
+async function buildEncryptedSubmission(args) {
+  const input = normalizeInput(args.tx.input);
+  const to = normalizeTo(args.tx.to);
+  const nonceAad = {
+    sender: args.backend.addressBytes(),
+    nonce: parseBigint(args.tx.nonce, "nonce"),
+    chainId: parseBigint(args.tx.chainId, "chainId"),
+    class: args.class ?? (to !== null && input.length === 0 ? MempoolClass.Transfer : MempoolClass.ContractCall),
+    maxFeePerGas: u128Checked(parseBigint(args.tx.maxFeePerGas, "maxFeePerGas"), "maxFeePerGas"),
+    maxPriorityFeePerGas: u128Checked(
+      parseBigint(args.tx.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
+      "maxPriorityFeePerGas"
+    ),
+    gasLimit: parseBigint(args.tx.gasLimit, "gasLimit")
+  };
+  const signed = args.backend.signEvmTx(args.tx);
+  const decryptionHint = { epoch: args.encryptionKey.epoch, scheme: 0 };
+  const built = await buildEncryptedEnvelope({
+    signedInnerTxBincode: signed.wireBytes,
+    nonceAad,
+    decryptionHint,
+    kemEncapsulationKey: args.encryptionKey.encapsulationKey,
+    senderAddress: args.backend.addressBytes(),
+    senderPubkey: args.backend.publicKey(),
+    signOuterDigest: (digest) => args.backend.signPrehash(digest)
+  });
+  return {
+    envelopeWireHex: built.wireHex,
+    innerSighashHex: `0x${[...signed.sighash].map((b) => b.toString(16).padStart(2, "0")).join("")}`,
+    innerTxHashHex: bytesToHex2(signed.txHash),
+    innerWireBytes: signed.wireBytes.length
+  };
+}
+async function submitEncryptedEnvelope(client, envelopeWireHex) {
+  return client.call("lyth_submitEncrypted", [envelopeWireHex]);
+}
+function u128Checked(value, field2) {
+  const cap = (1n << 128n) - 1n;
+  if (value < 0n || value > cap) {
+    throw new Error(`${field2} must fit in u128 for encrypted nonce AAD`);
+  }
+  return value;
+}
+function normalizeTo(value) {
+  if (value === null) return null;
+  if (typeof value === "string") return hexToAddressBytes(value);
+  const bytes = value instanceof Uint8Array ? value : Uint8Array.from(value);
+  if (bytes.length !== 20) throw new Error("to must be 20 bytes");
+  return bytes;
+}
+function normalizeInput(value) {
+  if (value === void 0) return new Uint8Array(0);
+  if (typeof value === "string") return hexToBytes2(value, "input");
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+
+// src/mrv.ts
+var MRV_FORMAT_VERSION = 1;
+var MRV_DEPLOY_PAYLOAD_VERSION = 1;
+var MRV_PROFILE_MONO_RV32IM_V1 = "mono_rv32im_v1";
+var MRV_MEMORY_PAGE_BYTES = 65536;
+var MRV_MAX_CODE_BYTES = 16 * 1024 * 1024;
+var MRV_MAX_DEBUG_BYTES = 16 * 1024 * 1024;
+var MRV_MAX_MEMORY_PAGES = 1024;
+var MRV_MAX_ABI_SYMBOLS = 1024;
+var MRV_MAX_STORAGE_NAMESPACE_BYTES = 64;
+var LYTH_DECIMALS = 8;
+var NATIVE_LYTH_DECIMALS = LYTH_DECIMALS;
+var LYTHOSHI_PER_LYTH = 100000000n;
+var MRV_TX_EXTENSION_KIND = 48;
+var MRV_TX_EXTENSION_V1 = 1;
+var MRV_CODE_HASH_DOMAIN = new TextEncoder().encode("MONO_MRV_CODE_V1");
+var MRV_CONTRACT_ADDRESS_DOMAIN = new TextEncoder().encode("mono:riscv:contract-address:v1");
+var MONO_SYSCALL_MODULE = "mono";
+var SYSCALLS = [
+  [257, "storage_read"],
+  [258, "storage_write"],
+  [259, "storage_delete"],
+  [513, "caller"],
+  [514, "contract_address"],
+  [515, "block_height"],
+  [516, "block_hash"],
+  [769, "call_contract"],
+  [770, "emit_event"],
+  [771, "transfer_native"],
+  [1025, "verify_signature"],
+  [1026, "hash"],
+  [1281, "revert"]
+];
+var SYSCALL_NAME_BY_ID = new Map(SYSCALLS);
+var SYSCALL_ID_BY_NAME = new Map(SYSCALLS.map(([id, name]) => [name, id]));
+var MrvValidationError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "MrvValidationError";
+  }
+};
+var MRV_STRUCTURED_FEE_FIELDS = [
+  "total_lythoshi",
+  "total_lyth",
+  "cycles_used",
+  "base_price_per_cycle_lythoshi",
+  "state_io_units",
+  "state_io_price_per_unit_lythoshi",
+  "priority_tip_lythoshi"
+];
+function formatLyth(lythoshi, options = {}) {
+  const amount = BigInt(normalizeDecimalLike("lythoshi", lythoshi));
+  const whole = amount / LYTHOSHI_PER_LYTH;
+  const fraction = amount % LYTHOSHI_PER_LYTH;
+  let formatted = formatWholeWithCommas(whole);
+  if (fraction !== 0n) {
+    formatted += `.${fraction.toString().padStart(NATIVE_LYTH_DECIMALS, "0").replace(/0+$/, "")}`;
+  }
+  if (options.includeUnit !== false) {
+    formatted += " LYTH";
+  }
+  return formatted;
+}
+function formatLythoshi(lythoshi, options = {}) {
+  return formatLyth(lythoshi, options);
+}
+function parseLythToLythoshi(input) {
+  const numeric = stripLythUnit(input);
+  const parts = numeric.split(".");
+  if (parts.length > 2) {
+    throw new MrvValidationError("lyth amount must be a canonical LYTH decimal");
+  }
+  const [wholeRaw, fractionRaw = ""] = parts;
+  if (!isCanonicalWholeLyth(wholeRaw)) {
+    throw new MrvValidationError("lyth amount must be a canonical LYTH decimal");
+  }
+  if (numeric.includes(".") && fractionRaw.length === 0) {
+    throw new MrvValidationError("lyth amount must be a canonical LYTH decimal");
+  }
+  if (fractionRaw.length > NATIVE_LYTH_DECIMALS || !/^[0-9]*$/.test(fractionRaw)) {
+    throw new MrvValidationError("lyth amount supports at most 8 decimal places");
+  }
+  const whole = BigInt(wholeRaw.replaceAll(",", ""));
+  const fraction = fractionRaw === "" ? 0n : BigInt(fractionRaw.padEnd(NATIVE_LYTH_DECIMALS, "0"));
+  return whole * LYTHOSHI_PER_LYTH + fraction;
+}
+function checkMrvFeeDisplayConformance(input) {
+  const expectedTotalLythoshi = normalizeDecimalLike("expectedTotalLythoshi", input.expectedTotalLythoshi);
+  const expectedDefaultFeeText = formatLyth(expectedTotalLythoshi);
+  const failures = [];
+  const amountCandidates = extractLythAmountCandidates(input.defaultFeeText);
+  if (amountCandidates.length !== 1) {
+    failures.push("defaultFeeText must contain exactly one LYTH-denominated fee amount");
+  } else {
+    const renderedCandidate = `${amountCandidates[0]} LYTH`;
+    if (renderedCandidate !== expectedDefaultFeeText) {
+      failures.push(`defaultFeeText fee must be ${expectedDefaultFeeText}`);
+    }
+    try {
+      const parsed = parseLythToLythoshi(renderedCandidate);
+      if (parsed.toString() !== expectedTotalLythoshi) {
+        failures.push(`defaultFeeText fee must total ${expectedTotalLythoshi} lythoshi`);
+      }
+    } catch {
+      failures.push("defaultFeeText fee must be a canonical 8-decimal LYTH amount");
+    }
+  }
+  const defaultForbidden = firstForbiddenDefaultFeeTerm(input.defaultFeeText);
+  if (defaultForbidden !== void 0) {
+    failures.push(`defaultFeeText exposes detail-only fee term '${defaultForbidden}'`);
+  }
+  for (const [index, detailText] of (input.detailTexts ?? []).entries()) {
+    const detailForbidden = firstForbiddenDetailFeeTerm(detailText);
+    if (detailForbidden !== void 0) {
+      failures.push(`detailTexts[${index}] exposes inherited fee term '${detailForbidden}'`);
+    }
+  }
+  if (input.structuredFee !== void 0) {
+    checkStructuredFeeObject(input.structuredFee, expectedTotalLythoshi, failures);
+  }
+  if (input.customFeeInputVisible === true) {
+    failures.push("default surface must not expose custom fee inputs");
+  }
+  if (input.speedUpCancelVisible === true) {
+    failures.push("default surface must not expose speed-up or cancel controls");
+  }
+  return {
+    passed: failures.length === 0,
+    failures,
+    expectedDefaultFeeText
+  };
+}
+function checkMrvStructuredFeeConformance(value, options = {}) {
+  const failures = [];
+  const expectedTotalLythoshi = options.expectedTotalLythoshi === void 0 ? void 0 : normalizeDecimalLike("expectedTotalLythoshi", options.expectedTotalLythoshi);
+  checkStructuredFeeObject(
+    value,
+    expectedTotalLythoshi,
+    failures,
+    options.label ?? "structuredFee"
+  );
+  return {
+    passed: failures.length === 0,
+    failures
+  };
+}
+function assertMrvStructuredFeeConformance(value, options = {}) {
+  const report = checkMrvStructuredFeeConformance(value, options);
+  if (!report.passed) {
+    throw new MrvValidationError(`structured fee conformance failed: ${report.failures.join("; ")}`);
+  }
+}
+function assertMrvFeeDisplayConformance(input) {
+  const report = checkMrvFeeDisplayConformance(input);
+  if (!report.passed) {
+    throw new MrvValidationError(`fee display conformance failed: ${report.failures.join("; ")}`);
+  }
+}
+function formatNativeReceiptFeeDisplay(fee) {
+  const totalLythoshi = normalizeDecimalLike("fee.total_lythoshi", fee.total_lythoshi);
+  const totalLyth = formatLyth(totalLythoshi, { includeUnit: false });
+  return {
+    defaultFeeText: `Network fee: ${totalLyth} LYTH`,
+    detailTexts: [
+      `cycles ${fee.cycles_used}, state I/O ${fee.state_io_units}, total ${totalLythoshi} lythoshi`,
+      `cycle price ${fee.base_price_per_cycle_lythoshi} lythoshi, state I/O price ${fee.state_io_price_per_unit_lythoshi} lythoshi, priority tip ${fee.priority_tip_lythoshi} lythoshi`
+    ],
+    totalLythoshi,
+    totalLyth
+  };
+}
+function mrvCodeHashHex(code) {
+  const codeBytes = bytesFrom(code, "code");
+  const len = new Uint8Array(8);
+  new DataView(len.buffer).setBigUint64(0, BigInt(codeBytes.length), false);
+  return bytesToHex3(blake3_js.blake3(concatBytes3(MRV_CODE_HASH_DOMAIN, len, codeBytes)));
+}
+function mrvV1TransactionExtension() {
+  return { kind: MRV_TX_EXTENSION_KIND, bodyHex: "0x01" };
+}
+function encodeMrvDeployPayload(artifactBytes, constructorInput) {
+  const artifact = bytesFrom(artifactBytes, "artifactBytes");
+  const w = new BincodeWriter();
+  w.u16(MRV_DEPLOY_PAYLOAD_VERSION);
+  w.bytes(artifact);
+  if (constructorInput === void 0 || constructorInput === null) {
+    w.u8(0);
+  } else {
+    const constructor = bytesFrom(constructorInput, "constructorInput");
+    w.u8(1);
+    w.bytes(constructor);
+  }
+  return bytesToHex3(w.toBytes());
+}
+function mrvAddressToBech32(kind, bytes) {
+  return addressToTypedBech32(kind, bytesFrom(bytes, "address"));
+}
+function mrvBech32ToAddress(address, expectedKind) {
+  return typedBech32ToAddress(address, expectedKind);
+}
+function deriveMrvContractAddress(deployerAddress, deployerNonce, artifactHashHex) {
+  const deployer = typedBech32ToAddress(deployerAddress);
+  const artifactHash = hexToBytes3(artifactHashHex, "artifactHash");
+  if (artifactHash.length !== 32) throw new MrvValidationError("artifactHash must be 32 bytes");
+  const nonceValue = normalizeU64(deployerNonce, "deployerNonce");
+  const nonce = new Uint8Array(8);
+  new DataView(nonce.buffer).setBigUint64(0, nonceValue, false);
+  const digest = blake3_js.blake3(
+    concatBytes3(
+      MRV_CONTRACT_ADDRESS_DOMAIN,
+      new TextEncoder().encode(ADDRESS_KIND_HRPS[deployer.kind]),
+      Uint8Array.of(0),
+      hexToBytes3(deployer.hex, "deployerAddress"),
+      nonce,
+      artifactHash
+    )
+  );
+  return addressToTypedBech32("contract", digest.slice(0, 20));
+}
+function validateMrvArtifactMetadata(metadata, code) {
+  const codeBytes = bytesFrom(code, "code");
+  if (metadata.formatVersion !== MRV_FORMAT_VERSION) {
+    throw new MrvValidationError(
+      `unsupported MRV format version ${metadata.formatVersion}, expected ${MRV_FORMAT_VERSION}`
+    );
+  }
+  if (metadata.profile !== MRV_PROFILE_MONO_RV32IM_V1) {
+    throw new MrvValidationError(`unsupported MRV profile ${metadata.profile}`);
+  }
+  if (codeBytes.length === 0) {
+    throw new MrvValidationError("MRV code is empty");
+  }
+  if (codeBytes.length > MRV_MAX_CODE_BYTES) {
+    throw new MrvValidationError(`MRV code has ${codeBytes.length} bytes, max ${MRV_MAX_CODE_BYTES}`);
+  }
+  if (metadata.codeBytes !== BigInt(codeBytes.length)) {
+    throw new MrvValidationError(
+      `metadata codeBytes ${metadata.codeBytes.toString()} does not match supplied code length ${codeBytes.length}`
+    );
+  }
+  if (metadata.debugBytes > BigInt(MRV_MAX_DEBUG_BYTES)) {
+    throw new MrvValidationError(`MRV debug section has ${metadata.debugBytes.toString()} bytes`);
+  }
+  validateHexLength("codeHash", metadata.codeHash, 32);
+  validateHexLength("sourceDigest", metadata.build.sourceDigest, 32);
+  validateMemory(metadata.memory.initialPages, metadata.memory.maxPages, metadata.memory.stackBytes);
+  validateStorageNamespace(metadata.storageNamespace.name, metadata.storageNamespace.version);
+  validateAbi(metadata.abi);
+  const syscalls = validateImports(metadata.imports);
+  const computed = mrvCodeHashHex(codeBytes);
+  if (metadata.codeHash.toLowerCase() !== computed) {
+    throw new MrvValidationError(`MRV code hash mismatch: declared ${metadata.codeHash}, computed ${computed}`);
+  }
+  return {
+    codeHash: computed,
+    profile: metadata.profile,
+    memory: metadata.memory,
+    storageNamespace: metadata.storageNamespace,
+    syscalls,
+    abiSymbolCount: BigInt(metadata.abi.symbols.length),
+    codeBytes: BigInt(codeBytes.length)
+  };
+}
+function validateMrvDeployRequest(request) {
+  if (request.from !== void 0) typedBech32ToAddress(request.from, "user");
+  hexToBytes3(request.artifactBytes, "artifactBytes");
+  validateDecimal("valueLythoshi", request.valueLythoshi);
+  validateOptionalDecimal("maxExecutionFeeLythoshi", request.maxExecutionFeeLythoshi);
+  validateOptionalDecimal("priorityTipLythoshi", request.priorityTipLythoshi);
+  validateExecutionUnitLimit("executionUnitLimit", request.executionUnitLimit);
+}
+function validateMrvCallRequest(request) {
+  if (request.from !== void 0) typedBech32ToAddress(request.from, "user");
+  typedBech32ToAddress(request.contractAddress, "contract");
+  hexToBytes3(request.input, "input");
+  validateDecimal("valueLythoshi", request.valueLythoshi);
+  validateOptionalDecimal("maxExecutionFeeLythoshi", request.maxExecutionFeeLythoshi);
+  validateOptionalDecimal("priorityTipLythoshi", request.priorityTipLythoshi);
+  validateExecutionUnitLimit("executionUnitLimit", request.executionUnitLimit);
+}
+function buildMrvDeployRequest(artifactBytes, options = {}) {
+  const request = {
+    artifactBytes: normalizeBytesHex(artifactBytes, "artifactBytes"),
+    valueLythoshi: normalizeDecimalLike("valueLythoshi", options.valueLythoshi, "0")
+  };
+  applyRequestOptions(request, options);
+  validateMrvDeployRequest(request);
+  return request;
+}
+function buildMrvDeployPayloadRequest(artifactBytes, options = {}) {
+  const request = buildMrvDeployRequest(
+    encodeMrvDeployPayload(artifactBytes, options.constructorInput),
+    options
+  );
+  return request;
+}
+function buildMrvCallRequest(contractAddress, input = "0x", options = {}) {
+  const request = {
+    contractAddress,
+    input: normalizeBytesHex(input, "input"),
+    valueLythoshi: normalizeDecimalLike("valueLythoshi", options.valueLythoshi, "0")
+  };
+  applyRequestOptions(request, options);
+  validateMrvCallRequest(request);
+  return request;
+}
+function buildMrvDeployPlan(artifactBytes, options = {}) {
+  const request = buildMrvDeployRequest(artifactBytes, options);
+  const plan = {
+    request,
+    extension: mrvV1TransactionExtension()
+  };
+  if (options.artifactHash !== void 0 && request.from !== void 0 && request.nonce !== void 0) {
+    plan.expectedContractAddress = deriveMrvContractAddress(request.from, request.nonce, options.artifactHash);
+  } else if (options.artifactHash !== void 0) {
+    validateHexLength("artifactHash", options.artifactHash, 32);
+  }
+  return plan;
+}
+function buildMrvDeployPayloadPlan(artifactBytes, options = {}) {
+  const request = buildMrvDeployPayloadRequest(artifactBytes, options);
+  const plan = {
+    request,
+    extension: mrvV1TransactionExtension()
+  };
+  if (options.artifactHash !== void 0 && request.from !== void 0 && request.nonce !== void 0) {
+    plan.expectedContractAddress = deriveMrvContractAddress(request.from, request.nonce, options.artifactHash);
+  } else if (options.artifactHash !== void 0) {
+    validateHexLength("artifactHash", options.artifactHash, 32);
+  }
+  return plan;
+}
+function buildMrvCallPlan(contractAddress, input = "0x", options = {}) {
+  return {
+    request: buildMrvCallRequest(contractAddress, input, options),
+    extension: mrvV1TransactionExtension()
+  };
+}
+function buildMrvDeployNativeTxPlan(artifactBytes, options) {
+  const chainId = normalizeU64(options.chainId, "chainId");
+  const nonce = normalizeU64(options.nonce, "nonce");
+  const executionUnitLimit = normalizeU64(options.executionUnitLimit, "executionUnitLimit");
+  const maxExecutionFee = normalizeDecimalLike("maxExecutionFeeLythoshi", options.maxExecutionFeeLythoshi);
+  const priorityTip = options.priorityTipLythoshi === void 0 ? void 0 : normalizeDecimalLike("priorityTipLythoshi", options.priorityTipLythoshi);
+  const plan = buildMrvDeployPlan(artifactBytes, {
+    ...options,
+    nonce,
+    executionUnitLimit,
+    maxExecutionFeeLythoshi: maxExecutionFee,
+    priorityTipLythoshi: priorityTip
+  });
+  return {
+    ...plan,
+    nativeTx: {
+      chainId,
+      nonce,
+      valueLythoshi: plan.request.valueLythoshi,
+      executionUnitLimit,
+      maxExecutionFeeLythoshi: maxExecutionFee,
+      priorityTipLythoshi: priorityTip ?? "0"
+    },
+    feePreview: buildMrvNativeFeePreview(executionUnitLimit, maxExecutionFee, priorityTip ?? "0"),
+    tx: {
+      chainId,
+      nonce,
+      maxPriorityFeePerGas: priorityTip ?? "0",
+      maxFeePerGas: maxExecutionFee,
+      gasLimit: executionUnitLimit,
+      to: null,
+      value: plan.request.valueLythoshi,
+      input: plan.request.artifactBytes,
+      extensions: [plan.extension]
+    }
+  };
+}
+function buildMrvDeployPayloadNativeTxPlan(artifactBytes, options) {
+  const chainId = normalizeU64(options.chainId, "chainId");
+  const nonce = normalizeU64(options.nonce, "nonce");
+  const executionUnitLimit = normalizeU64(options.executionUnitLimit, "executionUnitLimit");
+  const maxExecutionFee = normalizeDecimalLike("maxExecutionFeeLythoshi", options.maxExecutionFeeLythoshi);
+  const priorityTip = options.priorityTipLythoshi === void 0 ? void 0 : normalizeDecimalLike("priorityTipLythoshi", options.priorityTipLythoshi);
+  const plan = buildMrvDeployPayloadPlan(artifactBytes, {
+    ...options,
+    nonce,
+    executionUnitLimit,
+    maxExecutionFeeLythoshi: maxExecutionFee,
+    priorityTipLythoshi: priorityTip
+  });
+  return {
+    ...plan,
+    nativeTx: {
+      chainId,
+      nonce,
+      valueLythoshi: plan.request.valueLythoshi,
+      executionUnitLimit,
+      maxExecutionFeeLythoshi: maxExecutionFee,
+      priorityTipLythoshi: priorityTip ?? "0"
+    },
+    feePreview: buildMrvNativeFeePreview(executionUnitLimit, maxExecutionFee, priorityTip ?? "0"),
+    tx: {
+      chainId,
+      nonce,
+      maxPriorityFeePerGas: priorityTip ?? "0",
+      maxFeePerGas: maxExecutionFee,
+      gasLimit: executionUnitLimit,
+      to: null,
+      value: plan.request.valueLythoshi,
+      input: plan.request.artifactBytes,
+      extensions: [plan.extension]
+    }
+  };
+}
+function buildMrvCallNativeTxPlan(contractAddress, input, options) {
+  const chainId = normalizeU64(options.chainId, "chainId");
+  const nonce = normalizeU64(options.nonce, "nonce");
+  const executionUnitLimit = normalizeU64(options.executionUnitLimit, "executionUnitLimit");
+  const maxExecutionFee = normalizeDecimalLike("maxExecutionFeeLythoshi", options.maxExecutionFeeLythoshi);
+  const priorityTip = options.priorityTipLythoshi === void 0 ? void 0 : normalizeDecimalLike("priorityTipLythoshi", options.priorityTipLythoshi);
+  const plan = buildMrvCallPlan(contractAddress, input, {
+    ...options,
+    nonce,
+    executionUnitLimit,
+    maxExecutionFeeLythoshi: maxExecutionFee,
+    priorityTipLythoshi: priorityTip
+  });
+  return {
+    ...plan,
+    nativeTx: {
+      chainId,
+      nonce,
+      valueLythoshi: plan.request.valueLythoshi,
+      executionUnitLimit,
+      maxExecutionFeeLythoshi: maxExecutionFee,
+      priorityTipLythoshi: priorityTip ?? "0"
+    },
+    feePreview: buildMrvNativeFeePreview(executionUnitLimit, maxExecutionFee, priorityTip ?? "0"),
+    tx: {
+      chainId,
+      nonce,
+      maxPriorityFeePerGas: priorityTip ?? "0",
+      maxFeePerGas: maxExecutionFee,
+      gasLimit: executionUnitLimit,
+      to: typedBech32ToAddress(plan.request.contractAddress, "contract").hex,
+      value: plan.request.valueLythoshi,
+      input: plan.request.input,
+      extensions: [plan.extension]
+    }
+  };
+}
+function assertMrvDeployNativeSubmissionPlan(plan) {
+  assertMrvNativeSubmissionEnvelope(plan);
+  if (plan.tx.to !== null) {
+    throw new MrvValidationError("MRV deploy submission tx.to must be null");
+  }
+  const txInput = normalizeBytesHex(plan.tx.input ?? "0x", "tx.input");
+  if (txInput !== plan.request.artifactBytes) {
+    throw new MrvValidationError("MRV deploy submission tx.input must match artifactBytes");
+  }
+}
+function assertMrvCallNativeSubmissionPlan(plan) {
+  assertMrvNativeSubmissionEnvelope(plan);
+  const actualTo = normalizeNativeTxToHex(plan.tx.to, "tx.to");
+  if (actualTo === null) {
+    throw new MrvValidationError("MRV call submission tx.to must be a 20-byte contract address");
+  }
+  const expectedTo = typedBech32ToAddress(plan.request.contractAddress, "contract").hex.toLowerCase();
+  if (actualTo !== expectedTo) {
+    throw new MrvValidationError("MRV call submission tx.to must match contractAddress");
+  }
+  const txInput = normalizeBytesHex(plan.tx.input ?? "0x", "tx.input");
+  if (txInput !== plan.request.input) {
+    throw new MrvValidationError("MRV call submission tx.input must match request input");
+  }
+}
+function buildMrvNativeFeePreview(executionUnitLimit, maxExecutionFeeLythoshi, priorityTipLythoshi) {
+  const totalLythoshi = normalizeDecimalLike("maxExecutionFeeLythoshi", maxExecutionFeeLythoshi);
+  return {
+    totalLythoshi,
+    totalLyth: formatLyth(totalLythoshi, { includeUnit: false }),
+    cyclesUsed: executionUnitLimit,
+    executionUnitLimit,
+    maxExecutionFeeLythoshi: totalLythoshi,
+    priorityTipLythoshi: normalizeDecimalLike("priorityTipLythoshi", priorityTipLythoshi)
+  };
+}
+async function submitMrvDeployNativeTx(client, backend, artifactBytes, options) {
+  const plan = buildMrvDeployNativeTxPlan(artifactBytes, options);
+  assertMrvDeployNativeSubmissionPlan(plan);
+  const submission = await buildEncryptedSubmission({
+    backend,
+    tx: plan.tx,
+    encryptionKey: options.encryptionKey ?? await fetchEncryptionKey(client),
+    class: options.class
+  });
+  return {
+    ...plan,
+    ...submission,
+    txHash: await submitEncryptedEnvelope(client, submission.envelopeWireHex)
+  };
+}
+async function submitMrvDeployPayloadNativeTx(client, backend, artifactBytes, options) {
+  const plan = buildMrvDeployPayloadNativeTxPlan(artifactBytes, options);
+  assertMrvDeployNativeSubmissionPlan(plan);
+  const submission = await buildEncryptedSubmission({
+    backend,
+    tx: plan.tx,
+    encryptionKey: options.encryptionKey ?? await fetchEncryptionKey(client),
+    class: options.class
+  });
+  return {
+    ...plan,
+    ...submission,
+    txHash: await submitEncryptedEnvelope(client, submission.envelopeWireHex)
+  };
+}
+async function submitMrvCallNativeTx(client, backend, contractAddress, input, options) {
+  const plan = buildMrvCallNativeTxPlan(contractAddress, input, options);
+  assertMrvCallNativeSubmissionPlan(plan);
+  const submission = await buildEncryptedSubmission({
+    backend,
+    tx: plan.tx,
+    encryptionKey: options.encryptionKey ?? await fetchEncryptionKey(client),
+    class: options.class
+  });
+  return {
+    ...plan,
+    ...submission,
+    txHash: await submitEncryptedEnvelope(client, submission.envelopeWireHex)
+  };
+}
+function assertMrvNativeSubmissionEnvelope(plan) {
+  const extensions = plan.tx.extensions ?? [];
+  if (extensions.length !== 1) {
+    throw new MrvValidationError("MRV native submission must carry exactly one transaction extension");
+  }
+  assertMrvV1Extension(plan.extension, "extension");
+  assertMrvV1Extension(extensions[0], "tx.extensions[0]");
+  assertSameBigint("tx.chainId", plan.tx.chainId, plan.nativeTx.chainId);
+  assertSameBigint("tx.nonce", plan.tx.nonce, plan.nativeTx.nonce);
+  assertSameBigint("tx.gasLimit", plan.tx.gasLimit, plan.nativeTx.executionUnitLimit);
+  assertSameDecimal("tx.value", plan.tx.value, plan.nativeTx.valueLythoshi);
+  assertSameDecimal("tx.maxFeePerGas", plan.tx.maxFeePerGas, plan.nativeTx.maxExecutionFeeLythoshi);
+  assertSameDecimal("tx.maxPriorityFeePerGas", plan.tx.maxPriorityFeePerGas, plan.nativeTx.priorityTipLythoshi);
+  assertU128Lythoshi("maxExecutionFeeLythoshi", plan.nativeTx.maxExecutionFeeLythoshi);
+  assertU128Lythoshi("priorityTipLythoshi", plan.nativeTx.priorityTipLythoshi);
+}
+function assertMrvV1Extension(extension, field2) {
+  if (extension.kind !== MRV_TX_EXTENSION_KIND) {
+    throw new MrvValidationError(`${field2}.kind must be MRV v1 extension kind`);
+  }
+  const bodyHex = normalizeBytesHex("bodyHex" in extension ? extension.bodyHex : extension.body, `${field2}.body`);
+  if (bodyHex !== "0x01") {
+    throw new MrvValidationError(`${field2}.body must be MRV v1 extension body`);
+  }
+}
+function assertSameBigint(field2, actual, expected) {
+  if (normalizeU64Like(actual, field2) !== expected) {
+    throw new MrvValidationError(`${field2} must match nativeTx`);
+  }
+}
+function assertSameDecimal(field2, actual, expected) {
+  if (normalizeDecimalLike(field2, actual) !== expected) {
+    throw new MrvValidationError(`${field2} must match nativeTx`);
+  }
+}
+function assertU128Lythoshi(field2, value) {
+  const normalized = BigInt(normalizeDecimalLike(field2, value));
+  if (normalized > (1n << 128n) - 1n) {
+    throw new MrvValidationError(`${field2} must fit in u128 for encrypted submission`);
+  }
+}
+function normalizeNativeTxToHex(value, field2) {
+  if (value === null) return null;
+  const bytes = bytesFrom(value, field2);
+  if (bytes.length !== 20) {
+    throw new MrvValidationError(`${field2} must be a 20-byte address`);
+  }
+  return bytesToHex3(bytes).toLowerCase();
+}
+function normalizeU64Like(value, field2) {
+  if (typeof value === "string") {
+    return normalizeU64(BigInt(normalizeDecimalLike(field2, value)), field2);
+  }
+  return normalizeU64(value, field2);
+}
+function validateMemory(initialPages, maxPages, stackBytes) {
+  if (initialPages === 0) throw new MrvValidationError("initialPages is zero");
+  if (maxPages === 0) throw new MrvValidationError("maxPages is zero");
+  if (initialPages > maxPages) throw new MrvValidationError("initialPages exceeds maxPages");
+  if (maxPages > MRV_MAX_MEMORY_PAGES) throw new MrvValidationError("maxPages exceeds bound");
+  if (stackBytes === 0) throw new MrvValidationError("stackBytes is zero");
+  const maxBytes = maxPages * MRV_MEMORY_PAGE_BYTES;
+  if (stackBytes > maxBytes) throw new MrvValidationError("stackBytes exceeds max memory");
+  if (stackBytes % 16 !== 0) throw new MrvValidationError("stackBytes must be 16-byte aligned");
+}
+function validateStorageNamespace(name, version2) {
+  if (version2 === 0) throw new MrvValidationError("storage namespace version must be non-zero");
+  if (name.length > MRV_MAX_STORAGE_NAMESPACE_BYTES) throw new MrvValidationError("storage namespace is too long");
+  if (!isIdentifier(name)) throw new MrvValidationError("storage namespace is not canonical");
+}
+function validateAbi(abi) {
+  if (abi.symbols.length === 0) throw new MrvValidationError("MRV ABI must declare at least one symbol");
+  if (abi.symbols.length > MRV_MAX_ABI_SYMBOLS) {
+    throw new MrvValidationError(`MRV ABI has ${abi.symbols.length} symbols, max ${MRV_MAX_ABI_SYMBOLS}`);
+  }
+  const seen = /* @__PURE__ */ new Set();
+  for (const symbol of abi.symbols) {
+    if (!isIdentifier(symbol.name)) throw new MrvValidationError(`invalid MRV ABI symbol '${symbol.name}'`);
+    if (seen.has(symbol.name)) throw new MrvValidationError(`duplicate MRV ABI symbol '${symbol.name}'`);
+    seen.add(symbol.name);
+    for (const param of [...symbol.inputs, ...symbol.outputs]) {
+      if (!isIdentifier(param.name)) throw new MrvValidationError(`invalid MRV ABI parameter '${param.name}'`);
+      validateAbiType(param.ty);
+    }
+  }
+}
+function validateAbiType(ty) {
+  if (ty.kind === "fixedBytes" && ty.len === 0) {
+    throw new MrvValidationError("fixed bytes length is zero");
+  }
+}
+function validateImports(imports) {
+  const seen = /* @__PURE__ */ new Set();
+  const resolved = [];
+  for (const imp of imports) {
+    if (imp.module !== MONO_SYSCALL_MODULE) {
+      throw new MrvValidationError(`forbidden host import ${imp.module}.${imp.name}`);
+    }
+    const expectedName = SYSCALL_NAME_BY_ID.get(imp.id);
+    if (expectedName === void 0) throw new MrvValidationError(`unknown MRV syscall id ${imp.id}`);
+    const expectedId = SYSCALL_ID_BY_NAME.get(imp.name);
+    if (expectedId === void 0) throw new MrvValidationError(`unknown MRV syscall name '${imp.name}'`);
+    if (expectedId !== imp.id) {
+      throw new MrvValidationError(`MRV syscall name/id mismatch for ${imp.name}: declared ${imp.id}`);
+    }
+    if (seen.has(imp.id)) throw new MrvValidationError(`duplicate MRV syscall '${expectedName}'`);
+    seen.add(imp.id);
+    resolved.push({ id: imp.id, name: expectedName });
+  }
+  return resolved;
+}
+function validateOptionalDecimal(field2, value) {
+  if (value !== void 0) validateDecimal(field2, value);
+}
+function applyRequestOptions(request, options) {
+  if (options.from !== void 0) request.from = options.from;
+  const executionUnitLimit = normalizeOptionalU64("executionUnitLimit", options.executionUnitLimit);
+  if (executionUnitLimit !== void 0) request.executionUnitLimit = executionUnitLimit;
+  const maxExecutionFee = normalizeOptionalDecimalLike(
+    "maxExecutionFeeLythoshi",
+    options.maxExecutionFeeLythoshi
+  );
+  if (maxExecutionFee !== void 0) request.maxExecutionFeeLythoshi = maxExecutionFee;
+  const priorityTip = normalizeOptionalDecimalLike("priorityTipLythoshi", options.priorityTipLythoshi);
+  if (priorityTip !== void 0) request.priorityTipLythoshi = priorityTip;
+  const nonce = normalizeOptionalU64("nonce", options.nonce);
+  if (nonce !== void 0) request.nonce = nonce;
+}
+function normalizeBytesHex(value, field2) {
+  return bytesToHex3(bytesFrom(value, field2));
+}
+function normalizeOptionalDecimalLike(field2, value) {
+  return value === void 0 ? void 0 : normalizeDecimalLike(field2, value);
+}
+function formatWholeWithCommas(value) {
+  const digits = value.toString();
+  const firstGroupLen = digits.length % 3;
+  const groups = [];
+  let index = 0;
+  if (firstGroupLen !== 0) {
+    groups.push(digits.slice(0, firstGroupLen));
+    index = firstGroupLen;
+  }
+  while (index < digits.length) {
+    groups.push(digits.slice(index, index + 3));
+    index += 3;
+  }
+  return groups.join(",");
+}
+function stripLythUnit(input) {
+  const trimmed = input.trim();
+  const withoutUnit = trimmed.replace(/\s+LYTH$/i, "").trim();
+  if (withoutUnit.length === 0) {
+    throw new MrvValidationError("lyth amount must be a canonical LYTH decimal");
+  }
+  return withoutUnit;
+}
+function isCanonicalWholeLyth(value) {
+  if (/^(0|[1-9][0-9]*)$/.test(value)) {
+    return true;
+  }
+  return /^[1-9][0-9]{0,2}(,[0-9]{3})+$/.test(value);
+}
+function extractLythAmountCandidates(text) {
+  return [...text.matchAll(/(?:^|[^A-Za-z0-9_])([0-9][0-9,]*(?:\.[0-9]+)?)\s+LYTH\b/g)].map(
+    (match) => match[1]
+  );
+}
+function firstForbiddenDefaultFeeTerm(text) {
+  const tokens = feeTermTokens(text);
+  for (const forbidden of ["gas", "gwei", "wei", "cycle", "cycles", "lythoshi"]) {
+    if (tokens.includes(forbidden)) return forbidden;
+  }
+  if (hasAdjacentTerms(tokens, "state", "io") || hasStateIOTerms(tokens)) return "state I/O";
+  return void 0;
+}
+function firstForbiddenDetailFeeTerm(text) {
+  const tokens = feeTermTokens(text);
+  for (const forbidden of ["gas", "gwei", "wei"]) {
+    if (tokens.includes(forbidden)) return forbidden;
+  }
+  return void 0;
+}
+function feeTermTokens(text) {
+  return text.toLowerCase().match(/[a-z]+/g) ?? [];
+}
+function hasAdjacentTerms(tokens, first, second) {
+  return tokens.some((token, index) => token === first && tokens[index + 1] === second);
+}
+function hasStateIOTerms(tokens) {
+  return tokens.some((token, index) => token === "state" && tokens[index + 1] === "i" && tokens[index + 2] === "o");
+}
+function checkStructuredFeeObject(value, expectedTotalLythoshi, failures, label = "structuredFee") {
+  if (!isRecord(value)) {
+    failures.push(`${label} must be an object`);
+    return;
+  }
+  const expectedFields = new Set(MRV_STRUCTURED_FEE_FIELDS);
+  const actualFields = Object.keys(value);
+  for (const field2 of MRV_STRUCTURED_FEE_FIELDS) {
+    if (!(field2 in value)) failures.push(`${label} is missing '${field2}'`);
+  }
+  for (const field2 of actualFields) {
+    if (!expectedFields.has(field2)) failures.push(`${label} has unexpected field '${field2}'`);
+  }
+  const totalLythoshi = stringField(value, "total_lythoshi", failures, label);
+  const expectedTotal = expectedTotalLythoshi ?? totalLythoshi;
+  if (totalLythoshi !== void 0 && expectedTotalLythoshi !== void 0 && totalLythoshi !== expectedTotalLythoshi) {
+    failures.push(`${label}.total_lythoshi must be ${expectedTotalLythoshi}`);
+  }
+  const totalLyth = lythDecimalField(value, "total_lyth", failures, label);
+  if (totalLyth !== void 0 && expectedTotal !== void 0) {
+    const expectedTotalLyth = formatLyth(expectedTotal, { includeUnit: false });
+    if (totalLyth !== expectedTotalLyth) {
+      failures.push(`${label}.total_lyth must be ${expectedTotalLyth}`);
+    }
+  }
+  for (const field2 of [
+    "base_price_per_cycle_lythoshi",
+    "state_io_price_per_unit_lythoshi",
+    "priority_tip_lythoshi"
+  ]) {
+    stringField(value, field2, failures, label);
+  }
+  for (const field2 of ["cycles_used", "state_io_units"]) {
+    integerField(value, field2, failures, label);
+  }
+}
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function stringField(value, field2, failures, label) {
+  const fieldValue = value[field2];
+  if (typeof fieldValue !== "string" || !isCanonicalUnsignedDecimalString(fieldValue)) {
+    failures.push(`${label}.${field2} must be a canonical unsigned decimal string`);
+    return void 0;
+  }
+  return fieldValue;
+}
+function lythDecimalField(value, field2, failures, label) {
+  const fieldValue = value[field2];
+  if (typeof fieldValue !== "string") {
+    failures.push(`${label}.${field2} must be a canonical LYTH decimal string`);
+    return void 0;
+  }
+  try {
+    parseLythToLythoshi(`${fieldValue} LYTH`);
+  } catch {
+    failures.push(`${label}.${field2} must be a canonical LYTH decimal string`);
+    return void 0;
+  }
+  return fieldValue;
+}
+function integerField(value, field2, failures, label) {
+  const fieldValue = value[field2];
+  if (typeof fieldValue !== "number" || !Number.isSafeInteger(fieldValue) || fieldValue < 0) {
+    failures.push(`${label}.${field2} must be a non-negative safe integer`);
+  }
+}
+function isCanonicalUnsignedDecimalString(value) {
+  if (!/^(0|[1-9][0-9]*)$/.test(value)) return false;
+  try {
+    BigInt(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function normalizeDecimalLike(field2, value, defaultValue) {
+  if (value === void 0) {
+    if (defaultValue === void 0) throw new MrvValidationError(`${field2} is required`);
+    return defaultValue;
+  }
+  if (typeof value === "string") {
+    validateDecimal(field2, value);
+    return value;
+  }
+  if (typeof value === "number" && !Number.isSafeInteger(value)) {
+    throw new MrvValidationError(`${field2} must be a safe unsigned integer`);
+  }
+  const out = BigInt(value);
+  if (out < 0n) throw new MrvValidationError(`${field2} must be a canonical unsigned decimal string`);
+  return out.toString();
+}
+function normalizeOptionalU64(field2, value) {
+  return value === void 0 ? void 0 : normalizeU64(value, field2);
+}
+function validateDecimal(field2, value) {
+  if (!/^(0|[1-9][0-9]*)$/.test(value)) {
+    throw new MrvValidationError(`${field2} must be a canonical unsigned decimal string`);
+  }
+  try {
+    BigInt(value);
+  } catch {
+    throw new MrvValidationError(`${field2} must be a canonical unsigned decimal string`);
+  }
+}
+function validateExecutionUnitLimit(field2, value) {
+  if (value !== void 0 && BigInt(value) === 0n) {
+    throw new MrvValidationError(`${field2} must be greater than zero`);
+  }
+}
+function normalizeU64(value, field2) {
+  if (typeof value === "number" && !Number.isSafeInteger(value)) {
+    throw new MrvValidationError(`${field2} must be a safe unsigned integer`);
+  }
+  const out = BigInt(value);
+  if (out < 0n || out > 0xffffffffffffffffn) {
+    throw new MrvValidationError(`${field2} must fit in u64`);
+  }
+  return out;
+}
+function validateHexLength(field2, value, expected) {
+  const bytes = hexToBytes3(value, field2);
+  if (bytes.length !== expected) throw new MrvValidationError(`${field2} must be ${expected} bytes`);
+}
+function bytesFrom(value, field2) {
+  if (typeof value === "string") return hexToBytes3(value, field2);
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+function hexToBytes3(value, field2) {
+  if (!/^0x(?:[0-9a-fA-F]{2})*$/.test(value)) {
+    throw new MrvValidationError(`${field2} must be 0x-prefixed even-length hex`);
+  }
+  const out = new Uint8Array((value.length - 2) / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = Number.parseInt(value.slice(2 + i * 2, 4 + i * 2), 16);
+  }
+  return out;
+}
+function bytesToHex3(bytes) {
+  return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+function concatBytes3(...parts) {
+  const len = parts.reduce((sum, item) => sum + item.length, 0);
+  const out = new Uint8Array(len);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+function isIdentifier(value) {
+  return /^[a-z][a-z0-9_]*$/.test(value);
 }
 
 // src/registry.ts
@@ -986,7 +2117,9 @@ var RpcClient = class _RpcClient {
   }
   /** `lyth_nativeReceipt` — native RISC-V receipt metadata and typed native event rows. */
   async lythNativeReceipt(txHash) {
-    return this.call("lyth_nativeReceipt", [txHash]);
+    return decodeNativeReceiptResponse(
+      await this.call("lyth_nativeReceipt", [txHash])
+    );
   }
   /**
    * Typed native event rows from `lyth_nativeReceipt`.
@@ -1086,7 +2219,7 @@ var RpcClient = class _RpcClient {
   /** `lyth_txFeed` — paged global transaction feed. */
   async lythTxFeed(limit = 50, cursor) {
     const params = cursor === void 0 ? [limit] : [limit, cursor];
-    return this.call("lyth_txFeed", params);
+    return decodeTxFeedResponse(await this.call("lyth_txFeed", params));
   }
   /** `lyth_addressProfile` — live account + label + activity aggregate. */
   async lythAddressProfile(address) {
@@ -1514,6 +2647,7 @@ function decodeNativeAgentIssuerStateRecord(value, label) {
   return {
     issuerId: parseStringField(row["issuerId"], `${label}.issuerId`),
     issuer: parseStringField(row["issuer"], `${label}.issuer`),
+    nonce: parseRpcNumberNullable(row["nonce"], `${label}.nonce`),
     metadataHash: parseStringNullable(row["metadataHash"]),
     updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`)
   };
@@ -1522,6 +2656,7 @@ function decodeNativeAgentAttestationStateRecord(value, label) {
   const row = expectObject(value, label);
   return {
     attestationId: parseStringField(row["attestationId"], `${label}.attestationId`),
+    nonce: parseRpcNumberNullable(row["nonce"], `${label}.nonce`),
     issuerId: parseStringNullable(row["issuerId"]),
     issuer: parseStringNullable(row["issuer"]),
     subject: parseStringField(row["subject"], `${label}.subject`),
@@ -1537,6 +2672,7 @@ function decodeNativeAgentConsentStateRecord(value, label) {
     consentId: parseStringField(row["consentId"], `${label}.consentId`),
     subject: parseStringField(row["subject"], `${label}.subject`),
     grantee: parseStringField(row["grantee"], `${label}.grantee`),
+    nonce: parseRpcNumberNullable(row["nonce"], `${label}.nonce`),
     scopeHash: parseStringNullable(row["scopeHash"]),
     expiresAt: parseRpcNumberNullable(row["expiresAt"], `${label}.expiresAt`),
     active: parseBooleanField(row["active"], `${label}.active`),
@@ -1548,6 +2684,7 @@ function decodeNativeAgentServiceStateRecord(value, label) {
   return {
     serviceId: parseStringField(row["serviceId"], `${label}.serviceId`),
     provider: parseStringField(row["provider"], `${label}.provider`),
+    nonce: parseRpcNumberNullable(row["nonce"], `${label}.nonce`),
     categoryHash: parseStringNullable(row["categoryHash"]),
     metadataHash: parseStringNullable(row["metadataHash"]),
     active: parseBooleanField(row["active"], `${label}.active`),
@@ -1569,6 +2706,7 @@ function decodeNativeAgentArbiterStateRecord(value, label) {
   return {
     arbiterId: parseStringField(row["arbiterId"], `${label}.arbiterId`),
     arbiter: parseStringField(row["arbiter"], `${label}.arbiter`),
+    nonce: parseRpcNumberNullable(row["nonce"], `${label}.nonce`),
     tier: parseRpcUintNullable(row["tier"], `${label}.tier`, 65535, "uint16"),
     metadataHash: parseStringNullable(row["metadataHash"]),
     updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`)
@@ -1599,6 +2737,31 @@ function expectObject(value, label) {
     throw SdkError.malformed(`${label} must be an object`);
   }
   return value;
+}
+function decodeNativeReceiptResponse(value) {
+  const row = expectObject(value, "native receipt response");
+  assertNativeReceiptFee(row["fee"], "native receipt response.fee");
+  return value;
+}
+function decodeTxFeedResponse(value) {
+  const row = expectObject(value, "tx feed response");
+  const transactions = row["transactions"];
+  if (!Array.isArray(transactions)) {
+    throw SdkError.malformed("tx feed response.transactions must be an array");
+  }
+  transactions.forEach((transaction, index) => {
+    const tx = expectObject(transaction, `tx feed response.transactions[${index}]`);
+    assertNativeReceiptFee(tx["fee"], `tx feed response.transactions[${index}].fee`);
+  });
+  return value;
+}
+function assertNativeReceiptFee(value, label) {
+  try {
+    assertMrvStructuredFeeConformance(value, { label });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw SdkError.malformed(`ADR-0039 structured fee violation: ${message}`);
+  }
 }
 function firstField(row, keys, label) {
   for (const key of keys) {
@@ -2101,8 +3264,15 @@ var ApiClient = class {
   async blockTransactions(block = "latest", page = 0, limit = 25) {
     return this.get(`/blocks/${encodePathBlock(block)}/transactions`, { page, limit });
   }
+  async streams() {
+    return this.get("/streams");
+  }
   async transactions(limit = 50, cursor) {
-    return this.get("/transactions", { limit, cursor });
+    const response = await this.get("/transactions", { limit, cursor });
+    return {
+      ...response,
+      data: decodeTxFeedResponse(response.data)
+    };
   }
   async transaction(hash) {
     return this.get(`/transactions/${encodePathSegment(hash)}`);
@@ -2111,7 +3281,13 @@ var ApiClient = class {
     return this.get(`/transactions/${encodePathSegment(hash)}/receipt`);
   }
   async transactionNativeReceipt(hash) {
-    return this.get(`/transactions/${encodePathSegment(hash)}/native-receipt`);
+    const response = await this.get(
+      `/transactions/${encodePathSegment(hash)}/native-receipt`
+    );
+    return {
+      ...response,
+      data: decodeNativeReceiptResponse(response.data)
+    };
   }
   /**
    * Typed native event rows from `/transactions/{hash}/native-receipt`.
@@ -2393,42 +3569,42 @@ function bridgeAddressHex() {
   return PRECOMPILE_ADDRESSES.BRIDGE.toLowerCase();
 }
 function encodeLockBridgeConfigCalldata(bridgeId) {
-  return bytesToHex2(
-    concatBytes2(
-      hexToBytes2(BRIDGE_SELECTORS.lockBridgeConfig),
+  return bytesToHex4(
+    concatBytes4(
+      hexToBytes4(BRIDGE_SELECTORS.lockBridgeConfig),
       expectLength3(toBytes2(bridgeId), 32, "bridgeId")
     )
   );
 }
 function encodeSetBridgeResumeCooldownCalldata(bridgeId, cooldownBlocks) {
-  return bytesToHex2(
-    concatBytes2(
-      hexToBytes2(BRIDGE_SELECTORS.setBridgeResumeCooldown),
+  return bytesToHex4(
+    concatBytes4(
+      hexToBytes4(BRIDGE_SELECTORS.setBridgeResumeCooldown),
       expectLength3(toBytes2(bridgeId), 32, "bridgeId"),
       uint64Word(cooldownBlocks, "cooldownBlocks")
     )
   );
 }
 function encodeSetBridgeRouteFinalityCalldata(bridgeId, finalityBlocks) {
-  return bytesToHex2(
-    concatBytes2(
-      hexToBytes2(BRIDGE_SELECTORS.setBridgeRouteFinality),
+  return bytesToHex4(
+    concatBytes4(
+      hexToBytes4(BRIDGE_SELECTORS.setBridgeRouteFinality),
       expectLength3(toBytes2(bridgeId), 32, "bridgeId"),
       uint64Word(finalityBlocks, "finalityBlocks")
     )
   );
 }
 function isBridgeAdminLockedRevert(data) {
-  return bytesToHex2(toBytes2(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeAdminLocked;
+  return bytesToHex4(toBytes2(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeAdminLocked;
 }
 function isBridgeResumeCooldownActiveRevert(data) {
-  return bytesToHex2(toBytes2(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeResumeCooldownActive;
+  return bytesToHex4(toBytes2(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeResumeCooldownActive;
 }
 function isBridgeCooldownZeroRevert(data) {
-  return bytesToHex2(toBytes2(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeCooldownZero;
+  return bytesToHex4(toBytes2(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeCooldownZero;
 }
 function isBridgeFinalityZeroRevert(data) {
-  return bytesToHex2(toBytes2(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeFinalityZero;
+  return bytesToHex4(toBytes2(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeFinalityZero;
 }
 function assessBridgeRoute(route) {
   const blockedReasons = [];
@@ -2636,12 +3812,12 @@ function exportBridgeRouteCatalogueJson(payload, options = {}) {
 var MAX_U256 = (1n << 256n) - 1n;
 function routeArrayFromCataloguePayload(payload) {
   if (Array.isArray(payload)) return payload;
-  if (isRecord(payload) && Array.isArray(payload.routes)) return payload.routes;
+  if (isRecord2(payload) && Array.isArray(payload.routes)) return payload.routes;
   return null;
 }
 function validateBridgeRouteCatalogueRoute(idx, value, seen, blockedReasons) {
   const prefix = `routes[${idx}]`;
-  if (!isRecord(value)) {
+  if (!isRecord2(value)) {
     blockedReasons.push(`${prefix} must be an object`);
     return;
   }
@@ -2692,7 +3868,7 @@ function validateBridgeRouteCatalogueRoute(idx, value, seen, blockedReasons) {
     blockedReasons
   );
   const verifier = value.verifier;
-  if (!isRecord(verifier)) {
+  if (!isRecord2(verifier)) {
     blockedReasons.push(`${prefix}.verifier must be an object`);
   } else {
     validateTextField(`${prefix}.verifier.model`, verifier.model, 64, blockedReasons);
@@ -2737,30 +3913,30 @@ function validateBridgeRouteCatalogueRoute(idx, value, seen, blockedReasons) {
   }
 }
 function coerceBridgeRouteCatalogueRoute(value) {
-  if (!isRecord(value) || !isRecord(value.verifier)) {
+  if (!isRecord2(value) || !isRecord2(value.verifier)) {
     throw new BridgeRouteCatalogueError(["route catalogue validation did not normalize an object"]);
   }
   const lastIncidentDate = field(value, "lastIncidentDate", "last_incident_date");
   const route = {
-    tokenId: stringField(value, "tokenId", "token_id"),
-    routeId: stringField(value, "routeId", "route_id").trim(),
-    bridgeId: stringField(value, "bridgeId", "bridge_id"),
-    wrappedAsset: stringField(value, "wrappedAsset", "wrapped_asset"),
-    bridge: stringField(value, "bridge").trim(),
-    asset: stringField(value, "asset").trim(),
-    sourceChain: stringField(value, "sourceChain", "source_chain").trim(),
-    destinationChain: stringField(value, "destinationChain", "destination_chain").trim(),
+    tokenId: stringField2(value, "tokenId", "token_id"),
+    routeId: stringField2(value, "routeId", "route_id").trim(),
+    bridgeId: stringField2(value, "bridgeId", "bridge_id"),
+    wrappedAsset: stringField2(value, "wrappedAsset", "wrapped_asset"),
+    bridge: stringField2(value, "bridge").trim(),
+    asset: stringField2(value, "asset").trim(),
+    sourceChain: stringField2(value, "sourceChain", "source_chain").trim(),
+    destinationChain: stringField2(value, "destinationChain", "destination_chain").trim(),
     verifier: {
-      model: stringField(value.verifier, "model").trim(),
+      model: stringField2(value.verifier, "model").trim(),
       participantCount: numberField(value.verifier, "participantCount", "participant_count"),
       threshold: numberField(value.verifier, "threshold")
     },
-    drainCapAtomic: stringField(value, "drainCapAtomic", "drain_cap_atomic").trim(),
+    drainCapAtomic: stringField2(value, "drainCapAtomic", "drain_cap_atomic").trim(),
     finalityBlocks: numberField(value, "finalityBlocks", "finality_blocks"),
     cooldownSeconds: numberField(value, "cooldownSeconds", "cooldown_seconds"),
     adminControl: parseBridgeAdminControl(field(value, "adminControl", "admin_control")),
     circuitBreaker: parseBridgeCircuitBreaker(field(value, "circuitBreaker", "circuit_breaker")),
-    insuranceAtomic: stringField(value, "insuranceAtomic", "insurance_atomic").trim(),
+    insuranceAtomic: stringField2(value, "insuranceAtomic", "insurance_atomic").trim(),
     updatedAtBlock: numberField(value, "updatedAtBlock", "updated_at_block")
   };
   if (typeof lastIncidentDate === "string") {
@@ -2868,7 +4044,7 @@ function normalizedDecimalDigits(value) {
 function trimmedEq(left, right) {
   return left.trim() === right.trim();
 }
-function isRecord(value) {
+function isRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function field(record, camel, snake) {
@@ -2876,7 +4052,7 @@ function field(record, camel, snake) {
   if (snake != null && Object.prototype.hasOwnProperty.call(record, snake)) return record[snake];
   return void 0;
 }
-function stringField(record, camel, snake) {
+function stringField2(record, camel, snake) {
   return field(record, camel, snake);
 }
 function numberField(record, camel, snake) {
@@ -2993,11 +4169,11 @@ function toBigint(value, name) {
 }
 function toBytes2(value) {
   if (typeof value === "string") {
-    return hexToBytes2(value);
+    return hexToBytes4(value);
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes2(hex) {
+function hexToBytes4(hex) {
   const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
   if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
     throw new BridgePrecompileError("invalid hex bytes");
@@ -3008,10 +4184,10 @@ function hexToBytes2(hex) {
   }
   return out;
 }
-function bytesToHex2(bytes) {
+function bytesToHex4(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function concatBytes2(...parts) {
+function concatBytes4(...parts) {
   const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
   let offset = 0;
   for (const part of parts) {
@@ -3019,6 +4195,43 @@ function concatBytes2(...parts) {
     offset += part.length;
   }
   return out;
+}
+
+// src/streams.ts
+var NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC = "nativeMarketOrderBook";
+var API_STREAM_TOPICS = [
+  "newHeads",
+  "newPendingTx",
+  "logs",
+  "newCommit",
+  "dagVertices",
+  "registry",
+  "marketTrades",
+  NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC,
+  "gapRecords",
+  "nativeEvents"
+];
+function isNativeMarketOrderBookStreamPayload(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value;
+  return isString(row["marketId"]) && isString(row["orderId"]) && isOptionalString(row["relatedOrderId"]) && isString(row["eventName"]) && isNativeMarketOrderBookStreamAction(row["action"]) && isOptionalString(row["side"]) && isOptionalString(row["price"]) && isOptionalString(row["quantity"]) && isOptionalString(row["remaining"]) && isOptionalString(row["status"]) && isNonNegativeSafeInteger(row["blockHeight"]) && isNonNegativeSafeInteger(row["txIndex"]) && isNonNegativeSafeInteger(row["logIndex"]);
+}
+function assertNativeMarketOrderBookStreamPayload(value) {
+  if (!isNativeMarketOrderBookStreamPayload(value)) {
+    throw SdkError.malformed("nativeMarketOrderBook stream payload is malformed");
+  }
+}
+function isNativeMarketOrderBookStreamAction(value) {
+  return value === "upsert" || value === "remove";
+}
+function isString(value) {
+  return typeof value === "string";
+}
+function isOptionalString(value) {
+  return value === void 0 || typeof value === "string";
+}
+function isNonNegativeSafeInteger(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 var NO_EVM_RECEIPT_PROOF_SCHEMA = "mono.no_evm_receipt_proof.v1";
 var NO_EVM_RECEIPT_PROOF_TYPE = "canonicalReceiptsTranscript";
@@ -3073,10 +4286,10 @@ function computeNoEvmReceiptsRoot(receipts) {
     preimage.set(receipt, offset);
     offset += receipt.length;
   });
-  return bytesToHex3(sha3_js.keccak_256(preimage));
+  return bytesToHex5(sha3_js.keccak_256(preimage));
 }
 function computeNoEvmTargetReceiptHash(receiptBytes) {
-  return bytesToHex3(sha3_js.keccak_256(receiptBytes));
+  return bytesToHex5(sha3_js.keccak_256(receiptBytes));
 }
 function verifyNoEvmReceiptProof(proof) {
   if (proof == null) return null;
@@ -3190,1120 +4403,12 @@ function bytesEqual(a, b) {
   }
   return diff === 0;
 }
-function bytesToHex3(bytes) {
+function bytesToHex5(bytes) {
   let out = "0x";
   for (let index = 0; index < bytes.length; index++) {
     out += bytes[index].toString(16).padStart(2, "0");
   }
   return out;
-}
-
-// src/crypto/bytes.ts
-function concatBytes3(...chunks) {
-  const len = chunks.reduce((n, c) => n + c.length, 0);
-  const out = new Uint8Array(len);
-  let off = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, off);
-    off += chunk.length;
-  }
-  return out;
-}
-function bytesToHex4(bytes) {
-  let out = "0x";
-  for (let i = 0; i < bytes.length; i++) {
-    out += bytes[i].toString(16).padStart(2, "0");
-  }
-  return out;
-}
-function hexToBytes3(hex, label = "hex") {
-  const stripped = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
-  if (stripped.length % 2 !== 0) {
-    throw new Error(`${label} must have even length`);
-  }
-  const out = new Uint8Array(stripped.length / 2);
-  for (let i = 0; i < out.length; i++) {
-    const b = Number.parseInt(stripped.slice(i * 2, i * 2 + 2), 16);
-    if (Number.isNaN(b)) {
-      throw new Error(`${label} contains invalid hex`);
-    }
-    out[i] = b;
-  }
-  return out;
-}
-function expectBytes(value, len, label) {
-  if (value.length !== len) {
-    throw new Error(`${label} must be ${len} bytes, got ${value.length}`);
-  }
-  return value instanceof Uint8Array ? value : Uint8Array.from(value);
-}
-function parseBigint(value, label) {
-  if (value === void 0) throw new Error(`${label} missing`);
-  if (typeof value === "bigint") return value;
-  if (typeof value === "number") {
-    if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${label} must be a non-negative safe integer`);
-    return BigInt(value);
-  }
-  if (value.startsWith("0x") || value.startsWith("0X")) return BigInt(value);
-  return BigInt(value);
-}
-
-// src/crypto/bincode.ts
-var BincodeWriter = class {
-  #chunks = [];
-  u8(value) {
-    this.#int(value, 1);
-  }
-  u16(value) {
-    this.#int(value, 2);
-  }
-  u32(value) {
-    this.#int(value, 4);
-  }
-  u64(value) {
-    this.#big(value, 8);
-  }
-  u128(value) {
-    this.#big(value, 16);
-  }
-  enumVariant(value) {
-    this.u32(value);
-  }
-  rawBytes(bytes) {
-    for (const b of bytes) this.#chunks.push(b);
-  }
-  bytes(bytes) {
-    this.u64(BigInt(bytes.length));
-    this.rawBytes(bytes);
-  }
-  optionBytes(bytes) {
-    if (bytes === null) {
-      this.u8(0);
-      return;
-    }
-    this.u8(1);
-    this.rawBytes(bytes);
-  }
-  toBytes() {
-    return Uint8Array.from(this.#chunks);
-  }
-  #int(value, bytes) {
-    if (!Number.isSafeInteger(value) || value < 0 || value >= 2 ** (bytes * 8)) {
-      throw new Error(`integer out of u${bytes * 8} range`);
-    }
-    for (let i = 0; i < bytes; i++) {
-      this.#chunks.push(value >> 8 * i & 255);
-    }
-  }
-  #big(value, bytes) {
-    let v = typeof value === "bigint" ? value : BigInt(value);
-    if (v < 0n || v >= 1n << BigInt(bytes * 8)) {
-      throw new Error(`integer out of u${bytes * 8} range`);
-    }
-    for (let i = 0; i < bytes; i++) {
-      this.#chunks.push(Number(v & 0xffn));
-      v >>= 8n;
-    }
-  }
-};
-var ML_DSA_65_PUBLIC_KEY_LEN = 1952;
-var ML_DSA_65_SIGNATURE_LEN = 3309;
-var STANDARD_ALGO_NUMBER_ML_DSA_65 = 1001;
-var ENUM_VARIANT_INDEX_ML_DSA_65 = 5;
-
-// src/crypto/envelope.ts
-var DKG_AEAD_DOMAIN_TAG = new TextEncoder().encode("protocore/v2/mempool/dkg-mlkem768/1");
-var ML_KEM_768_ENCAPSULATION_KEY_LEN = 1184;
-var DKG_NONCE_LEN = 12;
-var MempoolClass = {
-  Transfer: 0,
-  ContractCall: 1,
-  CLOBOp: 3};
-function bincodeNonceAad(aad) {
-  const w = new BincodeWriter();
-  w.bytes(expectBytes(aad.sender, 20, "NonceAad.sender"));
-  w.u64(aad.nonce);
-  w.u64(aad.chainId);
-  w.enumVariant(aad.class);
-  w.u128(aad.maxFeePerGas);
-  w.u128(aad.maxPriorityFeePerGas);
-  w.u64(aad.gasLimit);
-  return w.toBytes();
-}
-function bincodeDecryptHint(hint) {
-  const w = new BincodeWriter();
-  w.u64(hint.epoch);
-  w.u16(hint.scheme);
-  return w.toBytes();
-}
-function bincodeEncryptedEnvelope(env) {
-  const w = new BincodeWriter();
-  w.rawBytes(bincodeNonceAad(env.nonceAad));
-  w.bytes(env.ciphertext);
-  w.rawBytes(bincodeDecryptHint(env.decryptionHint));
-  bincodeMlDsa65OpaqueInto(w, expectBytes(env.senderPubkey, ML_DSA_65_PUBLIC_KEY_LEN, "senderPubkey"));
-  bincodeMlDsa65OpaqueInto(w, expectBytes(env.outerSignature, ML_DSA_65_SIGNATURE_LEN, "outerSignature"));
-  w.bytes(expectBytes(env.sender, 20, "sender"));
-  return w.toBytes();
-}
-function encryptInnerTx(signedInnerTxBincode, nonceAad, kemEncapsulationKey) {
-  expectBytes(kemEncapsulationKey, ML_KEM_768_ENCAPSULATION_KEY_LEN, "kemEncapsulationKey");
-  const { cipherText: kemCt, sharedSecret } = mlKem_js.ml_kem768.encapsulate(kemEncapsulationKey);
-  const nonce = utils_js.randomBytes(DKG_NONCE_LEN);
-  const cipher = chacha_js.chacha20poly1305(sharedSecret, nonce, aadFor(nonceAad));
-  const aeadCt = cipher.encrypt(signedInnerTxBincode);
-  sharedSecret.fill(0);
-  return concatBytes3(kemCt, nonce, aeadCt);
-}
-function outerSigDigest(nonceAad, ciphertext, decryptionHint, senderPubkey) {
-  const aad = bincodeNonceAad(nonceAad);
-  const hint = bincodeDecryptHint(decryptionHint);
-  return sha3_js.keccak_256(concatBytes3(aad, ciphertext, hint, expectBytes(senderPubkey, ML_DSA_65_PUBLIC_KEY_LEN, "senderPubkey")));
-}
-async function buildEncryptedEnvelope(args) {
-  const ciphertext = encryptInnerTx(args.signedInnerTxBincode, args.nonceAad, args.kemEncapsulationKey);
-  const digest = outerSigDigest(args.nonceAad, ciphertext, args.decryptionHint, args.senderPubkey);
-  const outerSignature = await args.signOuterDigest(digest);
-  const envelope = {
-    nonceAad: args.nonceAad,
-    ciphertext,
-    decryptionHint: args.decryptionHint,
-    senderPubkey: expectBytes(args.senderPubkey, ML_DSA_65_PUBLIC_KEY_LEN, "senderPubkey"),
-    outerSignature: expectBytes(outerSignature, ML_DSA_65_SIGNATURE_LEN, "outerSignature"),
-    sender: expectBytes(args.senderAddress, 20, "senderAddress")
-  };
-  const wireBytes = bincodeEncryptedEnvelope(envelope);
-  return { envelope, wireBytes, wireHex: bytesToHex4(wireBytes) };
-}
-function aadFor(aad) {
-  return concatBytes3(DKG_AEAD_DOMAIN_TAG, bincodeNonceAad(aad));
-}
-function bincodeMlDsa65OpaqueInto(w, raw) {
-  w.enumVariant(ENUM_VARIANT_INDEX_ML_DSA_65);
-  w.u16(STANDARD_ALGO_NUMBER_ML_DSA_65);
-  w.bytes(raw);
-}
-
-// src/crypto/submission.ts
-async function fetchEncryptionKey(client) {
-  const result = await client.call(
-    "lyth_getEncryptionKey",
-    []
-  );
-  return {
-    algo: result.algo ?? "ml-kem-768",
-    epoch: typeof result.epoch === "string" ? BigInt(result.epoch) : BigInt(result.epoch),
-    encapsulationKey: hexToBytes3(result.encapsulationKey, "encapsulationKey")
-  };
-}
-async function buildEncryptedSubmission(args) {
-  const input = normalizeInput(args.tx.input);
-  const to = normalizeTo(args.tx.to);
-  const nonceAad = {
-    sender: args.backend.addressBytes(),
-    nonce: parseBigint(args.tx.nonce, "nonce"),
-    chainId: parseBigint(args.tx.chainId, "chainId"),
-    class: args.class ?? (to !== null && input.length === 0 ? MempoolClass.Transfer : MempoolClass.ContractCall),
-    maxFeePerGas: u128Checked(parseBigint(args.tx.maxFeePerGas, "maxFeePerGas"), "maxFeePerGas"),
-    maxPriorityFeePerGas: u128Checked(
-      parseBigint(args.tx.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
-      "maxPriorityFeePerGas"
-    ),
-    gasLimit: parseBigint(args.tx.gasLimit, "gasLimit")
-  };
-  const signed = args.backend.signEvmTx(args.tx);
-  const decryptionHint = { epoch: args.encryptionKey.epoch, scheme: 0 };
-  const built = await buildEncryptedEnvelope({
-    signedInnerTxBincode: signed.wireBytes,
-    nonceAad,
-    decryptionHint,
-    kemEncapsulationKey: args.encryptionKey.encapsulationKey,
-    senderAddress: args.backend.addressBytes(),
-    senderPubkey: args.backend.publicKey(),
-    signOuterDigest: (digest) => args.backend.signPrehash(digest)
-  });
-  return {
-    envelopeWireHex: built.wireHex,
-    innerSighashHex: `0x${[...signed.sighash].map((b) => b.toString(16).padStart(2, "0")).join("")}`,
-    innerTxHashHex: bytesToHex4(signed.txHash),
-    innerWireBytes: signed.wireBytes.length
-  };
-}
-async function submitEncryptedEnvelope(client, envelopeWireHex) {
-  return client.call("lyth_submitEncrypted", [envelopeWireHex]);
-}
-function u128Checked(value, field2) {
-  const cap = (1n << 128n) - 1n;
-  if (value < 0n || value > cap) {
-    throw new Error(`${field2} must fit in u128 for encrypted nonce AAD`);
-  }
-  return value;
-}
-function normalizeTo(value) {
-  if (value === null) return null;
-  if (typeof value === "string") return hexToAddressBytes(value);
-  const bytes = value instanceof Uint8Array ? value : Uint8Array.from(value);
-  if (bytes.length !== 20) throw new Error("to must be 20 bytes");
-  return bytes;
-}
-function normalizeInput(value) {
-  if (value === void 0) return new Uint8Array(0);
-  if (typeof value === "string") return hexToBytes3(value, "input");
-  return value instanceof Uint8Array ? value : Uint8Array.from(value);
-}
-
-// src/mrv.ts
-var MRV_FORMAT_VERSION = 1;
-var MRV_DEPLOY_PAYLOAD_VERSION = 1;
-var MRV_PROFILE_MONO_RV32IM_V1 = "mono_rv32im_v1";
-var MRV_MEMORY_PAGE_BYTES = 65536;
-var MRV_MAX_CODE_BYTES = 16 * 1024 * 1024;
-var MRV_MAX_DEBUG_BYTES = 16 * 1024 * 1024;
-var MRV_MAX_MEMORY_PAGES = 1024;
-var MRV_MAX_ABI_SYMBOLS = 1024;
-var MRV_MAX_STORAGE_NAMESPACE_BYTES = 64;
-var LYTH_DECIMALS = 8;
-var NATIVE_LYTH_DECIMALS = LYTH_DECIMALS;
-var LYTHOSHI_PER_LYTH = 100000000n;
-var MRV_TX_EXTENSION_KIND = 48;
-var MRV_TX_EXTENSION_V1 = 1;
-var MRV_CODE_HASH_DOMAIN = new TextEncoder().encode("MONO_MRV_CODE_V1");
-var MRV_CONTRACT_ADDRESS_DOMAIN = new TextEncoder().encode("mono:riscv:contract-address:v1");
-var MONO_SYSCALL_MODULE = "mono";
-var SYSCALLS = [
-  [257, "storage_read"],
-  [258, "storage_write"],
-  [259, "storage_delete"],
-  [513, "caller"],
-  [514, "contract_address"],
-  [515, "block_height"],
-  [516, "block_hash"],
-  [769, "call_contract"],
-  [770, "emit_event"],
-  [771, "transfer_native"],
-  [1025, "verify_signature"],
-  [1026, "hash"],
-  [1281, "revert"]
-];
-var SYSCALL_NAME_BY_ID = new Map(SYSCALLS);
-var SYSCALL_ID_BY_NAME = new Map(SYSCALLS.map(([id, name]) => [name, id]));
-var MrvValidationError = class extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "MrvValidationError";
-  }
-};
-var MRV_STRUCTURED_FEE_FIELDS = [
-  "total_lythoshi",
-  "total_lyth",
-  "cycles_used",
-  "base_price_per_cycle_lythoshi",
-  "state_io_units",
-  "state_io_price_per_unit_lythoshi",
-  "priority_tip_lythoshi"
-];
-function formatLyth(lythoshi, options = {}) {
-  const amount = BigInt(normalizeDecimalLike("lythoshi", lythoshi));
-  const whole = amount / LYTHOSHI_PER_LYTH;
-  const fraction = amount % LYTHOSHI_PER_LYTH;
-  let formatted = formatWholeWithCommas(whole);
-  if (fraction !== 0n) {
-    formatted += `.${fraction.toString().padStart(NATIVE_LYTH_DECIMALS, "0").replace(/0+$/, "")}`;
-  }
-  if (options.includeUnit !== false) {
-    formatted += " LYTH";
-  }
-  return formatted;
-}
-function formatLythoshi(lythoshi, options = {}) {
-  return formatLyth(lythoshi, options);
-}
-function parseLythToLythoshi(input) {
-  const numeric = stripLythUnit(input);
-  const parts = numeric.split(".");
-  if (parts.length > 2) {
-    throw new MrvValidationError("lyth amount must be a canonical LYTH decimal");
-  }
-  const [wholeRaw, fractionRaw = ""] = parts;
-  if (!isCanonicalWholeLyth(wholeRaw)) {
-    throw new MrvValidationError("lyth amount must be a canonical LYTH decimal");
-  }
-  if (numeric.includes(".") && fractionRaw.length === 0) {
-    throw new MrvValidationError("lyth amount must be a canonical LYTH decimal");
-  }
-  if (fractionRaw.length > NATIVE_LYTH_DECIMALS || !/^[0-9]*$/.test(fractionRaw)) {
-    throw new MrvValidationError("lyth amount supports at most 8 decimal places");
-  }
-  const whole = BigInt(wholeRaw.replaceAll(",", ""));
-  const fraction = fractionRaw === "" ? 0n : BigInt(fractionRaw.padEnd(NATIVE_LYTH_DECIMALS, "0"));
-  return whole * LYTHOSHI_PER_LYTH + fraction;
-}
-function checkMrvFeeDisplayConformance(input) {
-  const expectedTotalLythoshi = normalizeDecimalLike("expectedTotalLythoshi", input.expectedTotalLythoshi);
-  const expectedDefaultFeeText = formatLyth(expectedTotalLythoshi);
-  const failures = [];
-  const amountCandidates = extractLythAmountCandidates(input.defaultFeeText);
-  if (amountCandidates.length !== 1) {
-    failures.push("defaultFeeText must contain exactly one LYTH-denominated fee amount");
-  } else {
-    const renderedCandidate = `${amountCandidates[0]} LYTH`;
-    if (renderedCandidate !== expectedDefaultFeeText) {
-      failures.push(`defaultFeeText fee must be ${expectedDefaultFeeText}`);
-    }
-    try {
-      const parsed = parseLythToLythoshi(renderedCandidate);
-      if (parsed.toString() !== expectedTotalLythoshi) {
-        failures.push(`defaultFeeText fee must total ${expectedTotalLythoshi} lythoshi`);
-      }
-    } catch {
-      failures.push("defaultFeeText fee must be a canonical 8-decimal LYTH amount");
-    }
-  }
-  const defaultForbidden = firstForbiddenDefaultFeeTerm(input.defaultFeeText);
-  if (defaultForbidden !== void 0) {
-    failures.push(`defaultFeeText exposes detail-only fee term '${defaultForbidden}'`);
-  }
-  for (const [index, detailText] of (input.detailTexts ?? []).entries()) {
-    const detailForbidden = firstForbiddenDetailFeeTerm(detailText);
-    if (detailForbidden !== void 0) {
-      failures.push(`detailTexts[${index}] exposes inherited fee term '${detailForbidden}'`);
-    }
-  }
-  if (input.structuredFee !== void 0) {
-    checkStructuredFeeObject(input.structuredFee, expectedTotalLythoshi, failures);
-  }
-  if (input.customFeeInputVisible === true) {
-    failures.push("default surface must not expose custom fee inputs");
-  }
-  if (input.speedUpCancelVisible === true) {
-    failures.push("default surface must not expose speed-up or cancel controls");
-  }
-  return {
-    passed: failures.length === 0,
-    failures,
-    expectedDefaultFeeText
-  };
-}
-function assertMrvFeeDisplayConformance(input) {
-  const report = checkMrvFeeDisplayConformance(input);
-  if (!report.passed) {
-    throw new MrvValidationError(`fee display conformance failed: ${report.failures.join("; ")}`);
-  }
-}
-function formatNativeReceiptFeeDisplay(fee) {
-  const totalLythoshi = normalizeDecimalLike("fee.total_lythoshi", fee.total_lythoshi);
-  const totalLyth = formatLyth(totalLythoshi, { includeUnit: false });
-  return {
-    defaultFeeText: `Network fee: ${totalLyth} LYTH`,
-    detailTexts: [
-      `cycles ${fee.cycles_used}, state I/O ${fee.state_io_units}, total ${totalLythoshi} lythoshi`,
-      `cycle price ${fee.base_price_per_cycle_lythoshi} lythoshi, state I/O price ${fee.state_io_price_per_unit_lythoshi} lythoshi, priority tip ${fee.priority_tip_lythoshi} lythoshi`
-    ],
-    totalLythoshi,
-    totalLyth
-  };
-}
-function mrvCodeHashHex(code) {
-  const codeBytes = bytesFrom(code, "code");
-  const len = new Uint8Array(8);
-  new DataView(len.buffer).setBigUint64(0, BigInt(codeBytes.length), false);
-  return bytesToHex5(blake3_js.blake3(concatBytes4(MRV_CODE_HASH_DOMAIN, len, codeBytes)));
-}
-function mrvV1TransactionExtension() {
-  return { kind: MRV_TX_EXTENSION_KIND, bodyHex: "0x01" };
-}
-function encodeMrvDeployPayload(artifactBytes, constructorInput) {
-  const artifact = bytesFrom(artifactBytes, "artifactBytes");
-  const w = new BincodeWriter();
-  w.u16(MRV_DEPLOY_PAYLOAD_VERSION);
-  w.bytes(artifact);
-  if (constructorInput === void 0 || constructorInput === null) {
-    w.u8(0);
-  } else {
-    const constructor = bytesFrom(constructorInput, "constructorInput");
-    w.u8(1);
-    w.bytes(constructor);
-  }
-  return bytesToHex5(w.toBytes());
-}
-function mrvAddressToBech32(kind, bytes) {
-  return addressToTypedBech32(kind, bytesFrom(bytes, "address"));
-}
-function mrvBech32ToAddress(address, expectedKind) {
-  return typedBech32ToAddress(address, expectedKind);
-}
-function deriveMrvContractAddress(deployerAddress, deployerNonce, artifactHashHex) {
-  const deployer = typedBech32ToAddress(deployerAddress);
-  const artifactHash = hexToBytes4(artifactHashHex, "artifactHash");
-  if (artifactHash.length !== 32) throw new MrvValidationError("artifactHash must be 32 bytes");
-  const nonceValue = normalizeU64(deployerNonce, "deployerNonce");
-  const nonce = new Uint8Array(8);
-  new DataView(nonce.buffer).setBigUint64(0, nonceValue, false);
-  const digest = blake3_js.blake3(
-    concatBytes4(
-      MRV_CONTRACT_ADDRESS_DOMAIN,
-      new TextEncoder().encode(ADDRESS_KIND_HRPS[deployer.kind]),
-      Uint8Array.of(0),
-      hexToBytes4(deployer.hex, "deployerAddress"),
-      nonce,
-      artifactHash
-    )
-  );
-  return addressToTypedBech32("contract", digest.slice(0, 20));
-}
-function validateMrvArtifactMetadata(metadata, code) {
-  const codeBytes = bytesFrom(code, "code");
-  if (metadata.formatVersion !== MRV_FORMAT_VERSION) {
-    throw new MrvValidationError(
-      `unsupported MRV format version ${metadata.formatVersion}, expected ${MRV_FORMAT_VERSION}`
-    );
-  }
-  if (metadata.profile !== MRV_PROFILE_MONO_RV32IM_V1) {
-    throw new MrvValidationError(`unsupported MRV profile ${metadata.profile}`);
-  }
-  if (codeBytes.length === 0) {
-    throw new MrvValidationError("MRV code is empty");
-  }
-  if (codeBytes.length > MRV_MAX_CODE_BYTES) {
-    throw new MrvValidationError(`MRV code has ${codeBytes.length} bytes, max ${MRV_MAX_CODE_BYTES}`);
-  }
-  if (metadata.codeBytes !== BigInt(codeBytes.length)) {
-    throw new MrvValidationError(
-      `metadata codeBytes ${metadata.codeBytes.toString()} does not match supplied code length ${codeBytes.length}`
-    );
-  }
-  if (metadata.debugBytes > BigInt(MRV_MAX_DEBUG_BYTES)) {
-    throw new MrvValidationError(`MRV debug section has ${metadata.debugBytes.toString()} bytes`);
-  }
-  validateHexLength("codeHash", metadata.codeHash, 32);
-  validateHexLength("sourceDigest", metadata.build.sourceDigest, 32);
-  validateMemory(metadata.memory.initialPages, metadata.memory.maxPages, metadata.memory.stackBytes);
-  validateStorageNamespace(metadata.storageNamespace.name, metadata.storageNamespace.version);
-  validateAbi(metadata.abi);
-  const syscalls = validateImports(metadata.imports);
-  const computed = mrvCodeHashHex(codeBytes);
-  if (metadata.codeHash.toLowerCase() !== computed) {
-    throw new MrvValidationError(`MRV code hash mismatch: declared ${metadata.codeHash}, computed ${computed}`);
-  }
-  return {
-    codeHash: computed,
-    profile: metadata.profile,
-    memory: metadata.memory,
-    storageNamespace: metadata.storageNamespace,
-    syscalls,
-    abiSymbolCount: BigInt(metadata.abi.symbols.length),
-    codeBytes: BigInt(codeBytes.length)
-  };
-}
-function validateMrvDeployRequest(request) {
-  if (request.from !== void 0) typedBech32ToAddress(request.from, "user");
-  hexToBytes4(request.artifactBytes, "artifactBytes");
-  validateDecimal("valueLythoshi", request.valueLythoshi);
-  validateOptionalDecimal("maxExecutionFeeLythoshi", request.maxExecutionFeeLythoshi);
-  validateOptionalDecimal("priorityTipLythoshi", request.priorityTipLythoshi);
-  validateExecutionUnitLimit("executionUnitLimit", request.executionUnitLimit);
-}
-function validateMrvCallRequest(request) {
-  if (request.from !== void 0) typedBech32ToAddress(request.from, "user");
-  typedBech32ToAddress(request.contractAddress, "contract");
-  hexToBytes4(request.input, "input");
-  validateDecimal("valueLythoshi", request.valueLythoshi);
-  validateOptionalDecimal("maxExecutionFeeLythoshi", request.maxExecutionFeeLythoshi);
-  validateOptionalDecimal("priorityTipLythoshi", request.priorityTipLythoshi);
-  validateExecutionUnitLimit("executionUnitLimit", request.executionUnitLimit);
-}
-function buildMrvDeployRequest(artifactBytes, options = {}) {
-  const request = {
-    artifactBytes: normalizeBytesHex(artifactBytes, "artifactBytes"),
-    valueLythoshi: normalizeDecimalLike("valueLythoshi", options.valueLythoshi, "0")
-  };
-  applyRequestOptions(request, options);
-  validateMrvDeployRequest(request);
-  return request;
-}
-function buildMrvDeployPayloadRequest(artifactBytes, options = {}) {
-  const request = buildMrvDeployRequest(
-    encodeMrvDeployPayload(artifactBytes, options.constructorInput),
-    options
-  );
-  return request;
-}
-function buildMrvCallRequest(contractAddress, input = "0x", options = {}) {
-  const request = {
-    contractAddress,
-    input: normalizeBytesHex(input, "input"),
-    valueLythoshi: normalizeDecimalLike("valueLythoshi", options.valueLythoshi, "0")
-  };
-  applyRequestOptions(request, options);
-  validateMrvCallRequest(request);
-  return request;
-}
-function buildMrvDeployPlan(artifactBytes, options = {}) {
-  const request = buildMrvDeployRequest(artifactBytes, options);
-  const plan = {
-    request,
-    extension: mrvV1TransactionExtension()
-  };
-  if (options.artifactHash !== void 0 && request.from !== void 0 && request.nonce !== void 0) {
-    plan.expectedContractAddress = deriveMrvContractAddress(request.from, request.nonce, options.artifactHash);
-  } else if (options.artifactHash !== void 0) {
-    validateHexLength("artifactHash", options.artifactHash, 32);
-  }
-  return plan;
-}
-function buildMrvDeployPayloadPlan(artifactBytes, options = {}) {
-  const request = buildMrvDeployPayloadRequest(artifactBytes, options);
-  const plan = {
-    request,
-    extension: mrvV1TransactionExtension()
-  };
-  if (options.artifactHash !== void 0 && request.from !== void 0 && request.nonce !== void 0) {
-    plan.expectedContractAddress = deriveMrvContractAddress(request.from, request.nonce, options.artifactHash);
-  } else if (options.artifactHash !== void 0) {
-    validateHexLength("artifactHash", options.artifactHash, 32);
-  }
-  return plan;
-}
-function buildMrvCallPlan(contractAddress, input = "0x", options = {}) {
-  return {
-    request: buildMrvCallRequest(contractAddress, input, options),
-    extension: mrvV1TransactionExtension()
-  };
-}
-function buildMrvDeployNativeTxPlan(artifactBytes, options) {
-  const chainId = normalizeU64(options.chainId, "chainId");
-  const nonce = normalizeU64(options.nonce, "nonce");
-  const executionUnitLimit = normalizeU64(options.executionUnitLimit, "executionUnitLimit");
-  const maxExecutionFee = normalizeDecimalLike("maxExecutionFeeLythoshi", options.maxExecutionFeeLythoshi);
-  const priorityTip = options.priorityTipLythoshi === void 0 ? void 0 : normalizeDecimalLike("priorityTipLythoshi", options.priorityTipLythoshi);
-  const plan = buildMrvDeployPlan(artifactBytes, {
-    ...options,
-    nonce,
-    executionUnitLimit,
-    maxExecutionFeeLythoshi: maxExecutionFee,
-    priorityTipLythoshi: priorityTip
-  });
-  return {
-    ...plan,
-    nativeTx: {
-      chainId,
-      nonce,
-      valueLythoshi: plan.request.valueLythoshi,
-      executionUnitLimit,
-      maxExecutionFeeLythoshi: maxExecutionFee,
-      priorityTipLythoshi: priorityTip ?? "0"
-    },
-    feePreview: buildMrvNativeFeePreview(executionUnitLimit, maxExecutionFee, priorityTip ?? "0"),
-    tx: {
-      chainId,
-      nonce,
-      maxPriorityFeePerGas: priorityTip ?? "0",
-      maxFeePerGas: maxExecutionFee,
-      gasLimit: executionUnitLimit,
-      to: null,
-      value: plan.request.valueLythoshi,
-      input: plan.request.artifactBytes,
-      extensions: [plan.extension]
-    }
-  };
-}
-function buildMrvDeployPayloadNativeTxPlan(artifactBytes, options) {
-  const chainId = normalizeU64(options.chainId, "chainId");
-  const nonce = normalizeU64(options.nonce, "nonce");
-  const executionUnitLimit = normalizeU64(options.executionUnitLimit, "executionUnitLimit");
-  const maxExecutionFee = normalizeDecimalLike("maxExecutionFeeLythoshi", options.maxExecutionFeeLythoshi);
-  const priorityTip = options.priorityTipLythoshi === void 0 ? void 0 : normalizeDecimalLike("priorityTipLythoshi", options.priorityTipLythoshi);
-  const plan = buildMrvDeployPayloadPlan(artifactBytes, {
-    ...options,
-    nonce,
-    executionUnitLimit,
-    maxExecutionFeeLythoshi: maxExecutionFee,
-    priorityTipLythoshi: priorityTip
-  });
-  return {
-    ...plan,
-    nativeTx: {
-      chainId,
-      nonce,
-      valueLythoshi: plan.request.valueLythoshi,
-      executionUnitLimit,
-      maxExecutionFeeLythoshi: maxExecutionFee,
-      priorityTipLythoshi: priorityTip ?? "0"
-    },
-    feePreview: buildMrvNativeFeePreview(executionUnitLimit, maxExecutionFee, priorityTip ?? "0"),
-    tx: {
-      chainId,
-      nonce,
-      maxPriorityFeePerGas: priorityTip ?? "0",
-      maxFeePerGas: maxExecutionFee,
-      gasLimit: executionUnitLimit,
-      to: null,
-      value: plan.request.valueLythoshi,
-      input: plan.request.artifactBytes,
-      extensions: [plan.extension]
-    }
-  };
-}
-function buildMrvCallNativeTxPlan(contractAddress, input, options) {
-  const chainId = normalizeU64(options.chainId, "chainId");
-  const nonce = normalizeU64(options.nonce, "nonce");
-  const executionUnitLimit = normalizeU64(options.executionUnitLimit, "executionUnitLimit");
-  const maxExecutionFee = normalizeDecimalLike("maxExecutionFeeLythoshi", options.maxExecutionFeeLythoshi);
-  const priorityTip = options.priorityTipLythoshi === void 0 ? void 0 : normalizeDecimalLike("priorityTipLythoshi", options.priorityTipLythoshi);
-  const plan = buildMrvCallPlan(contractAddress, input, {
-    ...options,
-    nonce,
-    executionUnitLimit,
-    maxExecutionFeeLythoshi: maxExecutionFee,
-    priorityTipLythoshi: priorityTip
-  });
-  return {
-    ...plan,
-    nativeTx: {
-      chainId,
-      nonce,
-      valueLythoshi: plan.request.valueLythoshi,
-      executionUnitLimit,
-      maxExecutionFeeLythoshi: maxExecutionFee,
-      priorityTipLythoshi: priorityTip ?? "0"
-    },
-    feePreview: buildMrvNativeFeePreview(executionUnitLimit, maxExecutionFee, priorityTip ?? "0"),
-    tx: {
-      chainId,
-      nonce,
-      maxPriorityFeePerGas: priorityTip ?? "0",
-      maxFeePerGas: maxExecutionFee,
-      gasLimit: executionUnitLimit,
-      to: typedBech32ToAddress(plan.request.contractAddress, "contract").hex,
-      value: plan.request.valueLythoshi,
-      input: plan.request.input,
-      extensions: [plan.extension]
-    }
-  };
-}
-function assertMrvDeployNativeSubmissionPlan(plan) {
-  assertMrvNativeSubmissionEnvelope(plan);
-  if (plan.tx.to !== null) {
-    throw new MrvValidationError("MRV deploy submission tx.to must be null");
-  }
-  const txInput = normalizeBytesHex(plan.tx.input ?? "0x", "tx.input");
-  if (txInput !== plan.request.artifactBytes) {
-    throw new MrvValidationError("MRV deploy submission tx.input must match artifactBytes");
-  }
-}
-function assertMrvCallNativeSubmissionPlan(plan) {
-  assertMrvNativeSubmissionEnvelope(plan);
-  const actualTo = normalizeNativeTxToHex(plan.tx.to, "tx.to");
-  if (actualTo === null) {
-    throw new MrvValidationError("MRV call submission tx.to must be a 20-byte contract address");
-  }
-  const expectedTo = typedBech32ToAddress(plan.request.contractAddress, "contract").hex.toLowerCase();
-  if (actualTo !== expectedTo) {
-    throw new MrvValidationError("MRV call submission tx.to must match contractAddress");
-  }
-  const txInput = normalizeBytesHex(plan.tx.input ?? "0x", "tx.input");
-  if (txInput !== plan.request.input) {
-    throw new MrvValidationError("MRV call submission tx.input must match request input");
-  }
-}
-function buildMrvNativeFeePreview(executionUnitLimit, maxExecutionFeeLythoshi, priorityTipLythoshi) {
-  const totalLythoshi = normalizeDecimalLike("maxExecutionFeeLythoshi", maxExecutionFeeLythoshi);
-  return {
-    totalLythoshi,
-    totalLyth: formatLyth(totalLythoshi, { includeUnit: false }),
-    cyclesUsed: executionUnitLimit,
-    executionUnitLimit,
-    maxExecutionFeeLythoshi: totalLythoshi,
-    priorityTipLythoshi: normalizeDecimalLike("priorityTipLythoshi", priorityTipLythoshi)
-  };
-}
-async function submitMrvDeployNativeTx(client, backend, artifactBytes, options) {
-  const plan = buildMrvDeployNativeTxPlan(artifactBytes, options);
-  assertMrvDeployNativeSubmissionPlan(plan);
-  const submission = await buildEncryptedSubmission({
-    backend,
-    tx: plan.tx,
-    encryptionKey: options.encryptionKey ?? await fetchEncryptionKey(client),
-    class: options.class
-  });
-  return {
-    ...plan,
-    ...submission,
-    txHash: await submitEncryptedEnvelope(client, submission.envelopeWireHex)
-  };
-}
-async function submitMrvDeployPayloadNativeTx(client, backend, artifactBytes, options) {
-  const plan = buildMrvDeployPayloadNativeTxPlan(artifactBytes, options);
-  assertMrvDeployNativeSubmissionPlan(plan);
-  const submission = await buildEncryptedSubmission({
-    backend,
-    tx: plan.tx,
-    encryptionKey: options.encryptionKey ?? await fetchEncryptionKey(client),
-    class: options.class
-  });
-  return {
-    ...plan,
-    ...submission,
-    txHash: await submitEncryptedEnvelope(client, submission.envelopeWireHex)
-  };
-}
-async function submitMrvCallNativeTx(client, backend, contractAddress, input, options) {
-  const plan = buildMrvCallNativeTxPlan(contractAddress, input, options);
-  assertMrvCallNativeSubmissionPlan(plan);
-  const submission = await buildEncryptedSubmission({
-    backend,
-    tx: plan.tx,
-    encryptionKey: options.encryptionKey ?? await fetchEncryptionKey(client),
-    class: options.class
-  });
-  return {
-    ...plan,
-    ...submission,
-    txHash: await submitEncryptedEnvelope(client, submission.envelopeWireHex)
-  };
-}
-function assertMrvNativeSubmissionEnvelope(plan) {
-  const extensions = plan.tx.extensions ?? [];
-  if (extensions.length !== 1) {
-    throw new MrvValidationError("MRV native submission must carry exactly one transaction extension");
-  }
-  assertMrvV1Extension(plan.extension, "extension");
-  assertMrvV1Extension(extensions[0], "tx.extensions[0]");
-  assertSameBigint("tx.chainId", plan.tx.chainId, plan.nativeTx.chainId);
-  assertSameBigint("tx.nonce", plan.tx.nonce, plan.nativeTx.nonce);
-  assertSameBigint("tx.gasLimit", plan.tx.gasLimit, plan.nativeTx.executionUnitLimit);
-  assertSameDecimal("tx.value", plan.tx.value, plan.nativeTx.valueLythoshi);
-  assertSameDecimal("tx.maxFeePerGas", plan.tx.maxFeePerGas, plan.nativeTx.maxExecutionFeeLythoshi);
-  assertSameDecimal("tx.maxPriorityFeePerGas", plan.tx.maxPriorityFeePerGas, plan.nativeTx.priorityTipLythoshi);
-  assertU128Lythoshi("maxExecutionFeeLythoshi", plan.nativeTx.maxExecutionFeeLythoshi);
-  assertU128Lythoshi("priorityTipLythoshi", plan.nativeTx.priorityTipLythoshi);
-}
-function assertMrvV1Extension(extension, field2) {
-  if (extension.kind !== MRV_TX_EXTENSION_KIND) {
-    throw new MrvValidationError(`${field2}.kind must be MRV v1 extension kind`);
-  }
-  const bodyHex = normalizeBytesHex("bodyHex" in extension ? extension.bodyHex : extension.body, `${field2}.body`);
-  if (bodyHex !== "0x01") {
-    throw new MrvValidationError(`${field2}.body must be MRV v1 extension body`);
-  }
-}
-function assertSameBigint(field2, actual, expected) {
-  if (normalizeU64Like(actual, field2) !== expected) {
-    throw new MrvValidationError(`${field2} must match nativeTx`);
-  }
-}
-function assertSameDecimal(field2, actual, expected) {
-  if (normalizeDecimalLike(field2, actual) !== expected) {
-    throw new MrvValidationError(`${field2} must match nativeTx`);
-  }
-}
-function assertU128Lythoshi(field2, value) {
-  const normalized = BigInt(normalizeDecimalLike(field2, value));
-  if (normalized > (1n << 128n) - 1n) {
-    throw new MrvValidationError(`${field2} must fit in u128 for encrypted submission`);
-  }
-}
-function normalizeNativeTxToHex(value, field2) {
-  if (value === null) return null;
-  const bytes = bytesFrom(value, field2);
-  if (bytes.length !== 20) {
-    throw new MrvValidationError(`${field2} must be a 20-byte address`);
-  }
-  return bytesToHex5(bytes).toLowerCase();
-}
-function normalizeU64Like(value, field2) {
-  if (typeof value === "string") {
-    return normalizeU64(BigInt(normalizeDecimalLike(field2, value)), field2);
-  }
-  return normalizeU64(value, field2);
-}
-function validateMemory(initialPages, maxPages, stackBytes) {
-  if (initialPages === 0) throw new MrvValidationError("initialPages is zero");
-  if (maxPages === 0) throw new MrvValidationError("maxPages is zero");
-  if (initialPages > maxPages) throw new MrvValidationError("initialPages exceeds maxPages");
-  if (maxPages > MRV_MAX_MEMORY_PAGES) throw new MrvValidationError("maxPages exceeds bound");
-  if (stackBytes === 0) throw new MrvValidationError("stackBytes is zero");
-  const maxBytes = maxPages * MRV_MEMORY_PAGE_BYTES;
-  if (stackBytes > maxBytes) throw new MrvValidationError("stackBytes exceeds max memory");
-  if (stackBytes % 16 !== 0) throw new MrvValidationError("stackBytes must be 16-byte aligned");
-}
-function validateStorageNamespace(name, version2) {
-  if (version2 === 0) throw new MrvValidationError("storage namespace version must be non-zero");
-  if (name.length > MRV_MAX_STORAGE_NAMESPACE_BYTES) throw new MrvValidationError("storage namespace is too long");
-  if (!isIdentifier(name)) throw new MrvValidationError("storage namespace is not canonical");
-}
-function validateAbi(abi) {
-  if (abi.symbols.length === 0) throw new MrvValidationError("MRV ABI must declare at least one symbol");
-  if (abi.symbols.length > MRV_MAX_ABI_SYMBOLS) {
-    throw new MrvValidationError(`MRV ABI has ${abi.symbols.length} symbols, max ${MRV_MAX_ABI_SYMBOLS}`);
-  }
-  const seen = /* @__PURE__ */ new Set();
-  for (const symbol of abi.symbols) {
-    if (!isIdentifier(symbol.name)) throw new MrvValidationError(`invalid MRV ABI symbol '${symbol.name}'`);
-    if (seen.has(symbol.name)) throw new MrvValidationError(`duplicate MRV ABI symbol '${symbol.name}'`);
-    seen.add(symbol.name);
-    for (const param of [...symbol.inputs, ...symbol.outputs]) {
-      if (!isIdentifier(param.name)) throw new MrvValidationError(`invalid MRV ABI parameter '${param.name}'`);
-      validateAbiType(param.ty);
-    }
-  }
-}
-function validateAbiType(ty) {
-  if (ty.kind === "fixedBytes" && ty.len === 0) {
-    throw new MrvValidationError("fixed bytes length is zero");
-  }
-}
-function validateImports(imports) {
-  const seen = /* @__PURE__ */ new Set();
-  const resolved = [];
-  for (const imp of imports) {
-    if (imp.module !== MONO_SYSCALL_MODULE) {
-      throw new MrvValidationError(`forbidden host import ${imp.module}.${imp.name}`);
-    }
-    const expectedName = SYSCALL_NAME_BY_ID.get(imp.id);
-    if (expectedName === void 0) throw new MrvValidationError(`unknown MRV syscall id ${imp.id}`);
-    const expectedId = SYSCALL_ID_BY_NAME.get(imp.name);
-    if (expectedId === void 0) throw new MrvValidationError(`unknown MRV syscall name '${imp.name}'`);
-    if (expectedId !== imp.id) {
-      throw new MrvValidationError(`MRV syscall name/id mismatch for ${imp.name}: declared ${imp.id}`);
-    }
-    if (seen.has(imp.id)) throw new MrvValidationError(`duplicate MRV syscall '${expectedName}'`);
-    seen.add(imp.id);
-    resolved.push({ id: imp.id, name: expectedName });
-  }
-  return resolved;
-}
-function validateOptionalDecimal(field2, value) {
-  if (value !== void 0) validateDecimal(field2, value);
-}
-function applyRequestOptions(request, options) {
-  if (options.from !== void 0) request.from = options.from;
-  const executionUnitLimit = normalizeOptionalU64("executionUnitLimit", options.executionUnitLimit);
-  if (executionUnitLimit !== void 0) request.executionUnitLimit = executionUnitLimit;
-  const maxExecutionFee = normalizeOptionalDecimalLike(
-    "maxExecutionFeeLythoshi",
-    options.maxExecutionFeeLythoshi
-  );
-  if (maxExecutionFee !== void 0) request.maxExecutionFeeLythoshi = maxExecutionFee;
-  const priorityTip = normalizeOptionalDecimalLike("priorityTipLythoshi", options.priorityTipLythoshi);
-  if (priorityTip !== void 0) request.priorityTipLythoshi = priorityTip;
-  const nonce = normalizeOptionalU64("nonce", options.nonce);
-  if (nonce !== void 0) request.nonce = nonce;
-}
-function normalizeBytesHex(value, field2) {
-  return bytesToHex5(bytesFrom(value, field2));
-}
-function normalizeOptionalDecimalLike(field2, value) {
-  return value === void 0 ? void 0 : normalizeDecimalLike(field2, value);
-}
-function formatWholeWithCommas(value) {
-  const digits = value.toString();
-  const firstGroupLen = digits.length % 3;
-  const groups = [];
-  let index = 0;
-  if (firstGroupLen !== 0) {
-    groups.push(digits.slice(0, firstGroupLen));
-    index = firstGroupLen;
-  }
-  while (index < digits.length) {
-    groups.push(digits.slice(index, index + 3));
-    index += 3;
-  }
-  return groups.join(",");
-}
-function stripLythUnit(input) {
-  const trimmed = input.trim();
-  const withoutUnit = trimmed.replace(/\s+LYTH$/i, "").trim();
-  if (withoutUnit.length === 0) {
-    throw new MrvValidationError("lyth amount must be a canonical LYTH decimal");
-  }
-  return withoutUnit;
-}
-function isCanonicalWholeLyth(value) {
-  if (/^(0|[1-9][0-9]*)$/.test(value)) {
-    return true;
-  }
-  return /^[1-9][0-9]{0,2}(,[0-9]{3})+$/.test(value);
-}
-function extractLythAmountCandidates(text) {
-  return [...text.matchAll(/(?:^|[^A-Za-z0-9_])([0-9][0-9,]*(?:\.[0-9]+)?)\s+LYTH\b/g)].map(
-    (match) => match[1]
-  );
-}
-function firstForbiddenDefaultFeeTerm(text) {
-  const tokens = feeTermTokens(text);
-  for (const forbidden of ["gas", "gwei", "wei", "cycle", "cycles", "lythoshi"]) {
-    if (tokens.includes(forbidden)) return forbidden;
-  }
-  if (hasAdjacentTerms(tokens, "state", "io") || hasStateIOTerms(tokens)) return "state I/O";
-  return void 0;
-}
-function firstForbiddenDetailFeeTerm(text) {
-  const tokens = feeTermTokens(text);
-  for (const forbidden of ["gas", "gwei", "wei"]) {
-    if (tokens.includes(forbidden)) return forbidden;
-  }
-  return void 0;
-}
-function feeTermTokens(text) {
-  return text.toLowerCase().match(/[a-z]+/g) ?? [];
-}
-function hasAdjacentTerms(tokens, first, second) {
-  return tokens.some((token, index) => token === first && tokens[index + 1] === second);
-}
-function hasStateIOTerms(tokens) {
-  return tokens.some((token, index) => token === "state" && tokens[index + 1] === "i" && tokens[index + 2] === "o");
-}
-function checkStructuredFeeObject(value, expectedTotalLythoshi, failures) {
-  if (!isRecord2(value)) {
-    failures.push("structuredFee must be an object");
-    return;
-  }
-  const expectedFields = new Set(MRV_STRUCTURED_FEE_FIELDS);
-  const actualFields = Object.keys(value);
-  for (const field2 of MRV_STRUCTURED_FEE_FIELDS) {
-    if (!(field2 in value)) failures.push(`structuredFee is missing '${field2}'`);
-  }
-  for (const field2 of actualFields) {
-    if (!expectedFields.has(field2)) failures.push(`structuredFee has unexpected field '${field2}'`);
-  }
-  const totalLythoshi = stringField2(value, "total_lythoshi", failures);
-  if (totalLythoshi !== void 0 && totalLythoshi !== expectedTotalLythoshi) {
-    failures.push(`structuredFee.total_lythoshi must be ${expectedTotalLythoshi}`);
-  }
-  const totalLyth = lythDecimalField(value, "total_lyth", failures);
-  const expectedTotalLyth = formatLyth(expectedTotalLythoshi, { includeUnit: false });
-  if (totalLyth !== void 0 && totalLyth !== expectedTotalLyth) {
-    failures.push(`structuredFee.total_lyth must be ${expectedTotalLyth}`);
-  }
-  for (const field2 of [
-    "base_price_per_cycle_lythoshi",
-    "state_io_price_per_unit_lythoshi",
-    "priority_tip_lythoshi"
-  ]) {
-    stringField2(value, field2, failures);
-  }
-  for (const field2 of ["cycles_used", "state_io_units"]) {
-    integerField(value, field2, failures);
-  }
-}
-function isRecord2(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function stringField2(value, field2, failures) {
-  const fieldValue = value[field2];
-  if (typeof fieldValue !== "string" || !isCanonicalUnsignedDecimalString(fieldValue)) {
-    failures.push(`structuredFee.${field2} must be a canonical unsigned decimal string`);
-    return void 0;
-  }
-  return fieldValue;
-}
-function lythDecimalField(value, field2, failures) {
-  const fieldValue = value[field2];
-  if (typeof fieldValue !== "string") {
-    failures.push(`structuredFee.${field2} must be a canonical LYTH decimal string`);
-    return void 0;
-  }
-  try {
-    parseLythToLythoshi(`${fieldValue} LYTH`);
-  } catch {
-    failures.push(`structuredFee.${field2} must be a canonical LYTH decimal string`);
-    return void 0;
-  }
-  return fieldValue;
-}
-function integerField(value, field2, failures) {
-  const fieldValue = value[field2];
-  if (typeof fieldValue !== "number" || !Number.isSafeInteger(fieldValue) || fieldValue < 0) {
-    failures.push(`structuredFee.${field2} must be a non-negative safe integer`);
-  }
-}
-function isCanonicalUnsignedDecimalString(value) {
-  if (!/^(0|[1-9][0-9]*)$/.test(value)) return false;
-  try {
-    BigInt(value);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function normalizeDecimalLike(field2, value, defaultValue) {
-  if (value === void 0) {
-    if (defaultValue === void 0) throw new MrvValidationError(`${field2} is required`);
-    return defaultValue;
-  }
-  if (typeof value === "string") {
-    validateDecimal(field2, value);
-    return value;
-  }
-  if (typeof value === "number" && !Number.isSafeInteger(value)) {
-    throw new MrvValidationError(`${field2} must be a safe unsigned integer`);
-  }
-  const out = BigInt(value);
-  if (out < 0n) throw new MrvValidationError(`${field2} must be a canonical unsigned decimal string`);
-  return out.toString();
-}
-function normalizeOptionalU64(field2, value) {
-  return value === void 0 ? void 0 : normalizeU64(value, field2);
-}
-function validateDecimal(field2, value) {
-  if (!/^(0|[1-9][0-9]*)$/.test(value)) {
-    throw new MrvValidationError(`${field2} must be a canonical unsigned decimal string`);
-  }
-  try {
-    BigInt(value);
-  } catch {
-    throw new MrvValidationError(`${field2} must be a canonical unsigned decimal string`);
-  }
-}
-function validateExecutionUnitLimit(field2, value) {
-  if (value !== void 0 && BigInt(value) === 0n) {
-    throw new MrvValidationError(`${field2} must be greater than zero`);
-  }
-}
-function normalizeU64(value, field2) {
-  if (typeof value === "number" && !Number.isSafeInteger(value)) {
-    throw new MrvValidationError(`${field2} must be a safe unsigned integer`);
-  }
-  const out = BigInt(value);
-  if (out < 0n || out > 0xffffffffffffffffn) {
-    throw new MrvValidationError(`${field2} must fit in u64`);
-  }
-  return out;
-}
-function validateHexLength(field2, value, expected) {
-  const bytes = hexToBytes4(value, field2);
-  if (bytes.length !== expected) throw new MrvValidationError(`${field2} must be ${expected} bytes`);
-}
-function bytesFrom(value, field2) {
-  if (typeof value === "string") return hexToBytes4(value, field2);
-  return value instanceof Uint8Array ? value : Uint8Array.from(value);
-}
-function hexToBytes4(value, field2) {
-  if (!/^0x(?:[0-9a-fA-F]{2})*$/.test(value)) {
-    throw new MrvValidationError(`${field2} must be 0x-prefixed even-length hex`);
-  }
-  const out = new Uint8Array((value.length - 2) / 2);
-  for (let i = 0; i < out.length; i++) {
-    out[i] = Number.parseInt(value.slice(2 + i * 2, 4 + i * 2), 16);
-  }
-  return out;
-}
-function bytesToHex5(bytes) {
-  return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
-}
-function concatBytes4(...parts) {
-  const len = parts.reduce((sum, item) => sum + item.length, 0);
-  const out = new Uint8Array(len);
-  let offset = 0;
-  for (const part of parts) {
-    out.set(part, offset);
-    offset += part.length;
-  }
-  return out;
-}
-function isIdentifier(value) {
-  return /^[a-z][a-z0-9_]*$/.test(value);
 }
 
 // src/delegation.ts
@@ -4769,13 +4874,13 @@ function clobAddressHex() {
 function deriveClobMarketId(baseTokenId, quoteTokenId) {
   const base = bytes32FromHex(baseTokenId, "baseTokenId");
   const quote = bytes32FromHex(quoteTokenId, "quoteTokenId");
-  return bytesToHex4(sha3_js.keccak_256(concatBytes3(new Uint8Array([CLOB_MARKET_ID_DOMAIN_TAG]), base, quote)));
+  return bytesToHex2(sha3_js.keccak_256(concatBytes2(new Uint8Array([CLOB_MARKET_ID_DOMAIN_TAG]), base, quote)));
 }
 function encodePlaceLimitOrderCalldata(args) {
   const normalized = normalizePlaceSpotLimitOrderArgs(args);
-  return bytesToHex4(
-    concatBytes3(
-      hexToBytes3(CLOB_SELECTORS.placeLimitOrder, "placeLimitOrder selector"),
+  return bytesToHex2(
+    concatBytes2(
+      hexToBytes2(CLOB_SELECTORS.placeLimitOrder, "placeLimitOrder selector"),
       normalized.baseTokenId,
       normalized.quoteTokenId,
       uint8Word2(normalized.side),
@@ -4787,9 +4892,9 @@ function encodePlaceLimitOrderCalldata(args) {
 }
 function encodePlaceMarketOrderCalldata(args) {
   const normalized = normalizePlaceSpotMarketOrderArgs(args);
-  return bytesToHex4(
-    concatBytes3(
-      hexToBytes3(CLOB_SELECTORS.placeMarketOrder, "placeMarketOrder selector"),
+  return bytesToHex2(
+    concatBytes2(
+      hexToBytes2(CLOB_SELECTORS.placeMarketOrder, "placeMarketOrder selector"),
       normalized.baseTokenId,
       normalized.quoteTokenId,
       uint8Word2(normalized.side),
@@ -4800,9 +4905,9 @@ function encodePlaceMarketOrderCalldata(args) {
 }
 function encodePlaceMarketOrderExCalldata(args) {
   const normalized = normalizePlaceSpotMarketOrderExArgs(args);
-  return bytesToHex4(
-    concatBytes3(
-      hexToBytes3(CLOB_SELECTORS.placeMarketOrderEx, "placeMarketOrderEx selector"),
+  return bytesToHex2(
+    concatBytes2(
+      hexToBytes2(CLOB_SELECTORS.placeMarketOrderEx, "placeMarketOrderEx selector"),
       normalized.baseTokenId,
       normalized.quoteTokenId,
       uint8Word2(normalized.side),
@@ -4813,9 +4918,9 @@ function encodePlaceMarketOrderExCalldata(args) {
   );
 }
 function encodeCancelOrderCalldata(args) {
-  return bytesToHex4(
-    concatBytes3(
-      hexToBytes3(CLOB_SELECTORS.cancelOrder, "cancelOrder selector"),
+  return bytesToHex2(
+    concatBytes2(
+      hexToBytes2(CLOB_SELECTORS.cancelOrder, "cancelOrder selector"),
       bytes32FromHex(args.orderId, "orderId")
     )
   );
@@ -4831,7 +4936,7 @@ function encodeNativeSpotLimitOrderCall(args) {
   w.u128(positiveU128Decimal(args.price, "price"));
   w.u128(positiveU128Decimal(args.quantity, "quantity"));
   w.u64(uint64(args.expiresAtBlock, "expiresAtBlock"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeSpotCancelOrderCall(args) {
   const w = new BincodeWriter();
@@ -4839,7 +4944,7 @@ function encodeNativeSpotCancelOrderCall(args) {
   w.enumVariant(4);
   w.rawBytes(bytes32FromHex(args.orderId, "orderId"));
   monoAddressInto(w, args.caller, "caller");
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeNftCreateListingCall(args) {
   const w = new BincodeWriter();
@@ -4855,7 +4960,7 @@ function encodeNativeNftCreateListingCall(args) {
   w.u128(positiveU128Decimal(args.price, "price"));
   listingKindInto(w, args.kind);
   w.u64(uint64(args.expiresAtBlock, "expiresAtBlock"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeNftBuyListingCall(args) {
   const w = new BincodeWriter();
@@ -4864,7 +4969,7 @@ function encodeNativeNftBuyListingCall(args) {
   w.rawBytes(bytes32FromHex(args.listingId, "listingId"));
   monoAddressInto(w, args.buyer, "buyer");
   w.u64(uint64(args.currentBlock, "currentBlock"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeNftCancelListingCall(args) {
   const w = new BincodeWriter();
@@ -4872,7 +4977,7 @@ function encodeNativeNftCancelListingCall(args) {
   w.enumVariant(2);
   w.rawBytes(bytes32FromHex(args.listingId, "listingId"));
   monoAddressInto(w, args.caller, "caller");
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeNftPlaceAuctionBidCall(args) {
   const w = new BincodeWriter();
@@ -4882,7 +4987,7 @@ function encodeNativeNftPlaceAuctionBidCall(args) {
   monoAddressInto(w, args.bidder, "bidder");
   w.u128(positiveU128Decimal(args.amount, "amount"));
   w.u64(uint64(args.currentBlock, "currentBlock"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeNftSettleAuctionCall(args) {
   const w = new BincodeWriter();
@@ -4890,7 +4995,7 @@ function encodeNativeNftSettleAuctionCall(args) {
   w.enumVariant(6);
   w.rawBytes(bytes32FromHex(args.listingId, "listingId"));
   w.u64(uint64(args.currentBlock, "currentBlock"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeNftSweepExpiredListingsCall(args) {
   const listingIds = normalizeListingIds(args.listingIds, "listingIds");
@@ -4902,7 +5007,7 @@ function encodeNativeNftSweepExpiredListingsCall(args) {
     w.rawBytes(listingId);
   }
   w.u64(uint64(args.currentBlock, "currentBlock"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function buildNativeMarketModuleCallEnvelope(input, maxCycles) {
   return {
@@ -4925,16 +5030,16 @@ function encodeNativeMarketModuleForwarderInput(envelope) {
   if (envelope.call.valueLythoshi !== "0") {
     throw new MarketActionError("native market forwarder call valueLythoshi must be 0");
   }
-  const payload = hexToBytes3(normalizeHexBytes(envelope.call.input, "input"), "input");
+  const payload = hexToBytes2(normalizeHexBytes(envelope.call.input, "input"), "input");
   const maxCycles = uint64(envelope.call.maxCycles, "maxCycles");
   const w = new BincodeWriter();
   w.enumVariant(7);
   w.enumVariant(NATIVE_MARKET_ADDRESS_KIND_VARIANTS.systemModule);
-  w.rawBytes(hexToBytes3(NATIVE_MARKET_MODULE_ADDRESS_BYTES, "native market module address"));
+  w.rawBytes(hexToBytes2(NATIVE_MARKET_MODULE_ADDRESS_BYTES, "native market module address"));
   w.bytes(payload);
   w.u128(0n);
   w.u64(maxCycles);
-  const input = bytesToHex4(w.toBytes());
+  const input = bytesToHex2(w.toBytes());
   return { input, requestBytes: (input.length - 2) / 2 };
 }
 function buildNativeSpotLimitOrderForwarderInput(args, maxCycles) {
@@ -5088,7 +5193,7 @@ function normalizeBytes32Hex(value, name) {
 }
 function bytes32FromHex(value, name) {
   normalizeBytes32Hex(value, name);
-  return hexToBytes3(value, name);
+  return hexToBytes2(value, name);
 }
 function normalizeSide(side) {
   if (side === "buy") return 0;
@@ -5180,7 +5285,7 @@ function normalizeHexBytes(value, name) {
     throw new MarketActionError(`${name} must be 0x-prefixed hex bytes`);
   }
   try {
-    hexToBytes3(value, name);
+    hexToBytes2(value, name);
   } catch (error) {
     const detail = error instanceof Error ? `: ${error.message}` : "";
     throw new MarketActionError(`${name} must be 0x-prefixed hex bytes${detail}`);
@@ -5298,12 +5403,12 @@ function encodeNativeAgentRegisterIssuerCall(args) {
   monoAddressInto2(w, args.issuer, "issuer");
   w.u64(uint642(args.nonce, "nonce"));
   w.rawBytes(bytes32FromHex2(args.metadataHash, "metadataHash"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentIssuerGetCall(issuerId) {
   const w = agentCallWriter(0, 1);
   w.rawBytes(bytes32FromHex2(issuerId, "issuerId"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentIssueAttestationCall(args) {
   const w = agentCallWriter(1, 0);
@@ -5313,18 +5418,18 @@ function encodeNativeAgentIssueAttestationCall(args) {
   w.u64(uint642(args.nonce, "nonce"));
   w.rawBytes(bytes32FromHex2(args.schemaHash, "schemaHash"));
   w.rawBytes(bytes32FromHex2(args.payloadHash, "payloadHash"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentRevokeAttestationCall(args) {
   const w = agentCallWriter(1, 1);
   w.rawBytes(bytes32FromHex2(args.attestationId, "attestationId"));
   monoAddressInto2(w, args.issuer, "issuer");
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentAttestationGetCall(attestationId) {
   const w = agentCallWriter(1, 2);
   w.rawBytes(bytes32FromHex2(attestationId, "attestationId"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentGrantConsentCall(args) {
   const w = agentCallWriter(2, 0);
@@ -5333,18 +5438,18 @@ function encodeNativeAgentGrantConsentCall(args) {
   w.u64(uint642(args.nonce, "nonce"));
   w.rawBytes(bytes32FromHex2(args.scopeHash, "scopeHash"));
   w.u64(uint642(args.expiresAt, "expiresAt"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentRevokeConsentCall(args) {
   const w = agentCallWriter(2, 1);
   w.rawBytes(bytes32FromHex2(args.consentId, "consentId"));
   monoAddressInto2(w, args.subject, "subject");
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentConsentGetCall(consentId) {
   const w = agentCallWriter(2, 2);
   w.rawBytes(bytes32FromHex2(consentId, "consentId"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentListServiceCall(args) {
   const w = agentCallWriter(3, 0);
@@ -5352,42 +5457,42 @@ function encodeNativeAgentListServiceCall(args) {
   w.u64(uint642(args.nonce, "nonce"));
   w.rawBytes(bytes32FromHex2(args.categoryHash, "categoryHash"));
   w.rawBytes(bytes32FromHex2(args.metadataHash, "metadataHash"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentDeactivateServiceCall(args) {
   const w = agentCallWriter(3, 1);
   w.rawBytes(bytes32FromHex2(args.serviceId, "serviceId"));
   monoAddressInto2(w, args.provider, "provider");
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentServiceGetCall(serviceId) {
   const w = agentCallWriter(3, 2);
   w.rawBytes(bytes32FromHex2(serviceId, "serviceId"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentSetAvailabilityCall(args) {
   const w = agentCallWriter(4, 0);
   monoAddressInto2(w, args.provider, "provider");
   w.u32(uint32(args.maxConcurrent, "maxConcurrent"));
   w.u8(boolByte(args.paused, "paused"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentOpenAvailabilityCall(args) {
   const w = agentCallWriter(4, 1);
   monoAddressInto2(w, args.provider, "provider");
   monoAddressInto2(w, args.consumer, "consumer");
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentCloseAvailabilityCall(args) {
   const w = agentCallWriter(4, 2);
   monoAddressInto2(w, args.provider, "provider");
   monoAddressInto2(w, args.consumer, "consumer");
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentAvailabilityGetCall(provider) {
   const w = agentCallWriter(4, 3);
   monoAddressInto2(w, provider, "provider");
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentRegisterArbiterCall(args) {
   const w = agentCallWriter(5, 0);
@@ -5395,12 +5500,12 @@ function encodeNativeAgentRegisterArbiterCall(args) {
   w.u64(uint642(args.nonce, "nonce"));
   w.u16(uint16(args.tier, "tier"));
   w.rawBytes(bytes32FromHex2(args.metadataHash, "metadataHash"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentArbiterGetCall(arbiterId) {
   const w = agentCallWriter(5, 1);
   w.rawBytes(bytes32FromHex2(arbiterId, "arbiterId"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentSetSpendingPolicyCall(args) {
   const w = agentCallWriter(6, 0);
@@ -5411,7 +5516,7 @@ function encodeNativeAgentSetSpendingPolicyCall(args) {
   w.u128(positiveU128Decimal2(args.perActionLimit, "perActionLimit"));
   w.u128(positiveU128Decimal2(args.windowLimit, "windowLimit"));
   w.u64(uint642(args.windowSecs, "windowSecs"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentRecordPolicySpendCall(args) {
   const w = agentCallWriter(6, 1);
@@ -5419,12 +5524,12 @@ function encodeNativeAgentRecordPolicySpendCall(args) {
   monoAddressInto2(w, args.controller, "controller");
   w.u64(uint642(args.window, "window"));
   w.u128(positiveU128Decimal2(args.amount, "amount"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentSpendingPolicyGetCall(policyId) {
   const w = agentCallWriter(6, 2);
   w.rawBytes(bytes32FromHex2(policyId, "policyId"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentCreateEscrowCall(args) {
   const w = agentCallWriter(7, 0);
@@ -5435,59 +5540,59 @@ function encodeNativeAgentCreateEscrowCall(args) {
   w.rawBytes(bytes32FromHex2(args.assetId, "assetId"));
   w.u128(positiveU128Decimal2(args.amount, "amount"));
   w.rawBytes(bytes32FromHex2(args.termsHash, "termsHash"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentCounterEscrowCall(args) {
   const w = agentCallWriter(7, 1);
   w.rawBytes(bytes32FromHex2(args.escrowId, "escrowId"));
   monoAddressInto2(w, args.actor, "actor");
   w.rawBytes(bytes32FromHex2(args.termsHash, "termsHash"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentAcceptEscrowCall(args) {
   const w = agentCallWriter(7, 2);
   escrowActorInto(w, args);
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentStartEscrowCall(args) {
   const w = agentCallWriter(7, 3);
   w.rawBytes(bytes32FromHex2(args.escrowId, "escrowId"));
   monoAddressInto2(w, args.provider, "provider");
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentSubmitEscrowCall(args) {
   const w = agentCallWriter(7, 4);
   w.rawBytes(bytes32FromHex2(args.escrowId, "escrowId"));
   monoAddressInto2(w, args.provider, "provider");
   w.rawBytes(bytes32FromHex2(args.payloadHash, "payloadHash"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentApproveEscrowCall(args) {
   const w = agentCallWriter(7, 5);
   escrowActorInto(w, args);
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentDisputeEscrowCall(args) {
   const w = agentCallWriter(7, 6);
   escrowActorInto(w, args);
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentCancelEscrowCall(args) {
   const w = agentCallWriter(7, 7);
   escrowActorInto(w, args);
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentResolveEscrowCall(args) {
   const w = agentCallWriter(7, 8);
   w.rawBytes(bytes32FromHex2(args.escrowId, "escrowId"));
   monoAddressInto2(w, args.actor, "actor");
   w.enumVariant(normalizeEscrowResolution(args.resolution));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentEscrowGetCall(escrowId) {
   const w = agentCallWriter(7, 9);
   w.rawBytes(bytes32FromHex2(escrowId, "escrowId"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentRecordReputationCall(args) {
   const w = agentCallWriter(8, 0);
@@ -5496,13 +5601,13 @@ function encodeNativeAgentRecordReputationCall(args) {
   w.u32(uint32(args.categoryId, "categoryId"));
   reputationScoresInto(w, args.scores);
   w.rawBytes(bytes32FromHex2(args.payloadHash, "payloadHash"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function encodeNativeAgentReputationGetCall(subject, categoryId) {
   const w = agentCallWriter(8, 1);
   monoAddressInto2(w, subject, "subject");
   w.u32(uint32(categoryId, "categoryId"));
-  return bytesToHex4(w.toBytes());
+  return bytesToHex2(w.toBytes());
 }
 function buildNativeAgentModuleCallEnvelope(input, maxCycles) {
   return {
@@ -5525,16 +5630,16 @@ function encodeNativeAgentModuleForwarderInput(envelope) {
   if (envelope.call.valueLythoshi !== "0") {
     throw new AgentActionError("native agent forwarder call valueLythoshi must be 0");
   }
-  const payload = hexToBytes3(normalizeHexBytes2(envelope.call.input, "input"), "input");
+  const payload = hexToBytes2(normalizeHexBytes2(envelope.call.input, "input"), "input");
   const maxCycles = uint642(envelope.call.maxCycles, "maxCycles");
   const w = new BincodeWriter();
   w.enumVariant(7);
   w.enumVariant(NATIVE_AGENT_ADDRESS_KIND_VARIANTS.systemModule);
-  w.rawBytes(hexToBytes3(NATIVE_AGENT_MODULE_ADDRESS_BYTES, "native agent module address"));
+  w.rawBytes(hexToBytes2(NATIVE_AGENT_MODULE_ADDRESS_BYTES, "native agent module address"));
   w.bytes(payload);
   w.u128(0n);
   w.u64(maxCycles);
-  const input = bytesToHex4(w.toBytes());
+  const input = bytesToHex2(w.toBytes());
   return { input, requestBytes: (input.length - 2) / 2 };
 }
 function buildNativeAgentSetSpendingPolicyModuleCall(args, maxCycles) {
@@ -5592,7 +5697,7 @@ function normalizeBytes32Hex2(value, name) {
 }
 function bytes32FromHex2(value, name) {
   normalizeBytes32Hex2(value, name);
-  return hexToBytes3(value, name);
+  return hexToBytes2(value, name);
 }
 function positiveDecimal2(value, name) {
   if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) {
@@ -5661,7 +5766,7 @@ function normalizeHexBytes2(value, name) {
     throw new AgentActionError(`${name} must be 0x-prefixed hex bytes`);
   }
   try {
-    hexToBytes3(value, name);
+    hexToBytes2(value, name);
   } catch (error) {
     const detail = error instanceof Error ? `: ${error.message}` : "";
     throw new AgentActionError(`${name} must be 0x-prefixed hex bytes${detail}`);
@@ -5901,6 +6006,7 @@ var version = "0.1.0";
 
 exports.ADDRESS_HRP = ADDRESS_HRP;
 exports.ADDRESS_KIND_HRPS = ADDRESS_KIND_HRPS;
+exports.API_STREAM_TOPICS = API_STREAM_TOPICS;
 exports.AddressError = AddressError;
 exports.AgentActionError = AgentActionError;
 exports.ApiClient = ApiClient;
@@ -5948,6 +6054,7 @@ exports.NATIVE_LYTH_DECIMALS = NATIVE_LYTH_DECIMALS;
 exports.NATIVE_MARKET_EVENT_FAMILY = NATIVE_MARKET_EVENT_FAMILY;
 exports.NATIVE_MARKET_MODULE_ADDRESS = NATIVE_MARKET_MODULE_ADDRESS;
 exports.NATIVE_MARKET_MODULE_ADDRESS_BYTES = NATIVE_MARKET_MODULE_ADDRESS_BYTES;
+exports.NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC = NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC;
 exports.NODE_REGISTRY_CAPABILITIES = NODE_REGISTRY_CAPABILITIES;
 exports.NODE_REGISTRY_CAPABILITY_MASK = NODE_REGISTRY_CAPABILITY_MASK;
 exports.NODE_REGISTRY_PUBLIC_SERVICE_MASK = NODE_REGISTRY_PUBLIC_SERVICE_MASK;
@@ -5978,6 +6085,8 @@ exports.apiEndpointFromRpcEndpoint = apiEndpointFromRpcEndpoint;
 exports.assertMrvCallNativeSubmissionPlan = assertMrvCallNativeSubmissionPlan;
 exports.assertMrvDeployNativeSubmissionPlan = assertMrvDeployNativeSubmissionPlan;
 exports.assertMrvFeeDisplayConformance = assertMrvFeeDisplayConformance;
+exports.assertMrvStructuredFeeConformance = assertMrvStructuredFeeConformance;
+exports.assertNativeMarketOrderBookStreamPayload = assertNativeMarketOrderBookStreamPayload;
 exports.assessBridgeRoute = assessBridgeRoute;
 exports.bech32ToAddress = bech32ToAddress;
 exports.bech32ToAddressBytes = bech32ToAddressBytes;
@@ -6024,6 +6133,7 @@ exports.buildPlaceSpotLimitOrderPlan = buildPlaceSpotLimitOrderPlan;
 exports.buildPlaceSpotMarketOrderExPlan = buildPlaceSpotMarketOrderExPlan;
 exports.buildPlaceSpotMarketOrderPlan = buildPlaceSpotMarketOrderPlan;
 exports.checkMrvFeeDisplayConformance = checkMrvFeeDisplayConformance;
+exports.checkMrvStructuredFeeConformance = checkMrvStructuredFeeConformance;
 exports.clobAddressHex = clobAddressHex;
 exports.composeClaimBoundMessage = composeClaimBoundMessage;
 exports.computeNoEvmReceiptsRoot = computeNoEvmReceiptsRoot;
@@ -6032,7 +6142,9 @@ exports.consumeNativeEvents = consumeNativeEvents;
 exports.decodeHasPubkeyReturn = decodeHasPubkeyReturn;
 exports.decodeLookupPubkeyReturn = decodeLookupPubkeyReturn;
 exports.decodeNativeAgentStateResponse = decodeNativeAgentStateResponse;
+exports.decodeNativeReceiptResponse = decodeNativeReceiptResponse;
 exports.decodeNoEvmReceiptTranscript = decodeNoEvmReceiptTranscript;
+exports.decodeTxFeedResponse = decodeTxFeedResponse;
 exports.delegationAddressHex = delegationAddressHex;
 exports.deriveClobMarketId = deriveClobMarketId;
 exports.deriveMrvContractAddress = deriveMrvContractAddress;
@@ -6113,6 +6225,7 @@ exports.isBridgeFinalityZeroRevert = isBridgeFinalityZeroRevert;
 exports.isBridgeResumeCooldownActiveRevert = isBridgeResumeCooldownActiveRevert;
 exports.isConcreteServiceProbeStatus = isConcreteServiceProbeStatus;
 exports.isNativeDecodedEvent = isNativeDecodedEvent;
+exports.isNativeMarketOrderBookStreamPayload = isNativeMarketOrderBookStreamPayload;
 exports.isRedemptionPrincipalUnavailableRevert = isRedemptionPrincipalUnavailableRevert;
 exports.isSinglePublicServiceProbeMask = isSinglePublicServiceProbeMask;
 exports.isValidNodeRegistryCapabilities = isValidNodeRegistryCapabilities;

@@ -57,6 +57,19 @@ function bridgeRoute(routeId: string): BridgeRouteDisclosure {
   };
 }
 
+function nativeFee(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    total_lythoshi: "21000",
+    total_lyth: "0.00021",
+    cycles_used: 21_000,
+    base_price_per_cycle_lythoshi: "1",
+    state_io_units: 0,
+    state_io_price_per_unit_lythoshi: "0",
+    priority_tip_lythoshi: "0",
+    ...extra,
+  };
+}
+
 interface CapturedGet {
   url: string;
   method: string | undefined;
@@ -422,6 +435,39 @@ describe("ApiClient", () => {
     expect(calls[0]).toEqual({
       url: `https://rpc.example/api/v1/transactions/${txHash}/native-receipt`,
       method: "GET",
+    });
+  });
+
+  it("rejects legacy keys inside /api/v1 native receipt fee objects", async () => {
+    const txHash = `0x${"22".repeat(32)}`;
+    const { fetch } = mockGet(
+      apiEnvelope({
+        txHash,
+        blockHash: `0x${"33".repeat(32)}`,
+        blockHeight: 100,
+        txIndex: 0,
+        schema: "riscv.receipt.v1",
+        artifactHash: `0x${"aa".repeat(32)}`,
+        receiptCommitment: `0x${"bb".repeat(32)}`,
+        noEvmProof: null,
+        counters: { cycles: 44, syscallUnits: 3, stateIoUnits: 2 },
+        fee: nativeFee({ gas: "21000" }),
+        reverted: false,
+        nativeDeltaCount: 0,
+        eventCount: 0,
+        events: [],
+        source: {
+          chainProvider: "mock_chain",
+          indexerProvider: "native_events",
+          metadataLogIndex: 0xffff_ffff,
+        },
+      }),
+    );
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    await expect(client.transactionNativeReceipt(txHash)).rejects.toMatchObject({
+      kind: "malformed",
+      message: expect.stringContaining("gas"),
     });
   });
 
@@ -1070,7 +1116,15 @@ describe("ApiClient", () => {
   });
 
   it("wraps search, transaction-feed, address aggregate, stats, and market routes", async () => {
-    const { fetch, calls } = mockGet(apiEnvelope({ schemaVersion: 1 }));
+    const { fetch, calls } = mockGet(
+      apiEnvelope({
+        schemaVersion: 1,
+        latestHeight: 0,
+        limit: 25,
+        nextCursor: null,
+        transactions: [],
+      }),
+    );
     const client = new ApiClient("https://rpc.example", { fetch });
     const marketId = `0x${"55".repeat(32)}`;
     const assetId = `0x${"bb".repeat(32)}`;
@@ -1114,6 +1168,44 @@ describe("ApiClient", () => {
       `https://rpc.example/api/v1/service-probes/0x${"12".repeat(32)}/0x100`,
     ]);
     expect(calls.every((c) => c.method === "GET")).toBe(true);
+  });
+
+  it("rejects legacy keys inside /api/v1 transaction-feed fee objects", async () => {
+    const txHash = `0x${"22".repeat(32)}`;
+    const address = "0x1111111111111111111111111111111111111111";
+    const { fetch } = mockGet(
+      apiEnvelope({
+        schemaVersion: 1,
+        latestHeight: 12,
+        limit: 5,
+        nextCursor: null,
+        transactions: [
+          {
+            txHash,
+            blockHash: `0x${"33".repeat(32)}`,
+            blockNumber: 12,
+            blockTimestamp: 1700000000,
+            txIndex: 0,
+            from: address,
+            to: null,
+            nonce: 1,
+            value: "0",
+            executionUnitLimit: 21000,
+            maxExecutionFeeLythoshi: "1",
+            priorityTipLythoshi: "1",
+            fee: nativeFee({ wei: "21000" }),
+            input: "0x",
+            receipt: null,
+          },
+        ],
+      }),
+    );
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    await expect(client.transactions(5)).rejects.toMatchObject({
+      kind: "malformed",
+      message: expect.stringContaining("wei"),
+    });
   });
 
   it("wraps REST MRC account route and decodes policy spend rows", async () => {
@@ -1333,6 +1425,44 @@ describe("ApiClient", () => {
       "available",
     );
     expect(caps.accessPolicy.paidServiceEligibility.selfDeclaration).toBe(false);
+  });
+
+  it("reads the stream catalogue including nativeMarketOrderBook", async () => {
+    const { fetch, calls } = mockGet({
+      schemaVersion: 1,
+      chainId: 69420,
+      transport: "sse",
+      keepAliveSeconds: 15,
+      perConnectionMailbox: 1024,
+      topics: [
+        {
+          topic: "nativeMarketOrderBook",
+          endpoint: "/api/v1/streams/nativeMarketOrderBook",
+          description: "Native spot-market orderbook deltas from typed native market events.",
+          shape:
+            "object{marketId,orderId,relatedOrderId?,eventName,action,side?,price?,quantity?,remaining?,status?,blockHeight,txIndex,logIndex}",
+          source: "canonical_riscv_receipts",
+          queryFilters: [],
+          retention: {
+            kind: "live_broadcast",
+            replay: false,
+            historyApis: ["lyth_clobOrderBook", "lyth_nativeMarketState"],
+          },
+        },
+      ],
+    });
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    const streams = await client.streams();
+
+    expect(streams.transport).toBe("sse");
+    expect(streams.topics[0].topic).toBe("nativeMarketOrderBook");
+    expect(streams.topics[0].endpoint).toBe("/api/v1/streams/nativeMarketOrderBook");
+    expect(streams.topics[0].retention?.historyApis).toContain("lyth_clobOrderBook");
+    expect(calls[0]).toEqual({
+      url: "https://rpc.example/api/v1/streams",
+      method: "GET",
+    });
   });
 
   it("wraps address redemption queue API query params", async () => {

@@ -248,6 +248,16 @@ export interface MrvFeeDisplayConformanceReport {
   expectedDefaultFeeText: string;
 }
 
+export interface MrvStructuredFeeConformanceOptions {
+  expectedTotalLythoshi?: MrvDecimalLike;
+  label?: string;
+}
+
+export interface MrvStructuredFeeConformanceReport {
+  passed: boolean;
+  failures: string[];
+}
+
 export interface NativeReceiptFeeDisplay {
   defaultFeeText: string;
   detailTexts: string[];
@@ -347,6 +357,37 @@ export function checkMrvFeeDisplayConformance(
     failures,
     expectedDefaultFeeText,
   };
+}
+
+export function checkMrvStructuredFeeConformance(
+  value: unknown,
+  options: MrvStructuredFeeConformanceOptions = {},
+): MrvStructuredFeeConformanceReport {
+  const failures: string[] = [];
+  const expectedTotalLythoshi =
+    options.expectedTotalLythoshi === undefined
+      ? undefined
+      : normalizeDecimalLike("expectedTotalLythoshi", options.expectedTotalLythoshi);
+  checkStructuredFeeObject(
+    value,
+    expectedTotalLythoshi,
+    failures,
+    options.label ?? "structuredFee",
+  );
+  return {
+    passed: failures.length === 0,
+    failures,
+  };
+}
+
+export function assertMrvStructuredFeeConformance(
+  value: unknown,
+  options: MrvStructuredFeeConformanceOptions = {},
+): asserts value is NativeReceiptFee {
+  const report = checkMrvStructuredFeeConformance(value, options);
+  if (!report.passed) {
+    throw new MrvValidationError(`structured fee conformance failed: ${report.failures.join("; ")}`);
+  }
 }
 
 export function assertMrvFeeDisplayConformance(input: MrvFeeDisplayConformanceInput): void {
@@ -1051,40 +1092,48 @@ function hasStateIOTerms(tokens: readonly string[]): boolean {
 
 function checkStructuredFeeObject(
   value: unknown,
-  expectedTotalLythoshi: string,
+  expectedTotalLythoshi: string | undefined,
   failures: string[],
+  label = "structuredFee",
 ): void {
   if (!isRecord(value)) {
-    failures.push("structuredFee must be an object");
+    failures.push(`${label} must be an object`);
     return;
   }
   const expectedFields = new Set<string>(MRV_STRUCTURED_FEE_FIELDS);
   const actualFields = Object.keys(value);
   for (const field of MRV_STRUCTURED_FEE_FIELDS) {
-    if (!(field in value)) failures.push(`structuredFee is missing '${field}'`);
+    if (!(field in value)) failures.push(`${label} is missing '${field}'`);
   }
   for (const field of actualFields) {
-    if (!expectedFields.has(field)) failures.push(`structuredFee has unexpected field '${field}'`);
+    if (!expectedFields.has(field)) failures.push(`${label} has unexpected field '${field}'`);
   }
 
-  const totalLythoshi = stringField(value, "total_lythoshi", failures);
-  if (totalLythoshi !== undefined && totalLythoshi !== expectedTotalLythoshi) {
-    failures.push(`structuredFee.total_lythoshi must be ${expectedTotalLythoshi}`);
+  const totalLythoshi = stringField(value, "total_lythoshi", failures, label);
+  const expectedTotal = expectedTotalLythoshi ?? totalLythoshi;
+  if (
+    totalLythoshi !== undefined &&
+    expectedTotalLythoshi !== undefined &&
+    totalLythoshi !== expectedTotalLythoshi
+  ) {
+    failures.push(`${label}.total_lythoshi must be ${expectedTotalLythoshi}`);
   }
-  const totalLyth = lythDecimalField(value, "total_lyth", failures);
-  const expectedTotalLyth = formatLyth(expectedTotalLythoshi, { includeUnit: false });
-  if (totalLyth !== undefined && totalLyth !== expectedTotalLyth) {
-    failures.push(`structuredFee.total_lyth must be ${expectedTotalLyth}`);
+  const totalLyth = lythDecimalField(value, "total_lyth", failures, label);
+  if (totalLyth !== undefined && expectedTotal !== undefined) {
+    const expectedTotalLyth = formatLyth(expectedTotal, { includeUnit: false });
+    if (totalLyth !== expectedTotalLyth) {
+      failures.push(`${label}.total_lyth must be ${expectedTotalLyth}`);
+    }
   }
   for (const field of [
     "base_price_per_cycle_lythoshi",
     "state_io_price_per_unit_lythoshi",
     "priority_tip_lythoshi",
   ]) {
-    stringField(value, field, failures);
+    stringField(value, field, failures, label);
   }
   for (const field of ["cycles_used", "state_io_units"]) {
-    integerField(value, field, failures);
+    integerField(value, field, failures, label);
   }
 }
 
@@ -1096,10 +1145,11 @@ function stringField(
   value: Record<string, unknown>,
   field: string,
   failures: string[],
+  label: string,
 ): string | undefined {
   const fieldValue = value[field];
   if (typeof fieldValue !== "string" || !isCanonicalUnsignedDecimalString(fieldValue)) {
-    failures.push(`structuredFee.${field} must be a canonical unsigned decimal string`);
+    failures.push(`${label}.${field} must be a canonical unsigned decimal string`);
     return undefined;
   }
   return fieldValue;
@@ -1109,29 +1159,35 @@ function lythDecimalField(
   value: Record<string, unknown>,
   field: string,
   failures: string[],
+  label: string,
 ): string | undefined {
   const fieldValue = value[field];
   if (typeof fieldValue !== "string") {
-    failures.push(`structuredFee.${field} must be a canonical LYTH decimal string`);
+    failures.push(`${label}.${field} must be a canonical LYTH decimal string`);
     return undefined;
   }
   try {
     parseLythToLythoshi(`${fieldValue} LYTH`);
   } catch {
-    failures.push(`structuredFee.${field} must be a canonical LYTH decimal string`);
+    failures.push(`${label}.${field} must be a canonical LYTH decimal string`);
     return undefined;
   }
   return fieldValue;
 }
 
-function integerField(value: Record<string, unknown>, field: string, failures: string[]): void {
+function integerField(
+  value: Record<string, unknown>,
+  field: string,
+  failures: string[],
+  label: string,
+): void {
   const fieldValue = value[field];
   if (
     typeof fieldValue !== "number" ||
     !Number.isSafeInteger(fieldValue) ||
     fieldValue < 0
   ) {
-    failures.push(`structuredFee.${field} must be a non-negative safe integer`);
+    failures.push(`${label}.${field} must be a non-negative safe integer`);
   }
 }
 
