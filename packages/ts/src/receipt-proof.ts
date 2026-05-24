@@ -1,5 +1,12 @@
 import { keccak_256 } from "@noble/hashes/sha3.js";
+import { ml_dsa65 } from "@noble/post-quantum/ml-dsa.js";
+import {
+  ML_DSA_65_PUBLIC_KEY_LEN,
+  ML_DSA_65_SIGNATURE_LEN,
+  mlDsa65AddressFromPublicKey,
+} from "./crypto/ml-dsa.js";
 import type {
+  NoEvmArchiveProof,
   NoEvmBoundedReceiptProof,
   NoEvmCompactReceiptProof,
   NoEvmReceiptProof,
@@ -78,6 +85,34 @@ export interface NoEvmReceiptProofVerification {
   proofKind: "boundedCacheTranscript" | "compactInclusion";
 }
 
+export interface NoEvmArchiveTrustedSigner {
+  publicKey: Uint8Array | readonly number[];
+  signerId?: string;
+}
+
+export type NoEvmArchiveSignatureVerificationIssueCode =
+  | "missing_signature_digest"
+  | "threshold_not_met"
+  | "duplicate_signer"
+  | "untrusted_signer"
+  | "invalid_signature"
+  | "invalid_trusted_public_key";
+
+export interface NoEvmArchiveSignatureVerificationIssue {
+  code: NoEvmArchiveSignatureVerificationIssueCode;
+  message: string;
+  signatureIndex?: number;
+  signerId?: string;
+}
+
+export interface NoEvmArchiveSignatureVerification {
+  verified: boolean;
+  threshold: number;
+  validSigners: string[];
+  checkedSignatures: number;
+  issues: NoEvmArchiveSignatureVerificationIssue[];
+}
+
 export function decodeNoEvmReceiptTranscript(proof: NoEvmReceiptProof): Uint8Array[] {
   if (!Array.isArray(proof.receiptTranscript)) {
     throw new NoEvmReceiptProofError(
@@ -116,6 +151,126 @@ export function verifyNoEvmReceiptProof(
         `unsupported no-EVM receipt proofKind: ${proofKind}`,
       );
   }
+}
+
+export function verifyNoEvmArchiveProofSignatures(
+  archiveProof: NoEvmArchiveProof,
+  trustedSigners: readonly NoEvmArchiveTrustedSigner[],
+  threshold: number,
+): NoEvmArchiveSignatureVerification {
+  if (!Number.isSafeInteger(threshold) || threshold < 1) {
+    throw new NoEvmReceiptProofError("invalid_proof_shape", "threshold must be at least 1");
+  }
+  validateArchiveProofObject(archiveProof);
+
+  const roster = new Map<string, Uint8Array>();
+  trustedSigners.forEach((signer, index) => {
+    const publicKey = expectArchivePublicKey(signer.publicKey, `trustedSigners[${index}].publicKey`);
+    const signerId = mlDsa65AddressFromPublicKey(publicKey);
+    if (signer.signerId !== undefined && normalizeSignerId(signer.signerId) !== signerId) {
+      throw new NoEvmReceiptProofError(
+        "invalid_proof_shape",
+        `trustedSigners[${index}].signerId does not match public key signer id ${signerId}`,
+      );
+    }
+    if (roster.has(signerId)) {
+      throw new NoEvmReceiptProofError(
+        "invalid_proof_shape",
+        `trustedSigners contains duplicate signer id ${signerId}`,
+      );
+    }
+    roster.set(signerId, publicKey);
+  });
+
+  const issues: NoEvmArchiveSignatureVerificationIssue[] = [];
+  const digestValue = archiveProof.signatureDigest;
+  if (digestValue === undefined) {
+    issues.push({
+      code: "missing_signature_digest",
+      message: "archiveProof.signatureDigest is required for signature verification",
+    });
+    return {
+      verified: false,
+      threshold,
+      validSigners: [],
+      checkedSignatures: archiveProof.signatures.length,
+      issues,
+    };
+  }
+  const signatureDigest = decodeHash(digestValue, "archiveProof.signatureDigest");
+  const seen = new Set<string>();
+  const validSigners: string[] = [];
+
+  archiveProof.signatures.forEach((signature, signatureIndex) => {
+    const parsed = parseArchiveProofSignature(signature, signatureIndex);
+    if (seen.has(parsed.signerId)) {
+      issues.push({
+        code: "duplicate_signer",
+        message: `duplicate archive proof signer ${parsed.signerId}`,
+        signatureIndex,
+        signerId: parsed.signerId,
+      });
+      return;
+    }
+    seen.add(parsed.signerId);
+
+    const publicKey = roster.get(parsed.signerId);
+    if (publicKey === undefined) {
+      issues.push({
+        code: "untrusted_signer",
+        message: `archive proof signer ${parsed.signerId} is not trusted`,
+        signatureIndex,
+        signerId: parsed.signerId,
+      });
+      return;
+    }
+    if (parsed.payload.length !== ML_DSA_65_SIGNATURE_LEN) {
+      issues.push({
+        code: "invalid_signature",
+        message: `archive proof signature payload must be ${ML_DSA_65_SIGNATURE_LEN} bytes`,
+        signatureIndex,
+        signerId: parsed.signerId,
+      });
+      return;
+    }
+    let ok = false;
+    try {
+      ok = ml_dsa65.verify(parsed.payload, signatureDigest, publicKey);
+    } catch {
+      issues.push({
+        code: "invalid_trusted_public_key",
+        message: `trusted public key for ${parsed.signerId} is malformed`,
+        signatureIndex,
+        signerId: parsed.signerId,
+      });
+      return;
+    }
+    if (ok) {
+      validSigners.push(parsed.signerId);
+    } else {
+      issues.push({
+        code: "invalid_signature",
+        message: `archive proof signature from ${parsed.signerId} is invalid`,
+        signatureIndex,
+        signerId: parsed.signerId,
+      });
+    }
+  });
+
+  if (validSigners.length < threshold) {
+    issues.push({
+      code: "threshold_not_met",
+      message: `archive proof has ${validSigners.length} valid trusted signatures, below threshold ${threshold}`,
+    });
+  }
+
+  return {
+    verified: issues.length === 0,
+    threshold,
+    validSigners,
+    checkedSignatures: archiveProof.signatures.length,
+    issues,
+  };
 }
 
 function verifyBoundedReceiptProof(proof: NoEvmReceiptProof): NoEvmReceiptProofVerification {
@@ -350,6 +505,10 @@ function validateNoCompactOrArchiveMaterial(proof: NoEvmReceiptProof): void {
 function validateOptionalArchiveProof(proof: NoEvmReceiptProof): void {
   const archiveProof = (proof as NoEvmCompactReceiptProof).archiveProof;
   if (archiveProof == null) return;
+  validateArchiveProofObject(archiveProof);
+}
+
+function validateArchiveProofObject(archiveProof: NoEvmArchiveProof | unknown): void {
   if (!isRecord(archiveProof)) {
     throw new NoEvmReceiptProofError(
       "invalid_proof_shape",
@@ -370,6 +529,9 @@ function validateOptionalArchiveProof(proof: NoEvmReceiptProof): void {
   }
   decodeHash(archiveProof.manifestHash, "archiveProof.manifestHash");
   decodeHash(archiveProof.contentHash, "archiveProof.contentHash");
+  if (archiveProof.signatureDigest !== undefined) {
+    decodeHash(archiveProof.signatureDigest, "archiveProof.signatureDigest");
+  }
   if (
     !Array.isArray(archiveProof.signatures) ||
     archiveProof.signatures.some((signature) => typeof signature !== "string")
@@ -385,6 +547,13 @@ function validateOptionalArchiveProof(proof: NoEvmReceiptProof): void {
 }
 
 function validateArchiveProofSignature(signature: string, index: number): void {
+  parseArchiveProofSignature(signature, index);
+}
+
+function parseArchiveProofSignature(
+  signature: string,
+  index: number,
+): { signerId: string; payload: Uint8Array } {
   const field = `archiveProof.signatures[${index}]`;
   const parts = signature.split(":");
   if (parts.length !== 3 || parts[0] !== NO_EVM_ARCHIVE_SIGNATURE_SCHEME) {
@@ -424,6 +593,28 @@ function validateArchiveProofSignature(signature: string, index: number): void {
       `${field}.payload must be non-empty`,
     );
   }
+  return { signerId: bytesToHex(signerId), payload };
+}
+
+function normalizeSignerId(value: string): string {
+  const bytes = decodeHexBytes(value, "signerId");
+  if (bytes.length !== ARCHIVE_SIGNATURE_SIGNER_ID_BYTE_LENGTH) {
+    throw new NoEvmReceiptProofError(
+      "invalid_archive_signature",
+      `signerId must be ${ARCHIVE_SIGNATURE_SIGNER_ID_BYTE_LENGTH} bytes, got ${bytes.length}`,
+    );
+  }
+  return bytesToHex(bytes);
+}
+
+function expectArchivePublicKey(value: Uint8Array | readonly number[], field: string): Uint8Array {
+  if (value.length !== ML_DSA_65_PUBLIC_KEY_LEN) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      `${field} must be ${ML_DSA_65_PUBLIC_KEY_LEN} bytes, got ${value.length}`,
+    );
+  }
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
 
 function validateOptionalFinalityEvidence(proof: NoEvmReceiptProof): void {

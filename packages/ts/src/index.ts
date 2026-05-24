@@ -246,9 +246,14 @@ export {
   computeNoEvmReceiptsRoot,
   computeNoEvmTargetReceiptHash,
   decodeNoEvmReceiptTranscript,
+  verifyNoEvmArchiveProofSignatures,
   verifyNoEvmReceiptProof,
 } from "./receipt-proof.js";
 export type {
+  NoEvmArchiveSignatureVerification,
+  NoEvmArchiveSignatureVerificationIssue,
+  NoEvmArchiveSignatureVerificationIssueCode,
+  NoEvmArchiveTrustedSigner,
   NoEvmReceiptProofErrorCode,
   NoEvmReceiptProofVerification,
 } from "./receipt-proof.js";

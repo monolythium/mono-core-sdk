@@ -184,6 +184,7 @@ export interface NoEvmArchiveProof {
   source: "indexerReceiptArchiveContentDigest" | string;
   manifestHash: string;
   contentHash: string;
+  signatureDigest?: string;
   signatures: string[];
 }
 

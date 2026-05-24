@@ -96,7 +96,8 @@ pub use types::{
     compute_no_evm_receipts_root, compute_no_evm_target_receipt_hash,
     decode_no_evm_receipt_transcript, native_market_events_filter,
     native_market_events_from_receipt, native_market_receipt_event_filter,
-    verify_no_evm_receipt_proof, NativeAgentArbiterStateRecord, NativeAgentAttestationStateRecord,
+    verify_no_evm_archive_proof_signatures, verify_no_evm_receipt_proof,
+    NativeAgentArbiterStateRecord, NativeAgentAttestationStateRecord,
     NativeAgentAvailabilityStateRecord, NativeAgentConsentStateRecord,
     NativeAgentEscrowStateRecord, NativeAgentIssuerStateRecord, NativeAgentPolicySpendStateRecord,
     NativeAgentPolicyStateRecord, NativeAgentReputationReviewStateRecord,
@@ -105,11 +106,13 @@ pub use types::{
     NativeDecodedEvent, NativeEventProjection, NativeMarketStateFilter, NativeMarketStateResponse,
     NativeMarketStateResponseFilters, NativeMarketStateSource, NativeNftListingStateRecord,
     NativeSpotMarketStateRecord, NativeSpotOrderStateRecord, NoEvmArchiveProof,
-    NoEvmReceiptFinalityCertificate, NoEvmReceiptFinalityEvidence, NoEvmReceiptProof,
-    NoEvmReceiptProofError, NoEvmReceiptProofVerification, NATIVE_MARKET_EVENT_FAMILY,
-    NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_RECEIPT_CODEC,
-    NO_EVM_RECEIPT_FINALITY_EVIDENCE_SCHEMA, NO_EVM_RECEIPT_FINALITY_EVIDENCE_SOURCE,
-    NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM,
+    NoEvmArchiveSignatureVerification, NoEvmArchiveSignatureVerificationIssue,
+    NoEvmArchiveTrustedSigner, NoEvmReceiptFinalityCertificate, NoEvmReceiptFinalityEvidence,
+    NoEvmReceiptProof, NoEvmReceiptProofError, NoEvmReceiptProofVerification,
+    NATIVE_MARKET_EVENT_FAMILY, NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME,
+    NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_FINALITY_EVIDENCE_SCHEMA,
+    NO_EVM_RECEIPT_FINALITY_EVIDENCE_SOURCE, NO_EVM_RECEIPT_PROOF_SCHEMA,
+    NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM,
 };
 
 /// Crate version, sourced from `Cargo.toml`.

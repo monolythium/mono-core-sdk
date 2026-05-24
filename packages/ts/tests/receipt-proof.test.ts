@@ -11,7 +11,9 @@ import {
   computeNoEvmTargetReceiptHash,
   decodeNoEvmReceiptTranscript,
   verifyNoEvmReceiptProof,
+  verifyNoEvmArchiveProofSignatures,
 } from "../src/index.js";
+import { MlDsa65Backend, mlDsa65AddressFromPublicKey } from "../src/crypto/index.js";
 import type { NoEvmReceiptProof } from "../src/index.js";
 import type { NoEvmCompactReceiptProof } from "../src/client.js";
 
@@ -91,6 +93,7 @@ function compactNoEvmArchiveProof(signatures: string[] = []): NoEvmCompactReceip
       source: "indexerReceiptArchiveContentDigest",
       manifestHash: `0x${"53".repeat(32)}`,
       contentHash: `0x${"54".repeat(32)}`,
+      signatureDigest: `0x${"66".repeat(32)}`,
       signatures,
     },
     missingProofMaterial: [
@@ -196,6 +199,83 @@ describe("no-EVM receipt proof helpers", () => {
 
     expect(verified?.proofKind).toBe("compactInclusion");
     expect(proof.archiveProof?.signatures).toEqual([VALID_ARCHIVE_SIGNATURE]);
+  });
+
+  it("verifies archive proof signatures against trusted ML-DSA signers", () => {
+    const signer = MlDsa65Backend.fromSeed(new Uint8Array(32).fill(7));
+    const signatureDigest = `0x${"66".repeat(32)}`;
+    const signature = `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:${signer.getAddress()}:0x${bytesToHexRaw(
+      signer.sign(hexToBytes(signatureDigest)),
+    )}`;
+    const proof = compactNoEvmArchiveProof([signature]);
+    proof.archiveProof!.signatureDigest = signatureDigest;
+
+    const result = verifyNoEvmArchiveProofSignatures(
+      proof.archiveProof!,
+      [{ publicKey: signer.publicKey(), signerId: signer.getAddress() }],
+      1,
+    );
+
+    expect(result).toEqual({
+      verified: true,
+      threshold: 1,
+      validSigners: [signer.getAddress()],
+      checkedSignatures: 1,
+      issues: [],
+    });
+  });
+
+  it("rejects archive signature verification without signatureDigest", () => {
+    const signer = MlDsa65Backend.fromSeed(new Uint8Array(32).fill(8));
+    const proof = compactNoEvmArchiveProof([]);
+    delete proof.archiveProof!.signatureDigest;
+
+    const result = verifyNoEvmArchiveProofSignatures(
+      proof.archiveProof!,
+      [{ publicKey: signer.publicKey() }],
+      1,
+    );
+
+    expect(result.verified).toBe(false);
+    expect(result.issues.map((issue) => issue.code)).toContain("missing_signature_digest");
+  });
+
+  it("rejects untrusted, invalid, and duplicate archive signature signers", () => {
+    const signer = MlDsa65Backend.fromSeed(new Uint8Array(32).fill(9));
+    const untrusted = MlDsa65Backend.fromSeed(new Uint8Array(32).fill(10));
+    const signatureDigest = `0x${"66".repeat(32)}`;
+    const trustedSignature = `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:${signer.getAddress()}:0x${bytesToHexRaw(
+      signer.sign(hexToBytes(signatureDigest)),
+    )}`;
+    const wrongDigestSignature = `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:${signer.getAddress()}:0x${bytesToHexRaw(
+      signer.sign(hexToBytes(`0x${"67".repeat(32)}`)),
+    )}`;
+    const untrustedSignature = `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:${untrusted.getAddress()}:0x${bytesToHexRaw(
+      untrusted.sign(hexToBytes(signatureDigest)),
+    )}`;
+
+    expect(
+      verifyNoEvmArchiveProofSignatures(
+        compactNoEvmArchiveProof([untrustedSignature]).archiveProof!,
+        [{ publicKey: signer.publicKey() }],
+        1,
+      ).issues.map((issue) => issue.code),
+    ).toContain("untrusted_signer");
+    expect(
+      verifyNoEvmArchiveProofSignatures(
+        compactNoEvmArchiveProof([wrongDigestSignature]).archiveProof!,
+        [{ publicKey: signer.publicKey() }],
+        1,
+      ).issues.map((issue) => issue.code),
+    ).toContain("invalid_signature");
+    expect(
+      verifyNoEvmArchiveProofSignatures(
+        compactNoEvmArchiveProof([trustedSignature, trustedSignature]).archiveProof!,
+        [{ publicKey: signer.publicKey() }],
+        1,
+      ).issues.map((issue) => issue.code),
+    ).toContain("duplicate_signer");
+    expect(mlDsa65AddressFromPublicKey(signer.publicKey())).toBe(signer.getAddress());
   });
 
   it("rejects malformed compact archive proof signatures", () => {
@@ -420,6 +500,19 @@ function bytesToHex(bytes: Uint8Array): string {
   let out = "0x";
   for (let index = 0; index < bytes.length; index++) {
     out += bytes[index]!.toString(16).padStart(2, "0");
+  }
+  return out;
+}
+
+function bytesToHexRaw(bytes: Uint8Array): string {
+  return bytesToHex(bytes).slice(2);
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  const body = hex.slice(2);
+  const out = new Uint8Array(body.length / 2);
+  for (let index = 0; index < out.length; index++) {
+    out[index] = Number.parseInt(body.slice(index * 2, index * 2 + 2), 16);
   }
   return out;
 }
