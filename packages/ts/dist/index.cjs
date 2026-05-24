@@ -5,7 +5,7 @@ var mlKem_js = require('@noble/post-quantum/ml-kem.js');
 var chacha_js = require('@noble/ciphers/chacha.js');
 var sha3_js = require('@noble/hashes/sha3.js');
 var utils_js = require('@noble/hashes/utils.js');
-require('@noble/post-quantum/ml-dsa.js');
+var mlDsa_js = require('@noble/post-quantum/ml-dsa.js');
 var ethers = require('ethers');
 
 // src/error.ts
@@ -601,6 +601,9 @@ var ML_DSA_65_PUBLIC_KEY_LEN = 1952;
 var ML_DSA_65_SIGNATURE_LEN = 3309;
 var STANDARD_ALGO_NUMBER_ML_DSA_65 = 1001;
 var ENUM_VARIANT_INDEX_ML_DSA_65 = 5;
+function mlDsa65AddressFromPublicKey(publicKey) {
+  return bytesToHex2(sha3_js.keccak_256(expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key")).slice(12));
+}
 
 // src/crypto/envelope.ts
 var DKG_AEAD_DOMAIN_TAG = new TextEncoder().encode("protocore/v2/mempool/dkg-mlkem768/1");
@@ -4389,6 +4392,115 @@ function verifyNoEvmReceiptProof(proof) {
       );
   }
 }
+function verifyNoEvmArchiveProofSignatures(archiveProof, trustedSigners, threshold) {
+  if (!Number.isSafeInteger(threshold) || threshold < 1) {
+    throw new NoEvmReceiptProofError("invalid_proof_shape", "threshold must be at least 1");
+  }
+  validateArchiveProofObject(archiveProof);
+  const roster = /* @__PURE__ */ new Map();
+  trustedSigners.forEach((signer, index) => {
+    const publicKey = expectArchivePublicKey(signer.publicKey, `trustedSigners[${index}].publicKey`);
+    const signerId = mlDsa65AddressFromPublicKey(publicKey);
+    if (signer.signerId !== void 0 && normalizeSignerId(signer.signerId) !== signerId) {
+      throw new NoEvmReceiptProofError(
+        "invalid_proof_shape",
+        `trustedSigners[${index}].signerId does not match public key signer id ${signerId}`
+      );
+    }
+    if (roster.has(signerId)) {
+      throw new NoEvmReceiptProofError(
+        "invalid_proof_shape",
+        `trustedSigners contains duplicate signer id ${signerId}`
+      );
+    }
+    roster.set(signerId, publicKey);
+  });
+  const issues = [];
+  const digestValue = archiveProof.signatureDigest;
+  if (digestValue === void 0) {
+    issues.push({
+      code: "missing_signature_digest",
+      message: "archiveProof.signatureDigest is required for signature verification"
+    });
+    return {
+      verified: false,
+      threshold,
+      validSigners: [],
+      checkedSignatures: archiveProof.signatures.length,
+      issues
+    };
+  }
+  const signatureDigest = decodeHash(digestValue, "archiveProof.signatureDigest");
+  const seen = /* @__PURE__ */ new Set();
+  const validSigners = [];
+  archiveProof.signatures.forEach((signature, signatureIndex) => {
+    const parsed = parseArchiveProofSignature(signature, signatureIndex);
+    if (seen.has(parsed.signerId)) {
+      issues.push({
+        code: "duplicate_signer",
+        message: `duplicate archive proof signer ${parsed.signerId}`,
+        signatureIndex,
+        signerId: parsed.signerId
+      });
+      return;
+    }
+    seen.add(parsed.signerId);
+    const publicKey = roster.get(parsed.signerId);
+    if (publicKey === void 0) {
+      issues.push({
+        code: "untrusted_signer",
+        message: `archive proof signer ${parsed.signerId} is not trusted`,
+        signatureIndex,
+        signerId: parsed.signerId
+      });
+      return;
+    }
+    if (parsed.payload.length !== ML_DSA_65_SIGNATURE_LEN) {
+      issues.push({
+        code: "invalid_signature",
+        message: `archive proof signature payload must be ${ML_DSA_65_SIGNATURE_LEN} bytes`,
+        signatureIndex,
+        signerId: parsed.signerId
+      });
+      return;
+    }
+    let ok = false;
+    try {
+      ok = mlDsa_js.ml_dsa65.verify(parsed.payload, signatureDigest, publicKey);
+    } catch {
+      issues.push({
+        code: "invalid_trusted_public_key",
+        message: `trusted public key for ${parsed.signerId} is malformed`,
+        signatureIndex,
+        signerId: parsed.signerId
+      });
+      return;
+    }
+    if (ok) {
+      validSigners.push(parsed.signerId);
+    } else {
+      issues.push({
+        code: "invalid_signature",
+        message: `archive proof signature from ${parsed.signerId} is invalid`,
+        signatureIndex,
+        signerId: parsed.signerId
+      });
+    }
+  });
+  if (validSigners.length < threshold) {
+    issues.push({
+      code: "threshold_not_met",
+      message: `archive proof has ${validSigners.length} valid trusted signatures, below threshold ${threshold}`
+    });
+  }
+  return {
+    verified: issues.length === 0,
+    threshold,
+    validSigners,
+    checkedSignatures: archiveProof.signatures.length,
+    issues
+  };
+}
 function verifyBoundedReceiptProof(proof) {
   validateCommonProofMetadata(proof);
   assertSupported(
@@ -4596,6 +4708,9 @@ function validateNoCompactOrArchiveMaterial(proof) {
 function validateOptionalArchiveProof(proof) {
   const archiveProof = proof.archiveProof;
   if (archiveProof == null) return;
+  validateArchiveProofObject(archiveProof);
+}
+function validateArchiveProofObject(archiveProof) {
   if (!isRecord3(archiveProof)) {
     throw new NoEvmReceiptProofError(
       "invalid_proof_shape",
@@ -4616,6 +4731,9 @@ function validateOptionalArchiveProof(proof) {
   }
   decodeHash(archiveProof.manifestHash, "archiveProof.manifestHash");
   decodeHash(archiveProof.contentHash, "archiveProof.contentHash");
+  if (archiveProof.signatureDigest !== void 0) {
+    decodeHash(archiveProof.signatureDigest, "archiveProof.signatureDigest");
+  }
   if (!Array.isArray(archiveProof.signatures) || archiveProof.signatures.some((signature) => typeof signature !== "string")) {
     throw new NoEvmReceiptProofError(
       "invalid_proof_shape",
@@ -4627,6 +4745,9 @@ function validateOptionalArchiveProof(proof) {
   );
 }
 function validateArchiveProofSignature(signature, index) {
+  parseArchiveProofSignature(signature, index);
+}
+function parseArchiveProofSignature(signature, index) {
   const field2 = `archiveProof.signatures[${index}]`;
   const parts = signature.split(":");
   if (parts.length !== 3 || parts[0] !== NO_EVM_ARCHIVE_SIGNATURE_SCHEME) {
@@ -4663,6 +4784,26 @@ function validateArchiveProofSignature(signature, index) {
       `${field2}.payload must be non-empty`
     );
   }
+  return { signerId: bytesToHex5(signerId), payload };
+}
+function normalizeSignerId(value) {
+  const bytes = decodeHexBytes(value, "signerId");
+  if (bytes.length !== ARCHIVE_SIGNATURE_SIGNER_ID_BYTE_LENGTH) {
+    throw new NoEvmReceiptProofError(
+      "invalid_archive_signature",
+      `signerId must be ${ARCHIVE_SIGNATURE_SIGNER_ID_BYTE_LENGTH} bytes, got ${bytes.length}`
+    );
+  }
+  return bytesToHex5(bytes);
+}
+function expectArchivePublicKey(value, field2) {
+  if (value.length !== ML_DSA_65_PUBLIC_KEY_LEN) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      `${field2} must be ${ML_DSA_65_PUBLIC_KEY_LEN} bytes, got ${value.length}`
+    );
+  }
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
 function validateOptionalFinalityEvidence(proof) {
   const finalityEvidence = proof.finalityEvidence;
@@ -6760,6 +6901,7 @@ exports.validateBridgeRouteCatalogue = validateBridgeRouteCatalogue;
 exports.validateMrvArtifactMetadata = validateMrvArtifactMetadata;
 exports.validateMrvCallRequest = validateMrvCallRequest;
 exports.validateMrvDeployRequest = validateMrvDeployRequest;
+exports.verifyNoEvmArchiveProofSignatures = verifyNoEvmArchiveProofSignatures;
 exports.verifyNoEvmReceiptProof = verifyNoEvmReceiptProof;
 exports.version = version;
 //# sourceMappingURL=index.cjs.map

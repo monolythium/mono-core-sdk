@@ -8,7 +8,7 @@
 //! mono-core crates; when those land the wrapper types here forward
 //! to them transparently.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 
 use crate::bridge::BridgeRouteDisclosure;
@@ -306,6 +306,9 @@ pub struct NoEvmArchiveProof {
     pub manifest_hash: Hash,
     /// Snapshot/archive content hash.
     pub content_hash: Hash,
+    /// Optional digest that signed snapshot-manifest signatures cover.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature_digest: Option<Hash>,
     /// Core-emitted snapshot signature strings.
     pub signatures: Vec<String>,
 }
@@ -393,6 +396,43 @@ pub struct NoEvmReceiptProofVerification {
     pub target_receipt: Vec<u8>,
 }
 
+/// Trusted ML-DSA-65 signer accepted for archive proof signature checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoEvmArchiveTrustedSigner {
+    /// Raw ML-DSA-65 public key bytes.
+    pub public_key: Vec<u8>,
+    /// Optional expected canonical signer id as lower-case `0x` address/fingerprint.
+    pub signer_id: Option<Hash>,
+}
+
+/// Per-signature archive proof signature verification issue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoEvmArchiveSignatureVerificationIssue {
+    /// Machine-readable issue code.
+    pub code: &'static str,
+    /// Human-readable issue detail.
+    pub message: String,
+    /// Signature index when the issue came from an archive proof signature entry.
+    pub signature_index: Option<usize>,
+    /// Canonical signer id associated with the issue, when known.
+    pub signer_id: Option<Hash>,
+}
+
+/// Local trusted-signer check for snapshot archive proof signatures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoEvmArchiveSignatureVerification {
+    /// True only when every supplied signature entry is acceptable and threshold is met.
+    pub verified: bool,
+    /// Required trusted-signature threshold.
+    pub threshold: usize,
+    /// Valid trusted signer ids that signed `signatureDigest`.
+    pub valid_signers: Vec<Hash>,
+    /// Number of archive proof signature entries checked.
+    pub checked_signatures: usize,
+    /// Rejection reasons; non-empty means `verified == false`.
+    pub issues: Vec<NoEvmArchiveSignatureVerificationIssue>,
+}
+
 /// Local no-EVM receipt proof transcript verification failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum NoEvmReceiptProofError {
@@ -433,6 +473,9 @@ pub enum NoEvmReceiptProofError {
     /// An archive proof signature payload is empty.
     #[error("{field} must be non-empty")]
     EmptyArchiveSignaturePayload { field: String },
+    /// Archive proof trusted-signer verification was configured incorrectly.
+    #[error("{field}: {reason}")]
+    ArchiveSignatureVerificationConfig { field: String, reason: String },
     /// The transcript length cannot be encoded by the runtime root algorithm.
     #[error("receiptTranscript has {actual} receipts, exceeding u32::MAX")]
     TooManyReceipts { actual: usize },
@@ -590,6 +633,169 @@ pub fn verify_no_evm_receipt_proof(
     }))
 }
 
+/// Verify snapshot archive proof signatures against a trusted ML-DSA-65 roster.
+///
+/// This helper checks only that trusted signer public keys produced valid
+/// signatures over `archive_proof.signatureDigest` and that `threshold` is met.
+/// It does not claim validator finality or archive availability.
+///
+/// # Errors
+/// Returns [`NoEvmReceiptProofError`] when the archive proof shape or trusted
+/// signer roster is malformed.
+pub fn verify_no_evm_archive_proof_signatures(
+    archive_proof: &NoEvmArchiveProof,
+    trusted_signers: &[NoEvmArchiveTrustedSigner],
+    threshold: usize,
+) -> Result<NoEvmArchiveSignatureVerification, NoEvmReceiptProofError> {
+    use fips204::ml_dsa_65;
+    use fips204::traits::{SerDes, Verifier};
+
+    if threshold == 0 {
+        return Err(NoEvmReceiptProofError::ArchiveSignatureVerificationConfig {
+            field: "threshold".to_owned(),
+            reason: "must be at least 1".to_owned(),
+        });
+    }
+
+    validate_no_evm_archive_proof(archive_proof)?;
+
+    let mut roster = HashMap::<String, [u8; ml_dsa_65::PK_LEN]>::new();
+    for (index, signer) in trusted_signers.iter().enumerate() {
+        let field = format!("trustedSigners[{index}].publicKey");
+        let public_key: [u8; ml_dsa_65::PK_LEN] =
+            signer
+                .public_key
+                .clone()
+                .try_into()
+                .map_err(|bytes: Vec<u8>| NoEvmReceiptProofError::InvalidHexLength {
+                    field: field.clone(),
+                    expected: ml_dsa_65::PK_LEN,
+                    actual: bytes.len(),
+                })?;
+        let signer_id = no_evm_ml_dsa65_signer_id_hex(&public_key);
+        if let Some(expected) = &signer.signer_id {
+            let expected_bytes =
+                decode_no_evm_hex(format!("trustedSigners[{index}].signerId"), expected)?;
+            if expected_bytes.len() != 20 || expected.to_lowercase() != signer_id {
+                return Err(NoEvmReceiptProofError::ArchiveSignatureVerificationConfig {
+                    field: format!("trustedSigners[{index}].signerId"),
+                    reason: format!("does not match public key signer id {signer_id}"),
+                });
+            }
+        }
+        if roster.insert(signer_id.clone(), public_key).is_some() {
+            return Err(NoEvmReceiptProofError::ArchiveSignatureVerificationConfig {
+                field: "trustedSigners".to_owned(),
+                reason: format!("duplicate signer id {signer_id}"),
+            });
+        }
+    }
+
+    let mut issues = Vec::new();
+    let Some(signature_digest_hex) = &archive_proof.signature_digest else {
+        issues.push(NoEvmArchiveSignatureVerificationIssue {
+            code: "missing_signature_digest",
+            message: "archiveProof.signatureDigest is required for signature verification"
+                .to_owned(),
+            signature_index: None,
+            signer_id: None,
+        });
+        return Ok(NoEvmArchiveSignatureVerification {
+            verified: false,
+            threshold,
+            valid_signers: Vec::new(),
+            checked_signatures: archive_proof.signatures.len(),
+            issues,
+        });
+    };
+    let signature_digest =
+        decode_no_evm_hash("archiveProof.signatureDigest", signature_digest_hex)?;
+    let mut seen = HashSet::<String>::new();
+    let mut valid_signers = Vec::new();
+
+    for (index, signature) in archive_proof.signatures.iter().enumerate() {
+        let parsed = parse_no_evm_archive_signature(index, signature)?;
+        if !seen.insert(parsed.signer_id_hex.clone()) {
+            issues.push(NoEvmArchiveSignatureVerificationIssue {
+                code: "duplicate_signer",
+                message: format!("duplicate archive proof signer {}", parsed.signer_id_hex),
+                signature_index: Some(index),
+                signer_id: Some(parsed.signer_id_hex),
+            });
+            continue;
+        }
+        let Some(public_key_bytes) = roster.get(&parsed.signer_id_hex) else {
+            issues.push(NoEvmArchiveSignatureVerificationIssue {
+                code: "untrusted_signer",
+                message: format!(
+                    "archive proof signer {} is not trusted",
+                    parsed.signer_id_hex
+                ),
+                signature_index: Some(index),
+                signer_id: Some(parsed.signer_id_hex),
+            });
+            continue;
+        };
+        let Ok(signature_bytes) = <[u8; ml_dsa_65::SIG_LEN]>::try_from(parsed.payload) else {
+            issues.push(NoEvmArchiveSignatureVerificationIssue {
+                code: "invalid_signature",
+                message: format!(
+                    "archive proof signature payload must be {} bytes",
+                    ml_dsa_65::SIG_LEN
+                ),
+                signature_index: Some(index),
+                signer_id: Some(parsed.signer_id_hex),
+            });
+            continue;
+        };
+        let Ok(public_key) = ml_dsa_65::PublicKey::try_from_bytes(*public_key_bytes) else {
+            issues.push(NoEvmArchiveSignatureVerificationIssue {
+                code: "invalid_trusted_public_key",
+                message: format!(
+                    "trusted public key for {} is malformed",
+                    parsed.signer_id_hex
+                ),
+                signature_index: Some(index),
+                signer_id: Some(parsed.signer_id_hex),
+            });
+            continue;
+        };
+        if public_key.verify(&signature_digest, &signature_bytes, &[]) {
+            valid_signers.push(parsed.signer_id_hex);
+        } else {
+            issues.push(NoEvmArchiveSignatureVerificationIssue {
+                code: "invalid_signature",
+                message: format!(
+                    "archive proof signature from {} is invalid",
+                    parsed.signer_id_hex
+                ),
+                signature_index: Some(index),
+                signer_id: Some(parsed.signer_id_hex),
+            });
+        }
+    }
+
+    if valid_signers.len() < threshold {
+        issues.push(NoEvmArchiveSignatureVerificationIssue {
+            code: "threshold_not_met",
+            message: format!(
+                "archive proof has {} valid trusted signatures, below threshold {threshold}",
+                valid_signers.len()
+            ),
+            signature_index: None,
+            signer_id: None,
+        });
+    }
+
+    Ok(NoEvmArchiveSignatureVerification {
+        verified: issues.is_empty(),
+        threshold,
+        valid_signers,
+        checked_signatures: archive_proof.signatures.len(),
+        issues,
+    })
+}
+
 fn validate_no_evm_receipt_proof_metadata(
     proof: &NoEvmReceiptProof,
 ) -> Result<(), NoEvmReceiptProofError> {
@@ -632,16 +838,31 @@ fn validate_no_evm_archive_proof(
     }
     decode_no_evm_hash("archiveProof.manifestHash", &archive_proof.manifest_hash)?;
     decode_no_evm_hash("archiveProof.contentHash", &archive_proof.content_hash)?;
+    if let Some(signature_digest) = &archive_proof.signature_digest {
+        decode_no_evm_hash("archiveProof.signatureDigest", signature_digest)?;
+    }
     for (index, signature) in archive_proof.signatures.iter().enumerate() {
         validate_no_evm_archive_signature(index, signature)?;
     }
     Ok(())
 }
 
+struct ParsedNoEvmArchiveSignature {
+    signer_id_hex: Hash,
+    payload: Vec<u8>,
+}
+
 fn validate_no_evm_archive_signature(
     index: usize,
     signature: &str,
 ) -> Result<(), NoEvmReceiptProofError> {
+    parse_no_evm_archive_signature(index, signature).map(|_| ())
+}
+
+fn parse_no_evm_archive_signature(
+    index: usize,
+    signature: &str,
+) -> Result<ParsedNoEvmArchiveSignature, NoEvmReceiptProofError> {
     const SIGNER_ID_BYTE_LENGTH: usize = 20;
 
     let field = format!("archiveProof.signatures[{index}]");
@@ -678,7 +899,15 @@ fn validate_no_evm_archive_signature(
         });
     }
 
-    Ok(())
+    Ok(ParsedNoEvmArchiveSignature {
+        signer_id_hex: hex_encode_0x(&signer_id),
+        payload,
+    })
+}
+
+fn no_evm_ml_dsa65_signer_id_hex(public_key: &[u8]) -> Hash {
+    let digest = Keccak256::digest(public_key);
+    hex_encode_0x(&digest[12..])
 }
 
 fn validate_no_evm_receipt_finality_evidence(
@@ -4425,6 +4654,8 @@ mod tests {
         assess_bridge_route, BridgeAdminControl, BridgeCircuitBreakerState,
         BridgeVerifierDisclosure,
     };
+    use fips204::ml_dsa_65;
+    use fips204::traits::{KeyGen, SerDes, Signer};
 
     const VALID_ARCHIVE_SIGNATURE: &str =
         "mono.snapshot.sig.v1:0x1212121212121212121212121212121212121212:0xabab";
@@ -5392,6 +5623,7 @@ mod tests {
             source: "indexerReceiptArchiveContentDigest".to_owned(),
             manifest_hash: format!("0x{}", "53".repeat(32)),
             content_hash: format!("0x{}", "54".repeat(32)),
+            signature_digest: Some(format!("0x{}", "66".repeat(32))),
             signatures,
         }
     }
@@ -5503,6 +5735,113 @@ mod tests {
                 "{err}"
             );
         }
+    }
+
+    #[test]
+    fn no_evm_archive_proof_verifies_trusted_ml_dsa_signatures() {
+        let (public_key, private_key) = ml_dsa_65::KG::keygen_from_seed(&[7u8; 32]);
+        let public_key_bytes = public_key.into_bytes().to_vec();
+        let signer_id = no_evm_ml_dsa65_signer_id_hex(&public_key_bytes);
+        let signature_digest = vec![0x66; 32];
+        let signature = private_key
+            .try_sign_with_seed(&[8u8; 32], &signature_digest, &[])
+            .unwrap();
+        let archive_proof = test_no_evm_archive_proof(vec![format!(
+            "{}:{}:{}",
+            NO_EVM_ARCHIVE_SIGNATURE_SCHEME,
+            signer_id,
+            hex_encode_0x(&signature)
+        )]);
+
+        let result = verify_no_evm_archive_proof_signatures(
+            &archive_proof,
+            &[NoEvmArchiveTrustedSigner {
+                public_key: public_key_bytes,
+                signer_id: Some(signer_id.clone()),
+            }],
+            1,
+        )
+        .unwrap();
+
+        assert!(result.verified);
+        assert_eq!(result.valid_signers, vec![signer_id]);
+        assert!(result.issues.is_empty());
+    }
+
+    #[test]
+    fn no_evm_archive_proof_signature_verification_rejects_failures() {
+        let (public_key, private_key) = ml_dsa_65::KG::keygen_from_seed(&[9u8; 32]);
+        let public_key_bytes = public_key.into_bytes().to_vec();
+        let signer_id = no_evm_ml_dsa65_signer_id_hex(&public_key_bytes);
+        let signature_digest = vec![0x66; 32];
+        let signature = private_key
+            .try_sign_with_seed(&[10u8; 32], &signature_digest, &[])
+            .unwrap();
+        let signature_entry = format!(
+            "{}:{}:{}",
+            NO_EVM_ARCHIVE_SIGNATURE_SCHEME,
+            signer_id,
+            hex_encode_0x(&signature)
+        );
+
+        let mut missing_digest = test_no_evm_archive_proof(vec![signature_entry.clone()]);
+        missing_digest.signature_digest = None;
+        let result = verify_no_evm_archive_proof_signatures(
+            &missing_digest,
+            &[NoEvmArchiveTrustedSigner {
+                public_key: public_key_bytes.clone(),
+                signer_id: None,
+            }],
+            1,
+        )
+        .unwrap();
+        assert!(!result.verified);
+        assert_eq!(result.issues[0].code, "missing_signature_digest");
+
+        let (untrusted_public_key, _) = ml_dsa_65::KG::keygen_from_seed(&[11u8; 32]);
+        let result = verify_no_evm_archive_proof_signatures(
+            &test_no_evm_archive_proof(vec![signature_entry.clone()]),
+            &[NoEvmArchiveTrustedSigner {
+                public_key: untrusted_public_key.into_bytes().to_vec(),
+                signer_id: None,
+            }],
+            1,
+        )
+        .unwrap();
+        assert!(result
+            .issues
+            .iter()
+            .any(|issue| issue.code == "untrusted_signer"));
+
+        let mut wrong_digest = test_no_evm_archive_proof(vec![signature_entry.clone()]);
+        wrong_digest.signature_digest = Some(format!("0x{}", "67".repeat(32)));
+        let result = verify_no_evm_archive_proof_signatures(
+            &wrong_digest,
+            &[NoEvmArchiveTrustedSigner {
+                public_key: public_key_bytes.clone(),
+                signer_id: None,
+            }],
+            1,
+        )
+        .unwrap();
+        assert!(result
+            .issues
+            .iter()
+            .any(|issue| issue.code == "invalid_signature"));
+
+        let result = verify_no_evm_archive_proof_signatures(
+            &test_no_evm_archive_proof(vec![signature_entry.clone(), signature_entry]),
+            &[NoEvmArchiveTrustedSigner {
+                public_key: public_key_bytes,
+                signer_id: None,
+            }],
+            1,
+        )
+        .unwrap();
+        assert!(result
+            .issues
+            .iter()
+            .any(|issue| issue.code == "duplicate_signer"));
     }
 
     #[test]
