@@ -20,6 +20,8 @@ export const NO_EVM_COMPACT_INCLUSION_PROOF_SCHEMA =
   "mono.no_evm_receipt_compact_inclusion.v1";
 export const NO_EVM_COMPACT_INCLUSION_TREE_ALGORITHM = "binary-keccak-receipt-tree";
 export const NO_EVM_ARCHIVE_PROOF_SCHEMA = "mono.no_evm_receipt_archive_binding.v1";
+export const NO_EVM_FINALITY_EVIDENCE_SCHEMA = "mono.no_evm_receipt_finality.v1";
+export const NO_EVM_FINALITY_EVIDENCE_SOURCE = "blsRoundCertificate";
 
 const EMPTY_ROOT_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPTS_ROOT_DOMAIN);
 const LEAF_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPT_LEAF_DOMAIN);
@@ -296,6 +298,7 @@ function validateCommonProofMetadata(proof: NoEvmReceiptProof): void {
     "receiptCodec",
     "unsupported_receipt_codec",
   );
+  validateOptionalFinalityEvidence(proof);
 }
 
 function validateBoundedHistorySource(proof: NoEvmReceiptProof): void {
@@ -375,6 +378,75 @@ function validateOptionalArchiveProof(proof: NoEvmReceiptProof): void {
   }
 }
 
+function validateOptionalFinalityEvidence(proof: NoEvmReceiptProof): void {
+  const finalityEvidence = (proof as { finalityEvidence?: unknown }).finalityEvidence;
+  if (finalityEvidence == null) return;
+  if (!isRecord(finalityEvidence)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence must be an object when present",
+    );
+  }
+  assertSupported(
+    finalityEvidence["schema"],
+    NO_EVM_FINALITY_EVIDENCE_SCHEMA,
+    "finalityEvidence.schema",
+    "unsupported_schema",
+  );
+  assertSupported(
+    finalityEvidence["source"],
+    NO_EVM_FINALITY_EVIDENCE_SOURCE,
+    "finalityEvidence.source",
+    "unsupported_schema",
+  );
+  assertUint32(finalityEvidence["round"], "finalityEvidence.round");
+  const certificate = finalityEvidence["certificate"];
+  if (!isRecord(certificate)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate must be an object",
+    );
+  }
+  assertUint32(certificate["round"], "finalityEvidence.certificate.round");
+  if (certificate["round"] !== finalityEvidence["round"]) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate.round must match finalityEvidence.round",
+    );
+  }
+  decodeHexBytes(certificate["signature"], "finalityEvidence.certificate.signature");
+  decodeHexBytes(certificate["signersBitmap"], "finalityEvidence.certificate.signersBitmap");
+  const signerIndices = certificate["signerIndices"];
+  if (!Array.isArray(signerIndices)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate.signerIndices must be an array",
+    );
+  }
+  signerIndices.forEach((index, signerIndex) => {
+    assertUint32(index, `finalityEvidence.certificate.signerIndices[${signerIndex}]`);
+    if ((index as number) > 0xffff) {
+      throw new NoEvmReceiptProofError(
+        "invalid_proof_shape",
+        `finalityEvidence.certificate.signerIndices[${signerIndex}] must fit u16`,
+      );
+    }
+  });
+  assertUint32(certificate["signerCount"], "finalityEvidence.certificate.signerCount");
+  if ((certificate["signerCount"] as number) > 0xffff) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate.signerCount must fit u16",
+    );
+  }
+  if (certificate["signerCount"] !== signerIndices.length) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate.signerCount must match signerIndices length",
+    );
+  }
+}
+
 function getCompactInclusionProof(
   proof: NoEvmReceiptProof,
 ): NoEvmCompactReceiptProof["compactInclusionProof"] {
@@ -429,7 +501,7 @@ function assertSupportedRootAlgorithm(actual: string): void {
 }
 
 function assertSupported(
-  actual: string,
+  actual: unknown,
   expected: string,
   field: string,
   code: NoEvmReceiptProofErrorCode,

@@ -264,6 +264,36 @@ pub struct NativeReceiptSource {
     pub metadata_log_index: u32,
 }
 
+/// BLS aggregate round-certificate material attached to a no-EVM receipt proof.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoEvmReceiptFinalityCertificate {
+    /// Round at which the certificate sealed.
+    pub round: u64,
+    /// `0x`-prefixed aggregate BLS signature.
+    pub signature: Hex,
+    /// Signer-set bitmap as `0x`-hex bytes.
+    pub signers_bitmap: Hex,
+    /// Operator indices decoded from the signer bitmap.
+    pub signer_indices: Vec<u16>,
+    /// Number of signing operators.
+    pub signer_count: u16,
+}
+
+/// Optional finality evidence for the block containing a no-EVM receipt proof.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoEvmReceiptFinalityEvidence {
+    /// Finality proof schema identifier.
+    pub schema: String,
+    /// Evidence source, currently `blsRoundCertificate`.
+    pub source: String,
+    /// Consensus round that finalized the block.
+    pub round: u64,
+    /// BLS aggregate round certificate retained by the serving node.
+    pub certificate: NoEvmReceiptFinalityCertificate,
+}
+
 /// Bounded no-EVM receipt transcript attached to a native receipt.
 ///
 /// This is a local transcript of full receipt bytes, not a compact finality
@@ -293,6 +323,9 @@ pub struct NoEvmReceiptProof {
     pub tx_index: u32,
     /// Number of receipts carried by the transcript.
     pub receipt_count: u32,
+    /// Optional BLS finality evidence for the block round.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finality_evidence: Option<NoEvmReceiptFinalityEvidence>,
     /// Bounded full receipt bytes in transaction order.
     pub receipt_transcript: Vec<Hex>,
 }
@@ -309,6 +342,12 @@ pub const NO_EVM_RECEIPT_ROOT_ALGORITHM: &str =
 
 /// Current receipt byte codec label used inside no-EVM receipt transcripts.
 pub const NO_EVM_RECEIPT_CODEC: &str = "bincode(protocore_evm::Receipt)";
+
+/// Current no-EVM receipt finality evidence schema.
+pub const NO_EVM_RECEIPT_FINALITY_EVIDENCE_SCHEMA: &str = "mono.no_evm_receipt_finality.v1";
+
+/// Current no-EVM receipt finality evidence source.
+pub const NO_EVM_RECEIPT_FINALITY_EVIDENCE_SOURCE: &str = "blsRoundCertificate";
 
 const NO_EVM_RECEIPTS_ROOT_DOMAIN: &[u8] = b"monolythium/v2/receipts_root/1";
 
@@ -335,6 +374,12 @@ pub enum NoEvmReceiptProofError {
     /// Proof schema is not supported by these helpers.
     #[error("unsupported no-EVM receipt proof schema `{actual}`")]
     UnsupportedSchema { actual: String },
+    /// Finality evidence schema is not supported by these helpers.
+    #[error("unsupported no-EVM receipt finality evidence schema `{actual}`")]
+    UnsupportedFinalityEvidenceSchema { actual: String },
+    /// Finality evidence source is not supported by these helpers.
+    #[error("unsupported no-EVM receipt finality evidence source `{actual}`")]
+    UnsupportedFinalityEvidenceSource { actual: String },
     /// Proof type is not supported by these helpers.
     #[error("unsupported no-EVM receipt proof type `{actual}`")]
     UnsupportedProofType { actual: String },
@@ -372,6 +417,18 @@ pub enum NoEvmReceiptProofError {
     /// The recomputed target receipt hash differs from `targetReceiptHash`.
     #[error("targetReceiptHash mismatch: expected {expected}, computed {actual}")]
     TargetReceiptHashMismatch { expected: Hash, actual: Hash },
+    /// Finality evidence and certificate rounds disagree.
+    #[error("finalityEvidence.certificate.round {certificate_round} does not match finalityEvidence.round {evidence_round}")]
+    FinalityCertificateRoundMismatch {
+        evidence_round: u64,
+        certificate_round: u64,
+    },
+    /// Finality evidence signer count does not match the signer-index list.
+    #[error("finalityEvidence.certificate.signerCount {signer_count} does not match signerIndices length {signer_indices}")]
+    FinalitySignerCountMismatch {
+        signer_count: u16,
+        signer_indices: usize,
+    },
 }
 
 impl NoEvmReceiptProof {
@@ -522,6 +579,45 @@ fn validate_no_evm_receipt_proof_metadata(
             actual: proof.receipt_codec.clone(),
         });
     }
+    if let Some(finality) = &proof.finality_evidence {
+        validate_no_evm_receipt_finality_evidence(finality)?;
+    }
+    Ok(())
+}
+
+fn validate_no_evm_receipt_finality_evidence(
+    finality: &NoEvmReceiptFinalityEvidence,
+) -> Result<(), NoEvmReceiptProofError> {
+    if finality.schema != NO_EVM_RECEIPT_FINALITY_EVIDENCE_SCHEMA {
+        return Err(NoEvmReceiptProofError::UnsupportedFinalityEvidenceSchema {
+            actual: finality.schema.clone(),
+        });
+    }
+    if finality.source != NO_EVM_RECEIPT_FINALITY_EVIDENCE_SOURCE {
+        return Err(NoEvmReceiptProofError::UnsupportedFinalityEvidenceSource {
+            actual: finality.source.clone(),
+        });
+    }
+    if finality.certificate.round != finality.round {
+        return Err(NoEvmReceiptProofError::FinalityCertificateRoundMismatch {
+            evidence_round: finality.round,
+            certificate_round: finality.certificate.round,
+        });
+    }
+    if usize::from(finality.certificate.signer_count) != finality.certificate.signer_indices.len() {
+        return Err(NoEvmReceiptProofError::FinalitySignerCountMismatch {
+            signer_count: finality.certificate.signer_count,
+            signer_indices: finality.certificate.signer_indices.len(),
+        });
+    }
+    decode_no_evm_hex(
+        "finalityEvidence.certificate.signature".to_owned(),
+        &finality.certificate.signature,
+    )?;
+    decode_no_evm_hex(
+        "finalityEvidence.certificate.signersBitmap".to_owned(),
+        &finality.certificate.signers_bitmap,
+    )?;
     Ok(())
 }
 
@@ -5127,6 +5223,34 @@ mod tests {
         let typed_wire = serde_json::to_value(&with_proof).unwrap();
         assert_eq!(typed_wire["noEvmProof"], proof_wire);
 
+        let mut finality_proof_wire = proof_wire.clone();
+        finality_proof_wire.as_object_mut().unwrap().insert(
+            "finalityEvidence".to_owned(),
+            serde_json::json!({
+                "schema": NO_EVM_RECEIPT_FINALITY_EVIDENCE_SCHEMA,
+                "source": NO_EVM_RECEIPT_FINALITY_EVIDENCE_SOURCE,
+                "round": 57,
+                "certificate": {
+                    "round": 57,
+                    "signature": "0x1234",
+                    "signersBitmap": "0xabcd",
+                    "signerIndices": [1, 3],
+                    "signerCount": 2
+                }
+            }),
+        );
+        wire.as_object_mut()
+            .unwrap()
+            .insert("noEvmProof".to_owned(), finality_proof_wire);
+        let with_finality: NativeReceiptResponse = serde_json::from_value(wire.clone()).unwrap();
+        let finality = with_finality
+            .no_evm_proof
+            .as_ref()
+            .and_then(|proof| proof.finality_evidence.as_ref())
+            .expect("finality evidence");
+        assert_eq!(finality.source, NO_EVM_RECEIPT_FINALITY_EVIDENCE_SOURCE);
+        assert_eq!(finality.certificate.signer_indices, [1, 3]);
+
         wire.as_object_mut()
             .unwrap()
             .insert("noEvmProof".to_owned(), serde_json::Value::Null);
@@ -5154,6 +5278,7 @@ mod tests {
             block_height: 100,
             tx_index: 1,
             receipt_count: u32::try_from(receipt_bytes.len()).unwrap(),
+            finality_evidence: None,
             receipt_transcript: receipt_bytes
                 .iter()
                 .map(|receipt| hex_encode_0x(receipt))
@@ -5188,6 +5313,71 @@ mod tests {
         assert_eq!(verified.target_receipt_hash, proof.target_receipt_hash);
         assert_eq!(proof.verify_transcript().unwrap(), verified);
         assert_eq!(verify_no_evm_receipt_proof(None).unwrap(), None);
+    }
+
+    #[test]
+    fn no_evm_receipt_proof_validates_finality_evidence() {
+        let mut proof = test_no_evm_proof();
+        proof.finality_evidence = Some(NoEvmReceiptFinalityEvidence {
+            schema: NO_EVM_RECEIPT_FINALITY_EVIDENCE_SCHEMA.to_owned(),
+            source: NO_EVM_RECEIPT_FINALITY_EVIDENCE_SOURCE.to_owned(),
+            round: 57,
+            certificate: NoEvmReceiptFinalityCertificate {
+                round: 57,
+                signature: "0x1234".to_owned(),
+                signers_bitmap: "0xabcd".to_owned(),
+                signer_indices: vec![1, 3],
+                signer_count: 2,
+            },
+        });
+
+        let verified = verify_no_evm_receipt_proof(Some(&proof))
+            .unwrap()
+            .expect("verified proof");
+        assert_eq!(verified.tx_index, 1);
+        let wire = serde_json::to_value(&proof).unwrap();
+        assert_eq!(
+            wire["finalityEvidence"]["schema"],
+            serde_json::json!(NO_EVM_RECEIPT_FINALITY_EVIDENCE_SCHEMA)
+        );
+        assert_eq!(
+            wire["finalityEvidence"]["certificate"]["signersBitmap"],
+            serde_json::json!("0xabcd")
+        );
+        assert_eq!(
+            wire["finalityEvidence"]["certificate"]["signerIndices"],
+            serde_json::json!([1, 3])
+        );
+
+        let mut bad_round = proof.clone();
+        bad_round
+            .finality_evidence
+            .as_mut()
+            .expect("finality")
+            .certificate
+            .round = 58;
+        assert!(matches!(
+            verify_no_evm_receipt_proof(Some(&bad_round)),
+            Err(NoEvmReceiptProofError::FinalityCertificateRoundMismatch {
+                evidence_round: 57,
+                certificate_round: 58
+            })
+        ));
+
+        let mut bad_count = proof;
+        bad_count
+            .finality_evidence
+            .as_mut()
+            .expect("finality")
+            .certificate
+            .signer_count = 1;
+        assert!(matches!(
+            verify_no_evm_receipt_proof(Some(&bad_count)),
+            Err(NoEvmReceiptProofError::FinalitySignerCountMismatch {
+                signer_count: 1,
+                signer_indices: 2
+            })
+        ));
     }
 
     #[test]

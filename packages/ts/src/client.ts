@@ -187,6 +187,21 @@ export interface NoEvmArchiveProof {
   signatures: string[];
 }
 
+export interface NoEvmFinalityCertificate {
+  round: number;
+  signature: string;
+  signersBitmap: string;
+  signerIndices: number[];
+  signerCount: number;
+}
+
+export interface NoEvmFinalityEvidence {
+  schema: "mono.no_evm_receipt_finality.v1";
+  source: "blsRoundCertificate" | string;
+  round: number;
+  certificate: NoEvmFinalityCertificate;
+}
+
 interface NoEvmReceiptProofBase {
   schema: "mono.no_evm_receipt_proof.v1";
   rootAlgorithm: string;
@@ -198,6 +213,7 @@ interface NoEvmReceiptProofBase {
   blockHeight: number;
   txIndex: number;
   receiptCount: number;
+  finalityEvidence?: NoEvmFinalityEvidence | null;
 }
 
 export interface NoEvmBoundedReceiptProof extends NoEvmReceiptProofBase {
