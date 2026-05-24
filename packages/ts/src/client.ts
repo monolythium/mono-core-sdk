@@ -21,6 +21,7 @@ import {
   isSinglePublicServiceProbeMask,
   isValidPublicServiceProbeMask,
 } from "./node-registry.js";
+import { assertMrvStructuredFeeConformance } from "./mrv.js";
 import { getChainInfo, type ChainInfo, type ChainRegistry, type NetworkSlug } from "./registry.js";
 import type {
   AccountPolicy,
@@ -77,6 +78,7 @@ import type {
 } from "./bindings/index.js";
 import type { BlockSelector } from "./types.js";
 import { encodeBlockSelector } from "./types.js";
+import type { ApiStreamTopic } from "./streams.js";
 import type {
   NativeDecodedEvent,
   NativeEventFilter,
@@ -1439,7 +1441,9 @@ export class RpcClient {
   async lythNativeReceipt<TDecoded = unknown>(
     txHash: string,
   ): Promise<NativeReceiptResponse<TDecoded>> {
-    return this.call("lyth_nativeReceipt", [txHash]);
+    return decodeNativeReceiptResponse<TDecoded>(
+      await this.call<unknown>("lyth_nativeReceipt", [txHash]),
+    );
   }
 
   /**
@@ -1592,7 +1596,7 @@ export class RpcClient {
   /** `lyth_txFeed` — paged global transaction feed. */
   async lythTxFeed(limit = 50, cursor?: string | null): Promise<TxFeedResponse> {
     const params = cursor === undefined ? [limit] : [limit, cursor];
-    return this.call("lyth_txFeed", params);
+    return decodeTxFeedResponse(await this.call<unknown>("lyth_txFeed", params));
   }
 
   /** `lyth_addressProfile` — live account + label + activity aggregate. */
@@ -1965,7 +1969,7 @@ export class RpcClient {
   }
 
   /** `lyth_subscribe` — WebSocket-only; returns an RPC error over HTTP. */
-  async lythSubscribe(channel: string): Promise<unknown> {
+  async lythSubscribe(channel: ApiStreamTopic | (string & {})): Promise<unknown> {
     return this.call("lyth_subscribe", [channel]);
   }
 
@@ -2330,6 +2334,36 @@ function expectObject(value: unknown, label: string): Record<string, unknown> {
     throw SdkError.malformed(`${label} must be an object`);
   }
   return value as Record<string, unknown>;
+}
+
+export function decodeNativeReceiptResponse<TDecoded = unknown>(
+  value: unknown,
+): NativeReceiptResponse<TDecoded> {
+  const row = expectObject(value, "native receipt response");
+  assertNativeReceiptFee(row["fee"], "native receipt response.fee");
+  return value as NativeReceiptResponse<TDecoded>;
+}
+
+export function decodeTxFeedResponse(value: unknown): TxFeedResponse {
+  const row = expectObject(value, "tx feed response");
+  const transactions = row["transactions"];
+  if (!Array.isArray(transactions)) {
+    throw SdkError.malformed("tx feed response.transactions must be an array");
+  }
+  transactions.forEach((transaction, index) => {
+    const tx = expectObject(transaction, `tx feed response.transactions[${index}]`);
+    assertNativeReceiptFee(tx["fee"], `tx feed response.transactions[${index}].fee`);
+  });
+  return value as TxFeedResponse;
+}
+
+function assertNativeReceiptFee(value: unknown, label: string): asserts value is NativeReceiptFee {
+  try {
+    assertMrvStructuredFeeConformance(value, { label });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw SdkError.malformed(`ADR-0039 structured fee violation: ${message}`);
+  }
 }
 
 function firstField(row: Record<string, unknown>, keys: readonly string[], label: string): unknown {

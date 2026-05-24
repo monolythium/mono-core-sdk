@@ -11,6 +11,8 @@ import type { BridgeRoutesRequest, BridgeRoutesResponse } from "./bridge.js";
 import {
   decodeNativeAgentStateResponse,
   nativeAgentStateFilterParams,
+  decodeNativeReceiptResponse,
+  decodeTxFeedResponse,
   nativeMarketStateFilterParams,
 } from "./client.js";
 import {
@@ -27,6 +29,7 @@ import type { PendingRewardsResponse } from "./bindings/PendingRewardsResponse.j
 import type { RedemptionQueueResponse } from "./bindings/RedemptionQueueResponse.js";
 import type { BlockSelector } from "./types.js";
 import { encodeBlockSelector } from "./types.js";
+import type { ApiStreamsIndexResponse } from "./streams.js";
 import type {
   NativeDecodedEvent,
   NativeEventFilter,
@@ -485,8 +488,16 @@ export class ApiClient {
     return this.get(`/blocks/${encodePathBlock(block)}/transactions`, { page, limit });
   }
 
+  async streams(): Promise<ApiStreamsIndexResponse> {
+    return this.get("/streams");
+  }
+
   async transactions(limit = 50, cursor?: string | null): Promise<ApiEnvelope<TxFeedResponse>> {
-    return this.get("/transactions", { limit, cursor });
+    const response = await this.get<ApiEnvelope<unknown>>("/transactions", { limit, cursor });
+    return {
+      ...response,
+      data: decodeTxFeedResponse(response.data),
+    };
   }
 
   async transaction(hash: string): Promise<ApiEnvelope<ApiTransactionData>> {
@@ -500,7 +511,13 @@ export class ApiClient {
   async transactionNativeReceipt<TDecoded = unknown>(
     hash: string,
   ): Promise<ApiEnvelope<ApiTransactionNativeReceiptData<TDecoded>>> {
-    return this.get(`/transactions/${encodePathSegment(hash)}/native-receipt`);
+    const response = await this.get<ApiEnvelope<unknown>>(
+      `/transactions/${encodePathSegment(hash)}/native-receipt`,
+    );
+    return {
+      ...response,
+      data: decodeNativeReceiptResponse<TDecoded>(response.data),
+    };
   }
 
   /**

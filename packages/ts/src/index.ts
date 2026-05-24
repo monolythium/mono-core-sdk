@@ -105,6 +105,8 @@ export {
   MAX_NATIVE_RECEIPT_EVENTS,
   RpcClient,
   decodeNativeAgentStateResponse,
+  decodeNativeReceiptResponse,
+  decodeTxFeedResponse,
   nativeAgentStateFilterParams,
   nativeMarketStateFilterParams,
   nativeEventsFilterParams,
@@ -207,6 +209,20 @@ export type {
   VertexAtRound,
   VerticesAtRoundResponse,
 } from "./client.js";
+export {
+  API_STREAM_TOPICS,
+  NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC,
+  assertNativeMarketOrderBookStreamPayload,
+  isNativeMarketOrderBookStreamPayload,
+} from "./streams.js";
+export type {
+  ApiStreamTopic,
+  ApiStreamTopicMetadata,
+  ApiStreamTopicRetention,
+  ApiStreamsIndexResponse,
+  NativeMarketOrderBookStreamAction,
+  NativeMarketOrderBookStreamPayload,
+} from "./streams.js";
 export {
   NO_EVM_RECEIPTS_ROOT_DOMAIN,
   NO_EVM_RECEIPT_CODEC,

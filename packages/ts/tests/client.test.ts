@@ -79,6 +79,19 @@ function bridgeRoute(routeId: string): BridgeRouteDisclosure {
   };
 }
 
+function nativeFee(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    total_lythoshi: "21000",
+    total_lyth: "0.00021",
+    cycles_used: 21_000,
+    base_price_per_cycle_lythoshi: "1",
+    state_io_units: 0,
+    state_io_price_per_unit_lythoshi: "0",
+    priority_tip_lythoshi: "0",
+    ...extra,
+  };
+}
+
 interface CapturedCall {
   method: string;
   params: unknown;
@@ -866,6 +879,36 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(receipt.events[0].decodedJson).toBe(JSON.stringify(decoded));
     expect(calls[0].method).toBe("lyth_nativeReceipt");
     expect(calls[0].params).toEqual([txHash]);
+  });
+
+  it("lyth_nativeReceipt rejects legacy keys inside structured fee objects", async () => {
+    const txHash = `0x${"22".repeat(32)}`;
+    const { fetch } = mockFetch({
+      txHash,
+      blockHash: `0x${"33".repeat(32)}`,
+      blockHeight: 100,
+      txIndex: 0,
+      schema: "riscv.receipt.v1",
+      artifactHash: `0x${"aa".repeat(32)}`,
+      receiptCommitment: `0x${"bb".repeat(32)}`,
+      counters: { cycles: 44, syscallUnits: 3, stateIoUnits: 2 },
+      fee: nativeFee({ gasPrice: "1" }),
+      reverted: false,
+      nativeDeltaCount: 0,
+      eventCount: 0,
+      events: [],
+      source: {
+        chainProvider: "mock_chain",
+        indexerProvider: "native_events",
+        metadataLogIndex: 0xffff_ffff,
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    await expect(client.lythNativeReceipt(txHash)).rejects.toMatchObject({
+      kind: "malformed",
+      message: expect.stringContaining("gasPrice"),
+    });
   });
 
   it("lyth_nativeReceipt preserves typed no-EVM receipt proof transcripts", async () => {
@@ -2114,6 +2157,42 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
       [address, 5],
       [],
     ]);
+  });
+
+  it("lyth_txFeed rejects legacy keys inside structured fee objects", async () => {
+    const txHash = `0x${"22".repeat(32)}`;
+    const address = "0x1111111111111111111111111111111111111111";
+    const { fetch } = mockFetch({
+      schemaVersion: 1,
+      latestHeight: 12,
+      limit: 5,
+      nextCursor: null,
+      transactions: [
+        {
+          txHash,
+          blockHash: `0x${"33".repeat(32)}`,
+          blockNumber: 12,
+          blockTimestamp: 1700000000,
+          txIndex: 0,
+          from: address,
+          to: null,
+          nonce: 1,
+          value: "0",
+          executionUnitLimit: 21000,
+          maxExecutionFeeLythoshi: "1",
+          priorityTipLythoshi: "1",
+          fee: nativeFee({ maxFeePerGas: "1" }),
+          input: "0x",
+          receipt: null,
+        },
+      ],
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    await expect(client.lythTxFeed(5)).rejects.toMatchObject({
+      kind: "malformed",
+      message: expect.stringContaining("maxFeePerGas"),
+    });
   });
 
   it("wraps node capability, status, vertex, and metrics RPC surfaces", async () => {
