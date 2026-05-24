@@ -3200,6 +3200,107 @@ function normalizeCapabilitiesResponse(value) {
   };
 }
 
+// src/streams.ts
+var NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC = "nativeMarketOrderBook";
+var API_STREAM_TOPICS = [
+  "newHeads",
+  "newPendingTx",
+  "logs",
+  "newCommit",
+  "dagVertices",
+  "registry",
+  "marketTrades",
+  NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC,
+  "gapRecords",
+  "nativeEvents"
+];
+function isNativeMarketOrderBookStreamPayload(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value;
+  return isString(row["marketId"]) && isString(row["orderId"]) && isOptionalString(row["relatedOrderId"]) && isString(row["eventName"]) && isNativeMarketOrderBookStreamAction(row["action"]) && isOptionalString(row["side"]) && isOptionalString(row["price"]) && isOptionalString(row["quantity"]) && isOptionalString(row["remaining"]) && isOptionalString(row["status"]) && isNonNegativeSafeInteger(row["blockHeight"]) && isNonNegativeSafeInteger(row["txIndex"]) && isNonNegativeSafeInteger(row["logIndex"]);
+}
+function assertNativeMarketOrderBookStreamPayload(value) {
+  if (!isNativeMarketOrderBookStreamPayload(value)) {
+    throw SdkError.malformed("nativeMarketOrderBook stream payload is malformed");
+  }
+}
+function decodeNativeMarketOrderBookDeltasResponse(value) {
+  const row = expectObject2(value, "nativeMarketOrderBook delta replay response");
+  const replay = row["replay"];
+  const streamTopic = row["streamTopic"];
+  if (replay !== true || streamTopic !== NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC) {
+    throw SdkError.malformed(
+      "nativeMarketOrderBook delta replay response has invalid replay metadata"
+    );
+  }
+  const rawDeltas = row["deltas"];
+  if (!Array.isArray(rawDeltas)) {
+    throw SdkError.malformed("nativeMarketOrderBook delta replay response deltas must be an array");
+  }
+  const deltas = rawDeltas.map((delta, index) => {
+    if (!isNativeMarketOrderBookStreamPayload(delta)) {
+      throw SdkError.malformed(
+        `nativeMarketOrderBook delta replay response deltas[${index}] is malformed`
+      );
+    }
+    return delta;
+  });
+  return {
+    schemaVersion: parseSafeInteger(row["schemaVersion"], "schemaVersion"),
+    fromBlock: parseSafeInteger(row["fromBlock"], "fromBlock"),
+    toBlock: parseSafeInteger(row["toBlock"], "toBlock"),
+    limit: parseNullableSafeInteger(row["limit"], "limit"),
+    cursor: parseNullableString(row["cursor"], "cursor"),
+    nextCursor: parseNullableString(row["nextCursor"], "nextCursor"),
+    filters: expectObject2(
+      row["filters"],
+      "nativeMarketOrderBook delta replay response filters"
+    ),
+    replay,
+    streamTopic,
+    deltas,
+    source: expectObject2(
+      row["source"],
+      "nativeMarketOrderBook delta replay response source"
+    )
+  };
+}
+function isNativeMarketOrderBookStreamAction(value) {
+  return value === "upsert" || value === "remove";
+}
+function isString(value) {
+  return typeof value === "string";
+}
+function isOptionalString(value) {
+  return value === void 0 || typeof value === "string";
+}
+function isNonNegativeSafeInteger(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+function expectObject2(value, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw SdkError.malformed(`${label} must be an object`);
+  }
+  return value;
+}
+function parseSafeInteger(value, label) {
+  if (!isNonNegativeSafeInteger(value)) {
+    throw SdkError.malformed(`nativeMarketOrderBook delta replay response ${label} is malformed`);
+  }
+  return value;
+}
+function parseNullableSafeInteger(value, label) {
+  if (value === null || value === void 0) return null;
+  return parseSafeInteger(value, label);
+}
+function parseNullableString(value, label) {
+  if (value === null || value === void 0) return null;
+  if (typeof value !== "string") {
+    throw SdkError.malformed(`nativeMarketOrderBook delta replay response ${label} is malformed`);
+  }
+  return value;
+}
+
 // src/api.ts
 var SDK_VERSION2 = "0.1.0";
 function apiEndpointFromRpcEndpoint(endpoint) {
@@ -3347,6 +3448,16 @@ var ApiClient = class {
   }
   async nativeMarketState(filter = {}) {
     return this.get("/native-market-state", nativeMarketStateFilterParams(filter));
+  }
+  async nativeMarketOrderBookDeltas(filter) {
+    const response = await this.get(
+      "/native-market-orderbook-deltas",
+      nativeMarketOrderBookDeltasQuery(filter)
+    );
+    return {
+      ...response,
+      data: decodeNativeMarketOrderBookDeltasResponse(response.data)
+    };
   }
   async addressProfile(address) {
     return this.get(`/addresses/${encodePathSegment(address)}/profile`);
@@ -3523,6 +3634,26 @@ function nativeEventsFilterQuery(filter) {
     eventTopic: filter.eventTopic,
     family: filter.family,
     eventName: filter.eventName,
+    primaryId: filter.primaryId,
+    relatedId: filter.relatedId,
+    tokenId: filter.tokenId,
+    account: filter.account,
+    counterparty: filter.counterparty
+  };
+}
+function nativeMarketOrderBookDeltasQuery(filter) {
+  return {
+    fromBlock: filter.fromBlock,
+    toBlock: filter.toBlock,
+    limit: filter.limit,
+    cursor: filter.cursor,
+    txIndex: filter.txIndex,
+    logIndex: filter.logIndex,
+    address: filter.address,
+    eventTopic: filter.eventTopic,
+    eventName: filter.eventName,
+    marketId: filter.marketId,
+    listingId: filter.listingId,
     primaryId: filter.primaryId,
     relatedId: filter.relatedId,
     tokenId: filter.tokenId,
@@ -4195,43 +4326,6 @@ function concatBytes4(...parts) {
     offset += part.length;
   }
   return out;
-}
-
-// src/streams.ts
-var NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC = "nativeMarketOrderBook";
-var API_STREAM_TOPICS = [
-  "newHeads",
-  "newPendingTx",
-  "logs",
-  "newCommit",
-  "dagVertices",
-  "registry",
-  "marketTrades",
-  NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC,
-  "gapRecords",
-  "nativeEvents"
-];
-function isNativeMarketOrderBookStreamPayload(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const row = value;
-  return isString(row["marketId"]) && isString(row["orderId"]) && isOptionalString(row["relatedOrderId"]) && isString(row["eventName"]) && isNativeMarketOrderBookStreamAction(row["action"]) && isOptionalString(row["side"]) && isOptionalString(row["price"]) && isOptionalString(row["quantity"]) && isOptionalString(row["remaining"]) && isOptionalString(row["status"]) && isNonNegativeSafeInteger(row["blockHeight"]) && isNonNegativeSafeInteger(row["txIndex"]) && isNonNegativeSafeInteger(row["logIndex"]);
-}
-function assertNativeMarketOrderBookStreamPayload(value) {
-  if (!isNativeMarketOrderBookStreamPayload(value)) {
-    throw SdkError.malformed("nativeMarketOrderBook stream payload is malformed");
-  }
-}
-function isNativeMarketOrderBookStreamAction(value) {
-  return value === "upsert" || value === "remove";
-}
-function isString(value) {
-  return typeof value === "string";
-}
-function isOptionalString(value) {
-  return value === void 0 || typeof value === "string";
-}
-function isNonNegativeSafeInteger(value) {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 var NO_EVM_RECEIPT_PROOF_SCHEMA = "mono.no_evm_receipt_proof.v1";
 var NO_EVM_RECEIPT_PROOF_TYPE = "canonicalReceiptsTranscript";
@@ -6142,6 +6236,7 @@ exports.consumeNativeEvents = consumeNativeEvents;
 exports.decodeHasPubkeyReturn = decodeHasPubkeyReturn;
 exports.decodeLookupPubkeyReturn = decodeLookupPubkeyReturn;
 exports.decodeNativeAgentStateResponse = decodeNativeAgentStateResponse;
+exports.decodeNativeMarketOrderBookDeltasResponse = decodeNativeMarketOrderBookDeltasResponse;
 exports.decodeNativeReceiptResponse = decodeNativeReceiptResponse;
 exports.decodeNoEvmReceiptTranscript = decodeNoEvmReceiptTranscript;
 exports.decodeTxFeedResponse = decodeTxFeedResponse;

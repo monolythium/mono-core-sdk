@@ -29,7 +29,12 @@ import type { PendingRewardsResponse } from "./bindings/PendingRewardsResponse.j
 import type { RedemptionQueueResponse } from "./bindings/RedemptionQueueResponse.js";
 import type { BlockSelector } from "./types.js";
 import { encodeBlockSelector } from "./types.js";
-import type { ApiStreamsIndexResponse } from "./streams.js";
+import { decodeNativeMarketOrderBookDeltasResponse } from "./streams.js";
+import type {
+  ApiStreamsIndexResponse,
+  NativeMarketOrderBookDeltasRequest,
+  NativeMarketOrderBookDeltasResponse,
+} from "./streams.js";
 import type {
   NativeDecodedEvent,
   NativeEventFilter,
@@ -609,6 +614,19 @@ export class ApiClient {
     return this.get("/native-market-state", nativeMarketStateFilterParams(filter));
   }
 
+  async nativeMarketOrderBookDeltas(
+    filter: NativeMarketOrderBookDeltasRequest,
+  ): Promise<ApiEnvelope<NativeMarketOrderBookDeltasResponse>> {
+    const response = await this.get<ApiEnvelope<unknown>>(
+      "/native-market-orderbook-deltas",
+      nativeMarketOrderBookDeltasQuery(filter),
+    );
+    return {
+      ...response,
+      data: decodeNativeMarketOrderBookDeltasResponse(response.data),
+    };
+  }
+
   async addressProfile(address: string): Promise<ApiEnvelope<AddressProfileResponse>> {
     return this.get(`/addresses/${encodePathSegment(address)}/profile`);
   }
@@ -860,6 +878,29 @@ function nativeEventsFilterQuery(filter: NativeEventsFilter): Record<string, Api
     eventTopic: filter.eventTopic,
     family: filter.family,
     eventName: filter.eventName,
+    primaryId: filter.primaryId,
+    relatedId: filter.relatedId,
+    tokenId: filter.tokenId,
+    account: filter.account,
+    counterparty: filter.counterparty,
+  };
+}
+
+function nativeMarketOrderBookDeltasQuery(
+  filter: NativeMarketOrderBookDeltasRequest,
+): Record<string, ApiQueryValue> {
+  return {
+    fromBlock: filter.fromBlock,
+    toBlock: filter.toBlock,
+    limit: filter.limit,
+    cursor: filter.cursor,
+    txIndex: filter.txIndex,
+    logIndex: filter.logIndex,
+    address: filter.address,
+    eventTopic: filter.eventTopic,
+    eventName: filter.eventName,
+    marketId: filter.marketId,
+    listingId: filter.listingId,
     primaryId: filter.primaryId,
     relatedId: filter.relatedId,
     tokenId: filter.tokenId,

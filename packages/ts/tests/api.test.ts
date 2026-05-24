@@ -8,6 +8,9 @@ import {
 import type {
   AddressProfileResponse,
   BridgeRouteDisclosure,
+  NativeMarketOrderBookDelta,
+  NativeMarketOrderBookDeltasResponse,
+  NativeMarketOrderBookDeltasResponseFilters,
   NativeDecodedEvent,
   NativeEventProjection,
   NoEvmReceiptProof,
@@ -34,6 +37,26 @@ interface NativeMarketSaleEvent extends NativeDecodedEvent {
   status: "filled";
   nft_standard: "mrc1155";
   royalty_bps: number;
+}
+
+function nativeMarketOrderBookDelta(
+  extra: Partial<NativeMarketOrderBookDelta> = {},
+): NativeMarketOrderBookDelta {
+  return {
+    marketId: `0x${"aa".repeat(32)}`,
+    orderId: `0x${"bb".repeat(32)}`,
+    eventName: "market.spot.order_placed",
+    action: "upsert",
+    side: "bid",
+    price: "100",
+    quantity: "7",
+    remaining: "7",
+    status: "open",
+    blockHeight: 101,
+    txIndex: 0,
+    logIndex: 1,
+    ...extra,
+  };
 }
 
 function bridgeRoute(routeId: string): BridgeRouteDisclosure {
@@ -753,6 +776,151 @@ describe("ApiClient", () => {
         method: "GET",
       },
     ]);
+  });
+
+  it("replays native market orderbook deltas and parses stream-compatible payloads", async () => {
+    const marketId = `0x${"aa".repeat(32)}`;
+    const orderId = `0x${"bb".repeat(32)}`;
+    const cursor = `0x${"00".repeat(8)}${"01".repeat(8)}`;
+    const delta = nativeMarketOrderBookDelta({ marketId, orderId });
+    const filters = {
+      family: "market",
+      marketId,
+      eventName: "market.spot.order_placed",
+    } satisfies NativeMarketOrderBookDeltasResponseFilters;
+    const { fetch, calls } = mockGet(
+      apiEnvelope({
+        schemaVersion: 1,
+        fromBlock: 100,
+        toBlock: 103,
+        limit: 10,
+        cursor,
+        nextCursor: null,
+        filters,
+        replay: true,
+        streamTopic: "nativeMarketOrderBook",
+        deltas: [delta],
+        source: {
+          indexerProvider: "native_events",
+          projection: "native_market_orderbook_deltas",
+          historyApi: "lyth_nativeMarketEvents",
+        },
+      } satisfies NativeMarketOrderBookDeltasResponse),
+    );
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    const response = await client.nativeMarketOrderBookDeltas({
+      fromBlock: 100,
+      toBlock: 103,
+      marketId,
+      eventName: "market.spot.order_placed",
+      limit: 10,
+      cursor,
+    });
+
+    expect(response.data.replay).toBe(true);
+    expect(response.data.streamTopic).toBe("nativeMarketOrderBook");
+    expect(response.data.deltas).toEqual([delta]);
+    expect(response.data.filters.marketId).toBe(marketId);
+    expect(response.data.source.projection).toBe("native_market_orderbook_deltas");
+    expect(calls).toEqual([
+      {
+        url: `https://rpc.example/api/v1/native-market-orderbook-deltas?fromBlock=100&toBlock=103&limit=10&cursor=${cursor}&eventName=market.spot.order_placed&marketId=${marketId}`,
+        method: "GET",
+      },
+    ]);
+  });
+
+  it("serializes native market orderbook delta replay cursor and filters", async () => {
+    const marketId = `0x${"aa".repeat(32)}`;
+    const listingId = `0x${"bb".repeat(32)}`;
+    const primaryId = `0x${"cc".repeat(32)}`;
+    const relatedId = `0x${"dd".repeat(32)}`;
+    const tokenId = `0x${"ee".repeat(32)}`;
+    const eventTopic = `0x${"11".repeat(32)}`;
+    const account = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+    const counterparty = "mono1counterparty0000000000000000000000000";
+    const cursor = `0x${"12".repeat(16)}`;
+    const { fetch, calls } = mockGet(
+      apiEnvelope({
+        schemaVersion: 1,
+        fromBlock: 100,
+        toBlock: 120,
+        limit: null,
+        cursor,
+        nextCursor: null,
+        filters: { family: "market" },
+        replay: true,
+        streamTopic: "nativeMarketOrderBook",
+        deltas: [],
+        source: {
+          indexerProvider: "native_events",
+          projection: "native_market_orderbook_deltas",
+          historyApi: "lyth_nativeMarketEvents",
+        },
+      } satisfies NativeMarketOrderBookDeltasResponse),
+    );
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    await client.nativeMarketOrderBookDeltas({
+      fromBlock: 100n,
+      toBlock: 120,
+      cursor,
+      txIndex: 2,
+      logIndex: 3,
+      address: "monos1nativeeventemitter",
+      eventTopic,
+      eventName: "market.spot.order_settled",
+      marketId,
+      listingId,
+      primaryId,
+      relatedId,
+      tokenId,
+      account,
+      counterparty,
+    });
+
+    expect(calls[0]).toEqual({
+      url: `https://rpc.example/api/v1/native-market-orderbook-deltas?fromBlock=100&toBlock=120&cursor=${cursor}&txIndex=2&logIndex=3&address=monos1nativeeventemitter&eventTopic=${eventTopic}&eventName=market.spot.order_settled&marketId=${marketId}&listingId=${listingId}&primaryId=${primaryId}&relatedId=${relatedId}&tokenId=${tokenId}&account=${account}&counterparty=${counterparty}`,
+      method: "GET",
+    });
+  });
+
+  it("rejects malformed native market orderbook delta replay bodies", async () => {
+    const malformed = apiEnvelope({
+      schemaVersion: 1,
+      fromBlock: 100,
+      toBlock: 103,
+      limit: 10,
+      cursor: null,
+      nextCursor: null,
+      filters: { family: "market" },
+      replay: true,
+      streamTopic: "nativeMarketOrderBook",
+      events: [nativeMarketOrderBookDelta()],
+      deltas: [
+        {
+          ...nativeMarketOrderBookDelta(),
+          market_id: `0x${"aa".repeat(32)}`,
+          marketId: undefined,
+        },
+      ],
+      source: {
+        indexerProvider: "native_events",
+        projection: "native_market_orderbook_deltas",
+        historyApi: "lyth_nativeMarketEvents",
+      },
+    });
+    const { fetch } = mockGet(malformed);
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    await expect(
+      client.nativeMarketOrderBookDeltas({
+        fromBlock: 100,
+        toBlock: 103,
+        limit: 10,
+      }),
+    ).rejects.toMatchObject({ kind: "malformed" });
   });
 
   it("nativeAgentState sends query params and decodes native agent state rows", async () => {
