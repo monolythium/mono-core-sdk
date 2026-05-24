@@ -208,11 +208,20 @@ export interface NoEvmFinalityCertificate {
   signerCount: number;
 }
 
+export interface NoEvmFinalityBlockReference {
+  round: number;
+  authority: number;
+  digest: string;
+}
+
 export interface NoEvmFinalityEvidence {
   schema: "mono.no_evm_receipt_finality.v1";
   source: "blsRoundCertificate" | string;
   round: number;
   certificate: NoEvmFinalityCertificate;
+  blockReference?: NoEvmFinalityBlockReference | null;
+  leaderCertificate?: NoEvmFinalityCertificate | null;
+  dacCertificate?: NoEvmFinalityCertificate | null;
 }
 
 interface NoEvmReceiptProofBase {

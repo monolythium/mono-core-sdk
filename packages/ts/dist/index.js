@@ -4877,6 +4877,31 @@ function computeNoEvmRoundFinalityMessage(chainId, round) {
   writeU64Le(preimage, 13, round, "round");
   return blake3(preimage);
 }
+function computeNoEvmLeaderFinalityMessage(chainId, blockReference) {
+  return computeNoEvmBlockFinalityMessage("leader", chainId, blockReference);
+}
+function computeNoEvmDacFinalityMessage(chainId, blockReference) {
+  return computeNoEvmBlockFinalityMessage("dac", chainId, blockReference);
+}
+function computeNoEvmBlockFinalityMessage(domain, chainId, blockReference) {
+  const domainBytes = new TextEncoder().encode(domain);
+  const digest = decodeHash(
+    blockReference.digest,
+    "finalityEvidence.blockReference.digest"
+  );
+  const preimage = new Uint8Array(domainBytes.length + 8 + 2 + 8 + HASH_BYTE_LENGTH);
+  let offset = 0;
+  preimage.set(domainBytes, offset);
+  offset += domainBytes.length;
+  writeU64Le(preimage, offset, chainId, "chainId");
+  offset += 8;
+  writeU16Le(preimage, offset, blockReference.authority, "finalityEvidence.blockReference.authority");
+  offset += 2;
+  writeU64Le(preimage, offset, blockReference.round, "finalityEvidence.blockReference.round");
+  offset += 8;
+  preimage.set(digest, offset);
+  return blake3(preimage);
+}
 function verifyNoEvmFinalityEvidenceThreshold(finalityEvidence, options) {
   validateFinalityThreshold(options.threshold, options.committeeSize);
   const clusterPublicKey = expectBlsBytes(
@@ -4884,45 +4909,120 @@ function verifyNoEvmFinalityEvidenceThreshold(finalityEvidence, options) {
     BLS_PUBLIC_KEY_BYTE_LENGTH2,
     "clusterPublicKey"
   );
-  const signature = decodeFinalitySignature(finalityEvidence);
-  const signerIndices = signerIndicesFromBitmap(
-    decodeHexBytes(
-      finalityEvidence.certificate.signersBitmap,
-      "finalityEvidence.certificate.signersBitmap"
-    )
-  );
-  const base = finalityVerificationBase(
-    finalityEvidence,
-    signerIndices,
+  validateFinalityEvidenceForVerification(finalityEvidence);
+  const message = computeNoEvmRoundFinalityMessage(options.chainId, finalityEvidence.round);
+  return verifyFinalityCertificateThreshold(
+    finalityEvidence.certificate,
+    "finalityEvidence.certificate",
+    message,
+    clusterPublicKey,
     options.committeeSize,
     options.threshold
   );
-  const message = computeNoEvmRoundFinalityMessage(options.chainId, finalityEvidence.round);
-  const signatureValid = base.signerIndicesInRange && verifyBlsSignature(clusterPublicKey, message, signature);
-  return finalizeBlsFinalityVerification({
-    ...base,
-    allSignersTrusted: base.signerIndicesInRange,
-    signatureValid
-  });
 }
 function verifyNoEvmFinalityEvidenceMultisig(finalityEvidence, options) {
   validateFinalityThreshold(options.threshold, options.trustedSigners.length);
-  const signature = decodeFinalitySignature(finalityEvidence);
-  const signerIndices = signerIndicesFromBitmap(
-    decodeHexBytes(
-      finalityEvidence.certificate.signersBitmap,
-      "finalityEvidence.certificate.signersBitmap"
-    )
-  );
-  const committeeSize = options.trustedSigners.reduce((max, signer) => Math.max(max, signer.authorityIndex), -1) + 1;
-  const base = finalityVerificationBase(
-    finalityEvidence,
-    signerIndices,
-    committeeSize,
+  validateFinalityEvidenceForVerification(finalityEvidence);
+  const message = computeNoEvmRoundFinalityMessage(options.chainId, finalityEvidence.round);
+  return verifyFinalityCertificateMultisig(
+    finalityEvidence.certificate,
+    "finalityEvidence.certificate",
+    message,
+    options.trustedSigners,
     options.threshold
   );
+}
+function verifyNoEvmBlockFinalityEvidenceThreshold(finalityEvidence, options) {
+  validateFinalityThreshold(options.threshold, options.committeeSize);
+  validateFinalityEvidenceForVerification(finalityEvidence);
+  const clusterPublicKey = expectBlsBytes(
+    options.clusterPublicKey,
+    BLS_PUBLIC_KEY_BYTE_LENGTH2,
+    "clusterPublicKey"
+  );
+  const blockReference = requireBlockReference(finalityEvidence);
+  const leaderCertificate = requireBlockFinalityCertificate(
+    finalityEvidence.leaderCertificate,
+    "finalityEvidence.leaderCertificate"
+  );
+  const dacCertificate = requireBlockFinalityCertificate(
+    finalityEvidence.dacCertificate,
+    "finalityEvidence.dacCertificate"
+  );
+  const leaderMessage = computeNoEvmLeaderFinalityMessage(options.chainId, blockReference);
+  const dacMessage = computeNoEvmDacFinalityMessage(options.chainId, blockReference);
+  const leaderVerification = verifyFinalityCertificateThreshold(
+    leaderCertificate,
+    "finalityEvidence.leaderCertificate",
+    leaderMessage,
+    clusterPublicKey,
+    options.committeeSize,
+    options.threshold
+  );
+  const dacVerification = verifyFinalityCertificateThreshold(
+    dacCertificate,
+    "finalityEvidence.dacCertificate",
+    dacMessage,
+    clusterPublicKey,
+    options.committeeSize,
+    options.threshold
+  );
+  return {
+    blockReference,
+    leaderCertificate: leaderVerification,
+    dacCertificate: dacVerification,
+    verified: leaderVerification.verified && dacVerification.verified
+  };
+}
+function verifyNoEvmBlockFinalityEvidenceMultisig(finalityEvidence, options) {
+  validateFinalityThreshold(options.threshold, options.trustedSigners.length);
+  validateFinalityEvidenceForVerification(finalityEvidence);
+  const blockReference = requireBlockReference(finalityEvidence);
+  const leaderCertificate = requireBlockFinalityCertificate(
+    finalityEvidence.leaderCertificate,
+    "finalityEvidence.leaderCertificate"
+  );
+  const dacCertificate = requireBlockFinalityCertificate(
+    finalityEvidence.dacCertificate,
+    "finalityEvidence.dacCertificate"
+  );
+  const leaderMessage = computeNoEvmLeaderFinalityMessage(options.chainId, blockReference);
+  const dacMessage = computeNoEvmDacFinalityMessage(options.chainId, blockReference);
+  const leaderVerification = verifyFinalityCertificateMultisig(
+    leaderCertificate,
+    "finalityEvidence.leaderCertificate",
+    leaderMessage,
+    options.trustedSigners,
+    options.threshold
+  );
+  const dacVerification = verifyFinalityCertificateMultisig(
+    dacCertificate,
+    "finalityEvidence.dacCertificate",
+    dacMessage,
+    options.trustedSigners,
+    options.threshold
+  );
+  return {
+    blockReference,
+    leaderCertificate: leaderVerification,
+    dacCertificate: dacVerification,
+    verified: leaderVerification.verified && dacVerification.verified
+  };
+}
+function verifyFinalityCertificateMultisig(certificate, field2, message, trustedSigners, threshold) {
+  const signature = decodeFinalityCertificateSignature(certificate, field2);
+  const signerIndices = signerIndicesFromBitmap(
+    decodeHexBytes(certificate.signersBitmap, `${field2}.signersBitmap`)
+  );
+  const committeeSize = trustedSigners.reduce((max, signer) => Math.max(max, signer.authorityIndex), -1) + 1;
+  const base = finalityCertificateVerificationBase(
+    certificate,
+    signerIndices,
+    committeeSize,
+    threshold
+  );
   const roster = /* @__PURE__ */ new Map();
-  options.trustedSigners.forEach((signer, index) => {
+  trustedSigners.forEach((signer, index) => {
     assertUint32(signer.authorityIndex, `trustedSigners[${index}].authorityIndex`);
     if (signer.authorityIndex > 65535) {
       throw new NoEvmReceiptProofError(
@@ -4955,11 +5055,28 @@ function verifyNoEvmFinalityEvidenceMultisig(finalityEvidence, options) {
       publicKeys.push(publicKey);
     }
   });
-  const message = computeNoEvmRoundFinalityMessage(options.chainId, finalityEvidence.round);
   const signatureValid = allSignersTrusted && publicKeys.length > 0 && verifyBlsAggregateSignature(publicKeys, message, signature);
   return finalizeBlsFinalityVerification({
     ...base,
     allSignersTrusted,
+    signatureValid
+  });
+}
+function verifyFinalityCertificateThreshold(certificate, field2, message, clusterPublicKey, committeeSize, threshold) {
+  const signature = decodeFinalityCertificateSignature(certificate, field2);
+  const signerIndices = signerIndicesFromBitmap(
+    decodeHexBytes(certificate.signersBitmap, `${field2}.signersBitmap`)
+  );
+  const base = finalityCertificateVerificationBase(
+    certificate,
+    signerIndices,
+    committeeSize,
+    threshold
+  );
+  const signatureValid = base.signerIndicesInRange && verifyBlsSignature(clusterPublicKey, message, signature);
+  return finalizeBlsFinalityVerification({
+    ...base,
+    allSignersTrusted: base.signerIndicesInRange,
     signatureValid
   });
 }
@@ -5487,51 +5604,13 @@ function validateOptionalFinalityEvidence(proof) {
     "unsupported_schema"
   );
   assertUint32(finalityEvidence["round"], "finalityEvidence.round");
-  const certificate = finalityEvidence["certificate"];
-  if (!isRecord3(certificate)) {
-    throw new NoEvmReceiptProofError(
-      "invalid_proof_shape",
-      "finalityEvidence.certificate must be an object"
-    );
-  }
-  assertUint32(certificate["round"], "finalityEvidence.certificate.round");
-  if (certificate["round"] !== finalityEvidence["round"]) {
-    throw new NoEvmReceiptProofError(
-      "invalid_proof_shape",
-      "finalityEvidence.certificate.round must match finalityEvidence.round"
-    );
-  }
-  decodeHexBytes(certificate["signature"], "finalityEvidence.certificate.signature");
-  decodeHexBytes(certificate["signersBitmap"], "finalityEvidence.certificate.signersBitmap");
-  const signerIndices = certificate["signerIndices"];
-  if (!Array.isArray(signerIndices)) {
-    throw new NoEvmReceiptProofError(
-      "invalid_proof_shape",
-      "finalityEvidence.certificate.signerIndices must be an array"
-    );
-  }
-  signerIndices.forEach((index, signerIndex) => {
-    assertUint32(index, `finalityEvidence.certificate.signerIndices[${signerIndex}]`);
-    if (index > 65535) {
-      throw new NoEvmReceiptProofError(
-        "invalid_proof_shape",
-        `finalityEvidence.certificate.signerIndices[${signerIndex}] must fit u16`
-      );
-    }
-  });
-  assertUint32(certificate["signerCount"], "finalityEvidence.certificate.signerCount");
-  if (certificate["signerCount"] > 65535) {
-    throw new NoEvmReceiptProofError(
-      "invalid_proof_shape",
-      "finalityEvidence.certificate.signerCount must fit u16"
-    );
-  }
-  if (certificate["signerCount"] !== signerIndices.length) {
-    throw new NoEvmReceiptProofError(
-      "invalid_proof_shape",
-      "finalityEvidence.certificate.signerCount must match signerIndices length"
-    );
-  }
+  const round = finalityEvidence["round"];
+  validateFinalityCertificateObject(
+    finalityEvidence["certificate"],
+    round,
+    "finalityEvidence.certificate"
+  );
+  validateOptionalBlockFinalityFields(finalityEvidence, round, proof.blockHash);
 }
 function validateFinalityEvidenceForVerification(finalityEvidence) {
   if (!isRecord3(finalityEvidence)) {
@@ -5553,41 +5632,113 @@ function validateFinalityEvidenceForVerification(finalityEvidence) {
     "unsupported_schema"
   );
   assertUint32(finalityEvidence.round, "finalityEvidence.round");
-  const certificate = finalityEvidence.certificate;
+  validateFinalityCertificateObject(
+    finalityEvidence.certificate,
+    finalityEvidence.round,
+    "finalityEvidence.certificate"
+  );
+  validateOptionalBlockFinalityFields(
+    finalityEvidence,
+    finalityEvidence.round
+  );
+}
+function validateOptionalBlockFinalityFields(finalityEvidence, round, proofBlockHash) {
+  const blockReference = finalityEvidence["blockReference"];
+  if (blockReference != null) {
+    validateFinalityBlockReference(blockReference, round, proofBlockHash);
+  } else if (finalityEvidence["leaderCertificate"] != null || finalityEvidence["dacCertificate"] != null) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.blockReference is required for block-bound certificates"
+    );
+  }
+  if (finalityEvidence["leaderCertificate"] != null) {
+    validateFinalityCertificateObject(
+      finalityEvidence["leaderCertificate"],
+      round,
+      "finalityEvidence.leaderCertificate"
+    );
+  }
+  if (finalityEvidence["dacCertificate"] != null) {
+    validateFinalityCertificateObject(
+      finalityEvidence["dacCertificate"],
+      round,
+      "finalityEvidence.dacCertificate"
+    );
+  }
+}
+function validateFinalityBlockReference(blockReference, round, proofBlockHash) {
+  if (!isRecord3(blockReference)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.blockReference must be an object"
+    );
+  }
+  assertUint32(blockReference["round"], "finalityEvidence.blockReference.round");
+  if (blockReference["round"] !== round) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.blockReference.round must match finalityEvidence.round"
+    );
+  }
+  assertUint32(blockReference["authority"], "finalityEvidence.blockReference.authority");
+  if (blockReference["authority"] > 65535) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.blockReference.authority must fit u16"
+    );
+  }
+  const digest = decodeHash(
+    blockReference["digest"],
+    "finalityEvidence.blockReference.digest"
+  );
+  if (proofBlockHash !== void 0) {
+    const blockHash = decodeHash(proofBlockHash, "blockHash");
+    if (!bytesEqual(digest, blockHash)) {
+      throw new NoEvmReceiptProofError(
+        "invalid_proof_shape",
+        "finalityEvidence.blockReference.digest must match blockHash"
+      );
+    }
+  }
+}
+function validateFinalityCertificateObject(certificate, round, field2) {
   if (!isRecord3(certificate)) {
+    throw new NoEvmReceiptProofError("invalid_proof_shape", `${field2} must be an object`);
+  }
+  assertUint32(certificate["round"], `${field2}.round`);
+  if (certificate["round"] !== round) {
     throw new NoEvmReceiptProofError(
       "invalid_proof_shape",
-      "finalityEvidence.certificate must be an object"
+      `${field2}.round must match finalityEvidence.round`
     );
   }
-  assertUint32(certificate.round, "finalityEvidence.certificate.round");
-  if (certificate.round !== finalityEvidence.round) {
+  decodeHexBytes(certificate["signature"], `${field2}.signature`);
+  decodeHexBytes(certificate["signersBitmap"], `${field2}.signersBitmap`);
+  const signerIndices = certificate["signerIndices"];
+  if (!Array.isArray(signerIndices)) {
     throw new NoEvmReceiptProofError(
       "invalid_proof_shape",
-      "finalityEvidence.certificate.round must match finalityEvidence.round"
+      `${field2}.signerIndices must be an array`
     );
   }
-  decodeHexBytes(certificate.signersBitmap, "finalityEvidence.certificate.signersBitmap");
-  if (!Array.isArray(certificate.signerIndices)) {
-    throw new NoEvmReceiptProofError(
-      "invalid_proof_shape",
-      "finalityEvidence.certificate.signerIndices must be an array"
-    );
-  }
-  certificate.signerIndices.forEach((index, signerIndex) => {
-    assertUint32(index, `finalityEvidence.certificate.signerIndices[${signerIndex}]`);
+  signerIndices.forEach((index, signerIndex) => {
+    assertUint32(index, `${field2}.signerIndices[${signerIndex}]`);
     if (index > 65535) {
       throw new NoEvmReceiptProofError(
         "invalid_proof_shape",
-        `finalityEvidence.certificate.signerIndices[${signerIndex}] must fit u16`
+        `${field2}.signerIndices[${signerIndex}] must fit u16`
       );
     }
   });
-  assertUint32(certificate.signerCount, "finalityEvidence.certificate.signerCount");
-  if (certificate.signerCount > 65535) {
+  assertUint32(certificate["signerCount"], `${field2}.signerCount`);
+  if (certificate["signerCount"] > 65535) {
+    throw new NoEvmReceiptProofError("invalid_proof_shape", `${field2}.signerCount must fit u16`);
+  }
+  if (certificate["signerCount"] !== signerIndices.length) {
     throw new NoEvmReceiptProofError(
       "invalid_proof_shape",
-      "finalityEvidence.certificate.signerCount must fit u16"
+      `${field2}.signerCount must match signerIndices length`
     );
   }
 }
@@ -5611,16 +5762,32 @@ function validateFinalityThreshold(threshold, trustedCapacity) {
     );
   }
 }
-function decodeFinalitySignature(finalityEvidence) {
-  validateFinalityEvidenceForVerification(finalityEvidence);
-  const signature = decodeHexBytes(
-    finalityEvidence.certificate.signature,
-    "finalityEvidence.certificate.signature"
-  );
+function requireBlockReference(finalityEvidence) {
+  const blockReference = finalityEvidence.blockReference;
+  if (blockReference == null) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.blockReference is required for block-bound finality verification"
+    );
+  }
+  validateFinalityBlockReference(blockReference, finalityEvidence.round);
+  return blockReference;
+}
+function requireBlockFinalityCertificate(certificate, field2) {
+  if (certificate == null) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      `${field2} is required for block-bound finality verification`
+    );
+  }
+  return certificate;
+}
+function decodeFinalityCertificateSignature(certificate, field2) {
+  const signature = decodeHexBytes(certificate.signature, `${field2}.signature`);
   if (signature.length !== BLS_SIGNATURE_BYTE_LENGTH) {
     throw new NoEvmReceiptProofError(
       "invalid_hash_length",
-      `finalityEvidence.certificate.signature must be ${BLS_SIGNATURE_BYTE_LENGTH} bytes, got ${signature.length}`
+      `${field2}.signature must be ${BLS_SIGNATURE_BYTE_LENGTH} bytes, got ${signature.length}`
     );
   }
   return signature;
@@ -5642,12 +5809,9 @@ function signerIndicesFromBitmap(bitmap) {
   });
   return out;
 }
-function finalityVerificationBase(finalityEvidence, bitmapSignerIndices, committeeSize, threshold) {
-  const signerCountMatches = finalityEvidence.certificate.signerCount === finalityEvidence.certificate.signerIndices.length && finalityEvidence.certificate.signerCount === bitmapSignerIndices.length;
-  const signerBitmapMatchesIndices = arraysEqual(
-    finalityEvidence.certificate.signerIndices,
-    bitmapSignerIndices
-  );
+function finalityCertificateVerificationBase(certificate, bitmapSignerIndices, committeeSize, threshold) {
+  const signerCountMatches = certificate.signerCount === certificate.signerIndices.length && certificate.signerCount === bitmapSignerIndices.length;
+  const signerBitmapMatchesIndices = arraysEqual(certificate.signerIndices, bitmapSignerIndices);
   const signerIndicesInRange = bitmapSignerIndices.every(
     (signerIndex) => signerIndex < committeeSize
   );
@@ -5711,6 +5875,14 @@ function writeU64Le(out, offset, value, field2) {
   for (let i = 0; i < 8; i += 1) {
     out[offset + i] = Number(big >> BigInt(i * 8) & 0xffn);
   }
+}
+function writeU16Le(out, offset, value, field2) {
+  if (!Number.isInteger(value) || value < 0 || value > 65535) {
+    throw new NoEvmReceiptProofError("invalid_uint32", `${field2} must fit u16`);
+  }
+  const int = value;
+  out[offset] = int & 255;
+  out[offset + 1] = int >> 8 & 255;
 }
 function arraysEqual(a, b) {
   return a.length === b.length && a.every((value, index) => value === b[index]);
@@ -7674,6 +7846,6 @@ function translateBlockOut(header) {
 // src/index.ts
 var version = "0.1.0";
 
-export { ADDRESS_HRP, ADDRESS_KIND_HRPS, API_STREAM_TOPICS, AddressError, AgentActionError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, CLOB_MARKET_ID_DOMAIN_TAG, CLOB_SELECTORS, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DelegationPrecompileError, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MarketActionError, MonolythiumProvider, MonolythiumSigner, MrvValidationError, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NATIVE_MARKET_MODULE_ADDRESS, NATIVE_MARKET_MODULE_ADDRESS_BYTES, NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_FINALITY_EVIDENCE_SCHEMA, NO_EVM_FINALITY_EVIDENCE_SOURCE, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NoEvmReceiptProofError, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, assertNativeMarketOrderBookStreamPayload, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bridgeAddressHex, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildBridgeRouteCatalogue, buildCancelSpotOrderPlan, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildNativeMarketModuleCallEnvelope, buildNativeNftBuyListingForwarderInput, buildNativeNftBuyListingModuleCall, buildNativeNftCancelListingForwarderInput, buildNativeNftCancelListingModuleCall, buildNativeNftCreateListingForwarderInput, buildNativeNftCreateListingModuleCall, buildNativeNftPlaceAuctionBidForwarderInput, buildNativeNftPlaceAuctionBidModuleCall, buildNativeNftSettleAuctionForwarderInput, buildNativeNftSettleAuctionModuleCall, buildNativeNftSweepExpiredListingsForwarderInput, buildNativeNftSweepExpiredListingsModuleCall, buildNativeSpotCancelOrderForwarderInput, buildNativeSpotCancelOrderModuleCall, buildNativeSpotLimitOrderForwarderInput, buildNativeSpotLimitOrderModuleCall, buildPlaceSpotLimitOrderPlan, buildPlaceSpotMarketOrderExPlan, buildPlaceSpotMarketOrderPlan, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, clobAddressHex, compareNativeDevVersions, composeClaimBoundMessage, computeNoEvmReceiptsRoot, computeNoEvmRoundFinalityMessage, computeNoEvmTargetReceiptHash, consumeNativeEvents, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNativeAgentStateResponse, decodeNativeMarketOrderBookDeltasResponse, decodeNativeReceiptResponse, decodeNoEvmReceiptTranscript, decodeTxFeedResponse, delegationAddressHex, deriveClobMarketId, deriveMrvContractAddress, encodeBlockSelector, encodeCancelOrderCalldata, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeNativeMarketModuleForwarderInput, encodeNativeNftBuyListingCall, encodeNativeNftCancelListingCall, encodeNativeNftCreateListingCall, encodeNativeNftPlaceAuctionBidCall, encodeNativeNftSettleAuctionCall, encodeNativeNftSweepExpiredListingsCall, encodeNativeSpotCancelOrderCall, encodeNativeSpotLimitOrderCall, encodePlaceLimitOrderCalldata, encodePlaceMarketOrderCalldata, encodePlaceMarketOrderExCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, getChainInfo, getNoEvmReceiptTrustPolicy, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isNativeMarketOrderBookStreamPayload, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeAgentStateFilterParams, nativeDevSchemaFieldNames, nativeDevUiStrings, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nativeMarketStateFilterParams, noEvmReceiptTrustPolicyFromChainInfo, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseLythToLythoshi, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, rankBridgeRoutes, resolveStudioHostStatus, selectBridgeTransferRoute, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, verifyNoEvmArchiveProofSignatures, verifyNoEvmFinalityEvidenceMultisig, verifyNoEvmFinalityEvidenceThreshold, verifyNoEvmReceiptProof, verifyNoEvmReceiptProofTrust, version };
+export { ADDRESS_HRP, ADDRESS_KIND_HRPS, API_STREAM_TOPICS, AddressError, AgentActionError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, CLOB_MARKET_ID_DOMAIN_TAG, CLOB_SELECTORS, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DelegationPrecompileError, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MarketActionError, MonolythiumProvider, MonolythiumSigner, MrvValidationError, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NATIVE_MARKET_MODULE_ADDRESS, NATIVE_MARKET_MODULE_ADDRESS_BYTES, NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_FINALITY_EVIDENCE_SCHEMA, NO_EVM_FINALITY_EVIDENCE_SOURCE, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NoEvmReceiptProofError, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, assertNativeMarketOrderBookStreamPayload, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bridgeAddressHex, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildBridgeRouteCatalogue, buildCancelSpotOrderPlan, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildNativeMarketModuleCallEnvelope, buildNativeNftBuyListingForwarderInput, buildNativeNftBuyListingModuleCall, buildNativeNftCancelListingForwarderInput, buildNativeNftCancelListingModuleCall, buildNativeNftCreateListingForwarderInput, buildNativeNftCreateListingModuleCall, buildNativeNftPlaceAuctionBidForwarderInput, buildNativeNftPlaceAuctionBidModuleCall, buildNativeNftSettleAuctionForwarderInput, buildNativeNftSettleAuctionModuleCall, buildNativeNftSweepExpiredListingsForwarderInput, buildNativeNftSweepExpiredListingsModuleCall, buildNativeSpotCancelOrderForwarderInput, buildNativeSpotCancelOrderModuleCall, buildNativeSpotLimitOrderForwarderInput, buildNativeSpotLimitOrderModuleCall, buildPlaceSpotLimitOrderPlan, buildPlaceSpotMarketOrderExPlan, buildPlaceSpotMarketOrderPlan, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, clobAddressHex, compareNativeDevVersions, composeClaimBoundMessage, computeNoEvmDacFinalityMessage, computeNoEvmLeaderFinalityMessage, computeNoEvmReceiptsRoot, computeNoEvmRoundFinalityMessage, computeNoEvmTargetReceiptHash, consumeNativeEvents, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNativeAgentStateResponse, decodeNativeMarketOrderBookDeltasResponse, decodeNativeReceiptResponse, decodeNoEvmReceiptTranscript, decodeTxFeedResponse, delegationAddressHex, deriveClobMarketId, deriveMrvContractAddress, encodeBlockSelector, encodeCancelOrderCalldata, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeNativeMarketModuleForwarderInput, encodeNativeNftBuyListingCall, encodeNativeNftCancelListingCall, encodeNativeNftCreateListingCall, encodeNativeNftPlaceAuctionBidCall, encodeNativeNftSettleAuctionCall, encodeNativeNftSweepExpiredListingsCall, encodeNativeSpotCancelOrderCall, encodeNativeSpotLimitOrderCall, encodePlaceLimitOrderCalldata, encodePlaceMarketOrderCalldata, encodePlaceMarketOrderExCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, getChainInfo, getNoEvmReceiptTrustPolicy, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isNativeMarketOrderBookStreamPayload, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeAgentStateFilterParams, nativeDevSchemaFieldNames, nativeDevUiStrings, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nativeMarketStateFilterParams, noEvmReceiptTrustPolicyFromChainInfo, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseLythToLythoshi, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, rankBridgeRoutes, resolveStudioHostStatus, selectBridgeTransferRoute, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, verifyNoEvmArchiveProofSignatures, verifyNoEvmBlockFinalityEvidenceMultisig, verifyNoEvmBlockFinalityEvidenceThreshold, verifyNoEvmFinalityEvidenceMultisig, verifyNoEvmFinalityEvidenceThreshold, verifyNoEvmReceiptProof, verifyNoEvmReceiptProofTrust, version };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

@@ -8,11 +8,15 @@ import {
   NO_EVM_RECEIPT_PROOF_TYPE,
   NO_EVM_RECEIPT_ROOT_ALGORITHM,
   NoEvmReceiptProofError,
+  computeNoEvmDacFinalityMessage,
+  computeNoEvmLeaderFinalityMessage,
   computeNoEvmReceiptsRoot,
   computeNoEvmRoundFinalityMessage,
   computeNoEvmTargetReceiptHash,
   decodeNoEvmReceiptTranscript,
   verifyNoEvmArchiveProofSignatures,
+  verifyNoEvmBlockFinalityEvidenceMultisig,
+  verifyNoEvmBlockFinalityEvidenceThreshold,
   verifyNoEvmFinalityEvidenceThreshold,
   verifyNoEvmReceiptProof,
   verifyNoEvmReceiptProofTrust,
@@ -20,6 +24,8 @@ import {
 import { MlDsa65Backend, mlDsa65AddressFromPublicKey } from "../src/crypto/index.js";
 import type {
   NoEvmArchiveCoveringSnapshot,
+  NoEvmFinalityBlockReference,
+  NoEvmFinalityCertificate,
   NoEvmFinalityEvidence,
   NoEvmReceiptProof,
 } from "../src/index.js";
@@ -110,28 +116,60 @@ function blsFinalityEvidence(args: {
   signerIndices: number[];
   signerCount: number;
   committeeSize: number;
+  blockReference?: NoEvmFinalityBlockReference;
+  leaderSignature?: Uint8Array;
+  dacSignature?: Uint8Array;
 }): NoEvmFinalityEvidence {
+  const certificate = blsFinalityCertificate(args);
   return {
     schema: "mono.no_evm_receipt_finality.v1",
     source: "blsRoundCertificate",
     round: args.round,
-    certificate: {
-      round: args.round,
-      signature: bytesToHex(args.signature),
-      signersBitmap: finalityBitmapHex(args.bitmapIndices, args.committeeSize),
-      signerIndices: args.signerIndices,
-      signerCount: args.signerCount,
-    },
+    certificate,
+    blockReference: args.blockReference,
+    leaderCertificate:
+      args.leaderSignature == null
+        ? undefined
+        : blsFinalityCertificate({ ...args, signature: args.leaderSignature }),
+    dacCertificate:
+      args.dacSignature == null
+        ? undefined
+        : blsFinalityCertificate({ ...args, signature: args.dacSignature }),
   };
 }
 
-function blsFixture(seedByte: number, chainId: number, round: number) {
-  const key = bls12_381.longSignatures.keygen(new Uint8Array(48).fill(seedByte));
-  const message = computeNoEvmRoundFinalityMessage(chainId, round);
+function blsFinalityCertificate(args: {
+  round: number;
+  signature: Uint8Array;
+  bitmapIndices: readonly number[];
+  signerIndices: number[];
+  signerCount: number;
+  committeeSize: number;
+}): NoEvmFinalityCertificate {
+  return {
+    round: args.round,
+    signature: bytesToHex(args.signature),
+    signersBitmap: finalityBitmapHex(args.bitmapIndices, args.committeeSize),
+    signerIndices: args.signerIndices,
+    signerCount: args.signerCount,
+  };
+}
+
+function blsKey(seedByte: number) {
+  return bls12_381.longSignatures.keygen(new Uint8Array(48).fill(seedByte));
+}
+
+function signBlsMessage(key: ReturnType<typeof blsKey>, message: Uint8Array): Uint8Array {
   const hashedMessage = bls12_381.longSignatures.hash(message, BLS_DST);
-  const signature = bls12_381.longSignatures.Signature.toBytes(
+  return bls12_381.longSignatures.Signature.toBytes(
     bls12_381.longSignatures.sign(hashedMessage, key.secretKey),
   );
+}
+
+function blsFixture(seedByte: number, chainId: number, round: number) {
+  const key = blsKey(seedByte);
+  const message = computeNoEvmRoundFinalityMessage(chainId, round);
+  const signature = signBlsMessage(key, message);
   return { publicKey: key.publicKey.toBytes(), signature };
 }
 
@@ -545,13 +583,33 @@ describe("no-EVM receipt proof helpers", () => {
   });
 
   it("accepts compact proofs carrying BLS finality evidence", () => {
+    const base = compactNoEvmProof();
     const proof: NoEvmCompactReceiptProof = {
-      ...compactNoEvmProof(),
+      ...base,
       finalityEvidence: {
         schema: "mono.no_evm_receipt_finality.v1",
         source: "blsRoundCertificate",
         round: 57,
         certificate: {
+          round: 57,
+          signature: "0x1234",
+          signersBitmap: "0xabcd",
+          signerIndices: [1, 3],
+          signerCount: 2,
+        },
+        blockReference: {
+          round: 57,
+          authority: 4,
+          digest: base.blockHash,
+        },
+        leaderCertificate: {
+          round: 57,
+          signature: "0x1234",
+          signersBitmap: "0xabcd",
+          signerIndices: [1, 3],
+          signerCount: 2,
+        },
+        dacCertificate: {
           round: 57,
           signature: "0x1234",
           signersBitmap: "0xabcd",
@@ -569,6 +627,7 @@ describe("no-EVM receipt proof helpers", () => {
     expect(verified?.proofKind).toBe("compactInclusion");
     expect(proof.finalityEvidence?.source).toBe("blsRoundCertificate");
     expect(proof.finalityEvidence?.certificate.signerIndices).toEqual([1, 3]);
+    expect(proof.finalityEvidence?.blockReference?.digest).toBe(base.blockHash);
   });
 
   it("rejects malformed BLS finality evidence", () => {
@@ -688,6 +747,80 @@ describe("no-EVM receipt proof helpers", () => {
     expect(result.verified).toBe(false);
     expect(result.thresholdMet).toBe(false);
     expect(result.signatureValid).toBe(true);
+  });
+
+  it("verifies block-bound BLS finality evidence with a trusted signer roster", () => {
+    const chainId = 69_420;
+    const round = 62;
+    const blockReference = {
+      round,
+      authority: 4,
+      digest: `0x${"42".repeat(32)}`,
+    };
+    const key = blsKey(0x50);
+    const publicKey = key.publicKey.toBytes();
+    const finalityEvidence = blsFinalityEvidence({
+      round,
+      signature: signBlsMessage(key, computeNoEvmRoundFinalityMessage(chainId, round)),
+      bitmapIndices: [2],
+      signerIndices: [2],
+      signerCount: 1,
+      committeeSize: 7,
+      blockReference,
+      leaderSignature: signBlsMessage(
+        key,
+        computeNoEvmLeaderFinalityMessage(chainId, blockReference),
+      ),
+      dacSignature: signBlsMessage(key, computeNoEvmDacFinalityMessage(chainId, blockReference)),
+    });
+
+    const result = verifyNoEvmBlockFinalityEvidenceMultisig(finalityEvidence, {
+      chainId,
+      trustedSigners: [{ authorityIndex: 2, publicKey }],
+      threshold: 1,
+    });
+
+    expect(result.verified).toBe(true);
+    expect(result.blockReference).toEqual(blockReference);
+    expect(result.leaderCertificate.signatureValid).toBe(true);
+    expect(result.dacCertificate.signatureValid).toBe(true);
+  });
+
+  it("rejects block-bound BLS finality evidence for the wrong chain id", () => {
+    const chainId = 69_420;
+    const round = 63;
+    const blockReference = {
+      round,
+      authority: 5,
+      digest: `0x${"43".repeat(32)}`,
+    };
+    const key = blsKey(0x51);
+    const publicKey = key.publicKey.toBytes();
+    const finalityEvidence = blsFinalityEvidence({
+      round,
+      signature: signBlsMessage(key, computeNoEvmRoundFinalityMessage(chainId, round)),
+      bitmapIndices: [3],
+      signerIndices: [3],
+      signerCount: 1,
+      committeeSize: 7,
+      blockReference,
+      leaderSignature: signBlsMessage(
+        key,
+        computeNoEvmLeaderFinalityMessage(chainId, blockReference),
+      ),
+      dacSignature: signBlsMessage(key, computeNoEvmDacFinalityMessage(chainId, blockReference)),
+    });
+
+    const result = verifyNoEvmBlockFinalityEvidenceThreshold(finalityEvidence, {
+      chainId: chainId + 1,
+      clusterPublicKey: publicKey,
+      committeeSize: 7,
+      threshold: 1,
+    });
+
+    expect(result.verified).toBe(false);
+    expect(result.leaderCertificate.signatureValid).toBe(false);
+    expect(result.dacCertificate.signatureValid).toBe(false);
   });
 
   it("rejects malformed finality BLS signature length", () => {
