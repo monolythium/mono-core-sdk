@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { keccak_256 } from "@noble/hashes/sha3.js";
 import {
   NO_EVM_RECEIPT_CODEC,
   NO_EVM_RECEIPT_PROOF_SCHEMA,
@@ -11,27 +12,69 @@ import {
   verifyNoEvmReceiptProof,
 } from "../src/index.js";
 import type { NoEvmReceiptProof } from "../src/index.js";
+import type { NoEvmCompactReceiptProof } from "../src/client.js";
 
 const RECEIPTS = [
   new Uint8Array([0x01, 0x02, 0x03]),
   new Uint8Array([0x04, 0x05, 0x06, 0x07]),
   new Uint8Array([]),
 ];
+const COMPACT_INCLUSION_SCHEMA = "mono.no_evm_receipt_compact_inclusion.v1";
+const COMPACT_TREE_ALGORITHM = "binary-keccak-receipt-tree";
+const COMPACT_PROOF_TYPE = "canonicalReceiptInclusion";
+const RECEIPT_ROOT_EMPTY_DOMAIN = new TextEncoder().encode(
+  "monolythium/v4.1/receipts_root_empty/1",
+);
+const RECEIPT_LEAF_DOMAIN = new TextEncoder().encode("monolythium/v4.1/receipt_leaf/1");
+const RECEIPT_NODE_DOMAIN = new TextEncoder().encode("monolythium/v4.1/receipt_node/1");
 
 function noEvmProof(): NoEvmReceiptProof {
   return {
     schema: NO_EVM_RECEIPT_PROOF_SCHEMA,
+    proofKind: "boundedCacheTranscript",
     proofType: NO_EVM_RECEIPT_PROOF_TYPE,
+    historySource: "liveBlockCache",
+    compactInclusionProof: null,
+    archiveProof: null,
     rootAlgorithm: NO_EVM_RECEIPT_ROOT_ALGORITHM,
     receiptCodec: NO_EVM_RECEIPT_CODEC,
     blockHash: `0x${"22".repeat(32)}`,
     txHash: `0x${"11".repeat(32)}`,
-    receiptsRoot: "0xd889f488b3fe1ea852730deb17971b3618abd21e15a2b0824525151e8d14950a",
+    receiptsRoot: computeNoEvmReceiptsRoot(RECEIPTS),
     targetReceiptHash: "0xf53a5554601329f91c1b8baec5d7270102bd621873e3b119aff9c83c1d73d86c",
     blockHeight: 100,
     txIndex: 1,
     receiptCount: RECEIPTS.length,
     receiptTranscript: RECEIPTS.map(bytesToHex),
+  };
+}
+
+function compactNoEvmProof(): NoEvmCompactReceiptProof {
+  const material = compactInclusionMaterial(RECEIPTS, 1);
+  return {
+    schema: NO_EVM_RECEIPT_PROOF_SCHEMA,
+    proofKind: "compactInclusion",
+    proofType: COMPACT_PROOF_TYPE,
+    historySource: "liveBlockCache",
+    compactInclusionProof: {
+      schema: COMPACT_INCLUSION_SCHEMA,
+      treeAlgorithm: COMPACT_TREE_ALGORITHM,
+      root: material.root,
+      leafHash: material.leafHash,
+      siblingHashes: material.siblingHashes,
+      pathSides: material.pathSides,
+    },
+    archiveProof: null,
+    rootAlgorithm: NO_EVM_RECEIPT_ROOT_ALGORITHM,
+    receiptCodec: NO_EVM_RECEIPT_CODEC,
+    blockHash: `0x${"22".repeat(32)}`,
+    txHash: `0x${"11".repeat(32)}`,
+    receiptsRoot: material.root,
+    targetReceiptHash: computeNoEvmTargetReceiptHash(RECEIPTS[1]!),
+    blockHeight: 100,
+    txIndex: 1,
+    receiptCount: RECEIPTS.length,
+    targetReceiptBytes: bytesToHex(RECEIPTS[1]!),
   };
 }
 
@@ -52,6 +95,7 @@ describe("no-EVM receipt proof helpers", () => {
     expect(verified?.targetReceiptHash).toBe(proof.targetReceiptHash);
     expect(verified?.receiptCount).toBe(3);
     expect(verified?.txIndex).toBe(1);
+    expect(verified?.proofKind).toBe("boundedCacheTranscript");
     expect(Array.from(verified?.targetReceipt ?? [])).toEqual([0x04, 0x05, 0x06, 0x07]);
     expect(verifyNoEvmReceiptProof(null)).toBeNull();
     expect(verifyNoEvmReceiptProof(undefined)).toBeNull();
@@ -89,7 +133,171 @@ describe("no-EVM receipt proof helpers", () => {
       verifyNoEvmReceiptProof({ ...noEvmProof(), targetReceiptHash: "0x12" }),
     ).toThrow(/targetReceiptHash must be 32 bytes/u);
   });
+
+  it("accepts bounded transcripts carrying the legacy root algorithm label", () => {
+    const proof = {
+      ...noEvmProof(),
+      rootAlgorithm:
+        "keccak256(monolythium/v2/receipts_root/1 || len || indexed bincode receipts)",
+    };
+
+    expect(verifyNoEvmReceiptProof(proof)?.proofKind).toBe("boundedCacheTranscript");
+  });
+
+  it("verifies compact receipt inclusion proofs", () => {
+    const proof = compactNoEvmProof();
+
+    const verified = verifyNoEvmReceiptProof(proof);
+
+    expect(verified?.proofKind).toBe("compactInclusion");
+    expect(verified?.receipts).toEqual([]);
+    expect(verified?.receiptsRoot).toBe(proof.receiptsRoot);
+    expect(verified?.targetReceiptHash).toBe(proof.targetReceiptHash);
+    expect(verified?.receiptCount).toBe(3);
+    expect(verified?.txIndex).toBe(1);
+    expect(Array.from(verified?.targetReceipt ?? [])).toEqual([0x04, 0x05, 0x06, 0x07]);
+  });
+
+  it("rejects compact proofs with tampered target bytes", () => {
+    expect(() =>
+      verifyNoEvmReceiptProof({
+        ...compactNoEvmProof(),
+        targetReceiptBytes: "0x04050608",
+      }),
+    ).toThrow(/targetReceiptHash mismatch/u);
+  });
+
+  it("rejects compact proofs with tampered sibling hashes or path sides", () => {
+    const proof = compactNoEvmProof();
+
+    expect(() =>
+      verifyNoEvmReceiptProof({
+        ...proof,
+        compactInclusionProof: {
+          ...proof.compactInclusionProof!,
+          siblingHashes: [
+            `0x${"00".repeat(32)}`,
+            ...proof.compactInclusionProof!.siblingHashes.slice(1),
+          ],
+        },
+      }),
+    ).toThrow(/compact inclusion path mismatch/u);
+
+    expect(() =>
+      verifyNoEvmReceiptProof({
+        ...proof,
+        compactInclusionProof: {
+          ...proof.compactInclusionProof!,
+          pathSides: [false, ...proof.compactInclusionProof!.pathSides.slice(1)],
+        },
+      }),
+    ).toThrow(/compact inclusion path mismatch/u);
+  });
+
+  it("rejects compact proofs whose top-level root does not match compact root", () => {
+    expect(() =>
+      verifyNoEvmReceiptProof({
+        ...compactNoEvmProof(),
+        receiptsRoot: `0x${"00".repeat(32)}`,
+      }),
+    ).toThrow(/receiptsRoot must equal compactInclusionProof\.root/u);
+  });
+
+  it("rejects compact proofs missing target receipt bytes", () => {
+    const proof = { ...compactNoEvmProof() } as Partial<NoEvmReceiptProof>;
+    delete (proof as { targetReceiptBytes?: string }).targetReceiptBytes;
+
+    expect(() => verifyNoEvmReceiptProof(proof as NoEvmReceiptProof)).toThrow(
+      /compactInclusion proof requires targetReceiptBytes/u,
+    );
+  });
+
+  it("rejects compact proofs with mismatched sibling and path side lengths", () => {
+    const proof = compactNoEvmProof();
+
+    expect(() =>
+      verifyNoEvmReceiptProof({
+        ...proof,
+        compactInclusionProof: {
+          ...proof.compactInclusionProof!,
+          pathSides: proof.compactInclusionProof!.pathSides.slice(1),
+        },
+      }),
+    ).toThrow(/siblingHashes\/pathSides length mismatch/u);
+  });
 });
+
+function compactInclusionMaterial(
+  receipts: readonly Uint8Array[],
+  targetIndex: number,
+): {
+  root: string;
+  leafHash: string;
+  siblingHashes: string[];
+  pathSides: boolean[];
+} {
+  if (receipts.length === 0) {
+    const preimage = new Uint8Array(RECEIPT_ROOT_EMPTY_DOMAIN.length + 4);
+    preimage.set(RECEIPT_ROOT_EMPTY_DOMAIN);
+    return {
+      root: bytesToHex(keccak_256(preimage)),
+      leafHash: "0x",
+      siblingHashes: [],
+      pathSides: [],
+    };
+  }
+
+  let level = receipts.map((receipt, index) => receiptLeafHash(receipt, index));
+  let index = targetIndex;
+  const siblingHashes: string[] = [];
+  const pathSides: boolean[] = [];
+  while (level.length > 1) {
+    const siblingIndex = index % 2 === 1 ? index - 1 : Math.min(index + 1, level.length - 1);
+    siblingHashes.push(bytesToHex(level[siblingIndex]!));
+    pathSides.push(index % 2 === 1);
+
+    const nextLevel: Uint8Array[] = [];
+    for (let levelIndex = 0; levelIndex < level.length; levelIndex += 2) {
+      const left = level[levelIndex]!;
+      const right = level[levelIndex + 1] ?? left;
+      nextLevel.push(receiptNodeHash(left, right));
+    }
+    level = nextLevel;
+    index = Math.floor(index / 2);
+  }
+
+  return {
+    root: bytesToHex(level[0]!),
+    leafHash: bytesToHex(receiptLeafHash(receipts[targetIndex]!, targetIndex)),
+    siblingHashes,
+    pathSides,
+  };
+}
+
+function receiptLeafHash(receipt: Uint8Array, txIndex: number): Uint8Array {
+  const preimage = new Uint8Array(RECEIPT_LEAF_DOMAIN.length + 8 + receipt.length);
+  const view = new DataView(preimage.buffer);
+  let offset = 0;
+  preimage.set(RECEIPT_LEAF_DOMAIN, offset);
+  offset += RECEIPT_LEAF_DOMAIN.length;
+  view.setUint32(offset, txIndex, true);
+  offset += 4;
+  view.setUint32(offset, receipt.length, true);
+  offset += 4;
+  preimage.set(receipt, offset);
+  return keccak_256(preimage);
+}
+
+function receiptNodeHash(left: Uint8Array, right: Uint8Array): Uint8Array {
+  const preimage = new Uint8Array(RECEIPT_NODE_DOMAIN.length + 64);
+  let offset = 0;
+  preimage.set(RECEIPT_NODE_DOMAIN, offset);
+  offset += RECEIPT_NODE_DOMAIN.length;
+  preimage.set(left, offset);
+  offset += 32;
+  preimage.set(right, offset);
+  return keccak_256(preimage);
+}
 
 function bytesToHex(bytes: Uint8Array): string {
   let out = "0x";

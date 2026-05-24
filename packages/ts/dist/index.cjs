@@ -4329,11 +4329,20 @@ function concatBytes4(...parts) {
 }
 var NO_EVM_RECEIPT_PROOF_SCHEMA = "mono.no_evm_receipt_proof.v1";
 var NO_EVM_RECEIPT_PROOF_TYPE = "canonicalReceiptsTranscript";
-var NO_EVM_RECEIPT_ROOT_ALGORITHM = "keccak256(monolythium/v2/receipts_root/1 || len || indexed bincode receipts)";
+var NO_EVM_RECEIPT_INCLUSION_PROOF_TYPE = "canonicalReceiptInclusion";
+var NO_EVM_RECEIPT_ROOT_ALGORITHM = "keccak256(monolythium/v4.1/receipts_root_empty/1|receipt_leaf/1|receipt_node/1 binary Merkle)";
+var NO_EVM_LEGACY_RECEIPT_ROOT_ALGORITHM = "keccak256(monolythium/v2/receipts_root/1 || len || indexed bincode receipts)";
 var NO_EVM_RECEIPT_CODEC = "bincode(protocore_evm::Receipt)";
-var NO_EVM_RECEIPTS_ROOT_DOMAIN = "monolythium/v2/receipts_root/1";
-var ROOT_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPTS_ROOT_DOMAIN);
+var NO_EVM_RECEIPTS_ROOT_DOMAIN = "monolythium/v4.1/receipts_root_empty/1";
+var NO_EVM_RECEIPT_LEAF_DOMAIN = "monolythium/v4.1/receipt_leaf/1";
+var NO_EVM_RECEIPT_NODE_DOMAIN = "monolythium/v4.1/receipt_node/1";
+var NO_EVM_COMPACT_INCLUSION_PROOF_SCHEMA = "mono.no_evm_receipt_compact_inclusion.v1";
+var NO_EVM_COMPACT_INCLUSION_TREE_ALGORITHM = "binary-keccak-receipt-tree";
+var EMPTY_ROOT_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPTS_ROOT_DOMAIN);
+var LEAF_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPT_LEAF_DOMAIN);
+var NODE_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPT_NODE_DOMAIN);
 var UINT32_MAX = 4294967295;
+var HASH_BYTE_LENGTH = 32;
 var HEX_RE = /^[0-9a-fA-F]*$/u;
 var NoEvmReceiptProofError = class extends Error {
   constructor(code, message) {
@@ -4344,50 +4353,47 @@ var NoEvmReceiptProofError = class extends Error {
   code;
 };
 function decodeNoEvmReceiptTranscript(proof) {
+  if (!Array.isArray(proof.receiptTranscript)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "boundedCacheTranscript proof requires receiptTranscript"
+    );
+  }
   return proof.receiptTranscript.map(
     (hex, index) => decodeHexBytes(hex, `receiptTranscript[${index}]`)
   );
 }
 function computeNoEvmReceiptsRoot(receipts) {
-  if (receipts.length > UINT32_MAX) {
-    throw new NoEvmReceiptProofError(
-      "too_many_receipts",
-      `receiptTranscript has ${receipts.length} receipts, exceeding u32::MAX`
-    );
-  }
-  let totalLen = ROOT_DOMAIN_BYTES.length + 4;
-  receipts.forEach((receipt, index) => {
-    if (receipt.length > UINT32_MAX) {
-      throw new NoEvmReceiptProofError(
-        "receipt_too_large",
-        `receiptTranscript[${index}] has ${receipt.length} bytes, exceeding u32::MAX`
-      );
-    }
-    totalLen += 8 + receipt.length;
-  });
-  const preimage = new Uint8Array(totalLen);
-  const view = new DataView(preimage.buffer);
-  let offset = 0;
-  preimage.set(ROOT_DOMAIN_BYTES, offset);
-  offset += ROOT_DOMAIN_BYTES.length;
-  view.setUint32(offset, receipts.length, true);
-  offset += 4;
-  receipts.forEach((receipt, index) => {
-    view.setUint32(offset, index, true);
-    offset += 4;
-    view.setUint32(offset, receipt.length, true);
-    offset += 4;
-    preimage.set(receipt, offset);
-    offset += receipt.length;
-  });
-  return bytesToHex5(sha3_js.keccak_256(preimage));
+  return bytesToHex5(computeNoEvmReceiptsRootBytes(receipts));
 }
 function computeNoEvmTargetReceiptHash(receiptBytes) {
   return bytesToHex5(sha3_js.keccak_256(receiptBytes));
 }
 function verifyNoEvmReceiptProof(proof) {
   if (proof == null) return null;
-  validateProofMetadata(proof);
+  const proofKind = getProofKind(proof);
+  switch (proofKind) {
+    case "boundedCacheTranscript":
+      return verifyBoundedReceiptProof(proof);
+    case "compactInclusion":
+      return verifyCompactReceiptProof(proof);
+    default:
+      throw new NoEvmReceiptProofError(
+        "unsupported_proof_kind",
+        `unsupported no-EVM receipt proofKind: ${proofKind}`
+      );
+  }
+}
+function verifyBoundedReceiptProof(proof) {
+  validateCommonProofMetadata(proof);
+  assertSupported(
+    proof.proofType,
+    NO_EVM_RECEIPT_PROOF_TYPE,
+    "proofType",
+    "unsupported_proof_type"
+  );
+  validateBoundedHistorySource(proof);
+  validateNoCompactOrArchiveMaterial(proof);
   assertUint32(proof.receiptCount, "receiptCount");
   assertUint32(proof.txIndex, "txIndex");
   const receipts = decodeNoEvmReceiptTranscript(proof);
@@ -4426,34 +4432,193 @@ function verifyNoEvmReceiptProof(proof) {
     targetReceiptHash: actualTargetHash,
     receiptCount: receipts.length,
     txIndex: proof.txIndex,
-    targetReceipt
+    targetReceipt,
+    proofKind: "boundedCacheTranscript"
   };
 }
-function validateProofMetadata(proof) {
+function verifyCompactReceiptProof(proof) {
+  validateCommonProofMetadata(proof);
+  assertSupported(
+    proof.proofType,
+    NO_EVM_RECEIPT_INCLUSION_PROOF_TYPE,
+    "proofType",
+    "unsupported_proof_type"
+  );
+  assertSupported(
+    getHistorySource(proof),
+    "liveBlockCache",
+    "historySource",
+    "unsupported_history_source"
+  );
+  assertUint32(proof.receiptCount, "receiptCount");
+  assertUint32(proof.txIndex, "txIndex");
+  const compactProof = getCompactInclusionProof(proof);
+  assertSupported(
+    compactProof.schema,
+    NO_EVM_COMPACT_INCLUSION_PROOF_SCHEMA,
+    "compactInclusionProof.schema",
+    "unsupported_compact_schema"
+  );
+  assertSupported(
+    compactProof.treeAlgorithm,
+    NO_EVM_COMPACT_INCLUSION_TREE_ALGORITHM,
+    "compactInclusionProof.treeAlgorithm",
+    "unsupported_tree_algorithm"
+  );
+  if (!Array.isArray(compactProof.siblingHashes) || !Array.isArray(compactProof.pathSides)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "compactInclusionProof siblingHashes and pathSides must be arrays"
+    );
+  }
+  if (compactProof.siblingHashes.length !== compactProof.pathSides.length) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "compactInclusionProof siblingHashes/pathSides length mismatch"
+    );
+  }
+  const targetReceiptBytes = getTargetReceiptBytes(proof);
+  const targetReceipt = decodeHexBytes(targetReceiptBytes, "targetReceiptBytes");
+  const actualTargetHash = computeNoEvmTargetReceiptHash(targetReceipt);
+  const expectedTargetHash = decodeHash(proof.targetReceiptHash, "targetReceiptHash");
+  if (!bytesEqual(expectedTargetHash, decodeHash(actualTargetHash, "computedTargetReceiptHash"))) {
+    throw new NoEvmReceiptProofError(
+      "target_receipt_hash_mismatch",
+      `targetReceiptHash mismatch: expected ${proof.targetReceiptHash}, computed ${actualTargetHash}`
+    );
+  }
+  const actualLeafHashBytes = computeNoEvmReceiptLeafHashBytes(targetReceipt, proof.txIndex);
+  const expectedLeafHashBytes = decodeHash(
+    compactProof.leafHash,
+    "compactInclusionProof.leafHash"
+  );
+  if (!bytesEqual(expectedLeafHashBytes, actualLeafHashBytes)) {
+    throw new NoEvmReceiptProofError(
+      "compact_leaf_hash_mismatch",
+      `compactInclusionProof.leafHash mismatch: expected ${compactProof.leafHash}, computed ${bytesToHex5(
+        actualLeafHashBytes
+      )}`
+    );
+  }
+  const compactRootBytes = decodeHash(compactProof.root, "compactInclusionProof.root");
+  const receiptsRootBytes = decodeHash(proof.receiptsRoot, "receiptsRoot");
+  if (!bytesEqual(receiptsRootBytes, compactRootBytes)) {
+    throw new NoEvmReceiptProofError(
+      "compact_root_mismatch",
+      `receiptsRoot must equal compactInclusionProof.root: receiptsRoot ${proof.receiptsRoot}, compact root ${compactProof.root}`
+    );
+  }
+  const siblingHashes = compactProof.siblingHashes.map(
+    (hash, index) => decodeHash(hash, `compactInclusionProof.siblingHashes[${index}]`)
+  );
+  const pathSides = compactProof.pathSides.map((side, index) => {
+    if (typeof side !== "boolean") {
+      throw new NoEvmReceiptProofError(
+        "invalid_proof_shape",
+        `compactInclusionProof.pathSides[${index}] must be a boolean`
+      );
+    }
+    return side;
+  });
+  const actualRootBytes = computeCompactRootFromPath(
+    actualLeafHashBytes,
+    siblingHashes,
+    pathSides
+  );
+  if (!bytesEqual(actualRootBytes, compactRootBytes)) {
+    throw new NoEvmReceiptProofError(
+      "compact_path_mismatch",
+      `compact inclusion path mismatch: expected ${compactProof.root}, computed ${bytesToHex5(
+        actualRootBytes
+      )}`
+    );
+  }
+  return {
+    receipts: [],
+    receiptsRoot: bytesToHex5(actualRootBytes),
+    targetReceiptHash: actualTargetHash,
+    receiptCount: proof.receiptCount,
+    txIndex: proof.txIndex,
+    targetReceipt,
+    proofKind: "compactInclusion"
+  };
+}
+function validateCommonProofMetadata(proof) {
   assertSupported(
     proof.schema,
     NO_EVM_RECEIPT_PROOF_SCHEMA,
     "schema",
     "unsupported_schema"
   );
-  assertSupported(
-    proof.proofType,
-    NO_EVM_RECEIPT_PROOF_TYPE,
-    "proofType",
-    "unsupported_proof_type"
-  );
-  assertSupported(
-    proof.rootAlgorithm,
-    NO_EVM_RECEIPT_ROOT_ALGORITHM,
-    "rootAlgorithm",
-    "unsupported_root_algorithm"
-  );
+  assertSupportedRootAlgorithm(proof.rootAlgorithm);
   assertSupported(
     proof.receiptCodec,
     NO_EVM_RECEIPT_CODEC,
     "receiptCodec",
     "unsupported_receipt_codec"
   );
+}
+function validateBoundedHistorySource(proof) {
+  const historySource = getOptionalHistorySource(proof);
+  if (historySource !== void 0 && historySource !== "legacyUnspecified" && historySource !== "liveBlockCache") {
+    throw new NoEvmReceiptProofError(
+      "unsupported_history_source",
+      `unsupported no-EVM receipt proof historySource: ${historySource}`
+    );
+  }
+}
+function validateNoCompactOrArchiveMaterial(proof) {
+  const maybeBounded = proof;
+  if (maybeBounded.compactInclusionProof != null) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "boundedCacheTranscript proof cannot carry compactInclusionProof"
+    );
+  }
+  if (maybeBounded.archiveProof != null) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "boundedCacheTranscript proof cannot carry archiveProof"
+    );
+  }
+}
+function getCompactInclusionProof(proof) {
+  const compactProof = proof.compactInclusionProof;
+  if (!isRecord3(compactProof)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "compactInclusion proof requires compactInclusionProof"
+    );
+  }
+  return compactProof;
+}
+function getTargetReceiptBytes(proof) {
+  const value = proof.targetReceiptBytes;
+  if (typeof value !== "string") {
+    throw new NoEvmReceiptProofError(
+      "missing_target_receipt_bytes",
+      "compactInclusion proof requires targetReceiptBytes"
+    );
+  }
+  return value;
+}
+function getProofKind(proof) {
+  return proof.proofKind === void 0 ? "boundedCacheTranscript" : String(proof.proofKind);
+}
+function getHistorySource(proof) {
+  return getOptionalHistorySource(proof) ?? "legacyUnspecified";
+}
+function getOptionalHistorySource(proof) {
+  const value = proof.historySource;
+  return value === void 0 ? void 0 : String(value);
+}
+function assertSupportedRootAlgorithm(actual) {
+  if (actual !== NO_EVM_RECEIPT_ROOT_ALGORITHM && actual !== NO_EVM_LEGACY_RECEIPT_ROOT_ALGORITHM && actual !== NO_EVM_COMPACT_INCLUSION_TREE_ALGORITHM) {
+    throw new NoEvmReceiptProofError(
+      "unsupported_root_algorithm",
+      `unsupported no-EVM receipt proof rootAlgorithm: ${actual}`
+    );
+  }
 }
 function assertSupported(actual, expected, field2, code) {
   if (actual !== expected) {
@@ -4465,9 +4630,75 @@ function assertUint32(value, field2) {
     throw new NoEvmReceiptProofError("invalid_uint32", `${field2} must be a uint32`);
   }
 }
+function computeNoEvmReceiptsRootBytes(receipts) {
+  if (receipts.length > UINT32_MAX) {
+    throw new NoEvmReceiptProofError(
+      "too_many_receipts",
+      `receiptTranscript has ${receipts.length} receipts, exceeding u32::MAX`
+    );
+  }
+  if (receipts.length === 0) {
+    const preimage = new Uint8Array(EMPTY_ROOT_DOMAIN_BYTES.length + 4);
+    const view = new DataView(preimage.buffer);
+    preimage.set(EMPTY_ROOT_DOMAIN_BYTES, 0);
+    view.setUint32(EMPTY_ROOT_DOMAIN_BYTES.length, 0, true);
+    return sha3_js.keccak_256(preimage);
+  }
+  let level = receipts.map((receipt, index) => computeNoEvmReceiptLeafHashBytes(receipt, index));
+  while (level.length > 1) {
+    const nextLevel = [];
+    for (let index = 0; index < level.length; index += 2) {
+      const left = level[index];
+      const right = level[index + 1] ?? left;
+      nextLevel.push(computeNoEvmReceiptNodeHashBytes(left, right));
+    }
+    level = nextLevel;
+  }
+  return level[0];
+}
+function computeNoEvmReceiptLeafHashBytes(receiptBytes, txIndex) {
+  assertUint32(txIndex, "txIndex");
+  if (receiptBytes.length > UINT32_MAX) {
+    throw new NoEvmReceiptProofError(
+      "receipt_too_large",
+      `receiptTranscript[${txIndex}] has ${receiptBytes.length} bytes, exceeding u32::MAX`
+    );
+  }
+  const preimage = new Uint8Array(LEAF_DOMAIN_BYTES.length + 8 + receiptBytes.length);
+  const view = new DataView(preimage.buffer);
+  let offset = 0;
+  preimage.set(LEAF_DOMAIN_BYTES, offset);
+  offset += LEAF_DOMAIN_BYTES.length;
+  view.setUint32(offset, txIndex, true);
+  offset += 4;
+  view.setUint32(offset, receiptBytes.length, true);
+  offset += 4;
+  preimage.set(receiptBytes, offset);
+  return sha3_js.keccak_256(preimage);
+}
+function computeNoEvmReceiptNodeHashBytes(left, right) {
+  assertHashBytes(left, "left receipt node hash");
+  assertHashBytes(right, "right receipt node hash");
+  const preimage = new Uint8Array(NODE_DOMAIN_BYTES.length + HASH_BYTE_LENGTH * 2);
+  let offset = 0;
+  preimage.set(NODE_DOMAIN_BYTES, offset);
+  offset += NODE_DOMAIN_BYTES.length;
+  preimage.set(left, offset);
+  offset += HASH_BYTE_LENGTH;
+  preimage.set(right, offset);
+  return sha3_js.keccak_256(preimage);
+}
+function computeCompactRootFromPath(leafHash, siblingHashes, pathSides) {
+  let current = leafHash;
+  for (let index = 0; index < siblingHashes.length; index++) {
+    const sibling = siblingHashes[index];
+    current = pathSides[index] ? computeNoEvmReceiptNodeHashBytes(sibling, current) : computeNoEvmReceiptNodeHashBytes(current, sibling);
+  }
+  return current;
+}
 function decodeHash(value, field2) {
   const bytes = decodeHexBytes(value, field2);
-  if (bytes.length !== 32) {
+  if (bytes.length !== HASH_BYTE_LENGTH) {
     throw new NoEvmReceiptProofError(
       "invalid_hash_length",
       `${field2} must be 32 bytes, got ${bytes.length}`
@@ -4476,7 +4707,7 @@ function decodeHash(value, field2) {
   return bytes;
 }
 function decodeHexBytes(value, field2) {
-  if (!(value.startsWith("0x") || value.startsWith("0X"))) {
+  if (typeof value !== "string" || !(value.startsWith("0x") || value.startsWith("0X"))) {
     throw new NoEvmReceiptProofError("invalid_hex", `${field2} must be 0x-prefixed even-length hex`);
   }
   const body = value.slice(2);
@@ -4488,6 +4719,17 @@ function decodeHexBytes(value, field2) {
     out[index] = Number.parseInt(body.slice(index * 2, index * 2 + 2), 16);
   }
   return out;
+}
+function assertHashBytes(value, field2) {
+  if (value.length !== HASH_BYTE_LENGTH) {
+    throw new NoEvmReceiptProofError(
+      "invalid_hash_length",
+      `${field2} must be 32 bytes, got ${value.length}`
+    );
+  }
+}
+function isRecord3(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function bytesEqual(a, b) {
   if (a.length !== b.length) return false;

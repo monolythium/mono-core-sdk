@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ApiClient,
+  NO_EVM_RECEIPT_ROOT_ALGORITHM,
   SdkError,
   apiEndpointFromRpcEndpoint,
   assessBridgeRoute,
@@ -494,13 +495,23 @@ describe("ApiClient", () => {
     });
   });
 
-  it("preserves typed no-EVM proof transcripts from /api/v1 native receipts", async () => {
+  it("preserves typed no-EVM compact proofs from /api/v1 native receipts", async () => {
     const txHash = `0x${"22".repeat(32)}`;
     const noEvmProof = {
       schema: "mono.no_evm_receipt_proof.v1",
-      proofType: "canonicalReceiptsTranscript",
-      rootAlgorithm:
-        "keccak256(monolythium/v2/receipts_root/1 || len || indexed bincode receipts)",
+      proofKind: "compactInclusion",
+      proofType: "canonicalReceiptInclusion",
+      historySource: "liveBlockCache",
+      compactInclusionProof: {
+        schema: "mono.no_evm_receipt_compact_inclusion.v1",
+        treeAlgorithm: "binary-keccak-receipt-tree",
+        root: `0x${"44".repeat(32)}`,
+        leafHash: `0x${"66".repeat(32)}`,
+        siblingHashes: [`0x${"77".repeat(32)}`],
+        pathSides: [true],
+      },
+      archiveProof: null,
+      rootAlgorithm: NO_EVM_RECEIPT_ROOT_ALGORITHM,
       receiptCodec: "bincode(protocore_evm::Receipt)",
       blockHash: `0x${"33".repeat(32)}`,
       txHash,
@@ -509,7 +520,7 @@ describe("ApiClient", () => {
       blockHeight: 100,
       txIndex: 0,
       receiptCount: 2,
-      receiptTranscript: ["0x010203", "0x040506"],
+      targetReceiptBytes: "0x010203",
     } satisfies NoEvmReceiptProof;
     const { fetch } = mockGet(
       apiEnvelope({
@@ -546,8 +557,11 @@ describe("ApiClient", () => {
 
     const receipt = await client.transactionNativeReceipt(txHash);
 
-    expect(receipt.data.noEvmProof).toEqual(noEvmProof);
-    expect(receipt.data.noEvmProof?.targetReceiptHash).toBe(`0x${"55".repeat(32)}`);
+    const proof = receipt.data.noEvmProof;
+    expect(proof).toEqual(noEvmProof);
+    expect(proof?.proofKind).toBe("compactInclusion");
+    if (proof?.proofKind !== "compactInclusion") throw new Error("expected compact proof");
+    expect(proof.targetReceiptBytes).toBe("0x010203");
   });
 
   it("consumes typed native events from /api/v1 native receipt envelopes", async () => {

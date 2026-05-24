@@ -2360,10 +2360,17 @@ interface NativeReceiptSource {
     indexerProvider: string;
     metadataLogIndex: number;
 }
-interface NoEvmReceiptProof {
+interface NoEvmCompactInclusionProof {
+    schema: "mono.no_evm_receipt_compact_inclusion.v1";
+    treeAlgorithm: "binary-keccak-receipt-tree";
+    root: string;
+    leafHash: string;
+    siblingHashes: string[];
+    pathSides: boolean[];
+}
+interface NoEvmReceiptProofBase {
     schema: "mono.no_evm_receipt_proof.v1";
-    proofType: "canonicalReceiptsTranscript";
-    rootAlgorithm: "keccak256(monolythium/v2/receipts_root/1 || len || indexed bincode receipts)";
+    rootAlgorithm: string;
     receiptCodec: "bincode(protocore_evm::Receipt)";
     blockHash: string;
     txHash: string;
@@ -2372,8 +2379,27 @@ interface NoEvmReceiptProof {
     blockHeight: number;
     txIndex: number;
     receiptCount: number;
+}
+interface NoEvmBoundedReceiptProof extends NoEvmReceiptProofBase {
+    proofKind?: "boundedCacheTranscript";
+    proofType: "canonicalReceiptsTranscript";
+    historySource?: "legacyUnspecified" | "liveBlockCache";
+    compactInclusionProof?: null;
+    archiveProof?: null;
+    missingProofMaterial?: string[];
     receiptTranscript: string[];
 }
+interface NoEvmCompactReceiptProof extends NoEvmReceiptProofBase {
+    proofKind: "compactInclusion";
+    proofType: "canonicalReceiptInclusion";
+    historySource: "liveBlockCache";
+    compactInclusionProof: NoEvmCompactInclusionProof;
+    archiveProof?: null;
+    missingProofMaterial?: string[];
+    targetReceiptBytes: string;
+    receiptTranscript?: string[];
+}
+type NoEvmReceiptProof = NoEvmBoundedReceiptProof | NoEvmCompactReceiptProof;
 interface NativeReceiptResponse<TDecoded = unknown> {
     txHash: string;
     blockHash: string;
