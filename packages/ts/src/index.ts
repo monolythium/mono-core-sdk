@@ -296,6 +296,7 @@ export type { MrcPolicyRecord } from "./bindings/MrcPolicyRecord.js";
 export type { MrcPolicySpendRecord } from "./bindings/MrcPolicySpendRecord.js";
 export type { RedemptionQueueResponse } from "./bindings/RedemptionQueueResponse.js";
 export type { RedemptionQueueTicket } from "./bindings/RedemptionQueueTicket.js";
+export * from "./native-dev.js";
 export * from "./mrv.js";
 export {
   CHAIN_REGISTRY,

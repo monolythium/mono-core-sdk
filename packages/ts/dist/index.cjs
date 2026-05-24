@@ -1706,7 +1706,7 @@ var TESTNET_69420 = {
 var CHAIN_REGISTRY = {
   "testnet-69420": TESTNET_69420
 };
-var CHAIN_REGISTRY_RAW_BASE = "https://raw.githubusercontent.com/monolythium-vision/chain-registry/master/chains";
+var CHAIN_REGISTRY_RAW_BASE = "https://raw.githubusercontent.com/monolythium/chain-registry/master/chains";
 function getChainInfo(network) {
   const info = CHAIN_REGISTRY[network];
   if (!info) {
@@ -1851,7 +1851,7 @@ var RpcClient = class _RpcClient {
    * Construct a client from the chain-registry network slug.
    *
    * Defaults to the SDK-bundled registry snapshot from
-   * `monolythium-vision/chain-registry`. Set `probe: true` to walk the
+   * `monolythium/chain-registry`. Set `probe: true` to walk the
    * registry endpoints in order and return the first endpoint whose
    * `eth_chainId` matches the registry chain id.
    */
@@ -5419,6 +5419,149 @@ function bytesToHex5(bytes) {
   return out;
 }
 
+// src/native-dev.ts
+var NATIVE_DEV_HOST_API_VERSION = "0.1.0";
+var NATIVE_DEV_MANIFEST_SCHEMA_VERSION = 1;
+var NATIVE_DEV_IPC_PROTOCOL_VERSION = "mono.native-dev.ipc.v1";
+function compareNativeDevVersions(left, right) {
+  const leftParts = parseVersionParts(left);
+  const rightParts = parseVersionParts(right);
+  for (let index = 0; index < 3; index += 1) {
+    const delta = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (delta !== 0) return delta > 0 ? 1 : -1;
+  }
+  return 0;
+}
+function checkNativeDevkitCompatibility(manifest, hostApiVersion = NATIVE_DEV_HOST_API_VERSION) {
+  if (manifest === void 0 || manifest.schemaVersion !== NATIVE_DEV_MANIFEST_SCHEMA_VERSION) {
+    return "invalid_manifest";
+  }
+  if (manifest.sidecar.ipcProtocolVersion !== NATIVE_DEV_IPC_PROTOCOL_VERSION) {
+    return "invalid_manifest";
+  }
+  if (compareNativeDevVersions(hostApiVersion, manifest.minimumWalletHostApi) < 0) {
+    return "too_new_for_host";
+  }
+  if (compareNativeDevVersions(hostApiVersion, manifest.maximumWalletHostApi) > 0) {
+    return "too_old_for_host";
+  }
+  return "compatible";
+}
+function resolveStudioHostStatus(args) {
+  const hostApiVersion = args.hostApiVersion ?? NATIVE_DEV_HOST_API_VERSION;
+  const compatibility = checkNativeDevkitCompatibility(args.manifest, hostApiVersion);
+  const installedVersion = args.manifest?.devkitVersion;
+  const devkit = {
+    installedVersion,
+    channel: args.channel,
+    hostApiVersion,
+    installPath: args.installPath,
+    sidecarStatus: args.sidecarStatus ?? (args.installPath ? "stopped" : "missing"),
+    manifest: args.manifest,
+    compatibility,
+    message: nativeDevkitStatusMessage(compatibility, args.installPath)
+  };
+  if (!args.developerModeEnabled) {
+    return {
+      state: "disabled",
+      developerModeEnabled: false,
+      hostApiVersion,
+      devkit
+    };
+  }
+  if (!args.installPath || !args.manifest) {
+    return {
+      state: "missing_devkit",
+      developerModeEnabled: true,
+      hostApiVersion,
+      devkit
+    };
+  }
+  if (compatibility !== "compatible") {
+    return {
+      state: "incompatible_devkit",
+      developerModeEnabled: true,
+      hostApiVersion,
+      devkit
+    };
+  }
+  return {
+    state: "ready",
+    developerModeEnabled: true,
+    hostApiVersion,
+    devkit
+  };
+}
+function assertNativeDevWalletApprovalRequest(request) {
+  typedBech32ToAddress(request.from, "user");
+  if (!request.id.trim()) throw new Error("approval request id is required");
+  if (!request.chainId.trim()) throw new Error("approval request chain id is required");
+  if (!request.title.trim()) throw new Error("approval request title is required");
+  if (!request.summary.trim()) throw new Error("approval request summary is required");
+}
+function assertNativeDevMrvDeployPlan(plan) {
+  typedBech32ToAddress(plan.from, "user");
+  typedBech32ToAddress(plan.expectedContractAddress, "contract");
+  assertHash("artifactHash", plan.artifactHash);
+  assertHash("abiHash", plan.abiHash);
+  assertWholeNumber("valueLythoshi", plan.valueLythoshi);
+  assertWholeNumber("executionUnitLimit", plan.executionUnitLimit);
+  assertWholeNumber("maxExecutionFeeLythoshi", plan.maxExecutionFeeLythoshi);
+  assertNativeDevWalletApprovalRequest(plan.walletApprovalRequest);
+}
+function assertNativeDevMrcTokenPlan(plan) {
+  typedBech32ToAddress(plan.issuerAddress, "user");
+  if (!plan.name.trim()) throw new Error("token name is required");
+  if (!/^[A-Z0-9]{2,12}$/.test(plan.symbol)) throw new Error("token symbol must be uppercase");
+  if (!Number.isInteger(plan.decimals) || plan.decimals < 0 || plan.decimals > 18) {
+    throw new Error("token decimals must be between 0 and 18");
+  }
+  for (const allocation of plan.initialAllocations) {
+    typedBech32ToAddress(allocation.address, "user");
+    assertWholeNumber("allocation.amount", allocation.amount);
+  }
+  assertNativeDevWalletApprovalRequest(plan.walletApprovalRequest);
+}
+function nativeDevUiStrings() {
+  return [
+    "Mono Studio Host",
+    "Developer Mode",
+    "DevKit missing",
+    "DevKit incompatible",
+    "DevKit ready",
+    "Wallet approval required",
+    "Execution units",
+    "Maximum execution fee",
+    "Lythoshi value",
+    "Artifact hash",
+    "ABI manifest",
+    "Token passport",
+    "Verification bundle"
+  ];
+}
+function nativeDevkitStatusMessage(compatibility, installPath) {
+  if (!installPath) return "DevKit is not installed.";
+  if (compatibility === "compatible") return "DevKit is compatible with this wallet host.";
+  if (compatibility === "too_old_for_host") return "DevKit is older than this wallet host API.";
+  if (compatibility === "too_new_for_host") return "DevKit requires a newer wallet host API.";
+  return "DevKit manifest is invalid.";
+}
+function parseVersionParts(version2) {
+  const match = version2.trim().match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return [0, 0, 0];
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+function assertHash(field2, value) {
+  if (!/^[0-9a-f]{64}$/i.test(value)) {
+    throw new Error(`${field2} must be a 32 byte lowercase hex hash`);
+  }
+}
+function assertWholeNumber(field2, value) {
+  if (!/^[0-9]+$/.test(value)) {
+    throw new Error(`${field2} must be a whole number`);
+  }
+}
+
 // src/delegation.ts
 var DELEGATION_SELECTORS = {
   completeRedemption: "0x26169d0a"
@@ -7058,6 +7201,9 @@ exports.MonolythiumSigner = MonolythiumSigner;
 exports.MrvValidationError = MrvValidationError;
 exports.NATIVE_AGENT_MODULE_ADDRESS = NATIVE_AGENT_MODULE_ADDRESS;
 exports.NATIVE_AGENT_MODULE_ADDRESS_BYTES = NATIVE_AGENT_MODULE_ADDRESS_BYTES;
+exports.NATIVE_DEV_HOST_API_VERSION = NATIVE_DEV_HOST_API_VERSION;
+exports.NATIVE_DEV_IPC_PROTOCOL_VERSION = NATIVE_DEV_IPC_PROTOCOL_VERSION;
+exports.NATIVE_DEV_MANIFEST_SCHEMA_VERSION = NATIVE_DEV_MANIFEST_SCHEMA_VERSION;
 exports.NATIVE_LYTH_DECIMALS = NATIVE_LYTH_DECIMALS;
 exports.NATIVE_MARKET_EVENT_FAMILY = NATIVE_MARKET_EVENT_FAMILY;
 exports.NATIVE_MARKET_MODULE_ADDRESS = NATIVE_MARKET_MODULE_ADDRESS;
@@ -7098,6 +7244,9 @@ exports.assertMrvCallNativeSubmissionPlan = assertMrvCallNativeSubmissionPlan;
 exports.assertMrvDeployNativeSubmissionPlan = assertMrvDeployNativeSubmissionPlan;
 exports.assertMrvFeeDisplayConformance = assertMrvFeeDisplayConformance;
 exports.assertMrvStructuredFeeConformance = assertMrvStructuredFeeConformance;
+exports.assertNativeDevMrcTokenPlan = assertNativeDevMrcTokenPlan;
+exports.assertNativeDevMrvDeployPlan = assertNativeDevMrvDeployPlan;
+exports.assertNativeDevWalletApprovalRequest = assertNativeDevWalletApprovalRequest;
 exports.assertNativeMarketOrderBookStreamPayload = assertNativeMarketOrderBookStreamPayload;
 exports.assessBridgeRoute = assessBridgeRoute;
 exports.bech32ToAddress = bech32ToAddress;
@@ -7146,7 +7295,9 @@ exports.buildPlaceSpotMarketOrderExPlan = buildPlaceSpotMarketOrderExPlan;
 exports.buildPlaceSpotMarketOrderPlan = buildPlaceSpotMarketOrderPlan;
 exports.checkMrvFeeDisplayConformance = checkMrvFeeDisplayConformance;
 exports.checkMrvStructuredFeeConformance = checkMrvStructuredFeeConformance;
+exports.checkNativeDevkitCompatibility = checkNativeDevkitCompatibility;
 exports.clobAddressHex = clobAddressHex;
+exports.compareNativeDevVersions = compareNativeDevVersions;
 exports.composeClaimBoundMessage = composeClaimBoundMessage;
 exports.computeNoEvmReceiptsRoot = computeNoEvmReceiptsRoot;
 exports.computeNoEvmRoundFinalityMessage = computeNoEvmRoundFinalityMessage;
@@ -7249,6 +7400,7 @@ exports.mrvBech32ToAddress = mrvBech32ToAddress;
 exports.mrvCodeHashHex = mrvCodeHashHex;
 exports.mrvV1TransactionExtension = mrvV1TransactionExtension;
 exports.nativeAgentStateFilterParams = nativeAgentStateFilterParams;
+exports.nativeDevUiStrings = nativeDevUiStrings;
 exports.nativeEventMatches = nativeEventMatches;
 exports.nativeEventsFilterParams = nativeEventsFilterParams;
 exports.nativeEventsFromHistory = nativeEventsFromHistory;
@@ -7269,6 +7421,7 @@ exports.parseQuantity = parseQuantity;
 exports.parseQuantityBig = parseQuantityBig;
 exports.pubkeyRegistryAddressHex = pubkeyRegistryAddressHex;
 exports.rankBridgeRoutes = rankBridgeRoutes;
+exports.resolveStudioHostStatus = resolveStudioHostStatus;
 exports.selectBridgeTransferRoute = selectBridgeTransferRoute;
 exports.serviceProbeStatusLabel = serviceProbeStatusLabel;
 exports.spendingPolicyAddressHex = spendingPolicyAddressHex;

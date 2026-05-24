@@ -27,6 +27,7 @@ pub mod consts;
 pub mod delegation;
 pub mod error;
 pub mod mrv;
+pub mod native_dev;
 pub mod pubkey_registry;
 pub mod spending_policy;
 pub mod types;
@@ -91,6 +92,17 @@ pub use mrv::{
     LYTHOSHI_PER_LYTH, LYTH_DECIMALS, ML_KEM_768_CIPHERTEXT_LEN, ML_KEM_768_ENCAPSULATION_KEY_LEN,
     ML_KEM_768_SHARED_SECRET_LEN, MRV_DEPLOY_PAYLOAD_VERSION, MRV_ENCRYPTION_ALGO_ML_KEM_768,
     MRV_STRUCTURED_FEE_FIELDS, NATIVE_LYTH_DECIMALS,
+};
+pub use native_dev::{
+    check_native_devkit_compatibility, native_dev_ui_strings, resolve_studio_host_status,
+    NativeDevApprovalKind, NativeDevContractPassport, NativeDevMrcAllocation,
+    NativeDevMrcAssetKind, NativeDevMrcTokenPlan, NativeDevMrvDeployPlan, NativeDevRiskLabel,
+    NativeDevRiskSeverity, NativeDevVerificationArtifact, NativeDevVerificationBundle,
+    NativeDevVerificationFile, NativeDevWalletApprovalRequest, NativeDevkitArchive,
+    NativeDevkitChannel, NativeDevkitCompatibility, NativeDevkitManifest,
+    NativeDevkitSidecarManifest, NativeDevkitSidecarStatus, NativeDevkitStatus, StudioHostState,
+    StudioHostStatus, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION,
+    NATIVE_DEV_MANIFEST_SCHEMA_VERSION,
 };
 pub use types::{
     compute_no_evm_receipts_root, compute_no_evm_target_receipt_hash,
