@@ -15,6 +15,7 @@ import {
   verifyNoEvmArchiveProofSignatures,
   verifyNoEvmFinalityEvidenceThreshold,
   verifyNoEvmReceiptProof,
+  verifyNoEvmReceiptProofTrust,
 } from "../src/index.js";
 import { MlDsa65Backend, mlDsa65AddressFromPublicKey } from "../src/crypto/index.js";
 import type {
@@ -455,6 +456,92 @@ describe("no-EVM receipt proof helpers", () => {
       checkedSignatures: 1,
       issues: [],
     });
+  });
+
+  it("verifies compact proof archive and finality material against one trust policy", () => {
+    const chainId = 69_420;
+    const round = 63;
+    const signer = MlDsa65Backend.fromSeed(new Uint8Array(32).fill(13));
+    const signatureDigest = `0x${"66".repeat(32)}`;
+    const archiveSignature = `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:${signer.getAddress()}:0x${bytesToHexRaw(
+      signer.sign(hexToBytes(signatureDigest)),
+    )}`;
+    const { publicKey, signature } = blsFixture(0x49, chainId, round);
+    const proof = compactNoEvmArchiveProof([archiveSignature]);
+    proof.archiveProof!.signatureDigest = signatureDigest;
+    proof.finalityEvidence = blsFinalityEvidence({
+      round,
+      signature,
+      bitmapIndices: [2],
+      signerIndices: [2],
+      signerCount: 1,
+      committeeSize: 7,
+    });
+
+    const result = verifyNoEvmReceiptProofTrust(proof, {
+      chainId,
+      archive: {
+        threshold: 1,
+        trustedSigners: [{ publicKey: signer.publicKey(), signerId: signer.getAddress() }],
+      },
+      finality: {
+        mode: "cluster",
+        threshold: 1,
+        committeeSize: 7,
+        clusterPublicKey: publicKey,
+      },
+    });
+
+    expect(result.verified).toBe(true);
+    expect(result.receiptProof?.proofKind).toBe("compactInclusion");
+    expect(result.archiveSignatures?.verified).toBe(true);
+    expect(result.finalityEvidence?.verified).toBe(true);
+    expect(result.issues).toEqual([]);
+
+    const expired = verifyNoEvmReceiptProofTrust(proof, {
+      chainId,
+      archive: {
+        threshold: 1,
+        validToHeight: 99,
+        trustedSigners: [{ publicKey: signer.publicKey(), signerId: signer.getAddress() }],
+      },
+      finality: {
+        mode: "cluster",
+        threshold: 1,
+        validToRound: round - 1,
+        committeeSize: 7,
+        clusterPublicKey: publicKey,
+      },
+    });
+    expect(expired.verified).toBe(false);
+    expect(expired.issues.map((issue) => issue.code)).toContain(
+      "archive_policy_not_valid_at_height",
+    );
+    expect(expired.issues.map((issue) => issue.code)).toContain(
+      "finality_policy_not_valid_at_round",
+    );
+  });
+
+  it("fails trust verification when required archive or finality material is missing", () => {
+    const result = verifyNoEvmReceiptProofTrust(compactNoEvmProof(), {
+      chainId: 69_420,
+      archive: {
+        threshold: 1,
+        trustedSigners: [{ publicKey: new Uint8Array(1952) }],
+      },
+      finality: {
+        mode: "cluster",
+        threshold: 1,
+        committeeSize: 7,
+        clusterPublicKey: new Uint8Array(48),
+      },
+    });
+
+    expect(result.verified).toBe(false);
+    expect(result.issues.map((issue) => issue.code)).toEqual([
+      "missing_archive_proof",
+      "missing_finality_evidence",
+    ]);
   });
 
   it("accepts compact proofs carrying BLS finality evidence", () => {

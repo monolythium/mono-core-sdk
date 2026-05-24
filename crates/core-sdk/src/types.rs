@@ -510,6 +510,199 @@ impl NoEvmReceiptBlsFinalityVerification {
     }
 }
 
+/// Trusted archive signer plus an optional block-height validity window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoEvmArchiveTrustPolicySigner {
+    /// Raw ML-DSA-65 public key bytes.
+    pub public_key: Vec<u8>,
+    /// Optional expected canonical signer id as lower-case `0x` address/fingerprint.
+    pub signer_id: Option<Hash>,
+    /// First block height where this signer is trusted.
+    pub valid_from_height: Option<u64>,
+    /// Last block height where this signer is trusted.
+    pub valid_to_height: Option<u64>,
+}
+
+impl NoEvmArchiveTrustPolicySigner {
+    fn as_trusted_signer(&self) -> NoEvmArchiveTrustedSigner {
+        NoEvmArchiveTrustedSigner {
+            public_key: self.public_key.clone(),
+            signer_id: self.signer_id.clone(),
+        }
+    }
+}
+
+/// Trust policy for archive proof signatures attached to a no-EVM receipt proof.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoEvmArchiveTrustPolicy {
+    /// Trusted archive signer roster.
+    pub trusted_signers: Vec<NoEvmArchiveTrustPolicySigner>,
+    /// Required trusted archive-signature threshold.
+    pub threshold: usize,
+    /// First block height where this policy is valid.
+    pub valid_from_height: Option<u64>,
+    /// Last block height where this policy is valid.
+    pub valid_to_height: Option<u64>,
+}
+
+/// Trusted BLS signer plus an optional finality-round validity window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoEvmReceiptBlsTrustPolicySigner {
+    /// Operator authority index in the canonical committee for the round.
+    pub authority_index: u16,
+    /// 48-byte compressed BLS12-381 min-pk public key.
+    pub public_key: [u8; 48],
+    /// First finality round where this signer is trusted.
+    pub valid_from_round: Option<u64>,
+    /// Last finality round where this signer is trusted.
+    pub valid_to_round: Option<u64>,
+}
+
+impl NoEvmReceiptBlsTrustPolicySigner {
+    const fn as_trusted_signer(self) -> NoEvmReceiptTrustedBlsSigner {
+        NoEvmReceiptTrustedBlsSigner {
+            authority_index: self.authority_index,
+            public_key: self.public_key,
+        }
+    }
+}
+
+/// Trust policy for threshold-cluster BLS finality evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoEvmReceiptFinalityClusterTrustPolicy {
+    /// Optional chain id override. Falls back to [`NoEvmReceiptTrustPolicy::chain_id`].
+    pub chain_id: Option<u64>,
+    /// Trusted 48-byte threshold-cluster aggregate public key.
+    pub cluster_public_key: [u8; 48],
+    /// Committee size bound for signer bitmap indices.
+    pub committee_size: u16,
+    /// Required finality signature threshold.
+    pub threshold: usize,
+    /// First finality round where this policy is valid.
+    pub valid_from_round: Option<u64>,
+    /// Last finality round where this policy is valid.
+    pub valid_to_round: Option<u64>,
+}
+
+/// Trust policy for multisig BLS finality evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoEvmReceiptFinalityMultisigTrustPolicy {
+    /// Optional chain id override. Falls back to [`NoEvmReceiptTrustPolicy::chain_id`].
+    pub chain_id: Option<u64>,
+    /// Trusted BLS signer roster.
+    pub trusted_signers: Vec<NoEvmReceiptBlsTrustPolicySigner>,
+    /// Required finality signature threshold.
+    pub threshold: usize,
+    /// First finality round where this policy is valid.
+    pub valid_from_round: Option<u64>,
+    /// Last finality round where this policy is valid.
+    pub valid_to_round: Option<u64>,
+}
+
+/// Trust policy mode for BLS finality evidence attached to a no-EVM receipt proof.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoEvmReceiptFinalityTrustPolicy {
+    /// Verify against one trusted threshold-cluster aggregate public key.
+    Cluster(NoEvmReceiptFinalityClusterTrustPolicy),
+    /// Verify against individual trusted BLS authority keys.
+    Multisig(NoEvmReceiptFinalityMultisigTrustPolicy),
+}
+
+impl NoEvmReceiptFinalityTrustPolicy {
+    const fn chain_id(&self) -> Option<u64> {
+        match self {
+            Self::Cluster(policy) => policy.chain_id,
+            Self::Multisig(policy) => policy.chain_id,
+        }
+    }
+
+    const fn round_bounds(&self) -> (Option<u64>, Option<u64>) {
+        match self {
+            Self::Cluster(policy) => (policy.valid_from_round, policy.valid_to_round),
+            Self::Multisig(policy) => (policy.valid_from_round, policy.valid_to_round),
+        }
+    }
+}
+
+/// Trust policy for no-EVM receipt proofs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoEvmReceiptTrustPolicy {
+    /// Optional default chain id used by finality policies.
+    pub chain_id: Option<u64>,
+    /// Optional archive signature trust policy.
+    pub archive: Option<NoEvmArchiveTrustPolicy>,
+    /// Optional BLS finality trust policy.
+    pub finality: Option<NoEvmReceiptFinalityTrustPolicy>,
+}
+
+/// Machine-readable issue code from no-EVM receipt trust verification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoEvmReceiptTrustIssueCode {
+    /// No receipt proof was supplied.
+    MissingReceiptProof,
+    /// The policy requires archive material but the proof does not carry it.
+    MissingArchiveProof,
+    /// The archive policy was not valid at the proof block height.
+    ArchivePolicyNotValidAtHeight,
+    /// Archive signatures did not satisfy the policy.
+    ArchiveVerificationFailed,
+    /// The policy requires finality material but the proof does not carry it.
+    MissingFinalityEvidence,
+    /// Finality verification requires an explicit chain id.
+    MissingFinalityChainId,
+    /// The finality policy was not valid at the proof finality round.
+    FinalityPolicyNotValidAtRound,
+    /// BLS finality evidence did not satisfy the policy.
+    FinalityVerificationFailed,
+}
+
+impl NoEvmReceiptTrustIssueCode {
+    /// Stable snake-case issue code.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::MissingReceiptProof => "missing_receipt_proof",
+            Self::MissingArchiveProof => "missing_archive_proof",
+            Self::ArchivePolicyNotValidAtHeight => "archive_policy_not_valid_at_height",
+            Self::ArchiveVerificationFailed => "archive_verification_failed",
+            Self::MissingFinalityEvidence => "missing_finality_evidence",
+            Self::MissingFinalityChainId => "missing_finality_chain_id",
+            Self::FinalityPolicyNotValidAtRound => "finality_policy_not_valid_at_round",
+            Self::FinalityVerificationFailed => "finality_verification_failed",
+        }
+    }
+}
+
+impl std::fmt::Display for NoEvmReceiptTrustIssueCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Trust-policy verification issue for a no-EVM receipt proof.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoEvmReceiptTrustIssue {
+    /// Machine-readable issue code.
+    pub code: NoEvmReceiptTrustIssueCode,
+    /// Human-readable issue detail.
+    pub message: String,
+}
+
+/// Combined no-EVM receipt proof trust verification result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoEvmReceiptTrustVerification {
+    /// True only when the receipt proof exists and all requested trust policies pass.
+    pub verified: bool,
+    /// Transcript verification result, when a proof was supplied.
+    pub receipt_proof: Option<NoEvmReceiptProofVerification>,
+    /// Archive signature verification result, when archive material was checked.
+    pub archive_signatures: Option<NoEvmArchiveSignatureVerification>,
+    /// Finality evidence verification result, when finality material was checked.
+    pub finality_evidence: Option<NoEvmReceiptBlsFinalityVerification>,
+    /// Trust-policy issues. Non-empty means `verified == false`.
+    pub issues: Vec<NoEvmReceiptTrustIssue>,
+}
+
 /// Local no-EVM receipt proof transcript verification failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum NoEvmReceiptProofError {
@@ -714,6 +907,194 @@ pub fn verify_no_evm_receipt_proof(
         tx_index: proof.tx_index,
         target_receipt,
     }))
+}
+
+/// Verify a no-EVM receipt proof transcript plus any archive/finality material
+/// required by a caller-supplied trust policy.
+///
+/// This is intentionally fail-closed: missing proof material is reported as a
+/// trust issue, and configured height/round validity windows are enforced before
+/// signer rosters are applied. It does not prove archive availability or live
+/// finality beyond the supplied proof and trusted policy.
+pub fn verify_no_evm_receipt_proof_trust(
+    proof: Option<&NoEvmReceiptProof>,
+    policy: &NoEvmReceiptTrustPolicy,
+) -> Result<NoEvmReceiptTrustVerification, NoEvmReceiptProofError> {
+    let receipt_proof = verify_no_evm_receipt_proof(proof)?;
+    let mut archive_signatures = None;
+    let mut finality_evidence = None;
+    let mut issues = Vec::new();
+
+    if receipt_proof.is_none() {
+        issues.push(NoEvmReceiptTrustIssue {
+            code: NoEvmReceiptTrustIssueCode::MissingReceiptProof,
+            message: "native receipt proof is required for trust verification".to_owned(),
+        });
+    }
+
+    if let Some(archive_policy) = policy.archive.as_ref() {
+        match proof.and_then(|proof| {
+            proof
+                .archive_proof
+                .as_ref()
+                .map(|archive_proof| (proof, archive_proof))
+        }) {
+            None => {
+                issues.push(NoEvmReceiptTrustIssue {
+                    code: NoEvmReceiptTrustIssueCode::MissingArchiveProof,
+                    message: "native receipt proof does not carry archive signature material"
+                        .to_owned(),
+                });
+            }
+            Some((proof, archive_proof)) => {
+                if !is_u64_within_optional_bounds(
+                    proof.block_height,
+                    archive_policy.valid_from_height,
+                    archive_policy.valid_to_height,
+                ) {
+                    issues.push(NoEvmReceiptTrustIssue {
+                        code: NoEvmReceiptTrustIssueCode::ArchivePolicyNotValidAtHeight,
+                        message: format!(
+                            "archive trust policy is not valid at block height {}",
+                            proof.block_height
+                        ),
+                    });
+                }
+
+                let active_signers: Vec<_> = archive_policy
+                    .trusted_signers
+                    .iter()
+                    .filter(|signer| {
+                        is_u64_within_optional_bounds(
+                            proof.block_height,
+                            signer.valid_from_height,
+                            signer.valid_to_height,
+                        )
+                    })
+                    .map(NoEvmArchiveTrustPolicySigner::as_trusted_signer)
+                    .collect();
+                let verification = verify_no_evm_archive_proof_signatures(
+                    archive_proof,
+                    &active_signers,
+                    archive_policy.threshold,
+                )?;
+                if !verification.verified {
+                    issues.push(NoEvmReceiptTrustIssue {
+                        code: NoEvmReceiptTrustIssueCode::ArchiveVerificationFailed,
+                        message: "archive signature material did not satisfy the trusted policy"
+                            .to_owned(),
+                    });
+                }
+                archive_signatures = Some(verification);
+            }
+        }
+    }
+
+    if let Some(finality_policy) = policy.finality.as_ref() {
+        let Some(finality) = proof.and_then(|proof| proof.finality_evidence.as_ref()) else {
+            issues.push(NoEvmReceiptTrustIssue {
+                code: NoEvmReceiptTrustIssueCode::MissingFinalityEvidence,
+                message: "native receipt proof does not carry BLS finality evidence".to_owned(),
+            });
+            return Ok(NoEvmReceiptTrustVerification {
+                verified: false,
+                receipt_proof,
+                archive_signatures,
+                finality_evidence,
+                issues,
+            });
+        };
+        let Some(chain_id) = finality_policy.chain_id().or(policy.chain_id) else {
+            issues.push(NoEvmReceiptTrustIssue {
+                code: NoEvmReceiptTrustIssueCode::MissingFinalityChainId,
+                message: "finality trust policy requires a chain id".to_owned(),
+            });
+            return Ok(NoEvmReceiptTrustVerification {
+                verified: false,
+                receipt_proof,
+                archive_signatures,
+                finality_evidence,
+                issues,
+            });
+        };
+
+        let (valid_from_round, valid_to_round) = finality_policy.round_bounds();
+        if !is_u64_within_optional_bounds(finality.round, valid_from_round, valid_to_round) {
+            issues.push(NoEvmReceiptTrustIssue {
+                code: NoEvmReceiptTrustIssueCode::FinalityPolicyNotValidAtRound,
+                message: format!(
+                    "finality trust policy is not valid at round {}",
+                    finality.round
+                ),
+            });
+        }
+
+        let verification = match finality_policy {
+            NoEvmReceiptFinalityTrustPolicy::Cluster(cluster) => {
+                verify_no_evm_finality_evidence_threshold(
+                    finality,
+                    chain_id,
+                    &cluster.cluster_public_key,
+                    cluster.committee_size,
+                    cluster.threshold,
+                )?
+            }
+            NoEvmReceiptFinalityTrustPolicy::Multisig(multisig) => {
+                let active_signers: Vec<_> = multisig
+                    .trusted_signers
+                    .iter()
+                    .copied()
+                    .filter(|signer| {
+                        is_u64_within_optional_bounds(
+                            finality.round,
+                            signer.valid_from_round,
+                            signer.valid_to_round,
+                        )
+                    })
+                    .map(NoEvmReceiptBlsTrustPolicySigner::as_trusted_signer)
+                    .collect();
+                verify_no_evm_finality_evidence_multisig(
+                    finality,
+                    chain_id,
+                    &active_signers,
+                    multisig.threshold,
+                )?
+            }
+        };
+        if !verification.verified() {
+            issues.push(NoEvmReceiptTrustIssue {
+                code: NoEvmReceiptTrustIssueCode::FinalityVerificationFailed,
+                message: "BLS finality evidence did not satisfy the trusted policy".to_owned(),
+            });
+        }
+        finality_evidence = Some(verification);
+    }
+
+    Ok(NoEvmReceiptTrustVerification {
+        verified: receipt_proof.is_some() && issues.is_empty(),
+        receipt_proof,
+        archive_signatures,
+        finality_evidence,
+        issues,
+    })
+}
+
+const fn is_u64_within_optional_bounds(
+    value: u64,
+    valid_from: Option<u64>,
+    valid_to: Option<u64>,
+) -> bool {
+    if let Some(start) = valid_from {
+        if value < start {
+            return false;
+        }
+    }
+    if let Some(end) = valid_to {
+        if value > end {
+            return false;
+        }
+    }
+    true
 }
 
 /// Compute the Starfish round-certificate BLS message:
@@ -6547,6 +6928,132 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn no_evm_receipt_trust_policy_verifies_archive_and_finality_material() {
+        let (archive_public_key, archive_private_key) =
+            ml_dsa_65::KG::keygen_from_seed(&[13u8; 32]);
+        let archive_public_key_bytes = archive_public_key.into_bytes().to_vec();
+        let archive_signer_id = no_evm_ml_dsa65_signer_id_hex(&archive_public_key_bytes);
+        let archive_signature = archive_private_key
+            .try_sign_with_seed(&[14u8; 32], &[0x66; 32], &[])
+            .unwrap();
+        let archive_signature_entry = format!(
+            "{}:{}:{}",
+            NO_EVM_ARCHIVE_SIGNATURE_SCHEME,
+            archive_signer_id,
+            hex_encode_0x(&archive_signature)
+        );
+
+        let chain_id = 69_420_u64;
+        let round = 63_u64;
+        let finality_signer = test_bls_key(0x49);
+        let finality_message = compute_no_evm_round_finality_message(chain_id, round);
+        let finality_signature = finality_signer
+            .sign(&finality_message, NO_EVM_BLS_DST, &[])
+            .to_bytes();
+        let finality_public_key = finality_signer.sk_to_pk().to_bytes();
+
+        let mut proof = test_no_evm_proof();
+        proof.archive_proof = Some(test_no_evm_archive_proof(vec![archive_signature_entry]));
+        proof.finality_evidence = Some(test_finality_evidence(
+            round,
+            finality_signature,
+            &[2],
+            vec![2],
+            1,
+            7,
+        ));
+        let policy = NoEvmReceiptTrustPolicy {
+            chain_id: Some(chain_id),
+            archive: Some(NoEvmArchiveTrustPolicy {
+                trusted_signers: vec![NoEvmArchiveTrustPolicySigner {
+                    public_key: archive_public_key_bytes,
+                    signer_id: Some(archive_signer_id),
+                    valid_from_height: Some(0),
+                    valid_to_height: Some(100),
+                }],
+                threshold: 1,
+                valid_from_height: Some(0),
+                valid_to_height: Some(100),
+            }),
+            finality: Some(NoEvmReceiptFinalityTrustPolicy::Cluster(
+                NoEvmReceiptFinalityClusterTrustPolicy {
+                    chain_id: None,
+                    cluster_public_key: finality_public_key,
+                    committee_size: 7,
+                    threshold: 1,
+                    valid_from_round: Some(round),
+                    valid_to_round: Some(round),
+                },
+            )),
+        };
+
+        let verification = verify_no_evm_receipt_proof_trust(Some(&proof), &policy).unwrap();
+
+        assert!(verification.verified);
+        assert!(verification.archive_signatures.unwrap().verified);
+        assert!(verification.finality_evidence.unwrap().verified());
+        assert!(verification.issues.is_empty());
+
+        let mut expired_policy = policy.clone();
+        expired_policy
+            .archive
+            .as_mut()
+            .expect("archive policy")
+            .valid_to_height = Some(99);
+        if let Some(NoEvmReceiptFinalityTrustPolicy::Cluster(finality)) =
+            expired_policy.finality.as_mut()
+        {
+            finality.valid_to_round = Some(round - 1);
+        }
+        let expired = verify_no_evm_receipt_proof_trust(Some(&proof), &expired_policy).unwrap();
+        let expired_codes: Vec<_> = expired.issues.iter().map(|issue| issue.code).collect();
+        assert!(!expired.verified);
+        assert!(expired_codes.contains(&NoEvmReceiptTrustIssueCode::ArchivePolicyNotValidAtHeight));
+        assert!(expired_codes.contains(&NoEvmReceiptTrustIssueCode::FinalityPolicyNotValidAtRound));
+    }
+
+    #[test]
+    fn no_evm_receipt_trust_policy_fails_closed_for_missing_material() {
+        let proof = test_no_evm_proof();
+        let policy = NoEvmReceiptTrustPolicy {
+            chain_id: Some(69_420),
+            archive: Some(NoEvmArchiveTrustPolicy {
+                trusted_signers: vec![NoEvmArchiveTrustPolicySigner {
+                    public_key: vec![0; ml_dsa_65::PK_LEN],
+                    signer_id: None,
+                    valid_from_height: None,
+                    valid_to_height: None,
+                }],
+                threshold: 1,
+                valid_from_height: None,
+                valid_to_height: None,
+            }),
+            finality: Some(NoEvmReceiptFinalityTrustPolicy::Cluster(
+                NoEvmReceiptFinalityClusterTrustPolicy {
+                    chain_id: None,
+                    cluster_public_key: [0; 48],
+                    committee_size: 7,
+                    threshold: 1,
+                    valid_from_round: None,
+                    valid_to_round: None,
+                },
+            )),
+        };
+
+        let missing = verify_no_evm_receipt_proof_trust(Some(&proof), &policy).unwrap();
+        let missing_codes: Vec<_> = missing.issues.iter().map(|issue| issue.code).collect();
+        assert!(!missing.verified);
+        assert!(missing_codes.contains(&NoEvmReceiptTrustIssueCode::MissingArchiveProof));
+        assert!(missing_codes.contains(&NoEvmReceiptTrustIssueCode::MissingFinalityEvidence));
+
+        let absent = verify_no_evm_receipt_proof_trust(None, &policy).unwrap();
+        let absent_codes: Vec<_> = absent.issues.iter().map(|issue| issue.code).collect();
+        assert!(absent_codes.contains(&NoEvmReceiptTrustIssueCode::MissingReceiptProof));
+        assert!(absent_codes.contains(&NoEvmReceiptTrustIssueCode::MissingArchiveProof));
+        assert!(absent_codes.contains(&NoEvmReceiptTrustIssueCode::MissingFinalityEvidence));
     }
 
     #[test]
