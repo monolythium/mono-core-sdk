@@ -205,7 +205,7 @@ export interface NoEvmBoundedReceiptProof extends NoEvmReceiptProofBase {
 export interface NoEvmCompactReceiptProof extends NoEvmReceiptProofBase {
   proofKind: "compactInclusion";
   proofType: "canonicalReceiptInclusion";
-  historySource: "liveBlockCache";
+  historySource: "liveBlockCache" | "indexerReceiptArchive";
   compactInclusionProof: NoEvmCompactInclusionProof;
   archiveProof?: null;
   missingProofMaterial?: string[];

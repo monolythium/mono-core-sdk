@@ -178,12 +178,7 @@ function verifyCompactReceiptProof(proof: NoEvmReceiptProof): NoEvmReceiptProofV
     "proofType",
     "unsupported_proof_type",
   );
-  assertSupported(
-    getHistorySource(proof),
-    "liveBlockCache",
-    "historySource",
-    "unsupported_history_source",
-  );
+  validateCompactHistorySource(proof);
   assertUint32(proof.receiptCount, "receiptCount");
   assertUint32(proof.txIndex, "txIndex");
 
@@ -308,6 +303,16 @@ function validateBoundedHistorySource(proof: NoEvmReceiptProof): void {
     historySource !== "legacyUnspecified" &&
     historySource !== "liveBlockCache"
   ) {
+    throw new NoEvmReceiptProofError(
+      "unsupported_history_source",
+      `unsupported no-EVM receipt proof historySource: ${historySource}`,
+    );
+  }
+}
+
+function validateCompactHistorySource(proof: NoEvmReceiptProof): void {
+  const historySource = getHistorySource(proof);
+  if (historySource !== "liveBlockCache" && historySource !== "indexerReceiptArchive") {
     throw new NoEvmReceiptProofError(
       "unsupported_history_source",
       `unsupported no-EVM receipt proof historySource: ${historySource}`,
