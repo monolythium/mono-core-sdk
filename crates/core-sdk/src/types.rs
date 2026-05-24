@@ -12,6 +12,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 
 use crate::bridge::BridgeRouteDisclosure;
+use blst::min_pk::{
+    AggregatePublicKey, PublicKey as BlsPublicKeyPoint, Signature as BlsSignaturePoint,
+};
+use blst::BLST_ERROR;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
@@ -433,6 +437,54 @@ pub struct NoEvmArchiveSignatureVerification {
     pub issues: Vec<NoEvmArchiveSignatureVerificationIssue>,
 }
 
+/// Trusted BLS public key for a committee authority in a round-certificate
+/// verification call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoEvmReceiptTrustedBlsSigner {
+    /// Operator authority index in the canonical committee for the round.
+    pub authority_index: u16,
+    /// 48-byte compressed BLS12-381 min-pk public key.
+    pub public_key: [u8; 48],
+}
+
+/// Result of BLS round-certificate finality evidence verification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoEvmReceiptBlsFinalityVerification {
+    /// Non-null `finalityEvidence` was supplied to the helper.
+    pub finality_evidence_present: bool,
+    /// `certificate.signerCount` matches both bitmap popcount and `signerIndices.len()`.
+    pub signer_count_matches: bool,
+    /// `certificate.signerIndices` exactly match the decoded little-endian bitmap.
+    pub signer_bitmap_matches_indices: bool,
+    /// Every signer index is within the caller-supplied committee bound.
+    pub signer_indices_in_range: bool,
+    /// Every signer index had caller-supplied trusted BLS material.
+    pub all_signers_trusted: bool,
+    /// Signer count meets the caller-supplied finality threshold.
+    pub threshold_met: bool,
+    /// Aggregate signature verifies over the Starfish round message.
+    pub signature_valid: bool,
+    /// Counted signers from the decoded bitmap.
+    pub accepted_signature_count: usize,
+    /// Required signer threshold supplied by the caller.
+    pub required_signature_count: usize,
+}
+
+impl NoEvmReceiptBlsFinalityVerification {
+    /// True only when the finality evidence meets the caller's trusted BLS
+    /// material and threshold policy.
+    #[must_use]
+    pub const fn verified(self) -> bool {
+        self.finality_evidence_present
+            && self.signer_count_matches
+            && self.signer_bitmap_matches_indices
+            && self.signer_indices_in_range
+            && self.all_signers_trusted
+            && self.threshold_met
+            && self.signature_valid
+    }
+}
+
 /// Local no-EVM receipt proof transcript verification failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum NoEvmReceiptProofError {
@@ -506,6 +558,9 @@ pub enum NoEvmReceiptProofError {
         signer_count: u16,
         signer_indices: usize,
     },
+    /// Finality verification was configured incorrectly.
+    #[error("{field}: {reason}")]
+    FinalityVerificationConfig { field: String, reason: String },
 }
 
 impl NoEvmReceiptProof {
@@ -631,6 +686,116 @@ pub fn verify_no_evm_receipt_proof(
         tx_index: proof.tx_index,
         target_receipt,
     }))
+}
+
+/// Compute the Starfish round-certificate BLS message:
+/// `blake3("round" || chain_id_le || round_le)`.
+#[must_use]
+pub fn compute_no_evm_round_finality_message(chain_id: u64, round: u64) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"round");
+    hasher.update(&chain_id.to_le_bytes());
+    hasher.update(&round.to_le_bytes());
+    *hasher.finalize().as_bytes()
+}
+
+/// Verify BLS round-certificate finality evidence against a trusted
+/// threshold-cluster aggregate public key.
+///
+/// This validates only the supplied proof material for the supplied trusted
+/// key and committee policy. It does not imply archive availability or live
+/// finality beyond that material.
+pub fn verify_no_evm_finality_evidence_threshold(
+    finality: &NoEvmReceiptFinalityEvidence,
+    chain_id: u64,
+    cluster_public_key: &[u8; 48],
+    committee_size: u16,
+    required_signature_count: usize,
+) -> Result<NoEvmReceiptBlsFinalityVerification, NoEvmReceiptProofError> {
+    validate_no_evm_finality_threshold(required_signature_count, usize::from(committee_size))?;
+    let signature = decode_no_evm_finality_signature(&finality.certificate.signature)?;
+    let bitmap = decode_no_evm_hex(
+        "finalityEvidence.certificate.signersBitmap".to_owned(),
+        &finality.certificate.signers_bitmap,
+    )?;
+    let signer_indices = no_evm_signer_indices_from_bitmap(&bitmap)?;
+    let base = no_evm_finality_verification_base(
+        finality,
+        &signer_indices,
+        committee_size,
+        required_signature_count,
+    )?;
+    let message = compute_no_evm_round_finality_message(chain_id, finality.round);
+    let signature_valid = base.signer_indices_in_range
+        && verify_no_evm_bls_single(cluster_public_key, &message, &signature);
+
+    Ok(NoEvmReceiptBlsFinalityVerification {
+        all_signers_trusted: base.signer_indices_in_range,
+        signature_valid,
+        ..base
+    })
+}
+
+/// Verify BLS round-certificate finality evidence in multisig mode against a
+/// trusted authority roster.
+pub fn verify_no_evm_finality_evidence_multisig(
+    finality: &NoEvmReceiptFinalityEvidence,
+    chain_id: u64,
+    trusted_signers: &[NoEvmReceiptTrustedBlsSigner],
+    required_signature_count: usize,
+) -> Result<NoEvmReceiptBlsFinalityVerification, NoEvmReceiptProofError> {
+    validate_no_evm_finality_threshold(required_signature_count, trusted_signers.len())?;
+    let signature = decode_no_evm_finality_signature(&finality.certificate.signature)?;
+    let bitmap = decode_no_evm_hex(
+        "finalityEvidence.certificate.signersBitmap".to_owned(),
+        &finality.certificate.signers_bitmap,
+    )?;
+    let signer_indices = no_evm_signer_indices_from_bitmap(&bitmap)?;
+    let committee_size = trusted_signers
+        .iter()
+        .map(|signer| signer.authority_index)
+        .max()
+        .map_or(0_u16, |idx| idx.saturating_add(1));
+    let base = no_evm_finality_verification_base(
+        finality,
+        &signer_indices,
+        committee_size,
+        required_signature_count,
+    )?;
+
+    let mut trusted_indices = HashSet::new();
+    for signer in trusted_signers {
+        if !trusted_indices.insert(signer.authority_index) {
+            return Err(NoEvmReceiptProofError::FinalityVerificationConfig {
+                field: "trustedSigners".to_owned(),
+                reason: format!("duplicate authority index {}", signer.authority_index),
+            });
+        }
+    }
+
+    let mut public_keys = Vec::with_capacity(signer_indices.len());
+    let mut all_signers_trusted = true;
+    for signer_index in &signer_indices {
+        let Some(signer) = trusted_signers
+            .iter()
+            .find(|trusted| trusted.authority_index == *signer_index)
+        else {
+            all_signers_trusted = false;
+            continue;
+        };
+        public_keys.push(signer.public_key);
+    }
+
+    let message = compute_no_evm_round_finality_message(chain_id, finality.round);
+    let signature_valid = all_signers_trusted
+        && !public_keys.is_empty()
+        && verify_no_evm_bls_fast_aggregate(&public_keys, &message, &signature);
+
+    Ok(NoEvmReceiptBlsFinalityVerification {
+        all_signers_trusted,
+        signature_valid,
+        ..base
+    })
 }
 
 /// Verify snapshot archive proof signatures against a trusted ML-DSA-65 roster.
@@ -944,6 +1109,138 @@ fn validate_no_evm_receipt_finality_evidence(
         &finality.certificate.signers_bitmap,
     )?;
     Ok(())
+}
+
+fn validate_no_evm_finality_threshold(
+    required_signature_count: usize,
+    trusted_capacity: usize,
+) -> Result<(), NoEvmReceiptProofError> {
+    if required_signature_count == 0 {
+        return Err(NoEvmReceiptProofError::FinalityVerificationConfig {
+            field: "requiredSignatureCount".to_owned(),
+            reason: "finality evidence threshold must be at least 1".to_owned(),
+        });
+    }
+    if required_signature_count > trusted_capacity {
+        return Err(NoEvmReceiptProofError::FinalityVerificationConfig {
+            field: "requiredSignatureCount".to_owned(),
+            reason: format!(
+                "finality evidence threshold {required_signature_count} exceeds trusted signer capacity {trusted_capacity}",
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn no_evm_finality_verification_base(
+    finality: &NoEvmReceiptFinalityEvidence,
+    signer_indices: &[u16],
+    committee_size: u16,
+    required_signature_count: usize,
+) -> Result<NoEvmReceiptBlsFinalityVerification, NoEvmReceiptProofError> {
+    validate_no_evm_receipt_finality_evidence(finality)?;
+    let signer_count_matches = usize::from(finality.certificate.signer_count)
+        == finality.certificate.signer_indices.len()
+        && usize::from(finality.certificate.signer_count) == signer_indices.len();
+    let signer_bitmap_matches_indices = finality.certificate.signer_indices == signer_indices;
+    let signer_indices_in_range = signer_indices
+        .iter()
+        .all(|signer_index| *signer_index < committee_size);
+    let accepted_signature_count = signer_indices.len();
+    let threshold_met = accepted_signature_count >= required_signature_count;
+
+    Ok(NoEvmReceiptBlsFinalityVerification {
+        finality_evidence_present: true,
+        signer_count_matches,
+        signer_bitmap_matches_indices,
+        signer_indices_in_range,
+        all_signers_trusted: false,
+        threshold_met,
+        signature_valid: false,
+        accepted_signature_count,
+        required_signature_count,
+    })
+}
+
+fn decode_no_evm_finality_signature(raw: &str) -> Result<[u8; 96], NoEvmReceiptProofError> {
+    let bytes = decode_no_evm_hex("finalityEvidence.certificate.signature".to_owned(), raw)?;
+    let actual = bytes.len();
+    bytes
+        .try_into()
+        .map_err(|_| NoEvmReceiptProofError::InvalidHexLength {
+            field: "finalityEvidence.certificate.signature".to_owned(),
+            expected: 96,
+            actual,
+        })
+}
+
+fn no_evm_signer_indices_from_bitmap(bitmap: &[u8]) -> Result<Vec<u16>, NoEvmReceiptProofError> {
+    let mut out = Vec::new();
+    for (byte_index, byte) in bitmap.iter().enumerate() {
+        for bit_index in 0..8_usize {
+            if byte & (1_u8 << bit_index) == 0 {
+                continue;
+            }
+            let signer_index = byte_index
+                .checked_mul(8)
+                .and_then(|base| base.checked_add(bit_index))
+                .ok_or_else(|| NoEvmReceiptProofError::FinalityVerificationConfig {
+                    field: "finalityEvidence.certificate.signersBitmap".to_owned(),
+                    reason: "signer bitmap index overflow".to_owned(),
+                })?;
+            let signer_index = u16::try_from(signer_index).map_err(|_| {
+                NoEvmReceiptProofError::FinalityVerificationConfig {
+                    field: "finalityEvidence.certificate.signersBitmap".to_owned(),
+                    reason: "signer bitmap index exceeds u16 authority range".to_owned(),
+                }
+            })?;
+            out.push(signer_index);
+        }
+    }
+    Ok(out)
+}
+
+const NO_EVM_BLS_DST: &[u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
+
+fn verify_no_evm_bls_single(pk: &[u8; 48], msg: &[u8], sig: &[u8; 96]) -> bool {
+    let Ok(pk) = BlsPublicKeyPoint::from_bytes(pk) else {
+        return false;
+    };
+    let Ok(sig) = BlsSignaturePoint::from_bytes(sig) else {
+        return false;
+    };
+    matches!(
+        sig.verify(true, msg, NO_EVM_BLS_DST, &[], &pk, true),
+        BLST_ERROR::BLST_SUCCESS
+    )
+}
+
+fn verify_no_evm_bls_fast_aggregate(public_keys: &[[u8; 48]], msg: &[u8], sig: &[u8; 96]) -> bool {
+    let parsed = public_keys
+        .iter()
+        .map(|pk| BlsPublicKeyPoint::from_bytes(pk))
+        .collect::<Result<Vec<_>, _>>();
+    let Ok(parsed) = parsed else {
+        return false;
+    };
+    let refs = parsed.iter().collect::<Vec<_>>();
+    let Ok(agg_pk) = AggregatePublicKey::aggregate(&refs, true) else {
+        return false;
+    };
+    let Ok(sig) = BlsSignaturePoint::from_bytes(sig) else {
+        return false;
+    };
+    matches!(
+        sig.verify(
+            true,
+            msg,
+            NO_EVM_BLS_DST,
+            &[],
+            &agg_pk.to_public_key(),
+            true
+        ),
+        BLST_ERROR::BLST_SUCCESS
+    )
 }
 
 fn compute_no_evm_receipts_root_bytes<T>(receipts: &[T]) -> Result<[u8; 32], NoEvmReceiptProofError>
@@ -4654,11 +4951,49 @@ mod tests {
         assess_bridge_route, BridgeAdminControl, BridgeCircuitBreakerState,
         BridgeVerifierDisclosure,
     };
+    use blst::min_pk::SecretKey as BlsSecretKey;
     use fips204::ml_dsa_65;
     use fips204::traits::{KeyGen, SerDes, Signer};
 
     const VALID_ARCHIVE_SIGNATURE: &str =
         "mono.snapshot.sig.v1:0x1212121212121212121212121212121212121212:0xabab";
+
+    fn test_bls_key(seed_byte: u8) -> BlsSecretKey {
+        BlsSecretKey::key_gen(&[seed_byte; 32], &[]).unwrap()
+    }
+
+    fn test_finality_bitmap_hex(indices: &[u16], committee_size: u16) -> String {
+        let max_index = indices.iter().copied().max().unwrap_or(0);
+        let bit_capacity = committee_size.max(max_index.saturating_add(1));
+        let mut bitmap = vec![0_u8; usize::from(bit_capacity).div_ceil(8)];
+        for index in indices {
+            let index = usize::from(*index);
+            bitmap[index / 8] |= 1_u8 << (index % 8);
+        }
+        hex_encode_0x(&bitmap)
+    }
+
+    fn test_finality_evidence(
+        round: u64,
+        signature: [u8; 96],
+        bitmap_indices: &[u16],
+        signer_indices: Vec<u16>,
+        signer_count: u16,
+        committee_size: u16,
+    ) -> NoEvmReceiptFinalityEvidence {
+        NoEvmReceiptFinalityEvidence {
+            schema: NO_EVM_RECEIPT_FINALITY_EVIDENCE_SCHEMA.to_owned(),
+            source: NO_EVM_RECEIPT_FINALITY_EVIDENCE_SOURCE.to_owned(),
+            round,
+            certificate: NoEvmReceiptFinalityCertificate {
+                round,
+                signature: hex_encode_0x(&signature),
+                signers_bitmap: test_finality_bitmap_hex(bitmap_indices, committee_size),
+                signer_indices,
+                signer_count,
+            },
+        }
+    }
 
     fn bridge_route(route_id: &str) -> BridgeRouteDisclosure {
         BridgeRouteDisclosure {
@@ -5842,6 +6177,100 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.code == "duplicate_signer"));
+    }
+
+    #[test]
+    fn no_evm_finality_verifies_threshold_bls_with_cluster_key() {
+        let chain_id = 69_420_u64;
+        let round = 58_u64;
+        let signer = test_bls_key(0x44);
+        let message = compute_no_evm_round_finality_message(chain_id, round);
+        let signature = signer.sign(&message, NO_EVM_BLS_DST, &[]).to_bytes();
+        let public_key = signer.sk_to_pk().to_bytes();
+        let finality = test_finality_evidence(round, signature, &[3], vec![3], 1, 7);
+
+        let verification =
+            verify_no_evm_finality_evidence_threshold(&finality, chain_id, &public_key, 7, 1)
+                .unwrap();
+
+        assert!(verification.verified());
+        assert!(verification.signer_count_matches);
+        assert!(verification.signer_bitmap_matches_indices);
+        assert!(verification.signature_valid);
+    }
+
+    #[test]
+    fn no_evm_finality_rejects_wrong_chain_id() {
+        let chain_id = 69_420_u64;
+        let round = 59_u64;
+        let signer = test_bls_key(0x45);
+        let message = compute_no_evm_round_finality_message(chain_id, round);
+        let signature = signer.sign(&message, NO_EVM_BLS_DST, &[]).to_bytes();
+        let public_key = signer.sk_to_pk().to_bytes();
+        let finality = test_finality_evidence(round, signature, &[1], vec![1], 1, 7);
+
+        let verification =
+            verify_no_evm_finality_evidence_threshold(&finality, chain_id + 1, &public_key, 7, 1)
+                .unwrap();
+
+        assert!(!verification.verified());
+        assert!(!verification.signature_valid);
+    }
+
+    #[test]
+    fn no_evm_finality_detects_bitmap_index_mismatch() {
+        let chain_id = 69_420_u64;
+        let round = 60_u64;
+        let signer = test_bls_key(0x46);
+        let message = compute_no_evm_round_finality_message(chain_id, round);
+        let signature = signer.sign(&message, NO_EVM_BLS_DST, &[]).to_bytes();
+        let public_key = signer.sk_to_pk().to_bytes();
+        let finality = test_finality_evidence(round, signature, &[1], vec![1, 1], 2, 7);
+
+        let verification =
+            verify_no_evm_finality_evidence_threshold(&finality, chain_id, &public_key, 7, 1)
+                .unwrap();
+
+        assert!(!verification.verified());
+        assert!(!verification.signer_count_matches);
+        assert!(!verification.signer_bitmap_matches_indices);
+    }
+
+    #[test]
+    fn no_evm_finality_rejects_threshold_shortfall() {
+        let chain_id = 69_420_u64;
+        let round = 61_u64;
+        let signer = test_bls_key(0x47);
+        let message = compute_no_evm_round_finality_message(chain_id, round);
+        let signature = signer.sign(&message, NO_EVM_BLS_DST, &[]).to_bytes();
+        let public_key = signer.sk_to_pk().to_bytes();
+        let finality = test_finality_evidence(round, signature, &[2], vec![2], 1, 7);
+
+        let verification =
+            verify_no_evm_finality_evidence_threshold(&finality, chain_id, &public_key, 7, 2)
+                .unwrap();
+
+        assert!(!verification.verified());
+        assert!(!verification.threshold_met);
+        assert!(verification.signature_valid);
+    }
+
+    #[test]
+    fn no_evm_finality_rejects_malformed_signature_length() {
+        let mut finality = test_finality_evidence(62, [0x11; 96], &[0], vec![0], 1, 1);
+        finality.certificate.signature = hex_encode_0x(&[0x11; 95]);
+
+        let err = verify_no_evm_finality_evidence_threshold(&finality, 69_420, &[0x22; 48], 1, 1)
+            .expect_err("malformed signature length must fail");
+
+        assert!(matches!(
+            err,
+            NoEvmReceiptProofError::InvalidHexLength {
+                expected: 96,
+                actual: 95,
+                ..
+            }
+        ));
     }
 
     #[test]

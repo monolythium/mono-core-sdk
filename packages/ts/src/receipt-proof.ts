@@ -1,4 +1,6 @@
+import { blake3 } from "@noble/hashes/blake3.js";
 import { keccak_256 } from "@noble/hashes/sha3.js";
+import { bls12_381 } from "@noble/curves/bls12-381.js";
 import { ml_dsa65 } from "@noble/post-quantum/ml-dsa.js";
 import {
   ML_DSA_65_PUBLIC_KEY_LEN,
@@ -9,6 +11,7 @@ import type {
   NoEvmArchiveProof,
   NoEvmBoundedReceiptProof,
   NoEvmCompactReceiptProof,
+  NoEvmFinalityEvidence,
   NoEvmReceiptProof,
 } from "./client.js";
 
@@ -37,6 +40,9 @@ const NODE_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPT_NODE_DOMAIN);
 const UINT32_MAX = 0xffff_ffff;
 const HASH_BYTE_LENGTH = 32;
 const ARCHIVE_SIGNATURE_SIGNER_ID_BYTE_LENGTH = 20;
+const BLS_PUBLIC_KEY_BYTE_LENGTH = 48;
+const BLS_SIGNATURE_BYTE_LENGTH = 96;
+const BLS_DST = "BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
 const HEX_RE = /^[0-9a-fA-F]*$/u;
 
 export type NoEvmReceiptProofErrorCode =
@@ -111,6 +117,24 @@ export interface NoEvmArchiveSignatureVerification {
   validSigners: string[];
   checkedSignatures: number;
   issues: NoEvmArchiveSignatureVerificationIssue[];
+}
+
+export interface NoEvmReceiptTrustedBlsSigner {
+  authorityIndex: number;
+  publicKey: Uint8Array | readonly number[];
+}
+
+export interface NoEvmBlsFinalityVerification {
+  finalityEvidencePresent: boolean;
+  signerCountMatches: boolean;
+  signerBitmapMatchesIndices: boolean;
+  signerIndicesInRange: boolean;
+  allSignersTrusted: boolean;
+  thresholdMet: boolean;
+  signatureValid: boolean;
+  acceptedSignatureCount: number;
+  requiredSignatureCount: number;
+  verified: boolean;
 }
 
 export function decodeNoEvmReceiptTranscript(proof: NoEvmReceiptProof): Uint8Array[] {
@@ -271,6 +295,130 @@ export function verifyNoEvmArchiveProofSignatures(
     checkedSignatures: archiveProof.signatures.length,
     issues,
   };
+}
+
+export function computeNoEvmRoundFinalityMessage(
+  chainId: number | bigint,
+  round: number | bigint,
+): Uint8Array {
+  const preimage = new Uint8Array(5 + 8 + 8);
+  preimage.set(new TextEncoder().encode("round"), 0);
+  writeU64Le(preimage, 5, chainId, "chainId");
+  writeU64Le(preimage, 13, round, "round");
+  return blake3(preimage);
+}
+
+export function verifyNoEvmFinalityEvidenceThreshold(
+  finalityEvidence: NoEvmFinalityEvidence,
+  options: {
+    chainId: number | bigint;
+    clusterPublicKey: Uint8Array | readonly number[];
+    committeeSize: number;
+    threshold: number;
+  },
+): NoEvmBlsFinalityVerification {
+  validateFinalityThreshold(options.threshold, options.committeeSize);
+  const clusterPublicKey = expectBlsBytes(
+    options.clusterPublicKey,
+    BLS_PUBLIC_KEY_BYTE_LENGTH,
+    "clusterPublicKey",
+  );
+  const signature = decodeFinalitySignature(finalityEvidence);
+  const signerIndices = signerIndicesFromBitmap(
+    decodeHexBytes(
+      finalityEvidence.certificate.signersBitmap,
+      "finalityEvidence.certificate.signersBitmap",
+    ),
+  );
+  const base = finalityVerificationBase(
+    finalityEvidence,
+    signerIndices,
+    options.committeeSize,
+    options.threshold,
+  );
+  const message = computeNoEvmRoundFinalityMessage(options.chainId, finalityEvidence.round);
+  const signatureValid =
+    base.signerIndicesInRange && verifyBlsSignature(clusterPublicKey, message, signature);
+
+  return finalizeBlsFinalityVerification({
+    ...base,
+    allSignersTrusted: base.signerIndicesInRange,
+    signatureValid,
+  });
+}
+
+export function verifyNoEvmFinalityEvidenceMultisig(
+  finalityEvidence: NoEvmFinalityEvidence,
+  options: {
+    chainId: number | bigint;
+    trustedSigners: readonly NoEvmReceiptTrustedBlsSigner[];
+    threshold: number;
+  },
+): NoEvmBlsFinalityVerification {
+  validateFinalityThreshold(options.threshold, options.trustedSigners.length);
+  const signature = decodeFinalitySignature(finalityEvidence);
+  const signerIndices = signerIndicesFromBitmap(
+    decodeHexBytes(
+      finalityEvidence.certificate.signersBitmap,
+      "finalityEvidence.certificate.signersBitmap",
+    ),
+  );
+  const committeeSize =
+    options.trustedSigners.reduce((max, signer) => Math.max(max, signer.authorityIndex), -1) + 1;
+  const base = finalityVerificationBase(
+    finalityEvidence,
+    signerIndices,
+    committeeSize,
+    options.threshold,
+  );
+
+  const roster = new Map<number, Uint8Array>();
+  options.trustedSigners.forEach((signer, index) => {
+    assertUint32(signer.authorityIndex, `trustedSigners[${index}].authorityIndex`);
+    if (signer.authorityIndex > 0xffff) {
+      throw new NoEvmReceiptProofError(
+        "invalid_proof_shape",
+        `trustedSigners[${index}].authorityIndex must fit u16`,
+      );
+    }
+    if (roster.has(signer.authorityIndex)) {
+      throw new NoEvmReceiptProofError(
+        "invalid_proof_shape",
+        `trustedSigners contains duplicate authority index ${signer.authorityIndex}`,
+      );
+    }
+    roster.set(
+      signer.authorityIndex,
+      expectBlsBytes(
+        signer.publicKey,
+        BLS_PUBLIC_KEY_BYTE_LENGTH,
+        `trustedSigners[${index}].publicKey`,
+      ),
+    );
+  });
+
+  const publicKeys: Uint8Array[] = [];
+  let allSignersTrusted = true;
+  signerIndices.forEach((signerIndex) => {
+    const publicKey = roster.get(signerIndex);
+    if (publicKey === undefined) {
+      allSignersTrusted = false;
+    } else {
+      publicKeys.push(publicKey);
+    }
+  });
+
+  const message = computeNoEvmRoundFinalityMessage(options.chainId, finalityEvidence.round);
+  const signatureValid =
+    allSignersTrusted &&
+    publicKeys.length > 0 &&
+    verifyBlsAggregateSignature(publicKeys, message, signature);
+
+  return finalizeBlsFinalityVerification({
+    ...base,
+    allSignersTrusted,
+    signatureValid,
+  });
 }
 
 function verifyBoundedReceiptProof(proof: NoEvmReceiptProof): NoEvmReceiptProofVerification {
@@ -684,6 +832,234 @@ function validateOptionalFinalityEvidence(proof: NoEvmReceiptProof): void {
       "finalityEvidence.certificate.signerCount must match signerIndices length",
     );
   }
+}
+
+function validateFinalityEvidenceForVerification(
+  finalityEvidence: NoEvmFinalityEvidence,
+): void {
+  if (!isRecord(finalityEvidence)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence must be an object",
+    );
+  }
+  assertSupported(
+    finalityEvidence.schema,
+    NO_EVM_FINALITY_EVIDENCE_SCHEMA,
+    "finalityEvidence.schema",
+    "unsupported_schema",
+  );
+  assertSupported(
+    finalityEvidence.source,
+    NO_EVM_FINALITY_EVIDENCE_SOURCE,
+    "finalityEvidence.source",
+    "unsupported_schema",
+  );
+  assertUint32(finalityEvidence.round, "finalityEvidence.round");
+  const certificate = finalityEvidence.certificate;
+  if (!isRecord(certificate)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate must be an object",
+    );
+  }
+  assertUint32(certificate.round, "finalityEvidence.certificate.round");
+  if (certificate.round !== finalityEvidence.round) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate.round must match finalityEvidence.round",
+    );
+  }
+  decodeHexBytes(certificate.signersBitmap, "finalityEvidence.certificate.signersBitmap");
+  if (!Array.isArray(certificate.signerIndices)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate.signerIndices must be an array",
+    );
+  }
+  certificate.signerIndices.forEach((index, signerIndex) => {
+    assertUint32(index, `finalityEvidence.certificate.signerIndices[${signerIndex}]`);
+    if (index > 0xffff) {
+      throw new NoEvmReceiptProofError(
+        "invalid_proof_shape",
+        `finalityEvidence.certificate.signerIndices[${signerIndex}] must fit u16`,
+      );
+    }
+  });
+  assertUint32(certificate.signerCount, "finalityEvidence.certificate.signerCount");
+  if (certificate.signerCount > 0xffff) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate.signerCount must fit u16",
+    );
+  }
+}
+
+function validateFinalityThreshold(threshold: number, trustedCapacity: number): void {
+  if (!Number.isSafeInteger(threshold) || threshold < 1) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finality evidence threshold must be at least 1",
+    );
+  }
+  if (!Number.isSafeInteger(trustedCapacity) || trustedCapacity < 0 || trustedCapacity > 0xffff) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finality evidence trusted signer capacity must fit u16",
+    );
+  }
+  if (threshold > trustedCapacity) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      `finality evidence threshold ${threshold} exceeds trusted signer capacity ${trustedCapacity}`,
+    );
+  }
+}
+
+function decodeFinalitySignature(finalityEvidence: NoEvmFinalityEvidence): Uint8Array {
+  validateFinalityEvidenceForVerification(finalityEvidence);
+  const signature = decodeHexBytes(
+    finalityEvidence.certificate.signature,
+    "finalityEvidence.certificate.signature",
+  );
+  if (signature.length !== BLS_SIGNATURE_BYTE_LENGTH) {
+    throw new NoEvmReceiptProofError(
+      "invalid_hash_length",
+      `finalityEvidence.certificate.signature must be ${BLS_SIGNATURE_BYTE_LENGTH} bytes, got ${signature.length}`,
+    );
+  }
+  return signature;
+}
+
+function signerIndicesFromBitmap(bitmap: Uint8Array): number[] {
+  const out: number[] = [];
+  bitmap.forEach((byte, byteIndex) => {
+    for (let bitIndex = 0; bitIndex < 8; bitIndex += 1) {
+      if ((byte & (1 << bitIndex)) === 0) continue;
+      const signerIndex = byteIndex * 8 + bitIndex;
+      if (signerIndex > 0xffff) {
+        throw new NoEvmReceiptProofError(
+          "invalid_proof_shape",
+          "finalityEvidence signer bitmap index exceeds u16 authority range",
+        );
+      }
+      out.push(signerIndex);
+    }
+  });
+  return out;
+}
+
+function finalityVerificationBase(
+  finalityEvidence: NoEvmFinalityEvidence,
+  bitmapSignerIndices: readonly number[],
+  committeeSize: number,
+  threshold: number,
+): Omit<NoEvmBlsFinalityVerification, "verified"> {
+  const signerCountMatches =
+    finalityEvidence.certificate.signerCount === finalityEvidence.certificate.signerIndices.length &&
+    finalityEvidence.certificate.signerCount === bitmapSignerIndices.length;
+  const signerBitmapMatchesIndices = arraysEqual(
+    finalityEvidence.certificate.signerIndices,
+    bitmapSignerIndices,
+  );
+  const signerIndicesInRange = bitmapSignerIndices.every(
+    (signerIndex) => signerIndex < committeeSize,
+  );
+  const acceptedSignatureCount = bitmapSignerIndices.length;
+  return {
+    finalityEvidencePresent: true,
+    signerCountMatches,
+    signerBitmapMatchesIndices,
+    signerIndicesInRange,
+    allSignersTrusted: false,
+    thresholdMet: acceptedSignatureCount >= threshold,
+    signatureValid: false,
+    acceptedSignatureCount,
+    requiredSignatureCount: threshold,
+  };
+}
+
+function finalizeBlsFinalityVerification(
+  verification: Omit<NoEvmBlsFinalityVerification, "verified">,
+): NoEvmBlsFinalityVerification {
+  return {
+    ...verification,
+    verified:
+      verification.finalityEvidencePresent &&
+      verification.signerCountMatches &&
+      verification.signerBitmapMatchesIndices &&
+      verification.signerIndicesInRange &&
+      verification.allSignersTrusted &&
+      verification.thresholdMet &&
+      verification.signatureValid,
+  };
+}
+
+function verifyBlsSignature(
+  publicKey: Uint8Array,
+  message: Uint8Array,
+  signature: Uint8Array,
+): boolean {
+  try {
+    const hashedMessage = bls12_381.longSignatures.hash(message, BLS_DST);
+    return bls12_381.longSignatures.verify(signature, hashedMessage, publicKey);
+  } catch {
+    return false;
+  }
+}
+
+function verifyBlsAggregateSignature(
+  publicKeys: readonly Uint8Array[],
+  message: Uint8Array,
+  signature: Uint8Array,
+): boolean {
+  try {
+    const aggregatePublicKey = bls12_381.longSignatures.aggregatePublicKeys([...publicKeys]);
+    return verifyBlsSignature(
+      aggregatePublicKey.toBytes(),
+      message,
+      signature,
+    );
+  } catch {
+    return false;
+  }
+}
+
+function expectBlsBytes(
+  value: Uint8Array | readonly number[],
+  expectedLength: number,
+  field: string,
+): Uint8Array {
+  const bytes = value instanceof Uint8Array ? value : Uint8Array.from(value);
+  if (bytes.length !== expectedLength) {
+    throw new NoEvmReceiptProofError(
+      "invalid_hash_length",
+      `${field} must be ${expectedLength} bytes, got ${bytes.length}`,
+    );
+  }
+  return bytes;
+}
+
+function writeU64Le(
+  out: Uint8Array,
+  offset: number,
+  value: number | bigint,
+  field: string,
+): void {
+  if (typeof value === "number" && (!Number.isSafeInteger(value) || value < 0)) {
+    throw new NoEvmReceiptProofError("invalid_uint32", `${field} must fit u64`);
+  }
+  const big = typeof value === "bigint" ? value : BigInt(value);
+  if (big < 0n || big > 0xffff_ffff_ffff_ffffn) {
+    throw new NoEvmReceiptProofError("invalid_uint32", `${field} must fit u64`);
+  }
+  for (let i = 0; i < 8; i += 1) {
+    out[offset + i] = Number((big >> BigInt(i * 8)) & 0xffn);
+  }
+}
+
+function arraysEqual(a: readonly number[], b: readonly number[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
 function getCompactInclusionProof(

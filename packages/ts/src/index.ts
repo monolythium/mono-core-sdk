@@ -244,18 +244,23 @@ export {
   NO_EVM_RECEIPT_ROOT_ALGORITHM,
   NoEvmReceiptProofError,
   computeNoEvmReceiptsRoot,
+  computeNoEvmRoundFinalityMessage,
   computeNoEvmTargetReceiptHash,
   decodeNoEvmReceiptTranscript,
+  verifyNoEvmFinalityEvidenceMultisig,
+  verifyNoEvmFinalityEvidenceThreshold,
   verifyNoEvmArchiveProofSignatures,
   verifyNoEvmReceiptProof,
 } from "./receipt-proof.js";
 export type {
+  NoEvmBlsFinalityVerification,
   NoEvmArchiveSignatureVerification,
   NoEvmArchiveSignatureVerificationIssue,
   NoEvmArchiveSignatureVerificationIssueCode,
   NoEvmArchiveTrustedSigner,
   NoEvmReceiptProofErrorCode,
   NoEvmReceiptProofVerification,
+  NoEvmReceiptTrustedBlsSigner,
 } from "./receipt-proof.js";
 export {
   NATIVE_MARKET_EVENT_FAMILY,
