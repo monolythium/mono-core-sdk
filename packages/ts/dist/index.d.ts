@@ -1311,7 +1311,7 @@ declare class MrvValidationError extends Error {
 interface LythFormatOptions {
     includeUnit?: boolean;
 }
-declare const MRV_STRUCTURED_FEE_FIELDS: readonly ["total_lythoshi", "total_lyth", "cycles_used", "base_price_per_cycle_lythoshi", "state_io_units", "state_io_price_per_unit_lythoshi", "priority_tip_lythoshi"];
+declare const MRV_STRUCTURED_FEE_FIELDS: readonly ["total_lythoshi", "cycles_used", "base_price_per_cycle_lythoshi", "state_io_units", "state_io_price_per_unit_lythoshi", "priority_tip_lythoshi"];
 interface MrvFeeDisplayConformanceInput {
     expectedTotalLythoshi: MrvDecimalLike;
     defaultFeeText: string;

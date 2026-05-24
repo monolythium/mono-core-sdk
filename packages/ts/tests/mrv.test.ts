@@ -142,16 +142,22 @@ describe("MRV/RISC-V SDK helpers", () => {
   });
 
   it("checks fee display conformance for default and structured fee surfaces", () => {
-    const fee = {
+    const requiredFee = {
       total_lythoshi: "50000",
-      total_lyth: "0.0005",
       cycles_used: 42,
       base_price_per_cycle_lythoshi: "1000",
       state_io_units: 8,
       state_io_price_per_unit_lythoshi: "250",
       priority_tip_lythoshi: "0",
     };
-    expect(Object.keys(fee)).toEqual([...MRV_STRUCTURED_FEE_FIELDS]);
+    expect(Object.keys(requiredFee)).toEqual([...MRV_STRUCTURED_FEE_FIELDS]);
+    expect(() =>
+      assertMrvStructuredFeeConformance(requiredFee, {
+        expectedTotalLythoshi: "50000",
+      }),
+    ).not.toThrow();
+
+    const fee = { ...requiredFee, total_lyth: "0.0005" };
 
     const report = checkMrvFeeDisplayConformance({
       expectedTotalLythoshi: "50000",
@@ -199,13 +205,13 @@ describe("MRV/RISC-V SDK helpers", () => {
   it("rejects legacy EVM fee keys inside structured native fee objects", () => {
     const fee = {
       total_lythoshi: "21000",
-      total_lyth: "0.00021",
       cycles_used: 21_000,
       base_price_per_cycle_lythoshi: "1",
       state_io_units: 0,
       state_io_price_per_unit_lythoshi: "0",
       priority_tip_lythoshi: "0",
     };
+    expect(Object.keys(fee)).toEqual([...MRV_STRUCTURED_FEE_FIELDS]);
 
     expect(() => assertMrvStructuredFeeConformance(fee, { label: "fee" })).not.toThrow();
 
