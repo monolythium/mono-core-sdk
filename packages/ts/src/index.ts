@@ -142,6 +142,8 @@ export type {
   MetricsRangeSeries,
   MetricsRangeStatus,
   NoEvmArchiveProof,
+  NoEvmFinalityCertificate,
+  NoEvmFinalityEvidence,
   NoEvmReceiptProof,
   NativeReceiptCounters,
   NativeReceiptEvent,
@@ -232,6 +234,8 @@ export type {
 } from "./streams.js";
 export {
   NO_EVM_ARCHIVE_PROOF_SCHEMA,
+  NO_EVM_FINALITY_EVIDENCE_SCHEMA,
+  NO_EVM_FINALITY_EVIDENCE_SOURCE,
   NO_EVM_RECEIPTS_ROOT_DOMAIN,
   NO_EVM_RECEIPT_CODEC,
   NO_EVM_RECEIPT_PROOF_SCHEMA,

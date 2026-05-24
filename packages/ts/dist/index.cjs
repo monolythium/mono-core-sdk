@@ -4339,6 +4339,8 @@ var NO_EVM_RECEIPT_NODE_DOMAIN = "monolythium/v4.1/receipt_node/1";
 var NO_EVM_COMPACT_INCLUSION_PROOF_SCHEMA = "mono.no_evm_receipt_compact_inclusion.v1";
 var NO_EVM_COMPACT_INCLUSION_TREE_ALGORITHM = "binary-keccak-receipt-tree";
 var NO_EVM_ARCHIVE_PROOF_SCHEMA = "mono.no_evm_receipt_archive_binding.v1";
+var NO_EVM_FINALITY_EVIDENCE_SCHEMA = "mono.no_evm_receipt_finality.v1";
+var NO_EVM_FINALITY_EVIDENCE_SOURCE = "blsRoundCertificate";
 var EMPTY_ROOT_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPTS_ROOT_DOMAIN);
 var LEAF_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPT_LEAF_DOMAIN);
 var NODE_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPT_NODE_DOMAIN);
@@ -4554,6 +4556,7 @@ function validateCommonProofMetadata(proof) {
     "receiptCodec",
     "unsupported_receipt_codec"
   );
+  validateOptionalFinalityEvidence(proof);
 }
 function validateBoundedHistorySource(proof) {
   const historySource = getOptionalHistorySource(proof);
@@ -4615,6 +4618,74 @@ function validateOptionalArchiveProof(proof) {
     throw new NoEvmReceiptProofError(
       "invalid_proof_shape",
       "archiveProof.signatures must be an array of strings"
+    );
+  }
+}
+function validateOptionalFinalityEvidence(proof) {
+  const finalityEvidence = proof.finalityEvidence;
+  if (finalityEvidence == null) return;
+  if (!isRecord3(finalityEvidence)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence must be an object when present"
+    );
+  }
+  assertSupported(
+    finalityEvidence["schema"],
+    NO_EVM_FINALITY_EVIDENCE_SCHEMA,
+    "finalityEvidence.schema",
+    "unsupported_schema"
+  );
+  assertSupported(
+    finalityEvidence["source"],
+    NO_EVM_FINALITY_EVIDENCE_SOURCE,
+    "finalityEvidence.source",
+    "unsupported_schema"
+  );
+  assertUint32(finalityEvidence["round"], "finalityEvidence.round");
+  const certificate = finalityEvidence["certificate"];
+  if (!isRecord3(certificate)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate must be an object"
+    );
+  }
+  assertUint32(certificate["round"], "finalityEvidence.certificate.round");
+  if (certificate["round"] !== finalityEvidence["round"]) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate.round must match finalityEvidence.round"
+    );
+  }
+  decodeHexBytes(certificate["signature"], "finalityEvidence.certificate.signature");
+  decodeHexBytes(certificate["signersBitmap"], "finalityEvidence.certificate.signersBitmap");
+  const signerIndices = certificate["signerIndices"];
+  if (!Array.isArray(signerIndices)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate.signerIndices must be an array"
+    );
+  }
+  signerIndices.forEach((index, signerIndex) => {
+    assertUint32(index, `finalityEvidence.certificate.signerIndices[${signerIndex}]`);
+    if (index > 65535) {
+      throw new NoEvmReceiptProofError(
+        "invalid_proof_shape",
+        `finalityEvidence.certificate.signerIndices[${signerIndex}] must fit u16`
+      );
+    }
+  });
+  assertUint32(certificate["signerCount"], "finalityEvidence.certificate.signerCount");
+  if (certificate["signerCount"] > 65535) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate.signerCount must fit u16"
+    );
+  }
+  if (certificate["signerCount"] !== signerIndices.length) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "finalityEvidence.certificate.signerCount must match signerIndices length"
     );
   }
 }
@@ -6432,6 +6503,8 @@ exports.NODE_REGISTRY_CAPABILITY_MASK = NODE_REGISTRY_CAPABILITY_MASK;
 exports.NODE_REGISTRY_PUBLIC_SERVICE_MASK = NODE_REGISTRY_PUBLIC_SERVICE_MASK;
 exports.NODE_REGISTRY_SELECTORS = NODE_REGISTRY_SELECTORS;
 exports.NO_EVM_ARCHIVE_PROOF_SCHEMA = NO_EVM_ARCHIVE_PROOF_SCHEMA;
+exports.NO_EVM_FINALITY_EVIDENCE_SCHEMA = NO_EVM_FINALITY_EVIDENCE_SCHEMA;
+exports.NO_EVM_FINALITY_EVIDENCE_SOURCE = NO_EVM_FINALITY_EVIDENCE_SOURCE;
 exports.NO_EVM_RECEIPTS_ROOT_DOMAIN = NO_EVM_RECEIPTS_ROOT_DOMAIN;
 exports.NO_EVM_RECEIPT_CODEC = NO_EVM_RECEIPT_CODEC;
 exports.NO_EVM_RECEIPT_PROOF_SCHEMA = NO_EVM_RECEIPT_PROOF_SCHEMA;

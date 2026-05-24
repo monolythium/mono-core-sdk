@@ -181,6 +181,53 @@ describe("no-EVM receipt proof helpers", () => {
     expect(proof.archiveProof?.source).toBe("indexerReceiptArchiveContentDigest");
   });
 
+  it("accepts compact proofs carrying BLS finality evidence", () => {
+    const proof: NoEvmCompactReceiptProof = {
+      ...compactNoEvmProof(),
+      finalityEvidence: {
+        schema: "mono.no_evm_receipt_finality.v1",
+        source: "blsRoundCertificate",
+        round: 57,
+        certificate: {
+          round: 57,
+          signature: "0x1234",
+          signersBitmap: "0xabcd",
+          signerIndices: [1, 3],
+          signerCount: 2,
+        },
+      },
+      missingProofMaterial: [
+        "signed archive or snapshot manifest binding receipt bytes to blockHash and receiptsRoot",
+      ],
+    };
+
+    const verified = verifyNoEvmReceiptProof(proof);
+
+    expect(verified?.proofKind).toBe("compactInclusion");
+    expect(proof.finalityEvidence?.source).toBe("blsRoundCertificate");
+    expect(proof.finalityEvidence?.certificate.signerIndices).toEqual([1, 3]);
+  });
+
+  it("rejects malformed BLS finality evidence", () => {
+    expect(() =>
+      verifyNoEvmReceiptProof({
+        ...compactNoEvmProof(),
+        finalityEvidence: {
+          schema: "mono.no_evm_receipt_finality.v1",
+          source: "blsRoundCertificate",
+          round: 57,
+          certificate: {
+            round: 58,
+            signature: "0x1234",
+            signersBitmap: "0xabcd",
+            signerIndices: [1, 3],
+            signerCount: 2,
+          },
+        },
+      }),
+    ).toThrow(/certificate\.round must match/u);
+  });
+
   it("rejects compact proofs with tampered target bytes", () => {
     expect(() =>
       verifyNoEvmReceiptProof({
