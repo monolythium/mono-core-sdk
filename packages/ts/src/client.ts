@@ -184,7 +184,19 @@ export interface NoEvmArchiveProof {
   source: "indexerReceiptArchiveContentDigest" | string;
   manifestHash: string;
   contentHash: string;
-  signatureDigest?: string;
+  signatureDigest?: string | null;
+  signatures: string[];
+  coveringSnapshot?: NoEvmArchiveCoveringSnapshot | null;
+}
+
+export interface NoEvmArchiveCoveringSnapshot {
+  snapshotHeight: number;
+  manifestHash: string;
+  signatureDigest: string;
+  contentHash: string;
+  checkpointContentHash: string;
+  checkpointFrom: number;
+  checkpointTo: number;
   signatures: string[];
 }
 

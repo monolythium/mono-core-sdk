@@ -4417,9 +4417,25 @@ function verifyNoEvmArchiveProofSignatures(archiveProof, trustedSigners, thresho
     }
     roster.set(signerId, publicKey);
   });
+  const signatureMaterial = archiveProof.signatureDigest != null || archiveProof.signatures.length > 0 ? {
+    digestValue: archiveProof.signatureDigest,
+    digestField: "archiveProof.signatureDigest",
+    signatures: archiveProof.signatures,
+    signatureFieldPrefix: "archiveProof.signatures"
+  } : archiveProof.coveringSnapshot != null ? {
+    digestValue: archiveProof.coveringSnapshot.signatureDigest,
+    digestField: "archiveProof.coveringSnapshot.signatureDigest",
+    signatures: archiveProof.coveringSnapshot.signatures,
+    signatureFieldPrefix: "archiveProof.coveringSnapshot.signatures"
+  } : {
+    digestValue: archiveProof.signatureDigest,
+    digestField: "archiveProof.signatureDigest",
+    signatures: archiveProof.signatures,
+    signatureFieldPrefix: "archiveProof.signatures"
+  };
   const issues = [];
-  const digestValue = archiveProof.signatureDigest;
-  if (digestValue === void 0) {
+  const digestValue = signatureMaterial.digestValue;
+  if (digestValue == null) {
     issues.push({
       code: "missing_signature_digest",
       message: "archiveProof.signatureDigest is required for signature verification"
@@ -4428,15 +4444,19 @@ function verifyNoEvmArchiveProofSignatures(archiveProof, trustedSigners, thresho
       verified: false,
       threshold,
       validSigners: [],
-      checkedSignatures: archiveProof.signatures.length,
+      checkedSignatures: signatureMaterial.signatures.length,
       issues
     };
   }
-  const signatureDigest = decodeHash(digestValue, "archiveProof.signatureDigest");
+  const signatureDigest = decodeHash(digestValue, signatureMaterial.digestField);
   const seen = /* @__PURE__ */ new Set();
   const validSigners = [];
-  archiveProof.signatures.forEach((signature, signatureIndex) => {
-    const parsed = parseArchiveProofSignature(signature, signatureIndex);
+  signatureMaterial.signatures.forEach((signature, signatureIndex) => {
+    const parsed = parseArchiveProofSignature(
+      signature,
+      signatureIndex,
+      signatureMaterial.signatureFieldPrefix
+    );
     if (seen.has(parsed.signerId)) {
       issues.push({
         code: "duplicate_signer",
@@ -4499,7 +4519,7 @@ function verifyNoEvmArchiveProofSignatures(archiveProof, trustedSigners, thresho
     verified: issues.length === 0,
     threshold,
     validSigners,
-    checkedSignatures: archiveProof.signatures.length,
+    checkedSignatures: signatureMaterial.signatures.length,
     issues
   };
 }
@@ -4803,9 +4823,9 @@ function validateNoCompactOrArchiveMaterial(proof) {
 function validateOptionalArchiveProof(proof) {
   const archiveProof = proof.archiveProof;
   if (archiveProof == null) return;
-  validateArchiveProofObject(archiveProof);
+  validateArchiveProofObject(archiveProof, proof.blockHeight);
 }
-function validateArchiveProofObject(archiveProof) {
+function validateArchiveProofObject(archiveProof, proofBlockHeight) {
   if (!isRecord3(archiveProof)) {
     throw new NoEvmReceiptProofError(
       "invalid_proof_shape",
@@ -4825,8 +4845,8 @@ function validateArchiveProofObject(archiveProof) {
     );
   }
   decodeHash(archiveProof.manifestHash, "archiveProof.manifestHash");
-  decodeHash(archiveProof.contentHash, "archiveProof.contentHash");
-  if (archiveProof.signatureDigest !== void 0) {
+  const archiveContentHash = decodeHash(archiveProof.contentHash, "archiveProof.contentHash");
+  if (archiveProof.signatureDigest != null) {
     decodeHash(archiveProof.signatureDigest, "archiveProof.signatureDigest");
   }
   if (!Array.isArray(archiveProof.signatures) || archiveProof.signatures.some((signature) => typeof signature !== "string")) {
@@ -4836,14 +4856,88 @@ function validateArchiveProofObject(archiveProof) {
     );
   }
   archiveProof.signatures.forEach(
-    (signature, index) => validateArchiveProofSignature(signature, index)
+    (signature, index) => validateArchiveProofSignature(signature, index, "archiveProof.signatures")
+  );
+  if (archiveProof.coveringSnapshot != null) {
+    validateCoveringSnapshotObject(
+      archiveProof.coveringSnapshot,
+      archiveContentHash,
+      proofBlockHeight
+    );
+  }
+}
+function validateCoveringSnapshotObject(snapshot, archiveContentHash, proofBlockHeight) {
+  if (!isRecord3(snapshot)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "archiveProof.coveringSnapshot must be an object when present"
+    );
+  }
+  assertSafeNonNegativeInteger(
+    snapshot.snapshotHeight,
+    "archiveProof.coveringSnapshot.snapshotHeight"
+  );
+  assertSafeNonNegativeInteger(
+    snapshot.checkpointFrom,
+    "archiveProof.coveringSnapshot.checkpointFrom"
+  );
+  assertSafeNonNegativeInteger(snapshot.checkpointTo, "archiveProof.coveringSnapshot.checkpointTo");
+  decodeHash(snapshot.manifestHash, "archiveProof.coveringSnapshot.manifestHash");
+  decodeHash(snapshot.signatureDigest, "archiveProof.coveringSnapshot.signatureDigest");
+  decodeHash(snapshot.contentHash, "archiveProof.coveringSnapshot.contentHash");
+  const checkpointContentHash = decodeHash(
+    snapshot.checkpointContentHash,
+    "archiveProof.coveringSnapshot.checkpointContentHash"
+  );
+  if (snapshot.checkpointFrom !== 0) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "archiveProof.coveringSnapshot.checkpointFrom must be 0"
+    );
+  }
+  if (snapshot.checkpointTo > snapshot.snapshotHeight) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "archiveProof.coveringSnapshot.checkpointTo must be <= snapshotHeight"
+    );
+  }
+  if (proofBlockHeight !== void 0 && snapshot.checkpointTo !== proofBlockHeight) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "archiveProof.coveringSnapshot.checkpointTo must match blockHeight"
+    );
+  }
+  if (!bytesEqual(checkpointContentHash, archiveContentHash)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "archiveProof.coveringSnapshot.checkpointContentHash must match archiveProof.contentHash"
+    );
+  }
+  if (!Array.isArray(snapshot.signatures) || snapshot.signatures.some((signature) => typeof signature !== "string")) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "archiveProof.coveringSnapshot.signatures must be an array of strings"
+    );
+  }
+  if (snapshot.signatures.length === 0) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "archiveProof.coveringSnapshot.signatures must be non-empty"
+    );
+  }
+  snapshot.signatures.forEach(
+    (signature, index) => validateArchiveProofSignature(
+      signature,
+      index,
+      "archiveProof.coveringSnapshot.signatures"
+    )
   );
 }
-function validateArchiveProofSignature(signature, index) {
-  parseArchiveProofSignature(signature, index);
+function validateArchiveProofSignature(signature, index, fieldPrefix) {
+  parseArchiveProofSignature(signature, index, fieldPrefix);
 }
-function parseArchiveProofSignature(signature, index) {
-  const field2 = `archiveProof.signatures[${index}]`;
+function parseArchiveProofSignature(signature, index, fieldPrefix = "archiveProof.signatures") {
+  const field2 = `${fieldPrefix}[${index}]`;
   const parts = signature.split(":");
   if (parts.length !== 3 || parts[0] !== NO_EVM_ARCHIVE_SIGNATURE_SCHEME) {
     throw new NoEvmReceiptProofError(
@@ -5196,6 +5290,14 @@ function assertSupported(actual, expected, field2, code) {
 function assertUint32(value, field2) {
   if (!Number.isInteger(value) || value < 0 || value > UINT32_MAX) {
     throw new NoEvmReceiptProofError("invalid_uint32", `${field2} must be a uint32`);
+  }
+}
+function assertSafeNonNegativeInteger(value, field2) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      `${field2} must be a non-negative safe integer`
+    );
   }
 }
 function computeNoEvmReceiptsRootBytes(receipts) {

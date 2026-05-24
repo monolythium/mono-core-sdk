@@ -142,6 +142,7 @@ export type {
   MetricsRangeSeries,
   MetricsRangeStatus,
   NoEvmArchiveProof,
+  NoEvmArchiveCoveringSnapshot,
   NoEvmFinalityCertificate,
   NoEvmFinalityEvidence,
   NoEvmReceiptProof,

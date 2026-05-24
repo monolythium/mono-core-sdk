@@ -17,7 +17,11 @@ import {
   verifyNoEvmReceiptProof,
 } from "../src/index.js";
 import { MlDsa65Backend, mlDsa65AddressFromPublicKey } from "../src/crypto/index.js";
-import type { NoEvmFinalityEvidence, NoEvmReceiptProof } from "../src/index.js";
+import type {
+  NoEvmArchiveCoveringSnapshot,
+  NoEvmFinalityEvidence,
+  NoEvmReceiptProof,
+} from "../src/index.js";
 import type { NoEvmCompactReceiptProof } from "../src/client.js";
 
 const RECEIPTS = [
@@ -146,6 +150,33 @@ function compactNoEvmArchiveProof(signatures: string[] = []): NoEvmCompactReceip
       "signed archive or snapshot manifest binding receipt bytes to blockHash and receiptsRoot",
     ],
   };
+}
+
+function validArchiveCoveringSnapshot(
+  signatures: string[] = [VALID_ARCHIVE_SIGNATURE],
+): NoEvmArchiveCoveringSnapshot {
+  return {
+    snapshotHeight: 100,
+    manifestHash: `0x${"61".repeat(32)}`,
+    signatureDigest: `0x${"62".repeat(32)}`,
+    contentHash: `0x${"63".repeat(32)}`,
+    checkpointContentHash: `0x${"54".repeat(32)}`,
+    checkpointFrom: 0,
+    checkpointTo: 100,
+    signatures,
+  };
+}
+
+function compactNoEvmCoveringArchiveProof(
+  coveringSnapshot: NoEvmArchiveCoveringSnapshot | Record<string, unknown> =
+    validArchiveCoveringSnapshot(),
+): NoEvmCompactReceiptProof {
+  const proof = compactNoEvmArchiveProof();
+  proof.archiveProof!.signatureDigest = null;
+  proof.archiveProof!.signatures = [];
+  proof.archiveProof!.coveringSnapshot =
+    coveringSnapshot as NoEvmArchiveCoveringSnapshot;
+  return proof;
 }
 
 describe("no-EVM receipt proof helpers", () => {
@@ -352,6 +383,78 @@ describe("no-EVM receipt proof helpers", () => {
         },
       }),
     ).toThrow(/archiveProof\.signatures must be an array of strings/u);
+  });
+
+  it("accepts compact archive proofs with a signed covering snapshot checkpoint", () => {
+    const proof = compactNoEvmCoveringArchiveProof();
+
+    const verified = verifyNoEvmReceiptProof(proof);
+
+    expect(verified?.proofKind).toBe("compactInclusion");
+    expect(proof.archiveProof?.signatureDigest).toBeNull();
+    expect(proof.archiveProof?.signatures).toEqual([]);
+    expect(proof.archiveProof?.coveringSnapshot?.checkpointContentHash).toBe(
+      proof.archiveProof?.contentHash,
+    );
+    expect(proof.archiveProof?.coveringSnapshot?.signatures).toEqual([VALID_ARCHIVE_SIGNATURE]);
+  });
+
+  it("rejects invalid archive covering snapshot checkpoints", () => {
+    const cases: Array<[RegExp, Partial<NoEvmArchiveCoveringSnapshot>]> = [
+      [/checkpointFrom must be 0/u, { checkpointFrom: 1 }],
+      [/checkpointTo must be <= snapshotHeight/u, { checkpointTo: 101 }],
+      [/checkpointTo must match blockHeight/u, { checkpointTo: 99 }],
+      [
+        /checkpointContentHash must match archiveProof\.contentHash/u,
+        { checkpointContentHash: `0x${"55".repeat(32)}` },
+      ],
+      [/signatures must be non-empty/u, { signatures: [] }],
+      [
+        /archiveProof\.coveringSnapshot\.signatures\[0\]/u,
+        { signatures: [`${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:0x${"12".repeat(19)}:0xab`] },
+      ],
+    ];
+
+    for (const [message, patch] of cases) {
+      const snapshot = { ...validArchiveCoveringSnapshot(), ...patch };
+      expect(() => verifyNoEvmReceiptProof(compactNoEvmCoveringArchiveProof(snapshot))).toThrow(
+        message,
+      );
+    }
+  });
+
+  it("rejects archive covering snapshots without signatureDigest", () => {
+    const snapshot = validArchiveCoveringSnapshot() as unknown as Record<string, unknown>;
+    delete snapshot["signatureDigest"];
+
+    expect(() => verifyNoEvmReceiptProof(compactNoEvmCoveringArchiveProof(snapshot))).toThrow(
+      /archiveProof\.coveringSnapshot\.signatureDigest/u,
+    );
+  });
+
+  it("verifies covering snapshot signatures when top-level signatures are absent", () => {
+    const signer = MlDsa65Backend.fromSeed(new Uint8Array(32).fill(12));
+    const signatureDigest = `0x${"62".repeat(32)}`;
+    const signature = `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:${signer.getAddress()}:0x${bytesToHexRaw(
+      signer.sign(hexToBytes(signatureDigest)),
+    )}`;
+    const proof = compactNoEvmCoveringArchiveProof(
+      validArchiveCoveringSnapshot([signature]),
+    );
+
+    const result = verifyNoEvmArchiveProofSignatures(
+      proof.archiveProof!,
+      [{ publicKey: signer.publicKey(), signerId: signer.getAddress() }],
+      1,
+    );
+
+    expect(result).toEqual({
+      verified: true,
+      threshold: 1,
+      validSigners: [signer.getAddress()],
+      checkedSignatures: 1,
+      issues: [],
+    });
   });
 
   it("accepts compact proofs carrying BLS finality evidence", () => {

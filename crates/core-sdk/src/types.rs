@@ -298,6 +298,28 @@ pub struct NoEvmReceiptFinalityEvidence {
     pub certificate: NoEvmReceiptFinalityCertificate,
 }
 
+/// Covering snapshot material for an archived no-EVM receipt proof.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoEvmArchiveCoveringSnapshot {
+    /// Snapshot height covered by the signed archive manifest.
+    pub snapshot_height: u64,
+    /// Signed snapshot manifest hash.
+    pub manifest_hash: Hash,
+    /// Digest that covering snapshot signatures cover.
+    pub signature_digest: Hash,
+    /// Snapshot content hash.
+    pub content_hash: Hash,
+    /// Checkpoint content hash covered by this snapshot.
+    pub checkpoint_content_hash: Hash,
+    /// Inclusive checkpoint start height. Native archive coverage starts at genesis.
+    pub checkpoint_from: u64,
+    /// Inclusive checkpoint end height covered by the snapshot.
+    pub checkpoint_to: u64,
+    /// Covering snapshot signature strings.
+    pub signatures: Vec<String>,
+}
+
 /// Optional archive binding material attached to a no-EVM receipt proof.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -315,6 +337,9 @@ pub struct NoEvmArchiveProof {
     pub signature_digest: Option<Hash>,
     /// Core-emitted snapshot signature strings.
     pub signatures: Vec<String>,
+    /// Optional signed covering snapshot checkpoint proof.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covering_snapshot: Option<NoEvmArchiveCoveringSnapshot>,
 }
 
 /// Bounded no-EVM receipt transcript attached to a native receipt.
@@ -525,6 +550,9 @@ pub enum NoEvmReceiptProofError {
     /// An archive proof signature payload is empty.
     #[error("{field} must be non-empty")]
     EmptyArchiveSignaturePayload { field: String },
+    /// Archive proof material is internally inconsistent.
+    #[error("{field}: {reason}")]
+    InvalidArchiveProofShape { field: String, reason: String },
     /// Archive proof trusted-signer verification was configured incorrectly.
     #[error("{field}: {reason}")]
     ArchiveSignatureVerificationConfig { field: String, reason: String },
@@ -856,8 +884,29 @@ pub fn verify_no_evm_archive_proof_signatures(
         }
     }
 
+    let (signature_digest_hex, signatures, signature_field) =
+        if archive_proof.signature_digest.is_some() || !archive_proof.signatures.is_empty() {
+            (
+                archive_proof.signature_digest.as_ref(),
+                archive_proof.signatures.as_slice(),
+                "archiveProof.signatures",
+            )
+        } else if let Some(snapshot) = archive_proof.covering_snapshot.as_ref() {
+            (
+                Some(&snapshot.signature_digest),
+                snapshot.signatures.as_slice(),
+                "archiveProof.coveringSnapshot.signatures",
+            )
+        } else {
+            (
+                None,
+                archive_proof.signatures.as_slice(),
+                "archiveProof.signatures",
+            )
+        };
+
     let mut issues = Vec::new();
-    let Some(signature_digest_hex) = &archive_proof.signature_digest else {
+    let Some(signature_digest_hex) = signature_digest_hex else {
         issues.push(NoEvmArchiveSignatureVerificationIssue {
             code: "missing_signature_digest",
             message: "archiveProof.signatureDigest is required for signature verification"
@@ -869,17 +918,24 @@ pub fn verify_no_evm_archive_proof_signatures(
             verified: false,
             threshold,
             valid_signers: Vec::new(),
-            checked_signatures: archive_proof.signatures.len(),
+            checked_signatures: signatures.len(),
             issues,
         });
     };
-    let signature_digest =
-        decode_no_evm_hash("archiveProof.signatureDigest", signature_digest_hex)?;
+    let signature_digest = decode_no_evm_hash(
+        if signature_field == "archiveProof.signatures" {
+            "archiveProof.signatureDigest"
+        } else {
+            "archiveProof.coveringSnapshot.signatureDigest"
+        },
+        signature_digest_hex,
+    )?;
     let mut seen = HashSet::<String>::new();
     let mut valid_signers = Vec::new();
 
-    for (index, signature) in archive_proof.signatures.iter().enumerate() {
-        let parsed = parse_no_evm_archive_signature(index, signature)?;
+    for (index, signature) in signatures.iter().enumerate() {
+        let parsed =
+            parse_no_evm_archive_signature(format!("{signature_field}[{index}]"), signature)?;
         if !seen.insert(parsed.signer_id_hex.clone()) {
             issues.push(NoEvmArchiveSignatureVerificationIssue {
                 code: "duplicate_signer",
@@ -956,7 +1012,7 @@ pub fn verify_no_evm_archive_proof_signatures(
         verified: issues.is_empty(),
         threshold,
         valid_signers,
-        checked_signatures: archive_proof.signatures.len(),
+        checked_signatures: signatures.len(),
         issues,
     })
 }
@@ -986,6 +1042,26 @@ fn validate_no_evm_receipt_proof_metadata(
     }
     if let Some(archive_proof) = &proof.archive_proof {
         validate_no_evm_archive_proof(archive_proof)?;
+        if let Some(snapshot) = &archive_proof.covering_snapshot {
+            if snapshot.checkpoint_to != proof.block_height {
+                return Err(NoEvmReceiptProofError::InvalidArchiveProofShape {
+                    field: "archiveProof.coveringSnapshot.checkpointTo".to_owned(),
+                    reason: "must match blockHeight".to_owned(),
+                });
+            }
+            let checkpoint_content_hash = decode_no_evm_hash(
+                "archiveProof.coveringSnapshot.checkpointContentHash",
+                &snapshot.checkpoint_content_hash,
+            )?;
+            let archive_content_hash =
+                decode_no_evm_hash("archiveProof.contentHash", &archive_proof.content_hash)?;
+            if checkpoint_content_hash != archive_content_hash {
+                return Err(NoEvmReceiptProofError::InvalidArchiveProofShape {
+                    field: "archiveProof.coveringSnapshot.checkpointContentHash".to_owned(),
+                    reason: "must match archiveProof.contentHash".to_owned(),
+                });
+            }
+        }
     }
     if let Some(finality) = &proof.finality_evidence {
         validate_no_evm_receipt_finality_evidence(finality)?;
@@ -1007,7 +1083,56 @@ fn validate_no_evm_archive_proof(
         decode_no_evm_hash("archiveProof.signatureDigest", signature_digest)?;
     }
     for (index, signature) in archive_proof.signatures.iter().enumerate() {
-        validate_no_evm_archive_signature(index, signature)?;
+        validate_no_evm_archive_signature(format!("archiveProof.signatures[{index}]"), signature)?;
+    }
+    if let Some(snapshot) = &archive_proof.covering_snapshot {
+        validate_no_evm_archive_covering_snapshot(snapshot)?;
+    }
+    Ok(())
+}
+
+fn validate_no_evm_archive_covering_snapshot(
+    snapshot: &NoEvmArchiveCoveringSnapshot,
+) -> Result<(), NoEvmReceiptProofError> {
+    decode_no_evm_hash(
+        "archiveProof.coveringSnapshot.manifestHash",
+        &snapshot.manifest_hash,
+    )?;
+    decode_no_evm_hash(
+        "archiveProof.coveringSnapshot.signatureDigest",
+        &snapshot.signature_digest,
+    )?;
+    decode_no_evm_hash(
+        "archiveProof.coveringSnapshot.contentHash",
+        &snapshot.content_hash,
+    )?;
+    decode_no_evm_hash(
+        "archiveProof.coveringSnapshot.checkpointContentHash",
+        &snapshot.checkpoint_content_hash,
+    )?;
+    if snapshot.checkpoint_from != 0 {
+        return Err(NoEvmReceiptProofError::InvalidArchiveProofShape {
+            field: "archiveProof.coveringSnapshot.checkpointFrom".to_owned(),
+            reason: "must be 0".to_owned(),
+        });
+    }
+    if snapshot.checkpoint_to > snapshot.snapshot_height {
+        return Err(NoEvmReceiptProofError::InvalidArchiveProofShape {
+            field: "archiveProof.coveringSnapshot.checkpointTo".to_owned(),
+            reason: "must be <= snapshotHeight".to_owned(),
+        });
+    }
+    if snapshot.signatures.is_empty() {
+        return Err(NoEvmReceiptProofError::InvalidArchiveProofShape {
+            field: "archiveProof.coveringSnapshot.signatures".to_owned(),
+            reason: "must be non-empty".to_owned(),
+        });
+    }
+    for (index, signature) in snapshot.signatures.iter().enumerate() {
+        validate_no_evm_archive_signature(
+            format!("archiveProof.coveringSnapshot.signatures[{index}]"),
+            signature,
+        )?;
     }
     Ok(())
 }
@@ -1018,19 +1143,18 @@ struct ParsedNoEvmArchiveSignature {
 }
 
 fn validate_no_evm_archive_signature(
-    index: usize,
+    field: String,
     signature: &str,
 ) -> Result<(), NoEvmReceiptProofError> {
-    parse_no_evm_archive_signature(index, signature).map(|_| ())
+    parse_no_evm_archive_signature(field, signature).map(|_| ())
 }
 
 fn parse_no_evm_archive_signature(
-    index: usize,
+    field: String,
     signature: &str,
 ) -> Result<ParsedNoEvmArchiveSignature, NoEvmReceiptProofError> {
     const SIGNER_ID_BYTE_LENGTH: usize = 20;
 
-    let field = format!("archiveProof.signatures[{index}]");
     let parts: Vec<&str> = signature.split(':').collect();
     if parts.len() != 3 || parts[0] != NO_EVM_ARCHIVE_SIGNATURE_SCHEME {
         return Err(NoEvmReceiptProofError::InvalidArchiveSignatureFormat { field });
@@ -5960,6 +6084,20 @@ mod tests {
             content_hash: format!("0x{}", "54".repeat(32)),
             signature_digest: Some(format!("0x{}", "66".repeat(32))),
             signatures,
+            covering_snapshot: None,
+        }
+    }
+
+    fn test_no_evm_covering_snapshot(signatures: Vec<String>) -> NoEvmArchiveCoveringSnapshot {
+        NoEvmArchiveCoveringSnapshot {
+            snapshot_height: 100,
+            manifest_hash: format!("0x{}", "61".repeat(32)),
+            signature_digest: format!("0x{}", "62".repeat(32)),
+            content_hash: format!("0x{}", "63".repeat(32)),
+            checkpoint_content_hash: format!("0x{}", "54".repeat(32)),
+            checkpoint_from: 0,
+            checkpoint_to: 100,
+            signatures,
         }
     }
 
@@ -6073,6 +6211,110 @@ mod tests {
     }
 
     #[test]
+    fn no_evm_receipt_proof_validates_archive_covering_snapshot() {
+        let mut proof = test_no_evm_proof();
+        let mut archive = test_no_evm_archive_proof(Vec::new());
+        archive.signature_digest = None;
+        archive.covering_snapshot = Some(test_no_evm_covering_snapshot(vec![
+            VALID_ARCHIVE_SIGNATURE.to_owned(),
+        ]));
+        proof.archive_proof = Some(archive);
+
+        let verified = verify_no_evm_receipt_proof(Some(&proof))
+            .unwrap()
+            .expect("verified proof");
+        assert_eq!(verified.tx_index, 1);
+        let wire = serde_json::to_value(&proof).unwrap();
+        assert_eq!(
+            wire["archiveProof"]["coveringSnapshot"]["checkpointContentHash"],
+            serde_json::json!(format!("0x{}", "54".repeat(32)))
+        );
+        assert_eq!(
+            wire["archiveProof"]["coveringSnapshot"]["signatures"],
+            serde_json::json!([VALID_ARCHIVE_SIGNATURE])
+        );
+    }
+
+    #[test]
+    fn no_evm_receipt_proof_rejects_invalid_archive_covering_snapshot() {
+        type SnapshotMutator = fn(&mut NoEvmArchiveCoveringSnapshot);
+        let cases: [(&str, SnapshotMutator); 6] = [
+            (
+                "archiveProof.coveringSnapshot.checkpointFrom",
+                |snapshot: &mut NoEvmArchiveCoveringSnapshot| snapshot.checkpoint_from = 1,
+            ),
+            (
+                "archiveProof.coveringSnapshot.checkpointTo",
+                |snapshot: &mut NoEvmArchiveCoveringSnapshot| snapshot.checkpoint_to = 101,
+            ),
+            (
+                "archiveProof.coveringSnapshot.checkpointTo",
+                |snapshot: &mut NoEvmArchiveCoveringSnapshot| snapshot.checkpoint_to = 99,
+            ),
+            (
+                "archiveProof.coveringSnapshot.checkpointContentHash",
+                |snapshot: &mut NoEvmArchiveCoveringSnapshot| {
+                    snapshot.checkpoint_content_hash = format!("0x{}", "55".repeat(32));
+                },
+            ),
+            (
+                "archiveProof.coveringSnapshot.signatures",
+                |snapshot: &mut NoEvmArchiveCoveringSnapshot| snapshot.signatures.clear(),
+            ),
+            (
+                "archiveProof.coveringSnapshot.signatures[0]",
+                |snapshot: &mut NoEvmArchiveCoveringSnapshot| {
+                    snapshot.signatures = vec![format!(
+                        "{}:0x{}:0xab",
+                        NO_EVM_ARCHIVE_SIGNATURE_SCHEME,
+                        "12".repeat(19)
+                    )];
+                },
+            ),
+        ];
+
+        for (expected, mutate) in cases {
+            let mut proof = test_no_evm_proof();
+            let mut archive = test_no_evm_archive_proof(Vec::new());
+            archive.signature_digest = None;
+            let mut snapshot =
+                test_no_evm_covering_snapshot(vec![VALID_ARCHIVE_SIGNATURE.to_owned()]);
+            mutate(&mut snapshot);
+            archive.covering_snapshot = Some(snapshot);
+            proof.archive_proof = Some(archive);
+
+            let err = verify_no_evm_receipt_proof(Some(&proof))
+                .expect_err("invalid covering snapshot must be rejected");
+            assert!(err.to_string().contains(expected), "{err}");
+        }
+    }
+
+    #[test]
+    fn no_evm_receipt_proof_rejects_archive_covering_snapshot_without_signature_digest() {
+        let mut wire = serde_json::to_value(test_no_evm_proof()).unwrap();
+        wire["archiveProof"] = serde_json::json!({
+            "schema": NO_EVM_ARCHIVE_PROOF_SCHEMA,
+            "source": "indexerReceiptArchiveContentDigest",
+            "manifestHash": format!("0x{}", "53".repeat(32)),
+            "contentHash": format!("0x{}", "54".repeat(32)),
+            "signatures": [],
+            "coveringSnapshot": {
+                "snapshotHeight": 100,
+                "manifestHash": format!("0x{}", "61".repeat(32)),
+                "contentHash": format!("0x{}", "63".repeat(32)),
+                "checkpointContentHash": format!("0x{}", "54".repeat(32)),
+                "checkpointFrom": 0,
+                "checkpointTo": 100,
+                "signatures": [VALID_ARCHIVE_SIGNATURE]
+            }
+        });
+
+        let err = serde_json::from_value::<NoEvmReceiptProof>(wire)
+            .expect_err("missing covering signatureDigest must fail decoding");
+        assert!(err.to_string().contains("signatureDigest"), "{err}");
+    }
+
+    #[test]
     fn no_evm_archive_proof_verifies_trusted_ml_dsa_signatures() {
         let (public_key, private_key) = ml_dsa_65::KG::keygen_from_seed(&[7u8; 32]);
         let public_key_bytes = public_key.into_bytes().to_vec();
@@ -6177,6 +6419,40 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.code == "duplicate_signer"));
+    }
+
+    #[test]
+    fn no_evm_archive_proof_verifies_covering_snapshot_signatures() {
+        let (public_key, private_key) = ml_dsa_65::KG::keygen_from_seed(&[12u8; 32]);
+        let public_key_bytes = public_key.into_bytes().to_vec();
+        let signer_id = no_evm_ml_dsa65_signer_id_hex(&public_key_bytes);
+        let signature_digest = vec![0x62; 32];
+        let signature = private_key
+            .try_sign_with_seed(&[13u8; 32], &signature_digest, &[])
+            .unwrap();
+        let mut archive_proof = test_no_evm_archive_proof(Vec::new());
+        archive_proof.signature_digest = None;
+        archive_proof.covering_snapshot = Some(test_no_evm_covering_snapshot(vec![format!(
+            "{}:{}:{}",
+            NO_EVM_ARCHIVE_SIGNATURE_SCHEME,
+            signer_id,
+            hex_encode_0x(&signature)
+        )]));
+
+        let result = verify_no_evm_archive_proof_signatures(
+            &archive_proof,
+            &[NoEvmArchiveTrustedSigner {
+                public_key: public_key_bytes,
+                signer_id: Some(signer_id.clone()),
+            }],
+            1,
+        )
+        .unwrap();
+
+        assert!(result.verified);
+        assert_eq!(result.valid_signers, vec![signer_id]);
+        assert_eq!(result.checked_signatures, 1);
+        assert!(result.issues.is_empty());
     }
 
     #[test]

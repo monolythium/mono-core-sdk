@@ -206,9 +206,31 @@ export function verifyNoEvmArchiveProofSignatures(
     roster.set(signerId, publicKey);
   });
 
+  const signatureMaterial =
+    archiveProof.signatureDigest != null || archiveProof.signatures.length > 0
+      ? {
+          digestValue: archiveProof.signatureDigest,
+          digestField: "archiveProof.signatureDigest",
+          signatures: archiveProof.signatures,
+          signatureFieldPrefix: "archiveProof.signatures",
+        }
+      : archiveProof.coveringSnapshot != null
+        ? {
+            digestValue: archiveProof.coveringSnapshot.signatureDigest,
+            digestField: "archiveProof.coveringSnapshot.signatureDigest",
+            signatures: archiveProof.coveringSnapshot.signatures,
+            signatureFieldPrefix: "archiveProof.coveringSnapshot.signatures",
+          }
+        : {
+            digestValue: archiveProof.signatureDigest,
+            digestField: "archiveProof.signatureDigest",
+            signatures: archiveProof.signatures,
+            signatureFieldPrefix: "archiveProof.signatures",
+          };
+
   const issues: NoEvmArchiveSignatureVerificationIssue[] = [];
-  const digestValue = archiveProof.signatureDigest;
-  if (digestValue === undefined) {
+  const digestValue = signatureMaterial.digestValue;
+  if (digestValue == null) {
     issues.push({
       code: "missing_signature_digest",
       message: "archiveProof.signatureDigest is required for signature verification",
@@ -217,16 +239,20 @@ export function verifyNoEvmArchiveProofSignatures(
       verified: false,
       threshold,
       validSigners: [],
-      checkedSignatures: archiveProof.signatures.length,
+      checkedSignatures: signatureMaterial.signatures.length,
       issues,
     };
   }
-  const signatureDigest = decodeHash(digestValue, "archiveProof.signatureDigest");
+  const signatureDigest = decodeHash(digestValue, signatureMaterial.digestField);
   const seen = new Set<string>();
   const validSigners: string[] = [];
 
-  archiveProof.signatures.forEach((signature, signatureIndex) => {
-    const parsed = parseArchiveProofSignature(signature, signatureIndex);
+  signatureMaterial.signatures.forEach((signature, signatureIndex) => {
+    const parsed = parseArchiveProofSignature(
+      signature,
+      signatureIndex,
+      signatureMaterial.signatureFieldPrefix,
+    );
     if (seen.has(parsed.signerId)) {
       issues.push({
         code: "duplicate_signer",
@@ -292,7 +318,7 @@ export function verifyNoEvmArchiveProofSignatures(
     verified: issues.length === 0,
     threshold,
     validSigners,
-    checkedSignatures: archiveProof.signatures.length,
+    checkedSignatures: signatureMaterial.signatures.length,
     issues,
   };
 }
@@ -653,10 +679,13 @@ function validateNoCompactOrArchiveMaterial(proof: NoEvmReceiptProof): void {
 function validateOptionalArchiveProof(proof: NoEvmReceiptProof): void {
   const archiveProof = (proof as NoEvmCompactReceiptProof).archiveProof;
   if (archiveProof == null) return;
-  validateArchiveProofObject(archiveProof);
+  validateArchiveProofObject(archiveProof, proof.blockHeight);
 }
 
-function validateArchiveProofObject(archiveProof: NoEvmArchiveProof | unknown): void {
+function validateArchiveProofObject(
+  archiveProof: NoEvmArchiveProof | unknown,
+  proofBlockHeight?: number,
+): void {
   if (!isRecord(archiveProof)) {
     throw new NoEvmReceiptProofError(
       "invalid_proof_shape",
@@ -676,8 +705,8 @@ function validateArchiveProofObject(archiveProof: NoEvmArchiveProof | unknown): 
     );
   }
   decodeHash(archiveProof.manifestHash, "archiveProof.manifestHash");
-  decodeHash(archiveProof.contentHash, "archiveProof.contentHash");
-  if (archiveProof.signatureDigest !== undefined) {
+  const archiveContentHash = decodeHash(archiveProof.contentHash, "archiveProof.contentHash");
+  if (archiveProof.signatureDigest != null) {
     decodeHash(archiveProof.signatureDigest, "archiveProof.signatureDigest");
   }
   if (
@@ -690,19 +719,106 @@ function validateArchiveProofObject(archiveProof: NoEvmArchiveProof | unknown): 
     );
   }
   archiveProof.signatures.forEach((signature, index) =>
-    validateArchiveProofSignature(signature, index),
+    validateArchiveProofSignature(signature, index, "archiveProof.signatures"),
+  );
+  if (archiveProof.coveringSnapshot != null) {
+    validateCoveringSnapshotObject(
+      archiveProof.coveringSnapshot,
+      archiveContentHash,
+      proofBlockHeight,
+    );
+  }
+}
+
+function validateCoveringSnapshotObject(
+  snapshot: unknown,
+  archiveContentHash: Uint8Array,
+  proofBlockHeight?: number,
+): void {
+  if (!isRecord(snapshot)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "archiveProof.coveringSnapshot must be an object when present",
+    );
+  }
+  assertSafeNonNegativeInteger(
+    snapshot.snapshotHeight,
+    "archiveProof.coveringSnapshot.snapshotHeight",
+  );
+  assertSafeNonNegativeInteger(
+    snapshot.checkpointFrom,
+    "archiveProof.coveringSnapshot.checkpointFrom",
+  );
+  assertSafeNonNegativeInteger(snapshot.checkpointTo, "archiveProof.coveringSnapshot.checkpointTo");
+  decodeHash(snapshot.manifestHash, "archiveProof.coveringSnapshot.manifestHash");
+  decodeHash(snapshot.signatureDigest, "archiveProof.coveringSnapshot.signatureDigest");
+  decodeHash(snapshot.contentHash, "archiveProof.coveringSnapshot.contentHash");
+  const checkpointContentHash = decodeHash(
+    snapshot.checkpointContentHash,
+    "archiveProof.coveringSnapshot.checkpointContentHash",
+  );
+  if (snapshot.checkpointFrom !== 0) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "archiveProof.coveringSnapshot.checkpointFrom must be 0",
+    );
+  }
+  if (snapshot.checkpointTo > snapshot.snapshotHeight) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "archiveProof.coveringSnapshot.checkpointTo must be <= snapshotHeight",
+    );
+  }
+  if (proofBlockHeight !== undefined && snapshot.checkpointTo !== proofBlockHeight) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "archiveProof.coveringSnapshot.checkpointTo must match blockHeight",
+    );
+  }
+  if (!bytesEqual(checkpointContentHash, archiveContentHash)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "archiveProof.coveringSnapshot.checkpointContentHash must match archiveProof.contentHash",
+    );
+  }
+  if (
+    !Array.isArray(snapshot.signatures) ||
+    snapshot.signatures.some((signature) => typeof signature !== "string")
+  ) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "archiveProof.coveringSnapshot.signatures must be an array of strings",
+    );
+  }
+  if (snapshot.signatures.length === 0) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "archiveProof.coveringSnapshot.signatures must be non-empty",
+    );
+  }
+  snapshot.signatures.forEach((signature, index) =>
+    validateArchiveProofSignature(
+      signature,
+      index,
+      "archiveProof.coveringSnapshot.signatures",
+    ),
   );
 }
 
-function validateArchiveProofSignature(signature: string, index: number): void {
-  parseArchiveProofSignature(signature, index);
+function validateArchiveProofSignature(
+  signature: string,
+  index: number,
+  fieldPrefix: string,
+): void {
+  parseArchiveProofSignature(signature, index, fieldPrefix);
 }
 
 function parseArchiveProofSignature(
   signature: string,
   index: number,
+  fieldPrefix = "archiveProof.signatures",
 ): { signerId: string; payload: Uint8Array } {
-  const field = `archiveProof.signatures[${index}]`;
+  const field = `${fieldPrefix}[${index}]`;
   const parts = signature.split(":");
   if (parts.length !== 3 || parts[0] !== NO_EVM_ARCHIVE_SIGNATURE_SCHEME) {
     throw new NoEvmReceiptProofError(
@@ -1129,6 +1245,15 @@ function assertSupported(
 function assertUint32(value: unknown, field: string): asserts value is number {
   if (!Number.isInteger(value) || (value as number) < 0 || (value as number) > UINT32_MAX) {
     throw new NoEvmReceiptProofError("invalid_uint32", `${field} must be a uint32`);
+  }
+}
+
+function assertSafeNonNegativeInteger(value: unknown, field: string): asserts value is number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      `${field} must be a non-negative safe integer`,
+    );
   }
 }
 
