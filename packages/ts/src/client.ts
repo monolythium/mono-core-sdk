@@ -179,6 +179,14 @@ export interface NoEvmCompactInclusionProof {
   pathSides: boolean[];
 }
 
+export interface NoEvmArchiveProof {
+  schema: "mono.no_evm_receipt_archive_binding.v1";
+  source: "indexerReceiptArchiveContentDigest" | string;
+  manifestHash: string;
+  contentHash: string;
+  signatures: string[];
+}
+
 interface NoEvmReceiptProofBase {
   schema: "mono.no_evm_receipt_proof.v1";
   rootAlgorithm: string;
@@ -207,7 +215,7 @@ export interface NoEvmCompactReceiptProof extends NoEvmReceiptProofBase {
   proofType: "canonicalReceiptInclusion";
   historySource: "liveBlockCache" | "indexerReceiptArchive";
   compactInclusionProof: NoEvmCompactInclusionProof;
-  archiveProof?: null;
+  archiveProof?: NoEvmArchiveProof | null;
   missingProofMaterial?: string[];
   targetReceiptBytes: string;
   receiptTranscript?: string[];

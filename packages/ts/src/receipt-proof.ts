@@ -19,6 +19,7 @@ export const NO_EVM_RECEIPT_NODE_DOMAIN = "monolythium/v4.1/receipt_node/1";
 export const NO_EVM_COMPACT_INCLUSION_PROOF_SCHEMA =
   "mono.no_evm_receipt_compact_inclusion.v1";
 export const NO_EVM_COMPACT_INCLUSION_TREE_ALGORITHM = "binary-keccak-receipt-tree";
+export const NO_EVM_ARCHIVE_PROOF_SCHEMA = "mono.no_evm_receipt_archive_binding.v1";
 
 const EMPTY_ROOT_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPTS_ROOT_DOMAIN);
 const LEAF_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPT_LEAF_DOMAIN);
@@ -179,6 +180,7 @@ function verifyCompactReceiptProof(proof: NoEvmReceiptProof): NoEvmReceiptProofV
     "unsupported_proof_type",
   );
   validateCompactHistorySource(proof);
+  validateOptionalArchiveProof(proof);
   assertUint32(proof.receiptCount, "receiptCount");
   assertUint32(proof.txIndex, "txIndex");
 
@@ -335,6 +337,40 @@ function validateNoCompactOrArchiveMaterial(proof: NoEvmReceiptProof): void {
     throw new NoEvmReceiptProofError(
       "invalid_proof_shape",
       "boundedCacheTranscript proof cannot carry archiveProof",
+    );
+  }
+}
+
+function validateOptionalArchiveProof(proof: NoEvmReceiptProof): void {
+  const archiveProof = (proof as NoEvmCompactReceiptProof).archiveProof;
+  if (archiveProof == null) return;
+  if (!isRecord(archiveProof)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "archiveProof must be an object when present",
+    );
+  }
+  assertSupported(
+    archiveProof.schema,
+    NO_EVM_ARCHIVE_PROOF_SCHEMA,
+    "archiveProof.schema",
+    "unsupported_schema",
+  );
+  if (typeof archiveProof.source !== "string" || archiveProof.source.length === 0) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "archiveProof.source must be a non-empty string",
+    );
+  }
+  decodeHash(archiveProof.manifestHash, "archiveProof.manifestHash");
+  decodeHash(archiveProof.contentHash, "archiveProof.contentHash");
+  if (
+    !Array.isArray(archiveProof.signatures) ||
+    archiveProof.signatures.some((signature) => typeof signature !== "string")
+  ) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "archiveProof.signatures must be an array of strings",
     );
   }
 }

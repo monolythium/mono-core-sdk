@@ -141,6 +141,7 @@ export type {
   MetricsRangeSample,
   MetricsRangeSeries,
   MetricsRangeStatus,
+  NoEvmArchiveProof,
   NoEvmReceiptProof,
   NativeReceiptCounters,
   NativeReceiptEvent,
@@ -230,6 +231,7 @@ export type {
   NativeMarketOrderBookStreamPayload,
 } from "./streams.js";
 export {
+  NO_EVM_ARCHIVE_PROOF_SCHEMA,
   NO_EVM_RECEIPTS_ROOT_DOMAIN,
   NO_EVM_RECEIPT_CODEC,
   NO_EVM_RECEIPT_PROOF_SCHEMA,
