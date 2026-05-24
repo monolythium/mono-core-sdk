@@ -286,6 +286,18 @@ pub struct NoEvmReceiptFinalityCertificate {
     pub signer_count: u16,
 }
 
+/// Consensus block reference carried inside no-EVM receipt finality evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoEvmReceiptFinalityBlockReference {
+    /// Consensus round at which the certified block was authored.
+    pub round: u64,
+    /// Operator authority index that authored the certified block.
+    pub authority: u16,
+    /// Content-derived block digest.
+    pub digest: Hash,
+}
+
 /// Optional finality evidence for the block containing a no-EVM receipt proof.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -298,6 +310,18 @@ pub struct NoEvmReceiptFinalityEvidence {
     pub round: u64,
     /// BLS aggregate round certificate retained by the serving node.
     pub certificate: NoEvmReceiptFinalityCertificate,
+    /// Exact consensus block reference used for block-bound leader/DAC
+    /// certificate lookup, when retained by the serving node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_reference: Option<NoEvmReceiptFinalityBlockReference>,
+    /// BLS leader-vote certificate bound to [`Self::block_reference`], when
+    /// retained by the serving node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader_certificate: Option<NoEvmReceiptFinalityCertificate>,
+    /// BLS data-availability certificate bound to [`Self::block_reference`],
+    /// when retained by the serving node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dac_certificate: Option<NoEvmReceiptFinalityCertificate>,
 }
 
 /// Covering snapshot material for an archived no-EVM receipt proof.
@@ -509,6 +533,27 @@ impl NoEvmReceiptBlsFinalityVerification {
             && self.all_signers_trusted
             && self.threshold_met
             && self.signature_valid
+    }
+}
+
+/// Result of verifying the block-bound leader and DAC certificates carried by
+/// no-EVM receipt finality evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoEvmReceiptBlockBlsFinalityVerification {
+    /// Consensus block reference that both certificates are expected to bind.
+    pub block_reference: NoEvmReceiptFinalityBlockReference,
+    /// Verification result for `finalityEvidence.leaderCertificate`.
+    pub leader_certificate: NoEvmReceiptBlsFinalityVerification,
+    /// Verification result for `finalityEvidence.dacCertificate`.
+    pub dac_certificate: NoEvmReceiptBlsFinalityVerification,
+}
+
+impl NoEvmReceiptBlockBlsFinalityVerification {
+    /// True only when both block-bound BLS certificates meet the caller's
+    /// trusted material and threshold policy.
+    #[must_use]
+    pub const fn verified(&self) -> bool {
+        self.leader_certificate.verified() && self.dac_certificate.verified()
     }
 }
 
@@ -781,6 +826,9 @@ pub enum NoEvmReceiptProofError {
         signer_count: u16,
         signer_indices: usize,
     },
+    /// Finality evidence material is internally inconsistent.
+    #[error("{field}: {reason}")]
+    InvalidFinalityEvidenceShape { field: String, reason: String },
     /// Finality verification was configured incorrectly.
     #[error("{field}: {reason}")]
     FinalityVerificationConfig { field: String, reason: String },
@@ -1110,6 +1158,47 @@ pub fn compute_no_evm_round_finality_message(chain_id: u64, round: u64) -> [u8; 
     *hasher.finalize().as_bytes()
 }
 
+/// Compute the Starfish leader-certificate BLS message for a certified block.
+///
+/// The message is `blake3("leader" || chain_id_le || authority_le ||
+/// round_le || digest)`.
+pub fn compute_no_evm_leader_finality_message(
+    chain_id: u64,
+    block_reference: &NoEvmReceiptFinalityBlockReference,
+) -> Result<[u8; 32], NoEvmReceiptProofError> {
+    compute_no_evm_block_finality_message(b"leader", chain_id, block_reference)
+}
+
+/// Compute the Starfish data-availability-certificate BLS message for a
+/// certified block.
+///
+/// The message is `blake3("dac" || chain_id_le || authority_le || round_le ||
+/// digest)`.
+pub fn compute_no_evm_dac_finality_message(
+    chain_id: u64,
+    block_reference: &NoEvmReceiptFinalityBlockReference,
+) -> Result<[u8; 32], NoEvmReceiptProofError> {
+    compute_no_evm_block_finality_message(b"dac", chain_id, block_reference)
+}
+
+fn compute_no_evm_block_finality_message(
+    domain: &[u8],
+    chain_id: u64,
+    block_reference: &NoEvmReceiptFinalityBlockReference,
+) -> Result<[u8; 32], NoEvmReceiptProofError> {
+    let digest = decode_no_evm_hash(
+        "finalityEvidence.blockReference.digest",
+        &block_reference.digest,
+    )?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(domain);
+    hasher.update(&chain_id.to_le_bytes());
+    hasher.update(&block_reference.authority.to_le_bytes());
+    hasher.update(&block_reference.round.to_le_bytes());
+    hasher.update(&digest);
+    Ok(*hasher.finalize().as_bytes())
+}
+
 /// Verify BLS round-certificate finality evidence against a trusted
 /// threshold-cluster aggregate public key.
 ///
@@ -1124,27 +1213,17 @@ pub fn verify_no_evm_finality_evidence_threshold(
     required_signature_count: usize,
 ) -> Result<NoEvmReceiptBlsFinalityVerification, NoEvmReceiptProofError> {
     validate_no_evm_finality_threshold(required_signature_count, usize::from(committee_size))?;
-    let signature = decode_no_evm_finality_signature(&finality.certificate.signature)?;
-    let bitmap = decode_no_evm_hex(
-        "finalityEvidence.certificate.signersBitmap".to_owned(),
-        &finality.certificate.signers_bitmap,
-    )?;
-    let signer_indices = no_evm_signer_indices_from_bitmap(&bitmap)?;
-    let base = no_evm_finality_verification_base(
-        finality,
-        &signer_indices,
+    validate_no_evm_receipt_finality_evidence(finality, None)?;
+    let message = compute_no_evm_round_finality_message(chain_id, finality.round);
+    verify_no_evm_finality_certificate_threshold(
+        "finalityEvidence.certificate",
+        &finality.certificate,
+        finality.round,
+        &message,
+        cluster_public_key,
         committee_size,
         required_signature_count,
-    )?;
-    let message = compute_no_evm_round_finality_message(chain_id, finality.round);
-    let signature_valid = base.signer_indices_in_range
-        && verify_no_evm_bls_single(cluster_public_key, &message, &signature);
-
-    Ok(NoEvmReceiptBlsFinalityVerification {
-        all_signers_trusted: base.signer_indices_in_range,
-        signature_valid,
-        ..base
-    })
+    )
 }
 
 /// Verify BLS round-certificate finality evidence in multisig mode against a
@@ -1156,19 +1235,144 @@ pub fn verify_no_evm_finality_evidence_multisig(
     required_signature_count: usize,
 ) -> Result<NoEvmReceiptBlsFinalityVerification, NoEvmReceiptProofError> {
     validate_no_evm_finality_threshold(required_signature_count, trusted_signers.len())?;
-    let signature = decode_no_evm_finality_signature(&finality.certificate.signature)?;
-    let bitmap = decode_no_evm_hex(
-        "finalityEvidence.certificate.signersBitmap".to_owned(),
-        &finality.certificate.signers_bitmap,
-    )?;
-    let signer_indices = no_evm_signer_indices_from_bitmap(&bitmap)?;
+    validate_no_evm_receipt_finality_evidence(finality, None)?;
+    let message = compute_no_evm_round_finality_message(chain_id, finality.round);
+    verify_no_evm_finality_certificate_multisig(
+        "finalityEvidence.certificate",
+        &finality.certificate,
+        finality.round,
+        &message,
+        trusted_signers,
+        required_signature_count,
+    )
+}
+
+/// Verify block-bound leader and DAC BLS certificates in multisig mode against
+/// a trusted authority roster.
+pub fn verify_no_evm_block_finality_evidence_multisig(
+    finality: &NoEvmReceiptFinalityEvidence,
+    chain_id: u64,
+    trusted_signers: &[NoEvmReceiptTrustedBlsSigner],
+    required_signature_count: usize,
+) -> Result<NoEvmReceiptBlockBlsFinalityVerification, NoEvmReceiptProofError> {
+    validate_no_evm_finality_threshold(required_signature_count, trusted_signers.len())?;
+    validate_no_evm_receipt_finality_evidence(finality, None)?;
+    let block_reference = finality.block_reference.clone().ok_or_else(|| {
+        NoEvmReceiptProofError::FinalityVerificationConfig {
+            field: "finalityEvidence.blockReference".to_owned(),
+            reason: "required for block-bound finality verification".to_owned(),
+        }
+    })?;
+    let leader_certificate = finality.leader_certificate.as_ref().ok_or_else(|| {
+        NoEvmReceiptProofError::FinalityVerificationConfig {
+            field: "finalityEvidence.leaderCertificate".to_owned(),
+            reason: "required for block-bound finality verification".to_owned(),
+        }
+    })?;
+    let dac_certificate = finality.dac_certificate.as_ref().ok_or_else(|| {
+        NoEvmReceiptProofError::FinalityVerificationConfig {
+            field: "finalityEvidence.dacCertificate".to_owned(),
+            reason: "required for block-bound finality verification".to_owned(),
+        }
+    })?;
+    let leader_message = compute_no_evm_leader_finality_message(chain_id, &block_reference)?;
+    let dac_message = compute_no_evm_dac_finality_message(chain_id, &block_reference)?;
+
+    Ok(NoEvmReceiptBlockBlsFinalityVerification {
+        block_reference,
+        leader_certificate: verify_no_evm_finality_certificate_multisig(
+            "finalityEvidence.leaderCertificate",
+            leader_certificate,
+            finality.round,
+            &leader_message,
+            trusted_signers,
+            required_signature_count,
+        )?,
+        dac_certificate: verify_no_evm_finality_certificate_multisig(
+            "finalityEvidence.dacCertificate",
+            dac_certificate,
+            finality.round,
+            &dac_message,
+            trusted_signers,
+            required_signature_count,
+        )?,
+    })
+}
+
+/// Verify block-bound leader and DAC BLS certificates against a trusted
+/// threshold-cluster aggregate public key.
+pub fn verify_no_evm_block_finality_evidence_threshold(
+    finality: &NoEvmReceiptFinalityEvidence,
+    chain_id: u64,
+    cluster_public_key: &[u8; 48],
+    committee_size: u16,
+    required_signature_count: usize,
+) -> Result<NoEvmReceiptBlockBlsFinalityVerification, NoEvmReceiptProofError> {
+    validate_no_evm_finality_threshold(required_signature_count, usize::from(committee_size))?;
+    validate_no_evm_receipt_finality_evidence(finality, None)?;
+    let block_reference = finality.block_reference.clone().ok_or_else(|| {
+        NoEvmReceiptProofError::FinalityVerificationConfig {
+            field: "finalityEvidence.blockReference".to_owned(),
+            reason: "required for block-bound finality verification".to_owned(),
+        }
+    })?;
+    let leader_certificate = finality.leader_certificate.as_ref().ok_or_else(|| {
+        NoEvmReceiptProofError::FinalityVerificationConfig {
+            field: "finalityEvidence.leaderCertificate".to_owned(),
+            reason: "required for block-bound finality verification".to_owned(),
+        }
+    })?;
+    let dac_certificate = finality.dac_certificate.as_ref().ok_or_else(|| {
+        NoEvmReceiptProofError::FinalityVerificationConfig {
+            field: "finalityEvidence.dacCertificate".to_owned(),
+            reason: "required for block-bound finality verification".to_owned(),
+        }
+    })?;
+    let leader_message = compute_no_evm_leader_finality_message(chain_id, &block_reference)?;
+    let dac_message = compute_no_evm_dac_finality_message(chain_id, &block_reference)?;
+
+    Ok(NoEvmReceiptBlockBlsFinalityVerification {
+        block_reference,
+        leader_certificate: verify_no_evm_finality_certificate_threshold(
+            "finalityEvidence.leaderCertificate",
+            leader_certificate,
+            finality.round,
+            &leader_message,
+            cluster_public_key,
+            committee_size,
+            required_signature_count,
+        )?,
+        dac_certificate: verify_no_evm_finality_certificate_threshold(
+            "finalityEvidence.dacCertificate",
+            dac_certificate,
+            finality.round,
+            &dac_message,
+            cluster_public_key,
+            committee_size,
+            required_signature_count,
+        )?,
+    })
+}
+
+fn verify_no_evm_finality_certificate_multisig(
+    field: &str,
+    cert: &NoEvmReceiptFinalityCertificate,
+    finality_round: u64,
+    message: &[u8; 32],
+    trusted_signers: &[NoEvmReceiptTrustedBlsSigner],
+    required_signature_count: usize,
+) -> Result<NoEvmReceiptBlsFinalityVerification, NoEvmReceiptProofError> {
+    let signature = decode_no_evm_finality_certificate_signature(field, &cert.signature)?;
+    let signer_indices = no_evm_finality_certificate_signer_indices(field, cert)?;
     let committee_size = trusted_signers
         .iter()
         .map(|signer| signer.authority_index)
         .max()
         .map_or(0_u16, |idx| idx.saturating_add(1));
-    let base = no_evm_finality_verification_base(
-        finality,
+    let base = no_evm_finality_certificate_verification_base(
+        field,
+        cert,
+        finality_round,
         &signer_indices,
         committee_size,
         required_signature_count,
@@ -1197,13 +1401,41 @@ pub fn verify_no_evm_finality_evidence_multisig(
         public_keys.push(signer.public_key);
     }
 
-    let message = compute_no_evm_round_finality_message(chain_id, finality.round);
     let signature_valid = all_signers_trusted
         && !public_keys.is_empty()
-        && verify_no_evm_bls_fast_aggregate(&public_keys, &message, &signature);
+        && verify_no_evm_bls_fast_aggregate(&public_keys, message, &signature);
 
     Ok(NoEvmReceiptBlsFinalityVerification {
         all_signers_trusted,
+        signature_valid,
+        ..base
+    })
+}
+
+fn verify_no_evm_finality_certificate_threshold(
+    field: &str,
+    cert: &NoEvmReceiptFinalityCertificate,
+    finality_round: u64,
+    message: &[u8; 32],
+    cluster_public_key: &[u8; 48],
+    committee_size: u16,
+    required_signature_count: usize,
+) -> Result<NoEvmReceiptBlsFinalityVerification, NoEvmReceiptProofError> {
+    let signature = decode_no_evm_finality_certificate_signature(field, &cert.signature)?;
+    let signer_indices = no_evm_finality_certificate_signer_indices(field, cert)?;
+    let base = no_evm_finality_certificate_verification_base(
+        field,
+        cert,
+        finality_round,
+        &signer_indices,
+        committee_size,
+        required_signature_count,
+    )?;
+    let signature_valid = base.signer_indices_in_range
+        && verify_no_evm_bls_single(cluster_public_key, message, &signature);
+
+    Ok(NoEvmReceiptBlsFinalityVerification {
+        all_signers_trusted: base.signer_indices_in_range,
         signature_valid,
         ..base
     })
@@ -1447,7 +1679,7 @@ fn validate_no_evm_receipt_proof_metadata(
         }
     }
     if let Some(finality) = &proof.finality_evidence {
-        validate_no_evm_receipt_finality_evidence(finality)?;
+        validate_no_evm_receipt_finality_evidence(finality, Some(&proof.block_hash))?;
     }
     Ok(())
 }
@@ -1584,6 +1816,7 @@ fn no_evm_ml_dsa65_signer_id_hex(public_key: &[u8]) -> Hash {
 
 fn validate_no_evm_receipt_finality_evidence(
     finality: &NoEvmReceiptFinalityEvidence,
+    proof_block_hash: Option<&Hash>,
 ) -> Result<(), NoEvmReceiptProofError> {
     if finality.schema != NO_EVM_RECEIPT_FINALITY_EVIDENCE_SCHEMA {
         return Err(NoEvmReceiptProofError::UnsupportedFinalityEvidenceSchema {
@@ -1595,25 +1828,87 @@ fn validate_no_evm_receipt_finality_evidence(
             actual: finality.source.clone(),
         });
     }
-    if finality.certificate.round != finality.round {
-        return Err(NoEvmReceiptProofError::FinalityCertificateRoundMismatch {
-            evidence_round: finality.round,
-            certificate_round: finality.certificate.round,
-        });
-    }
-    if usize::from(finality.certificate.signer_count) != finality.certificate.signer_indices.len() {
-        return Err(NoEvmReceiptProofError::FinalitySignerCountMismatch {
-            signer_count: finality.certificate.signer_count,
-            signer_indices: finality.certificate.signer_indices.len(),
-        });
-    }
-    decode_no_evm_hex(
-        "finalityEvidence.certificate.signature".to_owned(),
-        &finality.certificate.signature,
+    validate_no_evm_finality_certificate_shape(
+        "finalityEvidence.certificate",
+        finality.round,
+        &finality.certificate,
     )?;
+    if let Some(block_reference) = finality.block_reference.as_ref() {
+        if block_reference.round != finality.round {
+            return Err(NoEvmReceiptProofError::InvalidFinalityEvidenceShape {
+                field: "finalityEvidence.blockReference.round".to_owned(),
+                reason: "must match finalityEvidence.round".to_owned(),
+            });
+        }
+        let block_reference_digest = decode_no_evm_hash(
+            "finalityEvidence.blockReference.digest",
+            &block_reference.digest,
+        )?;
+        if let Some(proof_block_hash) = proof_block_hash {
+            let proof_block_hash = decode_no_evm_hash("blockHash", proof_block_hash)?;
+            if block_reference_digest != proof_block_hash {
+                return Err(NoEvmReceiptProofError::InvalidFinalityEvidenceShape {
+                    field: "finalityEvidence.blockReference.digest".to_owned(),
+                    reason: "must match blockHash".to_owned(),
+                });
+            }
+        }
+    } else if finality.leader_certificate.is_some() || finality.dac_certificate.is_some() {
+        return Err(NoEvmReceiptProofError::InvalidFinalityEvidenceShape {
+            field: "finalityEvidence.blockReference".to_owned(),
+            reason: "required for block-bound certificates".to_owned(),
+        });
+    }
+    if let Some(cert) = finality.leader_certificate.as_ref() {
+        validate_no_evm_finality_certificate_shape(
+            "finalityEvidence.leaderCertificate",
+            finality.round,
+            cert,
+        )?;
+    }
+    if let Some(cert) = finality.dac_certificate.as_ref() {
+        validate_no_evm_finality_certificate_shape(
+            "finalityEvidence.dacCertificate",
+            finality.round,
+            cert,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_no_evm_finality_certificate_shape(
+    field: &str,
+    finality_round: u64,
+    certificate: &NoEvmReceiptFinalityCertificate,
+) -> Result<(), NoEvmReceiptProofError> {
+    if certificate.round != finality_round {
+        if field == "finalityEvidence.certificate" {
+            return Err(NoEvmReceiptProofError::FinalityCertificateRoundMismatch {
+                evidence_round: finality_round,
+                certificate_round: certificate.round,
+            });
+        }
+        return Err(NoEvmReceiptProofError::InvalidFinalityEvidenceShape {
+            field: format!("{field}.round"),
+            reason: "must match finalityEvidence.round".to_owned(),
+        });
+    }
+    if usize::from(certificate.signer_count) != certificate.signer_indices.len() {
+        if field == "finalityEvidence.certificate" {
+            return Err(NoEvmReceiptProofError::FinalitySignerCountMismatch {
+                signer_count: certificate.signer_count,
+                signer_indices: certificate.signer_indices.len(),
+            });
+        }
+        return Err(NoEvmReceiptProofError::InvalidFinalityEvidenceShape {
+            field: format!("{field}.signerCount"),
+            reason: "must match signerIndices length".to_owned(),
+        });
+    }
+    decode_no_evm_hex(format!("{field}.signature"), &certificate.signature)?;
     decode_no_evm_hex(
-        "finalityEvidence.certificate.signersBitmap".to_owned(),
-        &finality.certificate.signers_bitmap,
+        format!("{field}.signersBitmap"),
+        &certificate.signers_bitmap,
     )?;
     Ok(())
 }
@@ -1639,17 +1934,19 @@ fn validate_no_evm_finality_threshold(
     Ok(())
 }
 
-fn no_evm_finality_verification_base(
-    finality: &NoEvmReceiptFinalityEvidence,
+fn no_evm_finality_certificate_verification_base(
+    field: &str,
+    certificate: &NoEvmReceiptFinalityCertificate,
+    finality_round: u64,
     signer_indices: &[u16],
     committee_size: u16,
     required_signature_count: usize,
 ) -> Result<NoEvmReceiptBlsFinalityVerification, NoEvmReceiptProofError> {
-    validate_no_evm_receipt_finality_evidence(finality)?;
-    let signer_count_matches = usize::from(finality.certificate.signer_count)
-        == finality.certificate.signer_indices.len()
-        && usize::from(finality.certificate.signer_count) == signer_indices.len();
-    let signer_bitmap_matches_indices = finality.certificate.signer_indices == signer_indices;
+    validate_no_evm_finality_certificate_shape(field, finality_round, certificate)?;
+    let signer_count_matches = usize::from(certificate.signer_count)
+        == certificate.signer_indices.len()
+        && usize::from(certificate.signer_count) == signer_indices.len();
+    let signer_bitmap_matches_indices = certificate.signer_indices == signer_indices;
     let signer_indices_in_range = signer_indices
         .iter()
         .all(|signer_index| *signer_index < committee_size);
@@ -1669,19 +1966,37 @@ fn no_evm_finality_verification_base(
     })
 }
 
-fn decode_no_evm_finality_signature(raw: &str) -> Result<[u8; 96], NoEvmReceiptProofError> {
-    let bytes = decode_no_evm_hex("finalityEvidence.certificate.signature".to_owned(), raw)?;
+fn decode_no_evm_finality_certificate_signature(
+    field: &str,
+    raw: &str,
+) -> Result<[u8; 96], NoEvmReceiptProofError> {
+    let field = format!("{field}.signature");
+    let bytes = decode_no_evm_hex(field.clone(), raw)?;
     let actual = bytes.len();
     bytes
         .try_into()
         .map_err(|_| NoEvmReceiptProofError::InvalidHexLength {
-            field: "finalityEvidence.certificate.signature".to_owned(),
+            field,
             expected: 96,
             actual,
         })
 }
 
-fn no_evm_signer_indices_from_bitmap(bitmap: &[u8]) -> Result<Vec<u16>, NoEvmReceiptProofError> {
+fn no_evm_finality_certificate_signer_indices(
+    field: &str,
+    certificate: &NoEvmReceiptFinalityCertificate,
+) -> Result<Vec<u16>, NoEvmReceiptProofError> {
+    let bitmap = decode_no_evm_hex(
+        format!("{field}.signersBitmap"),
+        &certificate.signers_bitmap,
+    )?;
+    no_evm_signer_indices_from_bitmap(field, &bitmap)
+}
+
+fn no_evm_signer_indices_from_bitmap(
+    field: &str,
+    bitmap: &[u8],
+) -> Result<Vec<u16>, NoEvmReceiptProofError> {
     let mut out = Vec::new();
     for (byte_index, byte) in bitmap.iter().enumerate() {
         for bit_index in 0..8_usize {
@@ -1692,12 +2007,12 @@ fn no_evm_signer_indices_from_bitmap(bitmap: &[u8]) -> Result<Vec<u16>, NoEvmRec
                 .checked_mul(8)
                 .and_then(|base| base.checked_add(bit_index))
                 .ok_or_else(|| NoEvmReceiptProofError::FinalityVerificationConfig {
-                    field: "finalityEvidence.certificate.signersBitmap".to_owned(),
+                    field: format!("{field}.signersBitmap"),
                     reason: "signer bitmap index overflow".to_owned(),
                 })?;
             let signer_index = u16::try_from(signer_index).map_err(|_| {
                 NoEvmReceiptProofError::FinalityVerificationConfig {
-                    field: "finalityEvidence.certificate.signersBitmap".to_owned(),
+                    field: format!("{field}.signersBitmap"),
                     reason: "signer bitmap index exceeds u16 authority range".to_owned(),
                 }
             })?;
@@ -5488,17 +5803,39 @@ mod tests {
         signer_count: u16,
         committee_size: u16,
     ) -> NoEvmReceiptFinalityEvidence {
+        let certificate = test_finality_certificate(
+            round,
+            signature,
+            bitmap_indices,
+            signer_indices,
+            signer_count,
+            committee_size,
+        );
         NoEvmReceiptFinalityEvidence {
             schema: NO_EVM_RECEIPT_FINALITY_EVIDENCE_SCHEMA.to_owned(),
             source: NO_EVM_RECEIPT_FINALITY_EVIDENCE_SOURCE.to_owned(),
             round,
-            certificate: NoEvmReceiptFinalityCertificate {
-                round,
-                signature: hex_encode_0x(&signature),
-                signers_bitmap: test_finality_bitmap_hex(bitmap_indices, committee_size),
-                signer_indices,
-                signer_count,
-            },
+            certificate,
+            block_reference: None,
+            leader_certificate: None,
+            dac_certificate: None,
+        }
+    }
+
+    fn test_finality_certificate(
+        round: u64,
+        signature: [u8; 96],
+        bitmap_indices: &[u16],
+        signer_indices: Vec<u16>,
+        signer_count: u16,
+        committee_size: u16,
+    ) -> NoEvmReceiptFinalityCertificate {
+        NoEvmReceiptFinalityCertificate {
+            round,
+            signature: hex_encode_0x(&signature),
+            signers_bitmap: test_finality_bitmap_hex(bitmap_indices, committee_size),
+            signer_indices,
+            signer_count,
         }
     }
 
@@ -6913,6 +7250,121 @@ mod tests {
     }
 
     #[test]
+    fn no_evm_block_bound_finality_verifies_multisig() {
+        let chain_id = 69_420_u64;
+        let round = 62_u64;
+        let authority = 4_u16;
+        let block_reference = NoEvmReceiptFinalityBlockReference {
+            round,
+            authority,
+            digest: format!("0x{}", "42".repeat(32)),
+        };
+        let signer = test_bls_key(0x50);
+        let public_key = signer.sk_to_pk().to_bytes();
+        let round_message = compute_no_evm_round_finality_message(chain_id, round);
+        let leader_message =
+            compute_no_evm_leader_finality_message(chain_id, &block_reference).unwrap();
+        let dac_message = compute_no_evm_dac_finality_message(chain_id, &block_reference).unwrap();
+        let mut finality = test_finality_evidence(
+            round,
+            signer.sign(&round_message, NO_EVM_BLS_DST, &[]).to_bytes(),
+            &[2],
+            vec![2],
+            1,
+            7,
+        );
+        finality.block_reference = Some(block_reference.clone());
+        finality.leader_certificate = Some(test_finality_certificate(
+            round,
+            signer.sign(&leader_message, NO_EVM_BLS_DST, &[]).to_bytes(),
+            &[2],
+            vec![2],
+            1,
+            7,
+        ));
+        finality.dac_certificate = Some(test_finality_certificate(
+            round,
+            signer.sign(&dac_message, NO_EVM_BLS_DST, &[]).to_bytes(),
+            &[2],
+            vec![2],
+            1,
+            7,
+        ));
+
+        let verification = verify_no_evm_block_finality_evidence_multisig(
+            &finality,
+            chain_id,
+            &[NoEvmReceiptTrustedBlsSigner {
+                authority_index: 2,
+                public_key,
+            }],
+            1,
+        )
+        .unwrap();
+
+        assert!(verification.verified());
+        assert_eq!(verification.block_reference, block_reference);
+        assert!(verification.leader_certificate.signature_valid);
+        assert!(verification.dac_certificate.signature_valid);
+    }
+
+    #[test]
+    fn no_evm_block_bound_finality_rejects_wrong_chain_id() {
+        let chain_id = 69_420_u64;
+        let round = 63_u64;
+        let authority = 5_u16;
+        let block_reference = NoEvmReceiptFinalityBlockReference {
+            round,
+            authority,
+            digest: format!("0x{}", "43".repeat(32)),
+        };
+        let signer = test_bls_key(0x51);
+        let public_key = signer.sk_to_pk().to_bytes();
+        let round_message = compute_no_evm_round_finality_message(chain_id, round);
+        let leader_message =
+            compute_no_evm_leader_finality_message(chain_id, &block_reference).unwrap();
+        let dac_message = compute_no_evm_dac_finality_message(chain_id, &block_reference).unwrap();
+        let mut finality = test_finality_evidence(
+            round,
+            signer.sign(&round_message, NO_EVM_BLS_DST, &[]).to_bytes(),
+            &[3],
+            vec![3],
+            1,
+            7,
+        );
+        finality.block_reference = Some(block_reference);
+        finality.leader_certificate = Some(test_finality_certificate(
+            round,
+            signer.sign(&leader_message, NO_EVM_BLS_DST, &[]).to_bytes(),
+            &[3],
+            vec![3],
+            1,
+            7,
+        ));
+        finality.dac_certificate = Some(test_finality_certificate(
+            round,
+            signer.sign(&dac_message, NO_EVM_BLS_DST, &[]).to_bytes(),
+            &[3],
+            vec![3],
+            1,
+            7,
+        ));
+
+        let verification = verify_no_evm_block_finality_evidence_threshold(
+            &finality,
+            chain_id + 1,
+            &public_key,
+            7,
+            1,
+        )
+        .unwrap();
+
+        assert!(!verification.verified());
+        assert!(!verification.leader_certificate.signature_valid);
+        assert!(!verification.dac_certificate.signature_valid);
+    }
+
+    #[test]
     fn no_evm_finality_rejects_malformed_signature_length() {
         let mut finality = test_finality_evidence(62, [0x11; 96], &[0], vec![0], 1, 1);
         finality.certificate.signature = hex_encode_0x(&[0x11; 95]);
@@ -7070,6 +7522,9 @@ mod tests {
                 signer_indices: vec![1, 3],
                 signer_count: 2,
             },
+            block_reference: None,
+            leader_certificate: None,
+            dac_certificate: None,
         });
 
         let verified = verify_no_evm_receipt_proof(Some(&proof))

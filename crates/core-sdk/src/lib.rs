@@ -105,10 +105,12 @@ pub use native_dev::{
     NATIVE_DEV_MANIFEST_SCHEMA_VERSION,
 };
 pub use types::{
+    compute_no_evm_dac_finality_message, compute_no_evm_leader_finality_message,
     compute_no_evm_receipts_root, compute_no_evm_target_receipt_hash,
     decode_no_evm_receipt_transcript, native_market_events_filter,
     native_market_events_from_receipt, native_market_receipt_event_filter,
-    verify_no_evm_archive_proof_signatures, verify_no_evm_finality_evidence_multisig,
+    verify_no_evm_archive_proof_signatures, verify_no_evm_block_finality_evidence_multisig,
+    verify_no_evm_block_finality_evidence_threshold, verify_no_evm_finality_evidence_multisig,
     verify_no_evm_finality_evidence_threshold, verify_no_evm_receipt_proof,
     verify_no_evm_receipt_proof_trust, NativeAgentArbiterStateRecord,
     NativeAgentAttestationStateRecord, NativeAgentAvailabilityStateRecord,
@@ -122,7 +124,8 @@ pub use types::{
     NativeSpotOrderStateRecord, NoEvmArchiveCoveringSnapshot, NoEvmArchiveProof,
     NoEvmArchiveSignatureVerification, NoEvmArchiveSignatureVerificationIssue,
     NoEvmArchiveTrustPolicy, NoEvmArchiveTrustPolicySigner, NoEvmArchiveTrustedSigner,
-    NoEvmReceiptBlsFinalityVerification, NoEvmReceiptBlsTrustPolicySigner,
+    NoEvmReceiptBlockBlsFinalityVerification, NoEvmReceiptBlsFinalityVerification,
+    NoEvmReceiptBlsTrustPolicySigner, NoEvmReceiptFinalityBlockReference,
     NoEvmReceiptFinalityCertificate, NoEvmReceiptFinalityClusterTrustPolicy,
     NoEvmReceiptFinalityEvidence, NoEvmReceiptFinalityMultisigTrustPolicy,
     NoEvmReceiptFinalityTrustPolicy, NoEvmReceiptProof, NoEvmReceiptProofError,
