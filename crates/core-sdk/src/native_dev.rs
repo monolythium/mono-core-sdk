@@ -52,6 +52,14 @@ pub struct NativeDevkitArchive {
     pub sha256: String,
     pub signature: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature_scheme: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signing_key_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trust_root: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signing_public_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub size_bytes: Option<u64>,
 }
 
@@ -319,6 +327,10 @@ pub fn native_dev_schema_field_names() -> &'static [&'static str] {
         "mono_core_commit",
         "mono_core_sdk_commit",
         "archive",
+        "signature_scheme",
+        "signing_key_id",
+        "trust_root",
+        "signing_public_key",
         "sidecar",
         "release_notes_url",
         "installed_version",
@@ -397,6 +409,10 @@ mod tests {
                 url: "file:///tmp/mono-devkit.tar.zst".to_owned(),
                 sha256: "a".repeat(64),
                 signature: "test-signature".to_owned(),
+                signature_scheme: Some("ed25519".to_owned()),
+                signing_key_id: Some("test-key".to_owned()),
+                trust_root: Some("local-dev".to_owned()),
+                signing_public_key: Some("test-public-key".to_owned()),
                 size_bytes: None,
             },
             sidecar: NativeDevkitSidecarManifest {

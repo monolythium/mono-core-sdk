@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,7 +36,7 @@ const manifest = {
   archive: {
     url: archiveName,
     sha256: archiveSha256,
-    signature: `local-devkit-signature:${archiveSha256}`,
+    signature: "",
   },
   sidecar: {
     binary_name: "mono-dev",
@@ -44,6 +44,7 @@ const manifest = {
   },
   release_notes_url: "https://github.com/monolythium/mono-core-sdk",
 };
+signManifest(manifest);
 writeFileSync(join(outRoot, "mono-devkit-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 writeFileSync(join(releaseRoot, "mono-devkit-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 
@@ -73,4 +74,40 @@ function sha256File(path) {
   const bytes = spawnSync("cat", [path], { encoding: "buffer" });
   if (bytes.status !== 0) process.exit(bytes.status ?? 1);
   return createHash("sha256").update(bytes.stdout).digest("hex");
+}
+
+function signManifest(manifest) {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const publicJwk = publicKey.export({ format: "jwk" });
+  if (publicJwk.crv !== "Ed25519" || typeof publicJwk.x !== "string") {
+    throw new Error("generated DevKit signing key is not Ed25519");
+  }
+  manifest.archive.signature_scheme = "ed25519";
+  manifest.archive.signing_public_key = publicJwk.x;
+  manifest.archive.signing_key_id = `local-dev:${createHash("sha256")
+    .update(Buffer.from(publicJwk.x, "base64url"))
+    .digest("hex")
+    .slice(0, 16)}`;
+  manifest.archive.trust_root = "local-dev";
+  manifest.archive.signature = sign(null, Buffer.from(manifestSignaturePayload(manifest)), privateKey)
+    .toString("base64url");
+}
+
+function manifestSignaturePayload(manifest) {
+  return [
+    "mono-devkit-manifest-v1",
+    `schema_version=${manifest.schema_version}`,
+    `devkit_version=${manifest.devkit_version}`,
+    `channel=${manifest.channel}`,
+    `minimum_wallet_host_api=${manifest.minimum_wallet_host_api}`,
+    `maximum_wallet_host_api=${manifest.maximum_wallet_host_api}`,
+    `mono_core_commit=${manifest.mono_core_commit}`,
+    `mono_core_sdk_commit=${manifest.mono_core_sdk_commit}`,
+    `archive_url=${manifest.archive.url}`,
+    `archive_sha256=${manifest.archive.sha256}`,
+    `sidecar_binary_name=${manifest.sidecar.binary_name}`,
+    `sidecar_ipc_protocol_version=${manifest.sidecar.ipc_protocol_version}`,
+    `release_notes_url=${manifest.release_notes_url ?? ""}`,
+    "",
+  ].join("\n");
 }

@@ -22,6 +22,10 @@ export interface NativeDevkitArchive {
   url: string;
   sha256: string;
   signature: string;
+  signatureScheme?: "ed25519";
+  signingKeyId?: string;
+  trustRoot?: string;
+  signingPublicKey?: string;
   sizeBytes?: number;
 }
 
@@ -344,6 +348,10 @@ export function nativeDevSchemaFieldNames(): readonly string[] {
     "monoCoreCommit",
     "monoCoreSdkCommit",
     "archive",
+    "signatureScheme",
+    "signingKeyId",
+    "trustRoot",
+    "signingPublicKey",
     "sidecar",
     "releaseNotesUrl",
     "installedVersion",
