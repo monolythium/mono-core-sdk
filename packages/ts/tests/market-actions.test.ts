@@ -3,11 +3,15 @@ import {
   CLOB_MARKET_ID_DOMAIN_TAG,
   CLOB_SELECTORS,
   MarketActionError,
+  NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE,
+  NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY,
+  NATIVE_CALL_FORWARDER_RESPONSE_OFFSET,
   NATIVE_MARKET_MODULE_ADDRESS,
   NATIVE_MARKET_MODULE_ADDRESS_BYTES,
   PRECOMPILE_ADDRESSES,
   addressToTypedBech32,
   buildCancelSpotOrderPlan,
+  buildNativeCallForwarderArtifact,
   buildNativeNftBuyListingForwarderInput,
   buildNativeMarketModuleCallEnvelope,
   buildNativeNftBuyListingModuleCall,
@@ -23,13 +27,21 @@ import {
   buildNativeNftSweepExpiredListingsModuleCall,
   buildNativeSpotCancelOrderForwarderInput,
   buildNativeSpotCancelOrderModuleCall,
+  buildNativeSpotCreateMarketForwarderInput,
+  buildNativeSpotCreateMarketModuleCall,
   buildNativeSpotLimitOrderForwarderInput,
   buildNativeSpotLimitOrderModuleCall,
+  buildNativeSpotSettleLimitOrderForwarderInput,
+  buildNativeSpotSettleLimitOrderModuleCall,
+  buildNativeSpotSettleRoutedLimitOrderForwarderInput,
+  buildNativeSpotSettleRoutedLimitOrderModuleCall,
   buildPlaceSpotLimitOrderPlan,
   buildPlaceSpotMarketOrderExPlan,
   buildPlaceSpotMarketOrderPlan,
   clobAddressHex,
   deriveClobMarketId,
+  deriveNativeSpotMarketId,
+  deriveNativeSpotOrderId,
   encodeCancelOrderCalldata,
   encodeNativeMarketModuleForwarderInput,
   encodeNativeNftBuyListingCall,
@@ -39,7 +51,10 @@ import {
   encodeNativeNftSettleAuctionCall,
   encodeNativeNftSweepExpiredListingsCall,
   encodeNativeSpotCancelOrderCall,
+  encodeNativeSpotCreateMarketCall,
   encodeNativeSpotLimitOrderCall,
+  encodeNativeSpotSettleLimitOrderCall,
+  encodeNativeSpotSettleRoutedLimitOrderCall,
   encodePlaceLimitOrderCalldata,
   encodePlaceMarketOrderCalldata,
   encodePlaceMarketOrderExCalldata,
@@ -50,6 +65,7 @@ import { MempoolClass } from "../src/crypto/index.js";
 const baseTokenId = `0x${"a1".repeat(32)}`;
 const quoteTokenId = `0x${"a2".repeat(32)}`;
 const marketId = deriveClobMarketId(baseTokenId, quoteTokenId);
+const nativeMarketId = `0x${"21".repeat(32)}`;
 const rustNativeLimitOrderGolden =
   `0x0000000001000000${"11".repeat(32)}` +
   `00000000${"22".repeat(20)}` +
@@ -58,7 +74,34 @@ const rustNativeLimitOrderGolden =
   "7d000000000000000000000000000000" +
   "32000000000000000000000000000000" +
   "e703000000000000";
+const rustNativeCreateSpotMarketGolden =
+  `0x000000000000000000000000${"10".repeat(20)}` +
+  "0400000000000000" +
+  `${"11".repeat(32)}` +
+  `${"12".repeat(32)}` +
+  "01000000000000000000000000000000" +
+  "0a000000000000000000000000000000" +
+  "0a000000000000000000000000000000" +
+  "64000000000000000000000000000000";
 const rustNativeCancelOrderGolden = `0x0000000004000000${"33".repeat(32)}00000000${"44".repeat(20)}`;
+const rustNativeSettleLimitOrderGolden =
+  `0x0000000002000000${"31".repeat(32)}` +
+  `${"21".repeat(32)}` +
+  `00000000${"30".repeat(20)}` +
+  "0600000000000000" +
+  "01000000" +
+  "78000000000000000000000000000000" +
+  "19000000000000000000000000000000" +
+  "6400000000000000";
+const rustNativeSettleRoutedLimitOrderGolden =
+  `0x00000000030000000200000000000000${"31".repeat(32)}${"32".repeat(32)}` +
+  `${"21".repeat(32)}` +
+  `00000000${"30".repeat(20)}` +
+  "0700000000000000" +
+  "01000000" +
+  "78000000000000000000000000000000" +
+  "4b000000000000000000000000000000" +
+  "6500000000000000";
 const rustNativeCreateListingGolden =
   `0x010000000000000000000000${"11".repeat(20)}` +
   "0700000000000000" +
@@ -107,6 +150,33 @@ describe("native market action builders", () => {
   it("derives the canonical market id from base and quote token ids", () => {
     expect(marketId).toBe("0xc707fbb655b8ef26fadeff8808adc1206317f5b392ee7ab76a5e6b2f8f8b32b9");
     expect(deriveClobMarketId(quoteTokenId, baseTokenId)).not.toBe(marketId);
+  });
+
+  it("derives native spot market and order ids for later RPC queries", () => {
+    expect(
+      deriveNativeSpotMarketId({
+        owner: `0x${"10".repeat(20)}`,
+        nonce: 4,
+        baseAsset: `0x${"11".repeat(32)}`,
+        quoteAsset: `0x${"12".repeat(32)}`,
+      }),
+    ).toBe("0x0ceb1adb23efe563e105eafb4b5fafddd19d52716eee7bf48a5bdcfcd7429492");
+    expect(
+      deriveNativeSpotOrderId({
+        marketId: nativeMarketId,
+        owner: `0x${"20".repeat(20)}`,
+        side: "buy",
+        nonce: 5,
+      }),
+    ).toBe("0xa2e19901809becbcc7f9b79a6c05c446a7813814dfac7bf070a60a8a8769ff80");
+    expect(
+      deriveNativeSpotOrderId({
+        marketId: nativeMarketId,
+        owner: `0x${"30".repeat(20)}`,
+        side: "sell",
+        nonce: 6,
+      }),
+    ).toBe("0x08cba2307ab25dd91ecc8c0768e821cacc23b56dffb7cb13a474c4734dce4841");
   });
 
   it("encodes placeLimitOrder calldata with the mono-core ABI layout", () => {
@@ -218,6 +288,19 @@ describe("native market action builders", () => {
 
   it("encodes native market router calls with the mono-core bincode layout", () => {
     expect(
+      encodeNativeSpotCreateMarketCall({
+        owner: `0x${"10".repeat(20)}`,
+        nonce: 4,
+        baseAsset: `0x${"11".repeat(32)}`,
+        quoteAsset: `0x${"12".repeat(32)}`,
+        tickSize: "1",
+        lotSize: "10",
+        minQuantity: "10",
+        minNotional: "100",
+      }),
+    ).toBe(rustNativeCreateSpotMarketGolden);
+
+    expect(
       encodeNativeSpotLimitOrderCall({
         marketId: `0x${"11".repeat(32)}`,
         owner: addressToTypedBech32("user", `0x${"22".repeat(20)}`),
@@ -235,6 +318,36 @@ describe("native market action builders", () => {
         caller: `0x${"44".repeat(20)}`,
       }),
     ).toBe(rustNativeCancelOrderGolden);
+
+    expect(
+      encodeNativeSpotSettleLimitOrderCall({
+        makerOrderId: `0x${"31".repeat(32)}`,
+        takerOrder: {
+          marketId: nativeMarketId,
+          owner: `0x${"30".repeat(20)}`,
+          nonce: 6,
+          side: "sell",
+          price: "120",
+          quantity: "25",
+          expiresAtBlock: 100,
+        },
+      }),
+    ).toBe(rustNativeSettleLimitOrderGolden);
+
+    expect(
+      encodeNativeSpotSettleRoutedLimitOrderCall({
+        makerOrderIds: [`0x${"31".repeat(32)}`, `0x${"32".repeat(32)}`],
+        takerOrder: {
+          marketId: nativeMarketId,
+          owner: `0x${"30".repeat(20)}`,
+          nonce: 7,
+          side: "sell",
+          price: "120",
+          quantity: "75",
+          expiresAtBlock: 101,
+        },
+      }),
+    ).toBe(rustNativeSettleRoutedLimitOrderGolden);
 
     expect(
       encodeNativeNftCreateListingCall({
@@ -341,6 +454,21 @@ describe("native market action builders", () => {
       maxCycles: "22000",
     });
     expect(
+      buildNativeSpotCreateMarketModuleCall(
+        {
+          owner: `0x${"10".repeat(20)}`,
+          nonce: 4,
+          baseAsset: `0x${"11".repeat(32)}`,
+          quoteAsset: `0x${"12".repeat(32)}`,
+          tickSize: "1",
+          lotSize: "10",
+          minQuantity: "10",
+          minNotional: "100",
+        },
+        22_000,
+      ).call.input,
+    ).toBe(rustNativeCreateSpotMarketGolden);
+    expect(
       buildNativeSpotCancelOrderModuleCall(
         {
           orderId: `0x${"33".repeat(32)}`,
@@ -349,6 +477,40 @@ describe("native market action builders", () => {
         22_000n,
       ).call.input,
     ).toBe(rustNativeCancelOrderGolden);
+    expect(
+      buildNativeSpotSettleLimitOrderModuleCall(
+        {
+          makerOrderId: `0x${"31".repeat(32)}`,
+          takerOrder: {
+            marketId: nativeMarketId,
+            owner: `0x${"30".repeat(20)}`,
+            nonce: 6,
+            side: "sell",
+            price: "120",
+            quantity: "25",
+            expiresAtBlock: 100,
+          },
+        },
+        22_000,
+      ).call.input,
+    ).toBe(rustNativeSettleLimitOrderGolden);
+    expect(
+      buildNativeSpotSettleRoutedLimitOrderModuleCall(
+        {
+          makerOrderIds: [`0x${"31".repeat(32)}`, `0x${"32".repeat(32)}`],
+          takerOrder: {
+            marketId: nativeMarketId,
+            owner: `0x${"30".repeat(20)}`,
+            nonce: 7,
+            side: "sell",
+            price: "120",
+            quantity: "75",
+            expiresAtBlock: 101,
+          },
+        },
+        22_000,
+      ).call.input,
+    ).toBe(rustNativeSettleRoutedLimitOrderGolden);
     expect(
       buildNativeNftCreateListingModuleCall(
         {
@@ -454,6 +616,21 @@ describe("native market action builders", () => {
       ).requestBytes,
     ).toBe(176);
     expect(
+      buildNativeSpotCreateMarketForwarderInput(
+        {
+          owner: `0x${"10".repeat(20)}`,
+          nonce: 4,
+          baseAsset: `0x${"11".repeat(32)}`,
+          quoteAsset: `0x${"12".repeat(32)}`,
+          tickSize: "1",
+          lotSize: "10",
+          minQuantity: "10",
+          minNotional: "100",
+        },
+        22_000,
+      ).requestBytes,
+    ).toBe(228);
+    expect(
       buildNativeSpotCancelOrderForwarderInput(
         {
           orderId: `0x${"33".repeat(32)}`,
@@ -462,6 +639,40 @@ describe("native market action builders", () => {
         22_000,
       ).requestBytes,
     ).toBe(124);
+    expect(
+      buildNativeSpotSettleLimitOrderForwarderInput(
+        {
+          makerOrderId: `0x${"31".repeat(32)}`,
+          takerOrder: {
+            marketId: nativeMarketId,
+            owner: `0x${"30".repeat(20)}`,
+            nonce: 6,
+            side: "sell",
+            price: "120",
+            quantity: "25",
+            expiresAtBlock: 100,
+          },
+        },
+        22_000,
+      ).requestBytes,
+    ).toBe(208);
+    expect(
+      buildNativeSpotSettleRoutedLimitOrderForwarderInput(
+        {
+          makerOrderIds: [`0x${"31".repeat(32)}`, `0x${"32".repeat(32)}`],
+          takerOrder: {
+            marketId: nativeMarketId,
+            owner: `0x${"30".repeat(20)}`,
+            nonce: 7,
+            side: "sell",
+            price: "120",
+            quantity: "75",
+            expiresAtBlock: 101,
+          },
+        },
+        22_000,
+      ).requestBytes,
+    ).toBe(248);
     expect(
       buildNativeNftCreateListingForwarderInput(
         {
@@ -529,6 +740,24 @@ describe("native market action builders", () => {
     ).toBe(148);
   });
 
+  it("builds fixed native-call forwarder artifact material", () => {
+    const artifact = buildNativeCallForwarderArtifact(132);
+    expect(artifact).toMatchObject({
+      requestBytes: 132,
+      artifactProfile: NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE,
+      codeHash: "0x39eea2271b55df93a89e73ce5bacd383f5e6606600e9c09ea7e9da83f9114d5b",
+    });
+    expect(artifact.artifactBytes.startsWith("0x0100000000001800000000000000")).toBe(true);
+    expect(artifact.artifactBytes).toContain("666f72776172645f63616c6c5f636f6e7472616374");
+    expect(artifact.artifactBytes).toContain("6e61746976655f63616c6c5f666f72776172646572");
+    expect(artifact.artifactBytes).toContain(Buffer.from(NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE).toString("hex"));
+    expect(NATIVE_CALL_FORWARDER_RESPONSE_OFFSET + NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY).toBeLessThanOrEqual(
+      65_536,
+    );
+    expect(() => buildNativeCallForwarderArtifact(0)).toThrow(/requestBytes/);
+    expect(() => buildNativeCallForwarderArtifact(2048)).toThrow(/requestBytes/);
+  });
+
   it("rejects malformed market action inputs", () => {
     expect(() => encodePlaceLimitOrderCalldata({ ...args, marketId: "0x1234" })).toThrow(MarketActionError);
     expect(() =>
@@ -581,6 +810,32 @@ describe("native market action builders", () => {
         expiresAtBlock: 999,
       }),
     ).toThrow(/price/);
+    expect(() =>
+      encodeNativeSpotCreateMarketCall({
+        owner: `0x${"10".repeat(20)}`,
+        nonce: 4,
+        baseAsset: `0x${"11".repeat(32)}`,
+        quoteAsset: `0x${"12".repeat(32)}`,
+        tickSize: "0",
+        lotSize: "10",
+        minQuantity: "10",
+        minNotional: "100",
+      }),
+    ).toThrow(/tickSize/);
+    expect(() =>
+      encodeNativeSpotSettleRoutedLimitOrderCall({
+        makerOrderIds: [],
+        takerOrder: {
+          marketId: nativeMarketId,
+          owner: `0x${"30".repeat(20)}`,
+          nonce: 7,
+          side: "sell",
+          price: "120",
+          quantity: "75",
+          expiresAtBlock: 101,
+        },
+      }),
+    ).toThrow(/makerOrderIds/);
     expect(() =>
       encodeNativeSpotCancelOrderCall({
         orderId: `0x${"33".repeat(32)}`,

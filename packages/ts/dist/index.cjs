@@ -6684,6 +6684,10 @@ var NATIVE_MARKET_MODULE_ADDRESS = addressToTypedBech32(
   "systemModule",
   NATIVE_MARKET_MODULE_ADDRESS_BYTES
 );
+var NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE = "native-call-forwarder-v1";
+var NATIVE_CALL_FORWARDER_RESPONSE_OFFSET = 768;
+var NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY = 256;
+var MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES = 2047;
 var CLOB_SELECTORS = {
   /**
    * `placeLimitOrder(bytes32,bytes32,uint8,uint256,uint256,uint64)`
@@ -6719,6 +6723,39 @@ function deriveClobMarketId(baseTokenId, quoteTokenId) {
   const base = bytes32FromHex(baseTokenId, "baseTokenId");
   const quote = bytes32FromHex(quoteTokenId, "quoteTokenId");
   return bytesToHex2(sha3_js.keccak_256(concatBytes2(new Uint8Array([CLOB_MARKET_ID_DOMAIN_TAG]), base, quote)));
+}
+function deriveNativeSpotMarketId(args) {
+  const owner = normalizeNativeMarketAddress(args.owner, "owner");
+  const nonce = uint64(args.nonce, "nonce");
+  return bytesToHex2(
+    blake3_js.blake3(
+      concatBytes2(
+        asciiBytes("MONO_MARKET_ID_V1"),
+        asciiBytes(ADDRESS_KIND_HRPS[owner.kind]),
+        owner.bytes,
+        bytes32FromHex(args.baseAsset, "baseAsset"),
+        bytes32FromHex(args.quoteAsset, "quoteAsset"),
+        uint64BeBytes(nonce)
+      )
+    )
+  );
+}
+function deriveNativeSpotOrderId(args) {
+  const owner = normalizeNativeMarketAddress(args.owner, "owner");
+  const side = normalizeSide(args.side);
+  const nonce = uint64(args.nonce, "nonce");
+  return bytesToHex2(
+    blake3_js.blake3(
+      concatBytes2(
+        asciiBytes("MONO_MARKET_ORDER_ID_V1"),
+        bytes32FromHex(args.marketId, "marketId"),
+        asciiBytes(ADDRESS_KIND_HRPS[owner.kind]),
+        owner.bytes,
+        new Uint8Array([nativeOrderSideDiscriminator(side)]),
+        uint64BeBytes(nonce)
+      )
+    )
+  );
 }
 function encodePlaceLimitOrderCalldata(args) {
   const normalized = normalizePlaceSpotLimitOrderArgs(args);
@@ -6773,13 +6810,21 @@ function encodeNativeSpotLimitOrderCall(args) {
   const w = new BincodeWriter();
   w.enumVariant(0);
   w.enumVariant(1);
-  w.rawBytes(bytes32FromHex(args.marketId, "marketId"));
+  spotLimitOrderInto(w, args, "");
+  return bytesToHex2(w.toBytes());
+}
+function encodeNativeSpotCreateMarketCall(args) {
+  const w = new BincodeWriter();
+  w.enumVariant(0);
+  w.enumVariant(0);
   monoAddressInto(w, args.owner, "owner");
   w.u64(uint64(args.nonce, "nonce"));
-  w.enumVariant(normalizeSide(args.side));
-  w.u128(positiveU128Decimal(args.price, "price"));
-  w.u128(positiveU128Decimal(args.quantity, "quantity"));
-  w.u64(uint64(args.expiresAtBlock, "expiresAtBlock"));
+  w.rawBytes(bytes32FromHex(args.baseAsset, "baseAsset"));
+  w.rawBytes(bytes32FromHex(args.quoteAsset, "quoteAsset"));
+  w.u128(positiveU128Decimal(args.tickSize, "tickSize"));
+  w.u128(positiveU128Decimal(args.lotSize, "lotSize"));
+  w.u128(positiveU128Decimal(args.minQuantity, "minQuantity"));
+  w.u128(u128Decimal(args.minNotional, "minNotional"));
   return bytesToHex2(w.toBytes());
 }
 function encodeNativeSpotCancelOrderCall(args) {
@@ -6788,6 +6833,26 @@ function encodeNativeSpotCancelOrderCall(args) {
   w.enumVariant(4);
   w.rawBytes(bytes32FromHex(args.orderId, "orderId"));
   monoAddressInto(w, args.caller, "caller");
+  return bytesToHex2(w.toBytes());
+}
+function encodeNativeSpotSettleLimitOrderCall(args) {
+  const w = new BincodeWriter();
+  w.enumVariant(0);
+  w.enumVariant(2);
+  w.rawBytes(bytes32FromHex(args.makerOrderId, "makerOrderId"));
+  spotLimitOrderInto(w, args.takerOrder, "takerOrder.");
+  return bytesToHex2(w.toBytes());
+}
+function encodeNativeSpotSettleRoutedLimitOrderCall(args) {
+  const makerOrderIds = normalizeListingIds(args.makerOrderIds, "makerOrderIds");
+  const w = new BincodeWriter();
+  w.enumVariant(0);
+  w.enumVariant(3);
+  w.u64(BigInt(makerOrderIds.length));
+  for (const makerOrderId of makerOrderIds) {
+    w.rawBytes(makerOrderId);
+  }
+  spotLimitOrderInto(w, args.takerOrder, "takerOrder.");
   return bytesToHex2(w.toBytes());
 }
 function encodeNativeNftCreateListingCall(args) {
@@ -6889,8 +6954,17 @@ function encodeNativeMarketModuleForwarderInput(envelope) {
 function buildNativeSpotLimitOrderForwarderInput(args, maxCycles) {
   return encodeNativeMarketModuleForwarderInput(buildNativeSpotLimitOrderModuleCall(args, maxCycles));
 }
+function buildNativeSpotCreateMarketForwarderInput(args, maxCycles) {
+  return encodeNativeMarketModuleForwarderInput(buildNativeSpotCreateMarketModuleCall(args, maxCycles));
+}
 function buildNativeSpotCancelOrderForwarderInput(args, maxCycles) {
   return encodeNativeMarketModuleForwarderInput(buildNativeSpotCancelOrderModuleCall(args, maxCycles));
+}
+function buildNativeSpotSettleLimitOrderForwarderInput(args, maxCycles) {
+  return encodeNativeMarketModuleForwarderInput(buildNativeSpotSettleLimitOrderModuleCall(args, maxCycles));
+}
+function buildNativeSpotSettleRoutedLimitOrderForwarderInput(args, maxCycles) {
+  return encodeNativeMarketModuleForwarderInput(buildNativeSpotSettleRoutedLimitOrderModuleCall(args, maxCycles));
 }
 function buildNativeNftCreateListingForwarderInput(args, maxCycles) {
   return encodeNativeMarketModuleForwarderInput(buildNativeNftCreateListingModuleCall(args, maxCycles));
@@ -6913,8 +6987,17 @@ function buildNativeNftSweepExpiredListingsForwarderInput(args, maxCycles) {
 function buildNativeSpotLimitOrderModuleCall(args, maxCycles) {
   return buildNativeMarketModuleCallEnvelope(encodeNativeSpotLimitOrderCall(args), maxCycles);
 }
+function buildNativeSpotCreateMarketModuleCall(args, maxCycles) {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeSpotCreateMarketCall(args), maxCycles);
+}
 function buildNativeSpotCancelOrderModuleCall(args, maxCycles) {
   return buildNativeMarketModuleCallEnvelope(encodeNativeSpotCancelOrderCall(args), maxCycles);
+}
+function buildNativeSpotSettleLimitOrderModuleCall(args, maxCycles) {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeSpotSettleLimitOrderCall(args), maxCycles);
+}
+function buildNativeSpotSettleRoutedLimitOrderModuleCall(args, maxCycles) {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeSpotSettleRoutedLimitOrderCall(args), maxCycles);
 }
 function buildNativeNftCreateListingModuleCall(args, maxCycles) {
   return buildNativeMarketModuleCallEnvelope(encodeNativeNftCreateListingCall(args), maxCycles);
@@ -6986,6 +7069,24 @@ function buildCancelSpotOrderPlan(args) {
     mempoolClass: MempoolClass.CLOBOp
   };
 }
+function buildNativeCallForwarderArtifact(requestBytes) {
+  const size = uint64(requestBytes, "requestBytes");
+  if (size === 0n) {
+    throw new MarketActionError("requestBytes must be non-zero");
+  }
+  if (size > BigInt(MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES)) {
+    throw new MarketActionError(`requestBytes must be <= ${MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES}`);
+  }
+  const requestBytesNumber = Number(size);
+  const code = nativeCallForwarderCode(requestBytesNumber);
+  const codeHash = mrvCodeHashHex2(code);
+  return {
+    artifactBytes: encodeNativeCallForwarderArtifact(code, codeHash),
+    requestBytes: requestBytesNumber,
+    artifactProfile: NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE,
+    codeHash
+  };
+}
 var NATIVE_MARKET_ADDRESS_KIND_VARIANTS = {
   user: 0,
   smartAccount: 1,
@@ -7043,6 +7144,9 @@ function normalizeSide(side) {
   if (side === "buy") return 0;
   if (side === "sell") return 1;
   throw new MarketActionError("side must be 'buy' or 'sell'");
+}
+function nativeOrderSideDiscriminator(side) {
+  return side === 0 ? 1 : 2;
 }
 function normalizeMarketOrderMode(mode) {
   if (mode === "fill-or-refund") return 0;
@@ -7119,6 +7223,15 @@ function uint64(value, name) {
 }
 function positiveU128Decimal(value, name) {
   const n = positiveDecimal(value, name);
+  return u128(n, name);
+}
+function u128Decimal(value, name) {
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) {
+    throw new MarketActionError(`${name} must be an integer decimal string`);
+  }
+  return u128(BigInt(value), name);
+}
+function u128(n, name) {
   if (n >= 1n << 128n) {
     throw new MarketActionError(`${name} must fit uint128`);
   }
@@ -7228,6 +7341,83 @@ function uint256Word2(value, name) {
     rest >>= 8n;
   }
   return out;
+}
+function spotLimitOrderInto(w, args, prefix) {
+  w.rawBytes(bytes32FromHex(args.marketId, `${prefix}marketId`));
+  monoAddressInto(w, args.owner, `${prefix}owner`);
+  w.u64(uint64(args.nonce, `${prefix}nonce`));
+  w.enumVariant(normalizeSide(args.side));
+  w.u128(positiveU128Decimal(args.price, `${prefix}price`));
+  w.u128(positiveU128Decimal(args.quantity, `${prefix}quantity`));
+  w.u64(uint64(args.expiresAtBlock, `${prefix}expiresAtBlock`));
+}
+function uint64BeBytes(value) {
+  const out = new Uint8Array(8);
+  let rest = value;
+  for (let i = 7; i >= 0; i--) {
+    out[i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  return out;
+}
+function asciiBytes(value) {
+  return new TextEncoder().encode(value);
+}
+function mrvCodeHashHex2(code) {
+  const len = uint64BeBytes(BigInt(code.length));
+  return bytesToHex2(blake3_js.blake3(concatBytes2(asciiBytes("MONO_MRV_CODE_V1"), len, code)));
+}
+function nativeCallForwarderCode(requestBytes) {
+  return rvCode([
+    rvAddi(17, 0, 769),
+    rvAddi(10, 0, 0),
+    rvAddi(11, 0, requestBytes),
+    rvAddi(12, 0, NATIVE_CALL_FORWARDER_RESPONSE_OFFSET),
+    rvAddi(13, 0, NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY),
+    115
+  ]);
+}
+function rvCode(words) {
+  const out = new Uint8Array(words.length * 4);
+  const view = new DataView(out.buffer);
+  words.forEach((word, i) => view.setUint32(i * 4, word >>> 0, true));
+  return out;
+}
+function rvAddi(rd, rs1, imm) {
+  return (imm & 4095) << 20 | rs1 << 15 | rd << 7 | 19;
+}
+function encodeNativeCallForwarderArtifact(code, codeHash) {
+  const w = new BincodeWriter();
+  w.u16(1);
+  w.enumVariant(0);
+  w.bytes(code);
+  w.u64(1n);
+  writeString(w, "forward_call_contract");
+  w.enumVariant(1);
+  w.u64(1n);
+  writeString(w, "request");
+  w.enumVariant(6);
+  w.u64(1n);
+  writeString(w, "response");
+  w.enumVariant(6);
+  w.u64(1n);
+  writeString(w, "mono");
+  writeString(w, "call_contract");
+  w.u16(769);
+  w.u32(1);
+  w.u32(1);
+  w.u32(16 * 1024);
+  writeString(w, "native_call_forwarder");
+  w.u16(1);
+  w.rawBytes(hexToBytes2(codeHash, "codeHash"));
+  writeString(w, "mono-sdk-rv32im-forwarder");
+  w.rawBytes(hexToBytes2(mrvCodeHashHex2(asciiBytes("mono-sdk-native-call-forwarder-v1")), "sourceDigest"));
+  writeString(w, NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE);
+  w.bytes(new Uint8Array());
+  return bytesToHex2(w.toBytes());
+}
+function writeString(w, value) {
+  w.bytes(asciiBytes(value));
 }
 
 // src/agent-actions.ts
@@ -7870,6 +8060,7 @@ exports.DELEGATION_SELECTORS = DELEGATION_SELECTORS;
 exports.DelegationPrecompileError = DelegationPrecompileError;
 exports.LYTHOSHI_PER_LYTH = LYTHOSHI_PER_LYTH;
 exports.LYTH_DECIMALS = LYTH_DECIMALS;
+exports.MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES = MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES;
 exports.MAX_NATIVE_RECEIPT_EVENTS = MAX_NATIVE_RECEIPT_EVENTS;
 exports.ML_DSA_65_PUBLIC_KEY_LEN = ML_DSA_65_PUBLIC_KEY_LEN2;
 exports.ML_DSA_65_SIGNATURE_LEN = ML_DSA_65_SIGNATURE_LEN2;
@@ -7894,6 +8085,9 @@ exports.MonolythiumSigner = MonolythiumSigner;
 exports.MrvValidationError = MrvValidationError;
 exports.NATIVE_AGENT_MODULE_ADDRESS = NATIVE_AGENT_MODULE_ADDRESS;
 exports.NATIVE_AGENT_MODULE_ADDRESS_BYTES = NATIVE_AGENT_MODULE_ADDRESS_BYTES;
+exports.NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE = NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE;
+exports.NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY = NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY;
+exports.NATIVE_CALL_FORWARDER_RESPONSE_OFFSET = NATIVE_CALL_FORWARDER_RESPONSE_OFFSET;
 exports.NATIVE_DEV_HOST_API_VERSION = NATIVE_DEV_HOST_API_VERSION;
 exports.NATIVE_DEV_IPC_PROTOCOL_VERSION = NATIVE_DEV_IPC_PROTOCOL_VERSION;
 exports.NATIVE_DEV_MANIFEST_SCHEMA_VERSION = NATIVE_DEV_MANIFEST_SCHEMA_VERSION;
@@ -7966,6 +8160,7 @@ exports.buildNativeAgentRecordReputationForwarderInput = buildNativeAgentRecordR
 exports.buildNativeAgentRecordReputationModuleCall = buildNativeAgentRecordReputationModuleCall;
 exports.buildNativeAgentSetSpendingPolicyForwarderInput = buildNativeAgentSetSpendingPolicyForwarderInput;
 exports.buildNativeAgentSetSpendingPolicyModuleCall = buildNativeAgentSetSpendingPolicyModuleCall;
+exports.buildNativeCallForwarderArtifact = buildNativeCallForwarderArtifact;
 exports.buildNativeMarketModuleCallEnvelope = buildNativeMarketModuleCallEnvelope;
 exports.buildNativeNftBuyListingForwarderInput = buildNativeNftBuyListingForwarderInput;
 exports.buildNativeNftBuyListingModuleCall = buildNativeNftBuyListingModuleCall;
@@ -7981,8 +8176,14 @@ exports.buildNativeNftSweepExpiredListingsForwarderInput = buildNativeNftSweepEx
 exports.buildNativeNftSweepExpiredListingsModuleCall = buildNativeNftSweepExpiredListingsModuleCall;
 exports.buildNativeSpotCancelOrderForwarderInput = buildNativeSpotCancelOrderForwarderInput;
 exports.buildNativeSpotCancelOrderModuleCall = buildNativeSpotCancelOrderModuleCall;
+exports.buildNativeSpotCreateMarketForwarderInput = buildNativeSpotCreateMarketForwarderInput;
+exports.buildNativeSpotCreateMarketModuleCall = buildNativeSpotCreateMarketModuleCall;
 exports.buildNativeSpotLimitOrderForwarderInput = buildNativeSpotLimitOrderForwarderInput;
 exports.buildNativeSpotLimitOrderModuleCall = buildNativeSpotLimitOrderModuleCall;
+exports.buildNativeSpotSettleLimitOrderForwarderInput = buildNativeSpotSettleLimitOrderForwarderInput;
+exports.buildNativeSpotSettleLimitOrderModuleCall = buildNativeSpotSettleLimitOrderModuleCall;
+exports.buildNativeSpotSettleRoutedLimitOrderForwarderInput = buildNativeSpotSettleRoutedLimitOrderForwarderInput;
+exports.buildNativeSpotSettleRoutedLimitOrderModuleCall = buildNativeSpotSettleRoutedLimitOrderModuleCall;
 exports.buildPlaceSpotLimitOrderPlan = buildPlaceSpotLimitOrderPlan;
 exports.buildPlaceSpotMarketOrderExPlan = buildPlaceSpotMarketOrderExPlan;
 exports.buildPlaceSpotMarketOrderPlan = buildPlaceSpotMarketOrderPlan;
@@ -8008,6 +8209,8 @@ exports.decodeTxFeedResponse = decodeTxFeedResponse;
 exports.delegationAddressHex = delegationAddressHex;
 exports.deriveClobMarketId = deriveClobMarketId;
 exports.deriveMrvContractAddress = deriveMrvContractAddress;
+exports.deriveNativeSpotMarketId = deriveNativeSpotMarketId;
+exports.deriveNativeSpotOrderId = deriveNativeSpotOrderId;
 exports.encodeBlockSelector = encodeBlockSelector;
 exports.encodeCancelOrderCalldata = encodeCancelOrderCalldata;
 exports.encodeClaimPolicyByAddressCalldata = encodeClaimPolicyByAddressCalldata;
@@ -8059,7 +8262,10 @@ exports.encodeNativeNftPlaceAuctionBidCall = encodeNativeNftPlaceAuctionBidCall;
 exports.encodeNativeNftSettleAuctionCall = encodeNativeNftSettleAuctionCall;
 exports.encodeNativeNftSweepExpiredListingsCall = encodeNativeNftSweepExpiredListingsCall;
 exports.encodeNativeSpotCancelOrderCall = encodeNativeSpotCancelOrderCall;
+exports.encodeNativeSpotCreateMarketCall = encodeNativeSpotCreateMarketCall;
 exports.encodeNativeSpotLimitOrderCall = encodeNativeSpotLimitOrderCall;
+exports.encodeNativeSpotSettleLimitOrderCall = encodeNativeSpotSettleLimitOrderCall;
+exports.encodeNativeSpotSettleRoutedLimitOrderCall = encodeNativeSpotSettleRoutedLimitOrderCall;
 exports.encodePlaceLimitOrderCalldata = encodePlaceLimitOrderCalldata;
 exports.encodePlaceMarketOrderCalldata = encodePlaceMarketOrderCalldata;
 exports.encodePlaceMarketOrderExCalldata = encodePlaceMarketOrderExCalldata;

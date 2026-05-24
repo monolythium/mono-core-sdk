@@ -6682,6 +6682,10 @@ var NATIVE_MARKET_MODULE_ADDRESS = addressToTypedBech32(
   "systemModule",
   NATIVE_MARKET_MODULE_ADDRESS_BYTES
 );
+var NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE = "native-call-forwarder-v1";
+var NATIVE_CALL_FORWARDER_RESPONSE_OFFSET = 768;
+var NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY = 256;
+var MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES = 2047;
 var CLOB_SELECTORS = {
   /**
    * `placeLimitOrder(bytes32,bytes32,uint8,uint256,uint256,uint64)`
@@ -6717,6 +6721,39 @@ function deriveClobMarketId(baseTokenId, quoteTokenId) {
   const base = bytes32FromHex(baseTokenId, "baseTokenId");
   const quote = bytes32FromHex(quoteTokenId, "quoteTokenId");
   return bytesToHex2(keccak_256(concatBytes2(new Uint8Array([CLOB_MARKET_ID_DOMAIN_TAG]), base, quote)));
+}
+function deriveNativeSpotMarketId(args) {
+  const owner = normalizeNativeMarketAddress(args.owner, "owner");
+  const nonce = uint64(args.nonce, "nonce");
+  return bytesToHex2(
+    blake3(
+      concatBytes2(
+        asciiBytes("MONO_MARKET_ID_V1"),
+        asciiBytes(ADDRESS_KIND_HRPS[owner.kind]),
+        owner.bytes,
+        bytes32FromHex(args.baseAsset, "baseAsset"),
+        bytes32FromHex(args.quoteAsset, "quoteAsset"),
+        uint64BeBytes(nonce)
+      )
+    )
+  );
+}
+function deriveNativeSpotOrderId(args) {
+  const owner = normalizeNativeMarketAddress(args.owner, "owner");
+  const side = normalizeSide(args.side);
+  const nonce = uint64(args.nonce, "nonce");
+  return bytesToHex2(
+    blake3(
+      concatBytes2(
+        asciiBytes("MONO_MARKET_ORDER_ID_V1"),
+        bytes32FromHex(args.marketId, "marketId"),
+        asciiBytes(ADDRESS_KIND_HRPS[owner.kind]),
+        owner.bytes,
+        new Uint8Array([nativeOrderSideDiscriminator(side)]),
+        uint64BeBytes(nonce)
+      )
+    )
+  );
 }
 function encodePlaceLimitOrderCalldata(args) {
   const normalized = normalizePlaceSpotLimitOrderArgs(args);
@@ -6771,13 +6808,21 @@ function encodeNativeSpotLimitOrderCall(args) {
   const w = new BincodeWriter();
   w.enumVariant(0);
   w.enumVariant(1);
-  w.rawBytes(bytes32FromHex(args.marketId, "marketId"));
+  spotLimitOrderInto(w, args, "");
+  return bytesToHex2(w.toBytes());
+}
+function encodeNativeSpotCreateMarketCall(args) {
+  const w = new BincodeWriter();
+  w.enumVariant(0);
+  w.enumVariant(0);
   monoAddressInto(w, args.owner, "owner");
   w.u64(uint64(args.nonce, "nonce"));
-  w.enumVariant(normalizeSide(args.side));
-  w.u128(positiveU128Decimal(args.price, "price"));
-  w.u128(positiveU128Decimal(args.quantity, "quantity"));
-  w.u64(uint64(args.expiresAtBlock, "expiresAtBlock"));
+  w.rawBytes(bytes32FromHex(args.baseAsset, "baseAsset"));
+  w.rawBytes(bytes32FromHex(args.quoteAsset, "quoteAsset"));
+  w.u128(positiveU128Decimal(args.tickSize, "tickSize"));
+  w.u128(positiveU128Decimal(args.lotSize, "lotSize"));
+  w.u128(positiveU128Decimal(args.minQuantity, "minQuantity"));
+  w.u128(u128Decimal(args.minNotional, "minNotional"));
   return bytesToHex2(w.toBytes());
 }
 function encodeNativeSpotCancelOrderCall(args) {
@@ -6786,6 +6831,26 @@ function encodeNativeSpotCancelOrderCall(args) {
   w.enumVariant(4);
   w.rawBytes(bytes32FromHex(args.orderId, "orderId"));
   monoAddressInto(w, args.caller, "caller");
+  return bytesToHex2(w.toBytes());
+}
+function encodeNativeSpotSettleLimitOrderCall(args) {
+  const w = new BincodeWriter();
+  w.enumVariant(0);
+  w.enumVariant(2);
+  w.rawBytes(bytes32FromHex(args.makerOrderId, "makerOrderId"));
+  spotLimitOrderInto(w, args.takerOrder, "takerOrder.");
+  return bytesToHex2(w.toBytes());
+}
+function encodeNativeSpotSettleRoutedLimitOrderCall(args) {
+  const makerOrderIds = normalizeListingIds(args.makerOrderIds, "makerOrderIds");
+  const w = new BincodeWriter();
+  w.enumVariant(0);
+  w.enumVariant(3);
+  w.u64(BigInt(makerOrderIds.length));
+  for (const makerOrderId of makerOrderIds) {
+    w.rawBytes(makerOrderId);
+  }
+  spotLimitOrderInto(w, args.takerOrder, "takerOrder.");
   return bytesToHex2(w.toBytes());
 }
 function encodeNativeNftCreateListingCall(args) {
@@ -6887,8 +6952,17 @@ function encodeNativeMarketModuleForwarderInput(envelope) {
 function buildNativeSpotLimitOrderForwarderInput(args, maxCycles) {
   return encodeNativeMarketModuleForwarderInput(buildNativeSpotLimitOrderModuleCall(args, maxCycles));
 }
+function buildNativeSpotCreateMarketForwarderInput(args, maxCycles) {
+  return encodeNativeMarketModuleForwarderInput(buildNativeSpotCreateMarketModuleCall(args, maxCycles));
+}
 function buildNativeSpotCancelOrderForwarderInput(args, maxCycles) {
   return encodeNativeMarketModuleForwarderInput(buildNativeSpotCancelOrderModuleCall(args, maxCycles));
+}
+function buildNativeSpotSettleLimitOrderForwarderInput(args, maxCycles) {
+  return encodeNativeMarketModuleForwarderInput(buildNativeSpotSettleLimitOrderModuleCall(args, maxCycles));
+}
+function buildNativeSpotSettleRoutedLimitOrderForwarderInput(args, maxCycles) {
+  return encodeNativeMarketModuleForwarderInput(buildNativeSpotSettleRoutedLimitOrderModuleCall(args, maxCycles));
 }
 function buildNativeNftCreateListingForwarderInput(args, maxCycles) {
   return encodeNativeMarketModuleForwarderInput(buildNativeNftCreateListingModuleCall(args, maxCycles));
@@ -6911,8 +6985,17 @@ function buildNativeNftSweepExpiredListingsForwarderInput(args, maxCycles) {
 function buildNativeSpotLimitOrderModuleCall(args, maxCycles) {
   return buildNativeMarketModuleCallEnvelope(encodeNativeSpotLimitOrderCall(args), maxCycles);
 }
+function buildNativeSpotCreateMarketModuleCall(args, maxCycles) {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeSpotCreateMarketCall(args), maxCycles);
+}
 function buildNativeSpotCancelOrderModuleCall(args, maxCycles) {
   return buildNativeMarketModuleCallEnvelope(encodeNativeSpotCancelOrderCall(args), maxCycles);
+}
+function buildNativeSpotSettleLimitOrderModuleCall(args, maxCycles) {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeSpotSettleLimitOrderCall(args), maxCycles);
+}
+function buildNativeSpotSettleRoutedLimitOrderModuleCall(args, maxCycles) {
+  return buildNativeMarketModuleCallEnvelope(encodeNativeSpotSettleRoutedLimitOrderCall(args), maxCycles);
 }
 function buildNativeNftCreateListingModuleCall(args, maxCycles) {
   return buildNativeMarketModuleCallEnvelope(encodeNativeNftCreateListingCall(args), maxCycles);
@@ -6984,6 +7067,24 @@ function buildCancelSpotOrderPlan(args) {
     mempoolClass: MempoolClass.CLOBOp
   };
 }
+function buildNativeCallForwarderArtifact(requestBytes) {
+  const size = uint64(requestBytes, "requestBytes");
+  if (size === 0n) {
+    throw new MarketActionError("requestBytes must be non-zero");
+  }
+  if (size > BigInt(MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES)) {
+    throw new MarketActionError(`requestBytes must be <= ${MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES}`);
+  }
+  const requestBytesNumber = Number(size);
+  const code = nativeCallForwarderCode(requestBytesNumber);
+  const codeHash = mrvCodeHashHex2(code);
+  return {
+    artifactBytes: encodeNativeCallForwarderArtifact(code, codeHash),
+    requestBytes: requestBytesNumber,
+    artifactProfile: NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE,
+    codeHash
+  };
+}
 var NATIVE_MARKET_ADDRESS_KIND_VARIANTS = {
   user: 0,
   smartAccount: 1,
@@ -7041,6 +7142,9 @@ function normalizeSide(side) {
   if (side === "buy") return 0;
   if (side === "sell") return 1;
   throw new MarketActionError("side must be 'buy' or 'sell'");
+}
+function nativeOrderSideDiscriminator(side) {
+  return side === 0 ? 1 : 2;
 }
 function normalizeMarketOrderMode(mode) {
   if (mode === "fill-or-refund") return 0;
@@ -7117,6 +7221,15 @@ function uint64(value, name) {
 }
 function positiveU128Decimal(value, name) {
   const n = positiveDecimal(value, name);
+  return u128(n, name);
+}
+function u128Decimal(value, name) {
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) {
+    throw new MarketActionError(`${name} must be an integer decimal string`);
+  }
+  return u128(BigInt(value), name);
+}
+function u128(n, name) {
   if (n >= 1n << 128n) {
     throw new MarketActionError(`${name} must fit uint128`);
   }
@@ -7226,6 +7339,83 @@ function uint256Word2(value, name) {
     rest >>= 8n;
   }
   return out;
+}
+function spotLimitOrderInto(w, args, prefix) {
+  w.rawBytes(bytes32FromHex(args.marketId, `${prefix}marketId`));
+  monoAddressInto(w, args.owner, `${prefix}owner`);
+  w.u64(uint64(args.nonce, `${prefix}nonce`));
+  w.enumVariant(normalizeSide(args.side));
+  w.u128(positiveU128Decimal(args.price, `${prefix}price`));
+  w.u128(positiveU128Decimal(args.quantity, `${prefix}quantity`));
+  w.u64(uint64(args.expiresAtBlock, `${prefix}expiresAtBlock`));
+}
+function uint64BeBytes(value) {
+  const out = new Uint8Array(8);
+  let rest = value;
+  for (let i = 7; i >= 0; i--) {
+    out[i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  return out;
+}
+function asciiBytes(value) {
+  return new TextEncoder().encode(value);
+}
+function mrvCodeHashHex2(code) {
+  const len = uint64BeBytes(BigInt(code.length));
+  return bytesToHex2(blake3(concatBytes2(asciiBytes("MONO_MRV_CODE_V1"), len, code)));
+}
+function nativeCallForwarderCode(requestBytes) {
+  return rvCode([
+    rvAddi(17, 0, 769),
+    rvAddi(10, 0, 0),
+    rvAddi(11, 0, requestBytes),
+    rvAddi(12, 0, NATIVE_CALL_FORWARDER_RESPONSE_OFFSET),
+    rvAddi(13, 0, NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY),
+    115
+  ]);
+}
+function rvCode(words) {
+  const out = new Uint8Array(words.length * 4);
+  const view = new DataView(out.buffer);
+  words.forEach((word, i) => view.setUint32(i * 4, word >>> 0, true));
+  return out;
+}
+function rvAddi(rd, rs1, imm) {
+  return (imm & 4095) << 20 | rs1 << 15 | rd << 7 | 19;
+}
+function encodeNativeCallForwarderArtifact(code, codeHash) {
+  const w = new BincodeWriter();
+  w.u16(1);
+  w.enumVariant(0);
+  w.bytes(code);
+  w.u64(1n);
+  writeString(w, "forward_call_contract");
+  w.enumVariant(1);
+  w.u64(1n);
+  writeString(w, "request");
+  w.enumVariant(6);
+  w.u64(1n);
+  writeString(w, "response");
+  w.enumVariant(6);
+  w.u64(1n);
+  writeString(w, "mono");
+  writeString(w, "call_contract");
+  w.u16(769);
+  w.u32(1);
+  w.u32(1);
+  w.u32(16 * 1024);
+  writeString(w, "native_call_forwarder");
+  w.u16(1);
+  w.rawBytes(hexToBytes2(codeHash, "codeHash"));
+  writeString(w, "mono-sdk-rv32im-forwarder");
+  w.rawBytes(hexToBytes2(mrvCodeHashHex2(asciiBytes("mono-sdk-native-call-forwarder-v1")), "sourceDigest"));
+  writeString(w, NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE);
+  w.bytes(new Uint8Array());
+  return bytesToHex2(w.toBytes());
+}
+function writeString(w, value) {
+  w.bytes(asciiBytes(value));
 }
 
 // src/agent-actions.ts
@@ -7846,6 +8036,6 @@ function translateBlockOut(header) {
 // src/index.ts
 var version = "0.1.0";
 
-export { ADDRESS_HRP, ADDRESS_KIND_HRPS, API_STREAM_TOPICS, AddressError, AgentActionError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, CLOB_MARKET_ID_DOMAIN_TAG, CLOB_SELECTORS, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DelegationPrecompileError, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MarketActionError, MonolythiumProvider, MonolythiumSigner, MrvValidationError, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NATIVE_MARKET_MODULE_ADDRESS, NATIVE_MARKET_MODULE_ADDRESS_BYTES, NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_FINALITY_EVIDENCE_SCHEMA, NO_EVM_FINALITY_EVIDENCE_SOURCE, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NoEvmReceiptProofError, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, assertNativeMarketOrderBookStreamPayload, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bridgeAddressHex, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildBridgeRouteCatalogue, buildCancelSpotOrderPlan, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildNativeMarketModuleCallEnvelope, buildNativeNftBuyListingForwarderInput, buildNativeNftBuyListingModuleCall, buildNativeNftCancelListingForwarderInput, buildNativeNftCancelListingModuleCall, buildNativeNftCreateListingForwarderInput, buildNativeNftCreateListingModuleCall, buildNativeNftPlaceAuctionBidForwarderInput, buildNativeNftPlaceAuctionBidModuleCall, buildNativeNftSettleAuctionForwarderInput, buildNativeNftSettleAuctionModuleCall, buildNativeNftSweepExpiredListingsForwarderInput, buildNativeNftSweepExpiredListingsModuleCall, buildNativeSpotCancelOrderForwarderInput, buildNativeSpotCancelOrderModuleCall, buildNativeSpotLimitOrderForwarderInput, buildNativeSpotLimitOrderModuleCall, buildPlaceSpotLimitOrderPlan, buildPlaceSpotMarketOrderExPlan, buildPlaceSpotMarketOrderPlan, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, clobAddressHex, compareNativeDevVersions, composeClaimBoundMessage, computeNoEvmDacFinalityMessage, computeNoEvmLeaderFinalityMessage, computeNoEvmReceiptsRoot, computeNoEvmRoundFinalityMessage, computeNoEvmTargetReceiptHash, consumeNativeEvents, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNativeAgentStateResponse, decodeNativeMarketOrderBookDeltasResponse, decodeNativeReceiptResponse, decodeNoEvmReceiptTranscript, decodeTxFeedResponse, delegationAddressHex, deriveClobMarketId, deriveMrvContractAddress, encodeBlockSelector, encodeCancelOrderCalldata, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeNativeMarketModuleForwarderInput, encodeNativeNftBuyListingCall, encodeNativeNftCancelListingCall, encodeNativeNftCreateListingCall, encodeNativeNftPlaceAuctionBidCall, encodeNativeNftSettleAuctionCall, encodeNativeNftSweepExpiredListingsCall, encodeNativeSpotCancelOrderCall, encodeNativeSpotLimitOrderCall, encodePlaceLimitOrderCalldata, encodePlaceMarketOrderCalldata, encodePlaceMarketOrderExCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, getChainInfo, getNoEvmReceiptTrustPolicy, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isNativeMarketOrderBookStreamPayload, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeAgentStateFilterParams, nativeDevSchemaFieldNames, nativeDevUiStrings, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nativeMarketStateFilterParams, noEvmReceiptTrustPolicyFromChainInfo, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseLythToLythoshi, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, rankBridgeRoutes, resolveStudioHostStatus, selectBridgeTransferRoute, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, verifyNoEvmArchiveProofSignatures, verifyNoEvmBlockFinalityEvidenceMultisig, verifyNoEvmBlockFinalityEvidenceThreshold, verifyNoEvmFinalityEvidenceMultisig, verifyNoEvmFinalityEvidenceThreshold, verifyNoEvmReceiptProof, verifyNoEvmReceiptProofTrust, version };
+export { ADDRESS_HRP, ADDRESS_KIND_HRPS, API_STREAM_TOPICS, AddressError, AgentActionError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, CLOB_MARKET_ID_DOMAIN_TAG, CLOB_SELECTORS, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DelegationPrecompileError, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MarketActionError, MonolythiumProvider, MonolythiumSigner, MrvValidationError, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE, NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY, NATIVE_CALL_FORWARDER_RESPONSE_OFFSET, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NATIVE_MARKET_MODULE_ADDRESS, NATIVE_MARKET_MODULE_ADDRESS_BYTES, NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_FINALITY_EVIDENCE_SCHEMA, NO_EVM_FINALITY_EVIDENCE_SOURCE, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NoEvmReceiptProofError, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, assertNativeMarketOrderBookStreamPayload, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bridgeAddressHex, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildBridgeRouteCatalogue, buildCancelSpotOrderPlan, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildNativeCallForwarderArtifact, buildNativeMarketModuleCallEnvelope, buildNativeNftBuyListingForwarderInput, buildNativeNftBuyListingModuleCall, buildNativeNftCancelListingForwarderInput, buildNativeNftCancelListingModuleCall, buildNativeNftCreateListingForwarderInput, buildNativeNftCreateListingModuleCall, buildNativeNftPlaceAuctionBidForwarderInput, buildNativeNftPlaceAuctionBidModuleCall, buildNativeNftSettleAuctionForwarderInput, buildNativeNftSettleAuctionModuleCall, buildNativeNftSweepExpiredListingsForwarderInput, buildNativeNftSweepExpiredListingsModuleCall, buildNativeSpotCancelOrderForwarderInput, buildNativeSpotCancelOrderModuleCall, buildNativeSpotCreateMarketForwarderInput, buildNativeSpotCreateMarketModuleCall, buildNativeSpotLimitOrderForwarderInput, buildNativeSpotLimitOrderModuleCall, buildNativeSpotSettleLimitOrderForwarderInput, buildNativeSpotSettleLimitOrderModuleCall, buildNativeSpotSettleRoutedLimitOrderForwarderInput, buildNativeSpotSettleRoutedLimitOrderModuleCall, buildPlaceSpotLimitOrderPlan, buildPlaceSpotMarketOrderExPlan, buildPlaceSpotMarketOrderPlan, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, clobAddressHex, compareNativeDevVersions, composeClaimBoundMessage, computeNoEvmDacFinalityMessage, computeNoEvmLeaderFinalityMessage, computeNoEvmReceiptsRoot, computeNoEvmRoundFinalityMessage, computeNoEvmTargetReceiptHash, consumeNativeEvents, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNativeAgentStateResponse, decodeNativeMarketOrderBookDeltasResponse, decodeNativeReceiptResponse, decodeNoEvmReceiptTranscript, decodeTxFeedResponse, delegationAddressHex, deriveClobMarketId, deriveMrvContractAddress, deriveNativeSpotMarketId, deriveNativeSpotOrderId, encodeBlockSelector, encodeCancelOrderCalldata, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeNativeMarketModuleForwarderInput, encodeNativeNftBuyListingCall, encodeNativeNftCancelListingCall, encodeNativeNftCreateListingCall, encodeNativeNftPlaceAuctionBidCall, encodeNativeNftSettleAuctionCall, encodeNativeNftSweepExpiredListingsCall, encodeNativeSpotCancelOrderCall, encodeNativeSpotCreateMarketCall, encodeNativeSpotLimitOrderCall, encodeNativeSpotSettleLimitOrderCall, encodeNativeSpotSettleRoutedLimitOrderCall, encodePlaceLimitOrderCalldata, encodePlaceMarketOrderCalldata, encodePlaceMarketOrderExCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, getChainInfo, getNoEvmReceiptTrustPolicy, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isNativeMarketOrderBookStreamPayload, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeAgentStateFilterParams, nativeDevSchemaFieldNames, nativeDevUiStrings, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nativeMarketStateFilterParams, noEvmReceiptTrustPolicyFromChainInfo, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseLythToLythoshi, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, rankBridgeRoutes, resolveStudioHostStatus, selectBridgeTransferRoute, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, translateBlockOut, translateReceiptOut, translateTxIn, typedBech32ToAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, verifyNoEvmArchiveProofSignatures, verifyNoEvmBlockFinalityEvidenceMultisig, verifyNoEvmBlockFinalityEvidenceThreshold, verifyNoEvmFinalityEvidenceMultisig, verifyNoEvmFinalityEvidenceThreshold, verifyNoEvmReceiptProof, verifyNoEvmReceiptProofTrust, version };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map
