@@ -213,6 +213,7 @@ export {
   API_STREAM_TOPICS,
   NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC,
   assertNativeMarketOrderBookStreamPayload,
+  decodeNativeMarketOrderBookDeltasResponse,
   isNativeMarketOrderBookStreamPayload,
 } from "./streams.js";
 export type {
@@ -220,6 +221,11 @@ export type {
   ApiStreamTopicMetadata,
   ApiStreamTopicRetention,
   ApiStreamsIndexResponse,
+  NativeMarketOrderBookDelta,
+  NativeMarketOrderBookDeltasRequest,
+  NativeMarketOrderBookDeltasResponse,
+  NativeMarketOrderBookDeltasResponseFilters,
+  NativeMarketOrderBookDeltasSource,
   NativeMarketOrderBookStreamAction,
   NativeMarketOrderBookStreamPayload,
 } from "./streams.js";
