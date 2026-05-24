@@ -3,6 +3,13 @@
   "version": "0.1.0",
   "description": "Official TypeScript SDK for Monolythium v4.0 / LythiumDAG-BFT",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monolythium/mono-core-sdk.git",
+    "directory": "packages/ts"
+  },
+  "homepage": "https://github.com/monolythium/mono-core-sdk#readme",
+  "bugs": "https://github.com/monolythium/mono-core-sdk/issues",
   "private": false,
   "type": "module",
   "main": "./dist/index.cjs",
