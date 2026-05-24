@@ -221,6 +221,7 @@ mono-dev sidecar
 function runSidecar() {
   const protocolVersion = "mono.native-dev.ipc.v1";
   const projectId = `sidecar-${process.pid}`;
+  let hostContext = {};
   printIpc({
     direction: "sidecar_to_host",
     kind: "ready",
@@ -254,6 +255,7 @@ function runSidecar() {
       return;
     }
     if (message.kind === "host_context") {
+      hostContext = message;
       printIpc({
         direction: "sidecar_to_host",
         kind: "project_event",
@@ -278,29 +280,39 @@ function runSidecar() {
       return;
     }
     if (message.kind === "request_preview_approval") {
-      const artifactHash = "0".repeat(64);
+      const selectedProjectRoot = message.selectedProjectRoot ?? hostContext.selectedProjectRoot;
+      if (!selectedProjectRoot) {
+        printIpc({
+          direction: "sidecar_to_host",
+          kind: "project_event",
+          projectId,
+          event: "simulation_finished",
+          summary: "Preview approval requires a selected project root.",
+        });
+        return;
+      }
+      let plan;
+      try {
+        const artifact = buildRoot(resolve(selectedProjectRoot));
+        plan = createDeployPlan({
+          networkId: message.networkId ?? hostContext.activeNetwork?.networkId ?? "local-dev",
+          authorityAddress: message.authorityAddress ?? "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4",
+          artifact,
+        });
+      } catch (error) {
+        printIpc({
+          direction: "sidecar_to_host",
+          kind: "project_event",
+          projectId,
+          event: "simulation_finished",
+          summary: `Preview approval build failed: ${error instanceof Error ? error.message : String(error)}.`,
+        });
+        return;
+      }
       printIpc({
         direction: "sidecar_to_host",
         kind: "approval_request",
-        request: {
-          id: `preview-${Date.now()}`,
-          kind: "mrv_deploy",
-          createdAt: new Date().toISOString(),
-          origin: "mono_devkit",
-          networkId: message.networkId ?? "local-dev",
-          authorityAddress: message.authorityAddress ?? "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4",
-          title: "Review MRV deploy plan",
-          summary: "Preview request emitted by Mono DevKit sidecar.",
-          riskLabels: [{ id: "preview", title: "Preview request", severity: "info", detail: "No signing happens in DevKit." }],
-          payload: {
-            expectedContractAddress: "monoc1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqxk4v02",
-            artifactHash,
-            abiHash: "2".repeat(64),
-            valueLythoshi: "0",
-            executionUnitLimit: "1250000",
-            maxExecutionFeeLythoshi: "10000000",
-          },
-        },
+        request: plan.walletApprovalRequest,
       });
       return;
     }
