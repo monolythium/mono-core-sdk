@@ -306,6 +306,20 @@ Live TypeScript integration tests are skipped unless `MONO_CORE_RPC_URL` is set:
 MONO_CORE_RPC_URL=http://localhost:8545 corepack pnpm --dir packages/ts test
 ```
 
+## Releasing
+
+`@monolythium/core-sdk` publishes to npm via `.github/workflows/publish.yml`
+when a `v*` tag is pushed. Tag must match `packages/ts/package.json` version
+or the workflow fails fast.
+
+```bash
+pnpm -C packages/ts version patch     # bumps + creates v0.1.1 tag
+git push --follow-tags                 # publishes; watch /actions
+```
+
+`minor` / `major` work the same. The workflow runs typecheck, tests, and
+build before publishing with provenance attestation.
+
 ## Current Boundaries
 
 - `lyth_subscribe` / `lyth_unsubscribe` are WebSocket-only on the node side;
