@@ -7,7 +7,7 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "https://github.com/monolythium-vision/mono-core-sdk.git"
+    "url": "https://github.com/monolythium/mono-core-sdk.git"
   },
   "main": "./packages/ts/dist/index.cjs",
   "module": "./packages/ts/dist/index.js",
@@ -32,7 +32,9 @@
   "scripts": {
     "build": "npm --prefix packages/ts run build",
     "typecheck": "npm --prefix packages/ts run typecheck",
-    "test": "npm --prefix packages/ts run test"
+    "test": "npm --prefix packages/ts run test",
+    "devkit:test": "npm --prefix packages/mono-dev run test",
+    "devkit:pack:local": "npm --prefix packages/mono-dev run pack:local"
   },
   "engines": {
     "node": ">=22"

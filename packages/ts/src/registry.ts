@@ -2,7 +2,7 @@
  * Chain-registry snapshot and helpers.
  *
  * Source of truth:
- * https://github.com/monolythium-vision/chain-registry
+ * https://github.com/monolythium/chain-registry
  *
  * The SDK vendors a release-time snapshot so callers can bootstrap without
  * network access to GitHub. Callers that want the newest registry state can
@@ -138,7 +138,7 @@ export const CHAIN_REGISTRY: ChainRegistry = {
 };
 
 export const CHAIN_REGISTRY_RAW_BASE =
-  "https://raw.githubusercontent.com/monolythium-vision/chain-registry/master/chains" as const;
+  "https://raw.githubusercontent.com/monolythium/chain-registry/master/chains" as const;
 
 export function getChainInfo(network: NetworkSlug | string): ChainInfo {
   const info = CHAIN_REGISTRY[network];

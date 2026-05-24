@@ -1127,7 +1127,7 @@ export class RpcClient {
    * Construct a client from the chain-registry network slug.
    *
    * Defaults to the SDK-bundled registry snapshot from
-   * `monolythium-vision/chain-registry`. Set `probe: true` to walk the
+   * `monolythium/chain-registry`. Set `probe: true` to walk the
    * registry endpoints in order and return the first endpoint whose
    * `eth_chainId` matches the registry chain id.
    */
