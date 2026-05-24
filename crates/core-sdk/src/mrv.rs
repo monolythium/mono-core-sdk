@@ -53,15 +53,15 @@ pub const MRV_TX_EXTENSION_KIND: u8 = 0x30;
 /// Body byte for the first MRV extension version.
 pub const MRV_TX_EXTENSION_V1: u8 = 0x01;
 /// Required ADR-0039 structured native fee object fields.
-pub const MRV_STRUCTURED_FEE_FIELDS: [&str; 7] = [
+pub const MRV_STRUCTURED_FEE_FIELDS: [&str; 6] = [
     "total_lythoshi",
-    "total_lyth",
     "cycles_used",
     "base_price_per_cycle_lythoshi",
     "state_io_units",
     "state_io_price_per_unit_lythoshi",
     "priority_tip_lythoshi",
 ];
+const MRV_OPTIONAL_STRUCTURED_FEE_FIELDS: [&str; 1] = ["total_lyth"];
 /// ML-DSA-65 public key byte length for native transaction envelopes.
 pub const ML_DSA_65_PUBLIC_KEY_LEN: usize = 1_952;
 /// ML-DSA-65 signature byte length for native transaction envelopes.
@@ -2969,15 +2969,20 @@ fn check_structured_fee_object(
         failures.push("structured_fee must be an object".to_owned());
         return;
     };
-    let expected_fields = MRV_STRUCTURED_FEE_FIELDS
+    let required_fields = MRV_STRUCTURED_FEE_FIELDS
         .iter()
         .copied()
         .collect::<BTreeSet<_>>();
+    let allowed_fields = required_fields
+        .iter()
+        .copied()
+        .chain(MRV_OPTIONAL_STRUCTURED_FEE_FIELDS)
+        .collect::<BTreeSet<_>>();
     let actual_fields = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
-    for field in expected_fields.difference(&actual_fields) {
+    for field in required_fields.difference(&actual_fields) {
         failures.push(format!("structured_fee is missing '{field}'"));
     }
-    for field in actual_fields.difference(&expected_fields) {
+    for field in actual_fields.difference(&allowed_fields) {
         failures.push(format!("structured_fee has unexpected field '{field}'"));
     }
 
@@ -2989,11 +2994,13 @@ fn check_structured_fee_object(
         }
     }
     let expected_total_lyth = format_lyth(expected_total_lythoshi, LythFormatOptions::NUMERIC_ONLY);
-    if let Some(total_lyth) = json_lyth_decimal_string(object, "total_lyth", failures) {
-        if total_lyth != expected_total_lyth {
-            failures.push(format!(
-                "structured_fee.total_lyth must be {expected_total_lyth}"
-            ));
+    if object.contains_key("total_lyth") {
+        if let Some(total_lyth) = json_lyth_decimal_string(object, "total_lyth", failures) {
+            if total_lyth != expected_total_lyth {
+                failures.push(format!(
+                    "structured_fee.total_lyth must be {expected_total_lyth}"
+                ));
+            }
         }
     }
     for field in [
@@ -3768,7 +3775,6 @@ mod tests {
     fn fee_display_conformance_checks_default_and_structured_surfaces() {
         let fee = serde_json::json!({
             "total_lythoshi": "50000",
-            "total_lyth": "0.0005",
             "cycles_used": 42,
             "base_price_per_cycle_lythoshi": "1000",
             "state_io_units": 8,
@@ -3801,6 +3807,20 @@ mod tests {
             }
         );
         assert_mrv_fee_display_conformance(&input).unwrap();
+        let fee_with_optional_total_lyth = serde_json::json!({
+            "total_lythoshi": "50000",
+            "total_lyth": "0.0005",
+            "cycles_used": 42,
+            "base_price_per_cycle_lythoshi": "1000",
+            "state_io_units": 8,
+            "state_io_price_per_unit_lythoshi": "250",
+            "priority_tip_lythoshi": "0",
+        });
+        assert_mrv_fee_display_conformance(
+            &MrvFeeDisplayConformanceInput::new(50_000, "Network fee: 0.0005 LYTH")
+                .structured_fee(&fee_with_optional_total_lyth),
+        )
+        .unwrap();
 
         let failed_fee = serde_json::json!({
             "total_lythoshi": "50000",

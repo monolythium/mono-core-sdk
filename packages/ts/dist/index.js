@@ -788,7 +788,6 @@ var MrvValidationError = class extends Error {
 };
 var MRV_STRUCTURED_FEE_FIELDS = [
   "total_lythoshi",
-  "total_lyth",
   "cycles_used",
   "base_price_per_cycle_lythoshi",
   "state_io_units",
@@ -1472,7 +1471,7 @@ function checkStructuredFeeObject(value, expectedTotalLythoshi, failures, label 
     failures.push(`${label} must be an object`);
     return;
   }
-  const expectedFields = new Set(MRV_STRUCTURED_FEE_FIELDS);
+  const expectedFields = /* @__PURE__ */ new Set([...MRV_STRUCTURED_FEE_FIELDS, "total_lyth"]);
   const actualFields = Object.keys(value);
   for (const field2 of MRV_STRUCTURED_FEE_FIELDS) {
     if (!(field2 in value)) failures.push(`${label} is missing '${field2}'`);
@@ -1485,7 +1484,7 @@ function checkStructuredFeeObject(value, expectedTotalLythoshi, failures, label 
   if (totalLythoshi !== void 0 && expectedTotalLythoshi !== void 0 && totalLythoshi !== expectedTotalLythoshi) {
     failures.push(`${label}.total_lythoshi must be ${expectedTotalLythoshi}`);
   }
-  const totalLyth = lythDecimalField(value, "total_lyth", failures, label);
+  const totalLyth = "total_lyth" in value ? lythDecimalField(value, "total_lyth", failures, label) : void 0;
   if (totalLyth !== void 0 && expectedTotal !== void 0) {
     const expectedTotalLyth = formatLyth(expectedTotal, { includeUnit: false });
     if (totalLyth !== expectedTotalLyth) {
