@@ -20,6 +20,7 @@ export const NO_EVM_COMPACT_INCLUSION_PROOF_SCHEMA =
   "mono.no_evm_receipt_compact_inclusion.v1";
 export const NO_EVM_COMPACT_INCLUSION_TREE_ALGORITHM = "binary-keccak-receipt-tree";
 export const NO_EVM_ARCHIVE_PROOF_SCHEMA = "mono.no_evm_receipt_archive_binding.v1";
+export const NO_EVM_ARCHIVE_SIGNATURE_SCHEME = "mono.snapshot.sig.v1";
 export const NO_EVM_FINALITY_EVIDENCE_SCHEMA = "mono.no_evm_receipt_finality.v1";
 export const NO_EVM_FINALITY_EVIDENCE_SOURCE = "blsRoundCertificate";
 
@@ -28,6 +29,7 @@ const LEAF_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPT_LEAF_DOMAIN);
 const NODE_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPT_NODE_DOMAIN);
 const UINT32_MAX = 0xffff_ffff;
 const HASH_BYTE_LENGTH = 32;
+const ARCHIVE_SIGNATURE_SIGNER_ID_BYTE_LENGTH = 20;
 const HEX_RE = /^[0-9a-fA-F]*$/u;
 
 export type NoEvmReceiptProofErrorCode =
@@ -42,6 +44,7 @@ export type NoEvmReceiptProofErrorCode =
   | "invalid_uint32"
   | "invalid_hex"
   | "invalid_hash_length"
+  | "invalid_archive_signature"
   | "invalid_proof_shape"
   | "missing_target_receipt_bytes"
   | "too_many_receipts"
@@ -374,6 +377,51 @@ function validateOptionalArchiveProof(proof: NoEvmReceiptProof): void {
     throw new NoEvmReceiptProofError(
       "invalid_proof_shape",
       "archiveProof.signatures must be an array of strings",
+    );
+  }
+  archiveProof.signatures.forEach((signature, index) =>
+    validateArchiveProofSignature(signature, index),
+  );
+}
+
+function validateArchiveProofSignature(signature: string, index: number): void {
+  const field = `archiveProof.signatures[${index}]`;
+  const parts = signature.split(":");
+  if (parts.length !== 3 || parts[0] !== NO_EVM_ARCHIVE_SIGNATURE_SCHEME) {
+    throw new NoEvmReceiptProofError(
+      "invalid_archive_signature",
+      `${field} must match ${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:0x<20-byte signer-id hex>:0x<non-empty payload hex>`,
+    );
+  }
+
+  const signerIdHex = parts[1]!;
+  const payloadHex = parts[2]!;
+  if (!signerIdHex.startsWith("0x")) {
+    throw new NoEvmReceiptProofError(
+      "invalid_archive_signature",
+      `${field}.signerId must be 0x-prefixed`,
+    );
+  }
+  if (!payloadHex.startsWith("0x")) {
+    throw new NoEvmReceiptProofError(
+      "invalid_archive_signature",
+      `${field}.payload must be 0x-prefixed`,
+    );
+  }
+
+  const signerId = decodeHexBytes(signerIdHex, `${field}.signerId`);
+  if (signerId.length !== ARCHIVE_SIGNATURE_SIGNER_ID_BYTE_LENGTH) {
+    throw new NoEvmReceiptProofError(
+      "invalid_archive_signature",
+      `${field}.signerId must be ${ARCHIVE_SIGNATURE_SIGNER_ID_BYTE_LENGTH} bytes, got ${signerId.length}`,
+    );
+  }
+
+  const payload = decodeHexBytes(payloadHex, `${field}.payload`);
+  if (payload.length === 0) {
+    throw new NoEvmReceiptProofError(
+      "invalid_archive_signature",
+      `${field}.payload must be non-empty`,
     );
   }
 }

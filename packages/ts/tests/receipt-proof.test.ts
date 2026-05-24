@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import {
+  NO_EVM_ARCHIVE_SIGNATURE_SCHEME,
   NO_EVM_RECEIPT_CODEC,
   NO_EVM_RECEIPT_PROOF_SCHEMA,
   NO_EVM_RECEIPT_PROOF_TYPE,
@@ -27,6 +28,9 @@ const RECEIPT_ROOT_EMPTY_DOMAIN = new TextEncoder().encode(
 );
 const RECEIPT_LEAF_DOMAIN = new TextEncoder().encode("monolythium/v4.1/receipt_leaf/1");
 const RECEIPT_NODE_DOMAIN = new TextEncoder().encode("monolythium/v4.1/receipt_node/1");
+const VALID_ARCHIVE_SIGNATURE = `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:0x${"12".repeat(
+  20,
+)}:0x${"ab".repeat(64)}`;
 
 function noEvmProof(): NoEvmReceiptProof {
   return {
@@ -75,6 +79,23 @@ function compactNoEvmProof(): NoEvmCompactReceiptProof {
     txIndex: 1,
     receiptCount: RECEIPTS.length,
     targetReceiptBytes: bytesToHex(RECEIPTS[1]!),
+  };
+}
+
+function compactNoEvmArchiveProof(signatures: string[] = []): NoEvmCompactReceiptProof {
+  return {
+    ...compactNoEvmProof(),
+    historySource: "indexerReceiptArchive",
+    archiveProof: {
+      schema: "mono.no_evm_receipt_archive_binding.v1",
+      source: "indexerReceiptArchiveContentDigest",
+      manifestHash: `0x${"53".repeat(32)}`,
+      contentHash: `0x${"54".repeat(32)}`,
+      signatures,
+    },
+    missingProofMaterial: [
+      "signed archive or snapshot manifest binding receipt bytes to blockHash and receiptsRoot",
+    ],
   };
 }
 
@@ -159,26 +180,52 @@ describe("no-EVM receipt proof helpers", () => {
   });
 
   it("verifies compact receipt proofs reconstructed from the indexer archive", () => {
-    const proof: NoEvmCompactReceiptProof = {
-      ...compactNoEvmProof(),
-      historySource: "indexerReceiptArchive",
-      archiveProof: {
-        schema: "mono.no_evm_receipt_archive_binding.v1",
-        source: "indexerReceiptArchiveContentDigest",
-        manifestHash: `0x${"53".repeat(32)}`,
-        contentHash: `0x${"54".repeat(32)}`,
-        signatures: [],
-      },
-      missingProofMaterial: [
-        "signed archive or snapshot manifest binding receipt bytes to blockHash and receiptsRoot",
-      ],
-    };
+    const proof = compactNoEvmArchiveProof();
 
     const verified = verifyNoEvmReceiptProof(proof);
 
     expect(verified?.proofKind).toBe("compactInclusion");
     expect(verified?.receiptsRoot).toBe(proof.receiptsRoot);
     expect(proof.archiveProof?.source).toBe("indexerReceiptArchiveContentDigest");
+  });
+
+  it("accepts compact archive proofs carrying snapshot signatures", () => {
+    const proof = compactNoEvmArchiveProof([VALID_ARCHIVE_SIGNATURE]);
+
+    const verified = verifyNoEvmReceiptProof(proof);
+
+    expect(verified?.proofKind).toBe("compactInclusion");
+    expect(proof.archiveProof?.signatures).toEqual([VALID_ARCHIVE_SIGNATURE]);
+  });
+
+  it("rejects malformed compact archive proof signatures", () => {
+    const malformedSignatures = [
+      "0x1234",
+      `mono.snapshot.sig.v2:0x${"12".repeat(20)}:0xab`,
+      `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:0x${"12".repeat(19)}:0xab`,
+      `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:0x${"12".repeat(21)}:0xab`,
+      `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:0X${"12".repeat(20)}:0xab`,
+      `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:0x${"12".repeat(20)}:0Xab`,
+      `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:0x${"12".repeat(20)}:0x`,
+      `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:0x${"12".repeat(20)}:0xabc`,
+      `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:0x${"12".repeat(20)}:0xab:extra`,
+    ];
+
+    for (const signature of malformedSignatures) {
+      expect(() => verifyNoEvmReceiptProof(compactNoEvmArchiveProof([signature]))).toThrow(
+        /archiveProof\.signatures\[0\]/u,
+      );
+    }
+
+    expect(() =>
+      verifyNoEvmReceiptProof({
+        ...compactNoEvmArchiveProof(),
+        archiveProof: {
+          ...compactNoEvmArchiveProof().archiveProof!,
+          signatures: [123] as unknown as string[],
+        },
+      }),
+    ).toThrow(/archiveProof\.signatures must be an array of strings/u);
   });
 
   it("accepts compact proofs carrying BLS finality evidence", () => {

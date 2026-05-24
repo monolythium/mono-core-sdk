@@ -4339,6 +4339,7 @@ var NO_EVM_RECEIPT_NODE_DOMAIN = "monolythium/v4.1/receipt_node/1";
 var NO_EVM_COMPACT_INCLUSION_PROOF_SCHEMA = "mono.no_evm_receipt_compact_inclusion.v1";
 var NO_EVM_COMPACT_INCLUSION_TREE_ALGORITHM = "binary-keccak-receipt-tree";
 var NO_EVM_ARCHIVE_PROOF_SCHEMA = "mono.no_evm_receipt_archive_binding.v1";
+var NO_EVM_ARCHIVE_SIGNATURE_SCHEME = "mono.snapshot.sig.v1";
 var NO_EVM_FINALITY_EVIDENCE_SCHEMA = "mono.no_evm_receipt_finality.v1";
 var NO_EVM_FINALITY_EVIDENCE_SOURCE = "blsRoundCertificate";
 var EMPTY_ROOT_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPTS_ROOT_DOMAIN);
@@ -4346,6 +4347,7 @@ var LEAF_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPT_LEAF_DOMAIN);
 var NODE_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPT_NODE_DOMAIN);
 var UINT32_MAX = 4294967295;
 var HASH_BYTE_LENGTH = 32;
+var ARCHIVE_SIGNATURE_SIGNER_ID_BYTE_LENGTH = 20;
 var HEX_RE = /^[0-9a-fA-F]*$/u;
 var NoEvmReceiptProofError = class extends Error {
   constructor(code, message) {
@@ -4618,6 +4620,47 @@ function validateOptionalArchiveProof(proof) {
     throw new NoEvmReceiptProofError(
       "invalid_proof_shape",
       "archiveProof.signatures must be an array of strings"
+    );
+  }
+  archiveProof.signatures.forEach(
+    (signature, index) => validateArchiveProofSignature(signature, index)
+  );
+}
+function validateArchiveProofSignature(signature, index) {
+  const field2 = `archiveProof.signatures[${index}]`;
+  const parts = signature.split(":");
+  if (parts.length !== 3 || parts[0] !== NO_EVM_ARCHIVE_SIGNATURE_SCHEME) {
+    throw new NoEvmReceiptProofError(
+      "invalid_archive_signature",
+      `${field2} must match ${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:0x<20-byte signer-id hex>:0x<non-empty payload hex>`
+    );
+  }
+  const signerIdHex = parts[1];
+  const payloadHex = parts[2];
+  if (!signerIdHex.startsWith("0x")) {
+    throw new NoEvmReceiptProofError(
+      "invalid_archive_signature",
+      `${field2}.signerId must be 0x-prefixed`
+    );
+  }
+  if (!payloadHex.startsWith("0x")) {
+    throw new NoEvmReceiptProofError(
+      "invalid_archive_signature",
+      `${field2}.payload must be 0x-prefixed`
+    );
+  }
+  const signerId = decodeHexBytes(signerIdHex, `${field2}.signerId`);
+  if (signerId.length !== ARCHIVE_SIGNATURE_SIGNER_ID_BYTE_LENGTH) {
+    throw new NoEvmReceiptProofError(
+      "invalid_archive_signature",
+      `${field2}.signerId must be ${ARCHIVE_SIGNATURE_SIGNER_ID_BYTE_LENGTH} bytes, got ${signerId.length}`
+    );
+  }
+  const payload = decodeHexBytes(payloadHex, `${field2}.payload`);
+  if (payload.length === 0) {
+    throw new NoEvmReceiptProofError(
+      "invalid_archive_signature",
+      `${field2}.payload must be non-empty`
     );
   }
 }
@@ -6503,6 +6546,7 @@ exports.NODE_REGISTRY_CAPABILITY_MASK = NODE_REGISTRY_CAPABILITY_MASK;
 exports.NODE_REGISTRY_PUBLIC_SERVICE_MASK = NODE_REGISTRY_PUBLIC_SERVICE_MASK;
 exports.NODE_REGISTRY_SELECTORS = NODE_REGISTRY_SELECTORS;
 exports.NO_EVM_ARCHIVE_PROOF_SCHEMA = NO_EVM_ARCHIVE_PROOF_SCHEMA;
+exports.NO_EVM_ARCHIVE_SIGNATURE_SCHEME = NO_EVM_ARCHIVE_SIGNATURE_SCHEME;
 exports.NO_EVM_FINALITY_EVIDENCE_SCHEMA = NO_EVM_FINALITY_EVIDENCE_SCHEMA;
 exports.NO_EVM_FINALITY_EVIDENCE_SOURCE = NO_EVM_FINALITY_EVIDENCE_SOURCE;
 exports.NO_EVM_RECEIPTS_ROOT_DOMAIN = NO_EVM_RECEIPTS_ROOT_DOMAIN;
