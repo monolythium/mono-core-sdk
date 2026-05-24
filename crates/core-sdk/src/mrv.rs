@@ -3872,7 +3872,7 @@ mod tests {
     fn native_receipt_fee_display_formats_default_surface() {
         let fee = NativeReceiptFee {
             total_lythoshi: "825000000000".to_owned(),
-            total_lyth: "8,250".to_owned(),
+            total_lyth: None,
             cycles_used: 47,
             base_price_per_cycle_lythoshi: "10000000000".to_owned(),
             state_io_units: 2,

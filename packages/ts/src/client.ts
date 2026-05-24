@@ -146,7 +146,7 @@ export interface NativeReceiptCounters {
 
 export interface NativeReceiptFee {
   total_lythoshi: string;
-  total_lyth: string;
+  total_lyth?: string;
   cycles_used: number;
   base_price_per_cycle_lythoshi: string;
   state_io_units: number;

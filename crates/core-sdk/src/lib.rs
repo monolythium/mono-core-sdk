@@ -95,11 +95,11 @@ pub use mrv::{
 };
 pub use native_dev::{
     check_native_devkit_compatibility, native_dev_ui_strings, resolve_studio_host_status,
-    NativeDevApprovalKind, NativeDevContractPassport, NativeDevMrcAllocation,
+    NativeDevApprovalKind, NativeDevCommandName, NativeDevContractPassport, NativeDevMrcAllocation,
     NativeDevMrcAssetKind, NativeDevMrcTokenPlan, NativeDevMrvDeployPlan, NativeDevRiskLabel,
-    NativeDevRiskSeverity, NativeDevVerificationArtifact, NativeDevVerificationBundle,
-    NativeDevVerificationFile, NativeDevWalletApprovalRequest, NativeDevkitArchive,
-    NativeDevkitChannel, NativeDevkitCompatibility, NativeDevkitManifest,
+    NativeDevRiskSeverity, NativeDevSidecarCommandResult, NativeDevVerificationArtifact,
+    NativeDevVerificationBundle, NativeDevVerificationFile, NativeDevWalletApprovalRequest,
+    NativeDevkitArchive, NativeDevkitChannel, NativeDevkitCompatibility, NativeDevkitManifest,
     NativeDevkitSidecarManifest, NativeDevkitSidecarStatus, NativeDevkitStatus, StudioHostState,
     StudioHostStatus, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION,
     NATIVE_DEV_MANIFEST_SCHEMA_VERSION,

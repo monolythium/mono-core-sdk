@@ -1247,9 +1247,9 @@ type NativeReceiptFee$1 = {
      */
     total_lythoshi: string;
     /**
-     * Total fee formatted as LYTH numeric text without the unit suffix.
+     * Optional total fee formatted as LYTH numeric text without the unit suffix.
      */
-    total_lyth: string;
+    total_lyth?: string;
     /**
      * Execution cycles charged by the receipt.
      */
@@ -2496,7 +2496,7 @@ interface NativeReceiptCounters {
 }
 interface NativeReceiptFee {
     total_lythoshi: string;
-    total_lyth: string;
+    total_lyth?: string;
     cycles_used: number;
     base_price_per_cycle_lythoshi: string;
     state_io_units: number;

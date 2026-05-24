@@ -83,7 +83,6 @@ function bridgeRoute(routeId: string): BridgeRouteDisclosure {
 function nativeFee(extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     total_lythoshi: "21000",
-    total_lyth: "0.00021",
     cycles_used: 21_000,
     base_price_per_cycle_lythoshi: "1",
     state_io_units: 0,
@@ -833,7 +832,6 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
       counters: { cycles: 44, syscallUnits: 3, stateIoUnits: 2 },
       fee: {
         total_lythoshi: "440000000000",
-        total_lyth: "4,400",
         cycles_used: 44,
         base_price_per_cycle_lythoshi: "10000000000",
         state_io_units: 2,
@@ -869,7 +867,7 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(receipt.noEvmProof).toBeUndefined();
     expect(receipt.counters).toEqual({ cycles: 44, syscallUnits: 3, stateIoUnits: 2 });
     expect(receipt.fee.total_lythoshi).toBe("440000000000");
-    expect(receipt.fee.total_lyth).toBe("4,400");
+    expect(receipt.fee.total_lyth).toBeUndefined();
     expect(receipt.fee.cycles_used).toBe(44);
     expect(receipt.fee.state_io_units).toBe(2);
     expect(receipt.nativeDeltaCount).toBe(0);
