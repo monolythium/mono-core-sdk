@@ -212,6 +212,7 @@ pub struct NativeReceiptCounters {
 
 /// Structured native fee object attached to a RISC-V/native receipt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
 #[cfg_attr(feature = "ts-bindings", ts(export, export_to = "NativeReceiptFee.ts"))]
 pub struct NativeReceiptFee {
@@ -5020,6 +5021,22 @@ mod tests {
     }
 
     #[test]
+    fn native_receipt_fee_rejects_legacy_fee_fields() {
+        let wire = serde_json::json!({
+            "total_lythoshi": "21000",
+            "total_lyth": "0.00021",
+            "cycles_used": 21_000,
+            "base_price_per_cycle_lythoshi": "1",
+            "state_io_units": 0,
+            "state_io_price_per_unit_lythoshi": "0",
+            "priority_tip_lythoshi": "0",
+            "maxFeePerGas": "1"
+        });
+
+        assert!(serde_json::from_value::<NativeReceiptFee>(wire).is_err());
+    }
+
+    #[test]
     fn native_receipt_response_accepts_missing_null_and_typed_no_evm_proof() {
         let mut wire = serde_json::json!({
             "txHash": format!("0x{}", "11".repeat(32)),
@@ -5351,6 +5368,44 @@ mod tests {
             }]
         });
         assert!(serde_json::from_value::<TxFeedResponse>(stale).is_err());
+    }
+
+    #[test]
+    fn tx_feed_response_rejects_legacy_keys_inside_structured_fee() {
+        let wire = serde_json::json!({
+            "schemaVersion": 1,
+            "latestHeight": 12,
+            "limit": 5,
+            "nextCursor": null,
+            "transactions": [{
+                "txHash": format!("0x{}", "11".repeat(32)),
+                "blockHash": format!("0x{}", "22".repeat(32)),
+                "blockNumber": 12,
+                "blockTimestamp": 1_700_000_000u64,
+                "txIndex": 0,
+                "from": "mono1sender",
+                "to": null,
+                "nonce": 1,
+                "value": "100000000",
+                "executionUnitLimit": 21_000,
+                "maxExecutionFeeLythoshi": "10000000000",
+                "priorityTipLythoshi": "1",
+                "fee": {
+                    "total_lythoshi": "21000",
+                    "total_lyth": "0.00021",
+                    "cycles_used": 21_000,
+                    "base_price_per_cycle_lythoshi": "1",
+                    "state_io_units": 0,
+                    "state_io_price_per_unit_lythoshi": "0",
+                    "priority_tip_lythoshi": "0",
+                    "gasPrice": "1"
+                },
+                "input": "0x",
+                "receipt": null
+            }]
+        });
+
+        assert!(serde_json::from_value::<TxFeedResponse>(wire).is_err());
     }
 
     #[test]
