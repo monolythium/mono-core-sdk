@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import {
   NODE_REGISTRY_CAPABILITIES,
+  NO_EVM_RECEIPT_ROOT_ALGORITHM,
   SERVICE_PROBE_STATUS,
   RpcClient,
   SdkError,
@@ -911,13 +912,23 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     });
   });
 
-  it("lyth_nativeReceipt preserves typed no-EVM receipt proof transcripts", async () => {
+  it("lyth_nativeReceipt preserves typed no-EVM compact receipt proofs", async () => {
     const txHash = `0x${"22".repeat(32)}`;
     const noEvmProof = {
       schema: "mono.no_evm_receipt_proof.v1",
-      proofType: "canonicalReceiptsTranscript",
-      rootAlgorithm:
-        "keccak256(monolythium/v2/receipts_root/1 || len || indexed bincode receipts)",
+      proofKind: "compactInclusion",
+      proofType: "canonicalReceiptInclusion",
+      historySource: "liveBlockCache",
+      compactInclusionProof: {
+        schema: "mono.no_evm_receipt_compact_inclusion.v1",
+        treeAlgorithm: "binary-keccak-receipt-tree",
+        root: `0x${"44".repeat(32)}`,
+        leafHash: `0x${"66".repeat(32)}`,
+        siblingHashes: [`0x${"77".repeat(32)}`],
+        pathSides: [true],
+      },
+      archiveProof: null,
+      rootAlgorithm: NO_EVM_RECEIPT_ROOT_ALGORITHM,
       receiptCodec: "bincode(protocore_evm::Receipt)",
       blockHash: `0x${"33".repeat(32)}`,
       txHash,
@@ -926,7 +937,7 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
       blockHeight: 100,
       txIndex: 0,
       receiptCount: 2,
-      receiptTranscript: ["0x010203", "0x040506"],
+      targetReceiptBytes: "0x010203",
     } satisfies NoEvmReceiptProof;
     const { fetch } = mockFetch({
       txHash,
@@ -961,8 +972,11 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
 
     const receipt = await client.lythNativeReceipt(txHash);
 
-    expect(receipt.noEvmProof).toEqual(noEvmProof);
-    expect(receipt.noEvmProof?.receiptTranscript).toEqual(["0x010203", "0x040506"]);
+    const proof = receipt.noEvmProof;
+    expect(proof).toEqual(noEvmProof);
+    expect(proof?.proofKind).toBe("compactInclusion");
+    if (proof?.proofKind !== "compactInclusion") throw new Error("expected compact proof");
+    expect(proof.targetReceiptBytes).toBe("0x010203");
   });
 
   it("lythNativeReceiptEvents consumes typed native events from lyth_nativeReceipt", async () => {
