@@ -172,7 +172,14 @@ export function createDeployPlan({ networkId, authorityAddress, artifact }) {
       title: "Review MRV deploy plan",
       summary: "Prepared by Mono DevKit. Wallet approval is required before signing.",
       riskLabels: [{ id: "wallet-approval", title: "Wallet approval required", severity: "info" }],
-      payload: { artifactHash: artifact.artifactHash, expectedContractAddress },
+      payload: {
+        artifactHash: artifact.artifactHash,
+        abiHash: artifact.abiHash,
+        expectedContractAddress,
+        valueLythoshi: "0",
+        executionUnitLimit: "1250000",
+        maxExecutionFeeLythoshi: "10000000",
+      },
     },
   };
 }

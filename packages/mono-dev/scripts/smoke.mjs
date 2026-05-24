@@ -12,7 +12,7 @@ run(["templates"]);
 run(["new", "Counter", "--template", "counter-example", "--out", temp]);
 run(["build", join(temp, "counter")]);
 run(["simulate", join(temp, "counter")]);
-run(["deploy-plan", join(temp, "counter")]);
+const deployPlan = JSON.parse(run(["deploy-plan", join(temp, "counter")]));
 run(["verify-bundle", join(temp, "counter")]);
 const sidecarMessages = run(["sidecar"], {
   input: `${JSON.stringify({
@@ -26,7 +26,7 @@ const sidecarMessages = run(["sidecar"], {
     kind: "request_preview_approval",
     protocolVersion: "mono.native-dev.ipc.v1",
     networkId: "local-dev",
-    authorityAddress: "mono1devkitpreview00000000000000",
+    authorityAddress: "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4",
   })}\n${JSON.stringify({
     direction: "host_to_sidecar",
     kind: "approval_result",
@@ -42,6 +42,10 @@ assert.equal(sidecarMessages[1].event, "opened");
 assert.equal(sidecarMessages[2].kind, "approval_request");
 assert.equal(sidecarMessages[2].request.kind, "mrv_deploy");
 assert.equal(sidecarMessages[2].request.networkId, "local-dev");
+assert.equal(sidecarMessages[2].request.payload.artifactHash, deployPlan.artifactHash);
+assert.equal(sidecarMessages[2].request.payload.abiHash, deployPlan.abiHash);
+assert.equal(sidecarMessages[2].request.payload.expectedContractAddress, deployPlan.expectedContractAddress);
+assert.notEqual(sidecarMessages[2].request.payload.artifactHash, "0".repeat(64));
 assert.equal(sidecarMessages[3].kind, "project_event");
 assert.equal(sidecarMessages[3].event, "simulation_finished");
 
