@@ -292,9 +292,9 @@ impl RpcClient {
         self.call("eth_sendRawTransaction", json!([raw_tx])).await
     }
 
-    /// `eth_call` — dry-run a transaction, returning the EVM RETURN
-    /// data as `0x`-hex. Reverts surface as
-    /// [`SdkError::Rpc`].
+    /// `eth_call` — legacy compatibility dry-run. No-EVM v4.1 profiles may
+    /// reject this method server-side; prefer native `lyth_*` previews or the
+    /// local MRV harness for current app flows.
     pub async fn eth_call(
         &self,
         request: &CallRequest,
@@ -304,7 +304,9 @@ impl RpcClient {
             .await
     }
 
-    /// `eth_estimateGas` — gas estimate for a dry-run.
+    /// `eth_estimateGas` — legacy compatibility estimate. No-EVM v4.1 profiles
+    /// may reject this method server-side; prefer native execution-unit
+    /// estimates.
     pub async fn eth_estimate_gas(
         &self,
         request: &CallRequest,
@@ -316,7 +318,8 @@ impl RpcClient {
         parse_quantity_u64(&hex)
     }
 
-    /// `eth_gasPrice` — minimum gas price the node will accept.
+    /// `eth_gasPrice` — legacy compatibility fee quote. New v4.1 surfaces
+    /// should use native execution-unit price terminology.
     pub async fn eth_gas_price(&self) -> Result<u64, SdkError> {
         let hex: String = self.call("eth_gasPrice", json!([])).await?;
         parse_quantity_u64(&hex)
@@ -1263,14 +1266,14 @@ impl RpcClient {
     // When the namespace is disabled, every call surfaces as
     // [`SdkError::Rpc`] with the server's `MethodDisabled` code.
 
-    /// `debug_traceTransaction` — revm trace for a confirmed tx
-    /// (server-side gated; not yet wired in v0.0.x).
+    /// `debug_traceTransaction` — legacy compatibility trace for a confirmed
+    /// tx (server-side gated; unavailable on no-EVM profiles).
     pub async fn debug_trace_transaction(&self, tx_hash: &str) -> Result<Value, SdkError> {
         self.call("debug_traceTransaction", json!([tx_hash])).await
     }
 
-    /// `debug_traceCall` — revm trace for a dry-run call (server-side
-    /// gated; not yet wired in v0.0.x).
+    /// `debug_traceCall` — legacy compatibility trace for a dry-run call
+    /// (server-side gated; unavailable on no-EVM profiles).
     pub async fn debug_trace_call(
         &self,
         request: &CallRequest,
@@ -1280,8 +1283,8 @@ impl RpcClient {
             .await
     }
 
-    /// `debug_traceBlockByNumber` — revm traces for an entire block
-    /// (server-side gated; not yet wired in v0.0.x).
+    /// `debug_traceBlockByNumber` — legacy compatibility traces for an entire
+    /// block (server-side gated; unavailable on no-EVM profiles).
     pub async fn debug_trace_block_by_number(
         &self,
         block: BlockSelector,

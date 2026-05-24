@@ -1,12 +1,12 @@
 /**
  * Network identity for the ethers.js compat shim.
  *
- * Per whitepaper v4.0, Monolythium testnet `chain_id` is **`69420`**.
+ * Monolythium testnet `chain_id` is **`69420`**.
  * Mainnet chain id is reserved for the genesis ceremony and not yet
  * exported.
  */
 
-/** Monolythium v4.0 testnet chain id. */
+/** Monolythium v4.1 testnet chain id. */
 export const MONOLYTHIUM_TESTNET_CHAIN_ID = 69420n;
 
 /** Network name surfaced to ethers `Network` instances. */

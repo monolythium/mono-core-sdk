@@ -36,14 +36,15 @@ pub fn burn_addr_hex() -> String {
     out
 }
 
-/// SDK-exposed precompile address map (whitepaper v4.0).
+/// SDK-exposed native/precompile address map for the current v4.1 surface.
 ///
 /// These values are sourced from `mono-core` runtime/precompile
 /// constants and pinned here so wallets, explorers, and apps do not
 /// hand-roll address literals.
 ///
 /// `0x1002` and `0x1006` are intentionally absent from the SDK surface
-/// because whitepaper v4.0 does not define those application surfaces.
+/// because the current v4.1 launch surface does not define those application
+/// modules.
 pub mod precompile_addresses {
     /// Native fungible-token factory — non-gateable, foundational.
     pub const TOKEN_FACTORY: [u8; 20] = address([0x10, 0x00]);
@@ -208,8 +209,8 @@ mod tests {
 
     #[test]
     fn unwired_slots_are_not_exposed() {
-        // Whitepaper v4.0 does not define application surfaces at 0x1002
-        // or 0x1006, so the SDK must not advertise them.
+        // The current v4.1 launch surface does not define application modules
+        // at 0x1002 or 0x1006, so the SDK must not advertise them.
         let unwired_1002 = expected_addr(0x1002);
         let unwired_1006 = expected_addr(0x1006);
         for &(_, addr) in precompile_addresses::ALL {

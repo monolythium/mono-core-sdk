@@ -13,11 +13,10 @@
  * future SDK-side feature (auth headers, ws upgrade, registry-based
  * routing) lights up for ethers callers automatically.
  *
- * **SDK-only compat.** Per `feedback_no_ethereum_wire_retrofit.md`,
- * this shim never alters the chain's wire — it only wraps the chain's
- * existing `eth_*` namespace in ethers' interface so existing
- * Solidity tooling (Hardhat, Foundry, ethers-based dApps) can target
- * Monolythium without code rewrites.
+ * **SDK-only compat.** This shim never alters the chain's wire. It wraps
+ * compatibility JSON-RPC methods in ethers' interface for migration scripts;
+ * current v4.1 app paths should use native MRV/RISC-V builders and `lyth_*`
+ * read surfaces.
  */
 
 import {
@@ -39,7 +38,7 @@ import {
 export interface MonolythiumProviderOptions extends RpcClientOptions {
   /**
    * Override the chain id / network name surfaced to ethers. Defaults
-   * to the Monolythium v4.0 testnet preset (`chain_id` `69420`, name
+   * to the Monolythium v4.1 testnet preset (`chain_id` `69420`, name
    * `monolythium-testnet`).
    */
   network?: MonolythiumNetworkConfig;
@@ -58,10 +57,10 @@ export interface MonolythiumProviderOptions extends RpcClientOptions {
  * const block = await provider.getBlockNumber();
  * ```
  *
- * Anything ethers normally does — `getBlockNumber`, `getBalance`,
- * `getTransactionReceipt`, `call`, `estimateGas`, `broadcastTransaction`
- * — flows through `RpcClient.call` (which already handles JSON-RPC
- * error envelopes via `SdkError`).
+   * Legacy ethers actions such as `getBlockNumber`, `getBalance`,
+   * `getTransactionReceipt`, `call`, `estimateGas`, and
+   * `broadcastTransaction` flow through `RpcClient.call`, so no-EVM profiles
+   * may reject unsupported compatibility methods server-side.
  */
 export class MonolythiumProvider extends JsonRpcApiProvider {
   /** Underlying SDK client. Exposed for callers that want native types. */

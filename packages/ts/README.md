@@ -1,6 +1,6 @@
 # @monolythium/core-sdk
 
-Official TypeScript SDK for [Monolythium v4.0](https://monolythium.com) (LythiumDAG-BFT).
+Official TypeScript SDK for [Monolythium v4.1](https://monolythium.com) (LythiumDAG-BFT).
 
 ## Install
 
@@ -29,9 +29,10 @@ const markets = await client.lythClobMarkets(25);
 console.log(decoded.status, holders.holders.length, txs.transactions.length, markets.markets.length);
 ```
 
-The client wraps every JSON-RPC method served by a Monolythium node — the
-EVM-compatible `eth_*` / `net_*` / `web3_*` surface and the chain-native
-`lyth_*` and `debug_*` namespaces, including live explorer helpers such as
+The client wraps the Monolythium node JSON-RPC surface: current chain-native
+`lyth_*` methods, passive compatibility `eth_*` / `net_*` / `web3_*` reads, and
+server-gated debug methods. The no-EVM v4.1 path should use native helpers such
+as
 `lyth_decodeTx`, `lyth_gapRecords`, `lyth_dagParents`, `lyth_richList`,
 `lyth_txFeed`, `lyth_addressProfile`, `lyth_addressFlow`, `lyth_search`,
 `lyth_chainStats`, `lyth_clobMarkets`, `lyth_clobTrades`, `lyth_clobOhlc`,
@@ -232,14 +233,16 @@ const backend = pqm1MnemonicToMlDsa65Backend(mnemonic);
 const signature = backend.sign(new Uint8Array([1, 2, 3]));
 ```
 
-### ethers.js v6 compat
+### Legacy ethers.js v6 compat
 
-The package also ships an ethers v6 compat shim — a `MonolythiumProvider`
-and `MonolythiumSigner` that drop in wherever ethers' `Provider` and
-`Signer` are expected. `ethers` is a peer dependency.
+The package still ships an ethers v6 compat shim for legacy migration tooling:
+a `MonolythiumProvider` and `MonolythiumSigner` that drop in wherever ethers'
+`Provider` and `Signer` are expected. It is not the v4.1 no-EVM deployment path;
+new app work should use the MRV/RISC-V builders and `lyth_*` read surfaces.
+`ethers` is a peer dependency for this compatibility path.
 
 ```ts
-import { Wallet, ContractFactory } from "ethers";
+import { Wallet } from "ethers";
 import {
   MonolythiumProvider,
   MonolythiumSigner,
@@ -249,9 +252,8 @@ const provider = new MonolythiumProvider("https://rpc.testnet.monolythium.com");
 const wallet = new Wallet(process.env.PRIVATE_KEY!);
 const signer = MonolythiumSigner.fromEthersWallet(wallet, provider);
 
-const factory = new ContractFactory(abi, bytecode, signer);
-const contract = await factory.deploy();
-await contract.waitForDeployment();
+// Legacy-only adapter setup. Do not use this path for new v4.1 MRV deployments.
+console.log(await signer.getAddress());
 ```
 
 For non-secp256k1 signing sources (OS keychain, hardware wallet, future

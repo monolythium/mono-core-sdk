@@ -1,9 +1,11 @@
-//! Official Rust SDK for Monolythium v4.0 / LythiumDAG-BFT.
+//! Official Rust SDK for Monolythium v4.1 / LythiumDAG-BFT.
 //!
 //! This crate provides a typed [`RpcClient`] that wraps the JSON-RPC
-//! surface served by a `mono-core` node — both the EVM-compatible
-//! `eth_*` / `net_*` / `web3_*` methods and the chain-native
-//! `lyth_*` / `debug_*` methods (per Law §13.2).
+//! surface served by a `mono-core` node: current chain-native `lyth_*`
+//! methods, passive compatibility `eth_*` / `net_*` / `web3_*` reads, and
+//! server-gated legacy/debug methods. New v4.1 app paths should prefer the
+//! native MRV/RISC-V helpers and `lyth_*` surfaces over compatibility
+//! simulation or deployment methods.
 //!
 //! # Example
 //!

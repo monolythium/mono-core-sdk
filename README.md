@@ -1,11 +1,12 @@
 # mono-core-sdk
 
-Official Rust and TypeScript SDK for Monolythium v4.0 / LythiumDAG-BFT.
+Official Rust and TypeScript SDK for Monolythium v4.1 / LythiumDAG-BFT.
 
 This repository is the application boundary for code that should not have to
 know `mono-core` internals. It provides typed JSON-RPC clients, canonical chain
-constants, address-display helpers, precompile calldata builders, and an
-ethers.js v6 compatibility shim for existing Solidity tooling.
+constants, address-display helpers, native MRV/RISC-V helpers, precompile
+calldata builders, and a legacy ethers.js v6 compatibility shim for migration
+tooling.
 
 ## Packages
 
@@ -19,8 +20,8 @@ The SDK tracks the live `mono-core` RPC and precompile surface. Wire types under
 
 ## What Ships
 
-- Typed `RpcClient` wrappers for `eth_*`, `net_*`, `web3_*`, `lyth_*`, and
-  gated `debug_*` methods.
+- Typed `RpcClient` wrappers for current `lyth_*` native methods, passive
+  `eth_*`/`net_*`/`web3_*` reads, and gated legacy compatibility/debug methods.
 - Live explorer RPC helpers for decoded transactions, global transaction feeds,
   address profiles/flows, exact search, chain stats, gap records, DAG parents,
   rich lists, and CLOB markets/trades/OHLC/order books.
@@ -40,7 +41,8 @@ The SDK tracks the live `mono-core` RPC and precompile surface. Wire types under
 - Bridge route disclosure helpers for deterministic route selection plus an
   explicit quote/submit readiness boundary. Live bridge quote and submit remain
   blocked until `mono-core` exposes API/runtime primitives for them.
-- TypeScript ethers v6 provider/signer adapters.
+- Legacy TypeScript ethers v6 provider/signer adapters for migration tooling;
+  v4.1 app paths should prefer the native MRV/RISC-V and `lyth_*` helpers.
 - TypeScript PQM-1 + ML-DSA-65 helpers for mnemonic payloads, deterministic
   seed derivation, address derivation, and signing backends.
 
@@ -58,7 +60,7 @@ TypeScript:
 pnpm add @monolythium/core-sdk
 ```
 
-For ethers compatibility:
+For legacy ethers compatibility:
 
 ```bash
 pnpm add @monolythium/core-sdk ethers
@@ -187,9 +189,9 @@ println!("latest block {}", latest.data.block.height);
 
 ## Address Display
 
-Monolythium addresses are 20-byte EVM-compatible values on the JSON-RPC wire.
-Wallets, explorers, and user-facing apps should display them as `mono1...`
-bech32m.
+Monolythium accounts remain 20-byte identifiers on the JSON-RPC wire for
+compatibility. Wallets, explorers, and user-facing apps should display them as
+`mono1...` bech32m.
 
 TypeScript:
 
@@ -315,7 +317,8 @@ const calldata = encodeRegisterPubkeyCalldata(mlDsa65Pubkey);
 // send a transaction to PRECOMPILE_ADDRESSES.PUBKEY_REGISTRY with `calldata`
 
 const lookup = encodeLookupPubkeyCalldata("0x123456789abcdef0112233445566778899aabbcc");
-// eth_call to PUBKEY_REGISTRY, then:
+// query PUBKEY_REGISTRY through the supported read surface for your target
+// network, then:
 const decoded = decodeLookupPubkeyReturn(returnData);
 ```
 
@@ -373,23 +376,24 @@ when the sub-account pubkey has not been registered yet.
 The spending-policy precompile is also milestone-gated and typed-reverts before
 activation.
 
-## Ethers.js Compatibility
+## Legacy Ethers.js Compatibility
 
-The TypeScript package ships an ethers v6 shim so existing Solidity tooling can
-target Monolythium by swapping provider/signer instances. This is SDK-level
-compatibility only; the chain keeps its native transaction and hash semantics.
+The TypeScript package still ships an ethers v6 shim for legacy migration
+tooling. It is not the v4.1 no-EVM deployment path; current app work should use
+native MRV/RISC-V builders and `lyth_*` read surfaces. The shim is SDK-level
+compatibility only, and production no-EVM profiles may reject legacy simulation
+or deployment RPC methods server-side.
 
 ```ts
-import { Wallet, ContractFactory } from "ethers";
+import { Wallet } from "ethers";
 import { MonolythiumProvider, MonolythiumSigner } from "@monolythium/core-sdk";
 
 const provider = new MonolythiumProvider("https://rpc.testnet.monolythium.com");
 const wallet = new Wallet(process.env.PRIVATE_KEY!);
 const signer = MonolythiumSigner.fromEthersWallet(wallet, provider);
 
-const factory = new ContractFactory(abi, bytecode, signer);
-const contract = await factory.deploy();
-await contract.waitForDeployment();
+// Legacy-only adapter setup. Do not use this path for new v4.1 MRV deployments.
+console.log(await signer.getAddress());
 ```
 
 For non-secp256k1 signing sources, implement `MonolythiumSignerBackend` and pass
