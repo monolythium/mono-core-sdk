@@ -4338,6 +4338,7 @@ var NO_EVM_RECEIPT_LEAF_DOMAIN = "monolythium/v4.1/receipt_leaf/1";
 var NO_EVM_RECEIPT_NODE_DOMAIN = "monolythium/v4.1/receipt_node/1";
 var NO_EVM_COMPACT_INCLUSION_PROOF_SCHEMA = "mono.no_evm_receipt_compact_inclusion.v1";
 var NO_EVM_COMPACT_INCLUSION_TREE_ALGORITHM = "binary-keccak-receipt-tree";
+var NO_EVM_ARCHIVE_PROOF_SCHEMA = "mono.no_evm_receipt_archive_binding.v1";
 var EMPTY_ROOT_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPTS_ROOT_DOMAIN);
 var LEAF_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPT_LEAF_DOMAIN);
 var NODE_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPT_NODE_DOMAIN);
@@ -4445,6 +4446,7 @@ function verifyCompactReceiptProof(proof) {
     "unsupported_proof_type"
   );
   validateCompactHistorySource(proof);
+  validateOptionalArchiveProof(proof);
   assertUint32(proof.receiptCount, "receiptCount");
   assertUint32(proof.txIndex, "txIndex");
   const compactProof = getCompactInclusionProof(proof);
@@ -4583,6 +4585,36 @@ function validateNoCompactOrArchiveMaterial(proof) {
     throw new NoEvmReceiptProofError(
       "invalid_proof_shape",
       "boundedCacheTranscript proof cannot carry archiveProof"
+    );
+  }
+}
+function validateOptionalArchiveProof(proof) {
+  const archiveProof = proof.archiveProof;
+  if (archiveProof == null) return;
+  if (!isRecord3(archiveProof)) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "archiveProof must be an object when present"
+    );
+  }
+  assertSupported(
+    archiveProof.schema,
+    NO_EVM_ARCHIVE_PROOF_SCHEMA,
+    "archiveProof.schema",
+    "unsupported_schema"
+  );
+  if (typeof archiveProof.source !== "string" || archiveProof.source.length === 0) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "archiveProof.source must be a non-empty string"
+    );
+  }
+  decodeHash(archiveProof.manifestHash, "archiveProof.manifestHash");
+  decodeHash(archiveProof.contentHash, "archiveProof.contentHash");
+  if (!Array.isArray(archiveProof.signatures) || archiveProof.signatures.some((signature) => typeof signature !== "string")) {
+    throw new NoEvmReceiptProofError(
+      "invalid_proof_shape",
+      "archiveProof.signatures must be an array of strings"
     );
   }
 }
@@ -6399,6 +6431,7 @@ exports.NODE_REGISTRY_CAPABILITIES = NODE_REGISTRY_CAPABILITIES;
 exports.NODE_REGISTRY_CAPABILITY_MASK = NODE_REGISTRY_CAPABILITY_MASK;
 exports.NODE_REGISTRY_PUBLIC_SERVICE_MASK = NODE_REGISTRY_PUBLIC_SERVICE_MASK;
 exports.NODE_REGISTRY_SELECTORS = NODE_REGISTRY_SELECTORS;
+exports.NO_EVM_ARCHIVE_PROOF_SCHEMA = NO_EVM_ARCHIVE_PROOF_SCHEMA;
 exports.NO_EVM_RECEIPTS_ROOT_DOMAIN = NO_EVM_RECEIPTS_ROOT_DOMAIN;
 exports.NO_EVM_RECEIPT_CODEC = NO_EVM_RECEIPT_CODEC;
 exports.NO_EVM_RECEIPT_PROOF_SCHEMA = NO_EVM_RECEIPT_PROOF_SCHEMA;

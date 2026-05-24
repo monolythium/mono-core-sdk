@@ -162,6 +162,13 @@ describe("no-EVM receipt proof helpers", () => {
     const proof: NoEvmCompactReceiptProof = {
       ...compactNoEvmProof(),
       historySource: "indexerReceiptArchive",
+      archiveProof: {
+        schema: "mono.no_evm_receipt_archive_binding.v1",
+        source: "indexerReceiptArchiveContentDigest",
+        manifestHash: `0x${"53".repeat(32)}`,
+        contentHash: `0x${"54".repeat(32)}`,
+        signatures: [],
+      },
       missingProofMaterial: [
         "signed archive or snapshot manifest binding receipt bytes to blockHash and receiptsRoot",
       ],
@@ -171,6 +178,7 @@ describe("no-EVM receipt proof helpers", () => {
 
     expect(verified?.proofKind).toBe("compactInclusion");
     expect(verified?.receiptsRoot).toBe(proof.receiptsRoot);
+    expect(proof.archiveProof?.source).toBe("indexerReceiptArchiveContentDigest");
   });
 
   it("rejects compact proofs with tampered target bytes", () => {
