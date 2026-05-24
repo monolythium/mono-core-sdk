@@ -5493,14 +5493,14 @@ function resolveStudioHostStatus(args) {
   };
 }
 function assertNativeDevWalletApprovalRequest(request) {
-  typedBech32ToAddress(request.from, "user");
+  typedBech32ToAddress(request.authorityAddress, "user");
   if (!request.id.trim()) throw new Error("approval request id is required");
-  if (!request.chainId.trim()) throw new Error("approval request chain id is required");
+  if (!request.networkId.trim()) throw new Error("approval request network id is required");
   if (!request.title.trim()) throw new Error("approval request title is required");
   if (!request.summary.trim()) throw new Error("approval request summary is required");
 }
 function assertNativeDevMrvDeployPlan(plan) {
-  typedBech32ToAddress(plan.from, "user");
+  typedBech32ToAddress(plan.authorityAddress, "user");
   typedBech32ToAddress(plan.expectedContractAddress, "contract");
   assertHash("artifactHash", plan.artifactHash);
   assertHash("abiHash", plan.abiHash);
@@ -5537,6 +5537,49 @@ function nativeDevUiStrings() {
     "ABI manifest",
     "Token passport",
     "Verification bundle"
+  ];
+}
+function nativeDevSchemaFieldNames() {
+  return [
+    "schemaVersion",
+    "devkitVersion",
+    "channel",
+    "minimumWalletHostApi",
+    "maximumWalletHostApi",
+    "monoCoreCommit",
+    "monoCoreSdkCommit",
+    "archive",
+    "sidecar",
+    "releaseNotesUrl",
+    "installedVersion",
+    "hostApiVersion",
+    "installPath",
+    "sidecarStatus",
+    "compatibility",
+    "developerModeEnabled",
+    "selectedProjectRoot",
+    "activeNetwork",
+    "networkId",
+    "readOnlyWalletAddress",
+    "requestId",
+    "approved",
+    "authorityAddress",
+    "expectedContractAddress",
+    "artifactHash",
+    "abiHash",
+    "valueLythoshi",
+    "executionUnitLimit",
+    "maxExecutionFeeLythoshi",
+    "constructorInput",
+    "walletApprovalRequest",
+    "issuerAddress",
+    "initialAllocations",
+    "bundleHash",
+    "contractPassport",
+    "sourceBundleHash",
+    "compilerVersion",
+    "sdkVersion",
+    "verificationStatus"
   ];
 }
 function nativeDevkitStatusMessage(compatibility, installPath) {
@@ -7400,6 +7443,7 @@ exports.mrvBech32ToAddress = mrvBech32ToAddress;
 exports.mrvCodeHashHex = mrvCodeHashHex;
 exports.mrvV1TransactionExtension = mrvV1TransactionExtension;
 exports.nativeAgentStateFilterParams = nativeAgentStateFilterParams;
+exports.nativeDevSchemaFieldNames = nativeDevSchemaFieldNames;
 exports.nativeDevUiStrings = nativeDevUiStrings;
 exports.nativeEventMatches = nativeEventMatches;
 exports.nativeEventsFilterParams = nativeEventsFilterParams;

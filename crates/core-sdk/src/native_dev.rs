@@ -130,8 +130,8 @@ pub struct NativeDevWalletApprovalRequest {
     pub kind: NativeDevApprovalKind,
     pub created_at: String,
     pub origin: String,
-    pub chain_id: String,
-    pub from: String,
+    pub network_id: String,
+    pub authority_address: String,
     pub title: String,
     pub summary: String,
     pub risk_labels: Vec<NativeDevRiskLabel>,
@@ -140,8 +140,8 @@ pub struct NativeDevWalletApprovalRequest {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NativeDevMrvDeployPlan {
-    pub chain_id: String,
-    pub from: String,
+    pub network_id: String,
+    pub authority_address: String,
     pub expected_contract_address: String,
     pub artifact_hash: String,
     pub abi_hash: String,
@@ -308,6 +308,51 @@ pub fn native_dev_ui_strings() -> &'static [&'static str] {
     ]
 }
 
+#[must_use]
+pub fn native_dev_schema_field_names() -> &'static [&'static str] {
+    &[
+        "schema_version",
+        "devkit_version",
+        "channel",
+        "minimum_wallet_host_api",
+        "maximum_wallet_host_api",
+        "mono_core_commit",
+        "mono_core_sdk_commit",
+        "archive",
+        "sidecar",
+        "release_notes_url",
+        "installed_version",
+        "host_api_version",
+        "install_path",
+        "sidecar_status",
+        "compatibility",
+        "developer_mode_enabled",
+        "selected_project_root",
+        "active_network",
+        "network_id",
+        "read_only_wallet_address",
+        "request_id",
+        "approved",
+        "authority_address",
+        "expected_contract_address",
+        "artifact_hash",
+        "abi_hash",
+        "value_lythoshi",
+        "execution_unit_limit",
+        "max_execution_fee_lythoshi",
+        "constructor_input",
+        "wallet_approval_request",
+        "issuer_address",
+        "initial_allocations",
+        "bundle_hash",
+        "contract_passport",
+        "source_bundle_hash",
+        "compiler_version",
+        "sdk_version",
+        "verification_status",
+    ]
+}
+
 fn native_devkit_status_message(
     compatibility: NativeDevkitCompatibility,
     install_path: Option<&str>,
@@ -407,8 +452,21 @@ mod tests {
             String::from("eth") + "_",
         ];
         let ui = native_dev_ui_strings().join("\n");
+        let schema_fields = native_dev_schema_field_names().join("\n");
         for term in blocked {
             assert!(!ui.contains(&term), "native dev UI string contains {term}");
+            assert!(
+                !schema_fields.contains(&term),
+                "native dev schema field contains {term}"
+            );
         }
+        assert!(
+            !native_dev_schema_field_names().contains(&"from"),
+            "native dev schema exposes from"
+        );
+        assert!(
+            !native_dev_schema_field_names().contains(&"chain_id"),
+            "native dev schema exposes chain_id"
+        );
     }
 }
