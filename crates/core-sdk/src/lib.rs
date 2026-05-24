@@ -104,9 +104,10 @@ pub use types::{
     NativeAgentStateResponseFilters, NativeAgentStateSource, NativeCollectionRoyaltyStateRecord,
     NativeDecodedEvent, NativeEventProjection, NativeMarketStateFilter, NativeMarketStateResponse,
     NativeMarketStateResponseFilters, NativeMarketStateSource, NativeNftListingStateRecord,
-    NativeSpotMarketStateRecord, NativeSpotOrderStateRecord, NoEvmReceiptFinalityCertificate,
-    NoEvmReceiptFinalityEvidence, NoEvmReceiptProof, NoEvmReceiptProofError,
-    NoEvmReceiptProofVerification, NATIVE_MARKET_EVENT_FAMILY, NO_EVM_RECEIPT_CODEC,
+    NativeSpotMarketStateRecord, NativeSpotOrderStateRecord, NoEvmArchiveProof,
+    NoEvmReceiptFinalityCertificate, NoEvmReceiptFinalityEvidence, NoEvmReceiptProof,
+    NoEvmReceiptProofError, NoEvmReceiptProofVerification, NATIVE_MARKET_EVENT_FAMILY,
+    NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_RECEIPT_CODEC,
     NO_EVM_RECEIPT_FINALITY_EVIDENCE_SCHEMA, NO_EVM_RECEIPT_FINALITY_EVIDENCE_SOURCE,
     NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM,
 };

@@ -294,6 +294,22 @@ pub struct NoEvmReceiptFinalityEvidence {
     pub certificate: NoEvmReceiptFinalityCertificate,
 }
 
+/// Optional archive binding material attached to a no-EVM receipt proof.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoEvmArchiveProof {
+    /// Archive binding schema identifier.
+    pub schema: String,
+    /// Archive content-digest source label.
+    pub source: String,
+    /// Snapshot/archive manifest hash.
+    pub manifest_hash: Hash,
+    /// Snapshot/archive content hash.
+    pub content_hash: Hash,
+    /// Core-emitted snapshot signature strings.
+    pub signatures: Vec<String>,
+}
+
 /// Bounded no-EVM receipt transcript attached to a native receipt.
 ///
 /// This is a local transcript of full receipt bytes, not a compact finality
@@ -323,6 +339,9 @@ pub struct NoEvmReceiptProof {
     pub tx_index: u32,
     /// Number of receipts carried by the transcript.
     pub receipt_count: u32,
+    /// Optional archive binding material.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archive_proof: Option<NoEvmArchiveProof>,
     /// Optional BLS finality evidence for the block round.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finality_evidence: Option<NoEvmReceiptFinalityEvidence>,
@@ -342,6 +361,12 @@ pub const NO_EVM_RECEIPT_ROOT_ALGORITHM: &str =
 
 /// Current receipt byte codec label used inside no-EVM receipt transcripts.
 pub const NO_EVM_RECEIPT_CODEC: &str = "bincode(protocore_evm::Receipt)";
+
+/// Current no-EVM archive binding proof schema.
+pub const NO_EVM_ARCHIVE_PROOF_SCHEMA: &str = "mono.no_evm_receipt_archive_binding.v1";
+
+/// Current core-emitted snapshot archive signature scheme.
+pub const NO_EVM_ARCHIVE_SIGNATURE_SCHEME: &str = "mono.snapshot.sig.v1";
 
 /// Current no-EVM receipt finality evidence schema.
 pub const NO_EVM_RECEIPT_FINALITY_EVIDENCE_SCHEMA: &str = "mono.no_evm_receipt_finality.v1";
@@ -389,6 +414,9 @@ pub enum NoEvmReceiptProofError {
     /// Receipt codec is not supported by these helpers.
     #[error("unsupported no-EVM receipt codec `{actual}`")]
     UnsupportedReceiptCodec { actual: String },
+    /// Archive binding schema is not supported by these helpers.
+    #[error("unsupported no-EVM receipt archive proof schema `{actual}`")]
+    UnsupportedArchiveProofSchema { actual: String },
     /// A `0x` byte field is malformed.
     #[error("{field} must be 0x-prefixed even-length hex")]
     InvalidHex { field: String },
@@ -399,6 +427,12 @@ pub enum NoEvmReceiptProofError {
         expected: usize,
         actual: usize,
     },
+    /// An archive proof signature string does not match the supported envelope.
+    #[error("{field} must match mono.snapshot.sig.v1:0x<20-byte signer-id hex>:0x<non-empty payload hex>")]
+    InvalidArchiveSignatureFormat { field: String },
+    /// An archive proof signature payload is empty.
+    #[error("{field} must be non-empty")]
+    EmptyArchiveSignaturePayload { field: String },
     /// The transcript length cannot be encoded by the runtime root algorithm.
     #[error("receiptTranscript has {actual} receipts, exceeding u32::MAX")]
     TooManyReceipts { actual: usize },
@@ -579,9 +613,71 @@ fn validate_no_evm_receipt_proof_metadata(
             actual: proof.receipt_codec.clone(),
         });
     }
+    if let Some(archive_proof) = &proof.archive_proof {
+        validate_no_evm_archive_proof(archive_proof)?;
+    }
     if let Some(finality) = &proof.finality_evidence {
         validate_no_evm_receipt_finality_evidence(finality)?;
     }
+    Ok(())
+}
+
+fn validate_no_evm_archive_proof(
+    archive_proof: &NoEvmArchiveProof,
+) -> Result<(), NoEvmReceiptProofError> {
+    if archive_proof.schema != NO_EVM_ARCHIVE_PROOF_SCHEMA {
+        return Err(NoEvmReceiptProofError::UnsupportedArchiveProofSchema {
+            actual: archive_proof.schema.clone(),
+        });
+    }
+    decode_no_evm_hash("archiveProof.manifestHash", &archive_proof.manifest_hash)?;
+    decode_no_evm_hash("archiveProof.contentHash", &archive_proof.content_hash)?;
+    for (index, signature) in archive_proof.signatures.iter().enumerate() {
+        validate_no_evm_archive_signature(index, signature)?;
+    }
+    Ok(())
+}
+
+fn validate_no_evm_archive_signature(
+    index: usize,
+    signature: &str,
+) -> Result<(), NoEvmReceiptProofError> {
+    const SIGNER_ID_BYTE_LENGTH: usize = 20;
+
+    let field = format!("archiveProof.signatures[{index}]");
+    let parts: Vec<&str> = signature.split(':').collect();
+    if parts.len() != 3 || parts[0] != NO_EVM_ARCHIVE_SIGNATURE_SCHEME {
+        return Err(NoEvmReceiptProofError::InvalidArchiveSignatureFormat { field });
+    }
+
+    let signer_id_field = format!("{field}.signerId");
+    if !parts[1].starts_with("0x") {
+        return Err(NoEvmReceiptProofError::InvalidArchiveSignatureFormat {
+            field: signer_id_field,
+        });
+    }
+    let signer_id = decode_no_evm_hex(signer_id_field.clone(), parts[1])?;
+    if signer_id.len() != SIGNER_ID_BYTE_LENGTH {
+        return Err(NoEvmReceiptProofError::InvalidHexLength {
+            field: signer_id_field,
+            expected: SIGNER_ID_BYTE_LENGTH,
+            actual: signer_id.len(),
+        });
+    }
+
+    let payload_field = format!("{field}.payload");
+    if !parts[2].starts_with("0x") {
+        return Err(NoEvmReceiptProofError::InvalidArchiveSignatureFormat {
+            field: payload_field,
+        });
+    }
+    let payload = decode_no_evm_hex(payload_field.clone(), parts[2])?;
+    if payload.is_empty() {
+        return Err(NoEvmReceiptProofError::EmptyArchiveSignaturePayload {
+            field: payload_field,
+        });
+    }
+
     Ok(())
 }
 
@@ -4330,6 +4426,9 @@ mod tests {
         BridgeVerifierDisclosure,
     };
 
+    const VALID_ARCHIVE_SIGNATURE: &str =
+        "mono.snapshot.sig.v1:0x1212121212121212121212121212121212121212:0xabab";
+
     fn bridge_route(route_id: &str) -> BridgeRouteDisclosure {
         BridgeRouteDisclosure {
             route_id: route_id.to_owned(),
@@ -5278,11 +5377,22 @@ mod tests {
             block_height: 100,
             tx_index: 1,
             receipt_count: u32::try_from(receipt_bytes.len()).unwrap(),
+            archive_proof: None,
             finality_evidence: None,
             receipt_transcript: receipt_bytes
                 .iter()
                 .map(|receipt| hex_encode_0x(receipt))
                 .collect(),
+        }
+    }
+
+    fn test_no_evm_archive_proof(signatures: Vec<String>) -> NoEvmArchiveProof {
+        NoEvmArchiveProof {
+            schema: NO_EVM_ARCHIVE_PROOF_SCHEMA.to_owned(),
+            source: "indexerReceiptArchiveContentDigest".to_owned(),
+            manifest_hash: format!("0x{}", "53".repeat(32)),
+            content_hash: format!("0x{}", "54".repeat(32)),
+            signatures,
         }
     }
 
@@ -5313,6 +5423,86 @@ mod tests {
         assert_eq!(verified.target_receipt_hash, proof.target_receipt_hash);
         assert_eq!(proof.verify_transcript().unwrap(), verified);
         assert_eq!(verify_no_evm_receipt_proof(None).unwrap(), None);
+    }
+
+    #[test]
+    fn no_evm_receipt_proof_validates_archive_proof_signatures() {
+        let mut empty_signatures = test_no_evm_proof();
+        empty_signatures.archive_proof = Some(test_no_evm_archive_proof(Vec::new()));
+        let verified = verify_no_evm_receipt_proof(Some(&empty_signatures))
+            .unwrap()
+            .expect("verified proof");
+        assert_eq!(verified.tx_index, 1);
+        let wire = serde_json::to_value(&empty_signatures).unwrap();
+        assert_eq!(wire["archiveProof"]["signatures"], serde_json::json!([]));
+
+        let mut signed = test_no_evm_proof();
+        signed.archive_proof = Some(test_no_evm_archive_proof(vec![
+            VALID_ARCHIVE_SIGNATURE.to_owned()
+        ]));
+        let verified = verify_no_evm_receipt_proof(Some(&signed))
+            .unwrap()
+            .expect("verified proof");
+        assert_eq!(verified.tx_index, 1);
+        let wire = serde_json::to_value(&signed).unwrap();
+        assert_eq!(
+            wire["archiveProof"]["signatures"],
+            serde_json::json!([VALID_ARCHIVE_SIGNATURE])
+        );
+    }
+
+    #[test]
+    fn no_evm_receipt_proof_rejects_malformed_archive_proof_signatures() {
+        let malformed_signatures = vec![
+            "0x1234".to_owned(),
+            format!("mono.snapshot.sig.v2:0x{}:0xab", "12".repeat(20)),
+            format!(
+                "{}:0x{}:0xab",
+                NO_EVM_ARCHIVE_SIGNATURE_SCHEME,
+                "12".repeat(19)
+            ),
+            format!(
+                "{}:0x{}:0xab",
+                NO_EVM_ARCHIVE_SIGNATURE_SCHEME,
+                "12".repeat(21)
+            ),
+            format!(
+                "{}:0X{}:0xab",
+                NO_EVM_ARCHIVE_SIGNATURE_SCHEME,
+                "12".repeat(20)
+            ),
+            format!(
+                "{}:0x{}:0Xab",
+                NO_EVM_ARCHIVE_SIGNATURE_SCHEME,
+                "12".repeat(20)
+            ),
+            format!(
+                "{}:0x{}:0x",
+                NO_EVM_ARCHIVE_SIGNATURE_SCHEME,
+                "12".repeat(20)
+            ),
+            format!(
+                "{}:0x{}:0xabc",
+                NO_EVM_ARCHIVE_SIGNATURE_SCHEME,
+                "12".repeat(20)
+            ),
+            format!(
+                "{}:0x{}:0xab:extra",
+                NO_EVM_ARCHIVE_SIGNATURE_SCHEME,
+                "12".repeat(20)
+            ),
+        ];
+
+        for signature in malformed_signatures {
+            let mut proof = test_no_evm_proof();
+            proof.archive_proof = Some(test_no_evm_archive_proof(vec![signature]));
+            let err = verify_no_evm_receipt_proof(Some(&proof))
+                .expect_err("malformed archive signature must be rejected");
+            assert!(
+                err.to_string().contains("archiveProof.signatures[0]"),
+                "{err}"
+            );
+        }
     }
 
     #[test]
