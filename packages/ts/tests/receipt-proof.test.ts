@@ -158,6 +158,21 @@ describe("no-EVM receipt proof helpers", () => {
     expect(Array.from(verified?.targetReceipt ?? [])).toEqual([0x04, 0x05, 0x06, 0x07]);
   });
 
+  it("verifies compact receipt proofs reconstructed from the indexer archive", () => {
+    const proof: NoEvmCompactReceiptProof = {
+      ...compactNoEvmProof(),
+      historySource: "indexerReceiptArchive",
+      missingProofMaterial: [
+        "signed archive or snapshot manifest binding receipt bytes to blockHash and receiptsRoot",
+      ],
+    };
+
+    const verified = verifyNoEvmReceiptProof(proof);
+
+    expect(verified?.proofKind).toBe("compactInclusion");
+    expect(verified?.receiptsRoot).toBe(proof.receiptsRoot);
+  });
+
   it("rejects compact proofs with tampered target bytes", () => {
     expect(() =>
       verifyNoEvmReceiptProof({
