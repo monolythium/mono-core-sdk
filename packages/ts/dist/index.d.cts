@@ -996,6 +996,10 @@ interface NativeDevkitArchive {
     url: string;
     sha256: string;
     signature: string;
+    signatureScheme?: "ed25519";
+    signingKeyId?: string;
+    trustRoot?: string;
+    signingPublicKey?: string;
     sizeBytes?: number;
 }
 interface NativeDevkitSidecarManifest {
