@@ -79,8 +79,8 @@ try {
       const rootOrArtifact = resolve(args.positional[0] ?? ".");
       const artifact = rootOrArtifact.endsWith(".json") ? readJson(rootOrArtifact) : buildRoot(rootOrArtifact);
       print(createDeployPlan({
-        chainId: flag("chain", args, "local-dev"),
-        from: flag("from", args, "mono1devkitpreview00000000000000"),
+        networkId: flag("network", args, "local-dev"),
+        authorityAddress: flag("authority", args, "mono1devkitpreview00000000000000"),
         artifact,
       }));
       break;
@@ -105,8 +105,8 @@ try {
       const rootOrArtifact = resolve(args.positional[0] ?? ".");
       const artifact = rootOrArtifact.endsWith(".json") ? readJson(rootOrArtifact) : buildRoot(rootOrArtifact);
       const plan = createDeployPlan({
-        chainId: flag("chain", args, "local-dev"),
-        from: flag("from", args, "mono1devkitpreview00000000000000"),
+        networkId: flag("network", args, "local-dev"),
+        authorityAddress: flag("authority", args, "mono1devkitpreview00000000000000"),
         artifact,
       });
       print(createVerificationBundle(artifact, plan, rootOrArtifact.endsWith(".json") ? {} : readSources(rootOrArtifact)));
@@ -205,7 +205,7 @@ mono-dev validate <artifact-json>
 mono-dev test [project-root]
 mono-dev simulate [project-root]
 mono-dev trace [project-root]
-mono-dev deploy-plan [project-root-or-artifact] --from mono1... --chain local-dev
+mono-dev deploy-plan [project-root-or-artifact] --authority mono1... --network local-dev
 mono-dev call-plan [project-root]
 mono-dev mrc-token-plan
 mono-dev verify-bundle [project-root-or-artifact]

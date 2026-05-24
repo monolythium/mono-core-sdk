@@ -1,7 +1,5 @@
 import { typedBech32ToAddress } from "./address.js";
 import type { MrvAbiManifest } from "./bindings/MrvAbiManifest.js";
-import type { MrvDeployRequest } from "./bindings/MrvDeployRequest.js";
-import type { MrvTransactionExtension } from "./bindings/MrvTransactionExtension.js";
 
 export const NATIVE_DEV_HOST_API_VERSION = "0.1.0" as const;
 export const NATIVE_DEV_MANIFEST_SCHEMA_VERSION = 1 as const;
@@ -90,7 +88,7 @@ export interface NativeDevHostContextMessage {
   kind: "host_context";
   selectedProjectRoot?: string;
   activeNetwork: {
-    chainId: string;
+    networkId: string;
     name: string;
   };
   readOnlyWalletAddress?: string;
@@ -122,8 +120,8 @@ export interface NativeDevWalletApprovalRequest {
   kind: NativeDevApprovalKind;
   createdAt: string;
   origin: "mono_studio_host" | "mono_devkit" | "lyth_dev_mcp";
-  chainId: string;
-  from: string;
+  networkId: string;
+  authorityAddress: string;
   title: string;
   summary: string;
   riskLabels: NativeDevRiskLabel[];
@@ -131,8 +129,8 @@ export interface NativeDevWalletApprovalRequest {
 }
 
 export interface NativeDevMrvDeployPlan {
-  chainId: string;
-  from: string;
+  networkId: string;
+  authorityAddress: string;
   expectedContractAddress: string;
   artifactHash: string;
   abiHash: string;
@@ -141,8 +139,6 @@ export interface NativeDevMrvDeployPlan {
   maxExecutionFeeLythoshi: string;
   constructorInput: string;
   riskLabels: NativeDevRiskLabel[];
-  request?: MrvDeployRequest;
-  extension?: MrvTransactionExtension;
   abiManifest?: MrvAbiManifest;
   walletApprovalRequest: NativeDevWalletApprovalRequest;
 }
@@ -288,15 +284,15 @@ export function resolveStudioHostStatus(args: {
 }
 
 export function assertNativeDevWalletApprovalRequest(request: NativeDevWalletApprovalRequest): void {
-  typedBech32ToAddress(request.from, "user");
+  typedBech32ToAddress(request.authorityAddress, "user");
   if (!request.id.trim()) throw new Error("approval request id is required");
-  if (!request.chainId.trim()) throw new Error("approval request chain id is required");
+  if (!request.networkId.trim()) throw new Error("approval request network id is required");
   if (!request.title.trim()) throw new Error("approval request title is required");
   if (!request.summary.trim()) throw new Error("approval request summary is required");
 }
 
 export function assertNativeDevMrvDeployPlan(plan: NativeDevMrvDeployPlan): void {
-  typedBech32ToAddress(plan.from, "user");
+  typedBech32ToAddress(plan.authorityAddress, "user");
   typedBech32ToAddress(plan.expectedContractAddress, "contract");
   assertHash("artifactHash", plan.artifactHash);
   assertHash("abiHash", plan.abiHash);
@@ -335,6 +331,50 @@ export function nativeDevUiStrings(): readonly string[] {
     "ABI manifest",
     "Token passport",
     "Verification bundle",
+  ] as const;
+}
+
+export function nativeDevSchemaFieldNames(): readonly string[] {
+  return [
+    "schemaVersion",
+    "devkitVersion",
+    "channel",
+    "minimumWalletHostApi",
+    "maximumWalletHostApi",
+    "monoCoreCommit",
+    "monoCoreSdkCommit",
+    "archive",
+    "sidecar",
+    "releaseNotesUrl",
+    "installedVersion",
+    "hostApiVersion",
+    "installPath",
+    "sidecarStatus",
+    "compatibility",
+    "developerModeEnabled",
+    "selectedProjectRoot",
+    "activeNetwork",
+    "networkId",
+    "readOnlyWalletAddress",
+    "requestId",
+    "approved",
+    "authorityAddress",
+    "expectedContractAddress",
+    "artifactHash",
+    "abiHash",
+    "valueLythoshi",
+    "executionUnitLimit",
+    "maxExecutionFeeLythoshi",
+    "constructorInput",
+    "walletApprovalRequest",
+    "issuerAddress",
+    "initialAllocations",
+    "bundleHash",
+    "contractPassport",
+    "sourceBundleHash",
+    "compilerVersion",
+    "sdkVersion",
+    "verificationStatus",
   ] as const;
 }
 

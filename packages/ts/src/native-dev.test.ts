@@ -5,6 +5,7 @@ import {
   NATIVE_DEV_IPC_PROTOCOL_VERSION,
   NATIVE_DEV_MANIFEST_SCHEMA_VERSION,
   checkNativeDevkitCompatibility,
+  nativeDevSchemaFieldNames,
   nativeDevUiStrings,
   resolveStudioHostStatus,
 } from "./native-dev.js";
@@ -43,6 +44,8 @@ const blockedTerms = [
   "eth" + "_",
 ] as const;
 
+const blockedSchemaFields = ["from", "chainId"] as const;
+
 describe("native-dev schemas", () => {
   it("resolves host states from manifest compatibility", () => {
     expect(checkNativeDevkitCompatibility(manifest)).toBe("compatible");
@@ -71,9 +74,14 @@ describe("native-dev schemas", () => {
   it("keeps exported native-dev names and UI strings native", () => {
     const exportedNames = Object.keys(nativeDev).join("\n");
     const uiText = nativeDevUiStrings().join("\n");
+    const schemaFields = nativeDevSchemaFieldNames();
     for (const term of blockedTerms) {
       expect(exportedNames, `exported native-dev name contains ${term}`).not.toContain(term);
       expect(uiText, `native-dev UI string contains ${term}`).not.toContain(term);
+      expect(schemaFields.join("\n"), `native-dev schema field contains ${term}`).not.toContain(term);
+    }
+    for (const field of blockedSchemaFields) {
+      expect(schemaFields, `native-dev schema exposes ${field}`).not.toContain(field);
     }
   });
 });

@@ -149,11 +149,11 @@ export function simulate(artifact, call) {
   };
 }
 
-export function createDeployPlan({ chainId, from, artifact }) {
-  const expectedContractAddress = `monoc1${sha256({ chainId, from, artifactHash: artifact.artifactHash }).slice(0, 38)}`;
+export function createDeployPlan({ networkId, authorityAddress, artifact }) {
+  const expectedContractAddress = `monoc1${sha256({ networkId, authorityAddress, artifactHash: artifact.artifactHash }).slice(0, 38)}`;
   return {
-    chainId,
-    from,
+    networkId,
+    authorityAddress,
     expectedContractAddress,
     artifactHash: artifact.artifactHash,
     abiHash: artifact.abiHash,
@@ -163,12 +163,12 @@ export function createDeployPlan({ chainId, from, artifact }) {
     constructorInput: "",
     riskLabels: [{ id: "wallet-approval", title: "Wallet approval required", severity: "info" }],
     walletApprovalRequest: {
-      id: `approval-${sha256({ chainId, from, artifactHash: artifact.artifactHash }).slice(0, 12)}`,
+      id: `approval-${sha256({ networkId, authorityAddress, artifactHash: artifact.artifactHash }).slice(0, 12)}`,
       kind: "mrv_deploy",
       createdAt: new Date().toISOString(),
       origin: "mono_devkit",
-      chainId,
-      from,
+      networkId,
+      authorityAddress,
       title: "Review MRV deploy plan",
       summary: "Prepared by Mono DevKit. Wallet approval is required before signing.",
       riskLabels: [{ id: "wallet-approval", title: "Wallet approval required", severity: "info" }],
@@ -189,7 +189,7 @@ export function createVerificationBundle(artifact, deployPlan, sources) {
     templateId: artifact.buildMetadata.templateId,
     verificationStatus: "draft",
     riskLabels: deployPlan.riskLabels,
-    issuer: deployPlan.from,
+    issuer: deployPlan.authorityAddress,
   };
   return {
     bundleHash: sha256({ contractPassport, files }),
