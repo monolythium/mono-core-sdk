@@ -253,7 +253,7 @@ import { Wallet } from "ethers";
 import {
   MonolythiumProvider,
   MonolythiumSigner,
-} from "@monolythium/core-sdk";
+} from "@monolythium/core-sdk/ethers";
 
 const provider = new MonolythiumProvider("https://rpc.testnet.monolythium.com");
 const wallet = new Wallet(process.env.PRIVATE_KEY!);

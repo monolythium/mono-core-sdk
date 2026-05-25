@@ -40,16 +40,16 @@ interface MonolythiumProviderOptions extends RpcClientOptions {
  * Use it the same way you'd use any ethers provider:
  *
  * ```ts
- * import { MonolythiumProvider } from "@monolythium/core-sdk";
+ * import { MonolythiumProvider } from "@monolythium/core-sdk/ethers";
  *
  * const provider = new MonolythiumProvider("https://rpc.testnet.monolythium.com");
  * const block = await provider.getBlockNumber();
  * ```
  *
-   * Legacy ethers actions such as `getBlockNumber`, `getBalance`,
-   * `getTransactionReceipt`, `call`, `estimateGas`, and
-   * `broadcastTransaction` flow through `RpcClient.call`, so no-EVM profiles
-   * may reject unsupported compatibility methods server-side.
+ * Legacy ethers actions such as `getBlockNumber`, `getBalance`,
+ * `getTransactionReceipt`, `call`, `estimateGas`, and
+ * `broadcastTransaction` flow through `RpcClient.call`, so no-EVM profiles
+ * may reject unsupported compatibility methods server-side.
  */
 declare class MonolythiumProvider extends JsonRpcApiProvider {
     #private;
