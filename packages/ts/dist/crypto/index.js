@@ -1,4 +1,5 @@
 import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js';
+import { blake3 } from '@noble/hashes/blake3.js';
 import { keccak_256, shake256 } from '@noble/hashes/sha3.js';
 import { entropyToMnemonic, mnemonicToEntropy } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
@@ -239,6 +240,8 @@ var ML_DSA_65_PUBLIC_KEY_LEN = 1952;
 var ML_DSA_65_SIGNATURE_LEN = 3309;
 var STANDARD_ALGO_NUMBER_ML_DSA_65 = 1001;
 var ENUM_VARIANT_INDEX_ML_DSA_65 = 5;
+var ADDRESS_DERIVATION_DOMAIN = "MONO_ADDRESS_BLAKE3_20_V1";
+var ADDRESS_DERIVATION_DOMAIN_BYTES = new TextEncoder().encode(ADDRESS_DERIVATION_DOMAIN);
 var MlDsa65Backend = class _MlDsa65Backend {
   #secretKey;
   #publicKey;
@@ -246,7 +249,7 @@ var MlDsa65Backend = class _MlDsa65Backend {
   constructor(secretKey, publicKey) {
     this.#secretKey = expectBytes(secretKey, ML_DSA_65_SIGNING_KEY_LEN, "ML-DSA-65 secret key").slice();
     this.#publicKey = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key").slice();
-    this.#addressBytes = keccak_256(this.#publicKey).slice(12);
+    this.#addressBytes = mlDsa65AddressBytes(this.#publicKey);
   }
   static fromSeed(seed) {
     const kp = ml_dsa65.keygen(expectBytes(seed, ML_DSA_65_SEED_LEN, "ML-DSA-65 seed"));
@@ -295,7 +298,15 @@ var MlDsa65Backend = class _MlDsa65Backend {
   }
 };
 function mlDsa65AddressFromPublicKey(publicKey) {
-  return bytesToHex(keccak_256(expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key")).slice(12));
+  return bytesToHex(mlDsa65AddressBytes(publicKey));
+}
+function mlDsa65AddressBytes(publicKey) {
+  const bytes = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key");
+  return blake3(concatBytes(
+    ADDRESS_DERIVATION_DOMAIN_BYTES,
+    bigintToBeBytes(BigInt(STANDARD_ALGO_NUMBER_ML_DSA_65), 2, "ML-DSA-65 algo id"),
+    bytes
+  )).slice(0, 20);
 }
 function encodeMlDsa65Opaque(raw) {
   const bytes = raw instanceof Uint8Array ? raw : Uint8Array.from(raw);
@@ -574,6 +585,6 @@ function normalizeInput(value) {
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
 
-export { BincodeWriter, DKG_AEAD_TAG_LEN, DKG_NONCE_LEN, ENUM_VARIANT_INDEX_ML_DSA_65, ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SEED_LEN, ML_DSA_65_SIGNATURE_LEN, ML_DSA_65_SIGNING_KEY_LEN, ML_KEM_768_CIPHERTEXT_LEN, ML_KEM_768_ENCAPSULATION_KEY_LEN, ML_KEM_768_SHARED_SECRET_LEN, MempoolClass, MlDsa65Backend, PQM1_ALGO_TAG_FALCON512_RESERVED, PQM1_ALGO_TAG_MLDSA65, PQM1_ALGO_TAG_MLDSA87_RESERVED, PQM1_ALGO_TAG_SLHDSA128S_RESERVED, PQM1_ENTROPY_LEN, PQM1_PAYLOAD_LEN, PQM1_V1_MLDSA65_DOMAIN_TAG, PQM1_V1_MNEMONIC_WORDS, PQM1_VERSION_V1, Pqm1Error, STANDARD_ALGO_NUMBER_ML_DSA_65, assemblePqm1Payload, bincodeDecryptHint, bincodeEncryptedEnvelope, bincodeNonceAad, bincodeSignedTransaction, buildEncryptedEnvelope, buildEncryptedSubmission, bytesToHex, concatBytes, derivePqm1MlDsa65SeedFromPayload, encodeMlDsa65Opaque, encodeTransactionForHash, encryptInnerTx, expectBytes, fetchEncryptionKey, generatePqm1Mnemonic, hexToBytes, mlDsa65AddressFromPublicKey, outerSigDigest, parsePqm1Payload, pqm1MnemonicToAddress, pqm1MnemonicToMlDsa65Backend, pqm1MnemonicToMlDsa65Seed, pqm1MnemonicToPayload, pqm1PayloadToMnemonic, submitEncryptedEnvelope };
+export { ADDRESS_DERIVATION_DOMAIN, BincodeWriter, DKG_AEAD_TAG_LEN, DKG_NONCE_LEN, ENUM_VARIANT_INDEX_ML_DSA_65, ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SEED_LEN, ML_DSA_65_SIGNATURE_LEN, ML_DSA_65_SIGNING_KEY_LEN, ML_KEM_768_CIPHERTEXT_LEN, ML_KEM_768_ENCAPSULATION_KEY_LEN, ML_KEM_768_SHARED_SECRET_LEN, MempoolClass, MlDsa65Backend, PQM1_ALGO_TAG_FALCON512_RESERVED, PQM1_ALGO_TAG_MLDSA65, PQM1_ALGO_TAG_MLDSA87_RESERVED, PQM1_ALGO_TAG_SLHDSA128S_RESERVED, PQM1_ENTROPY_LEN, PQM1_PAYLOAD_LEN, PQM1_V1_MLDSA65_DOMAIN_TAG, PQM1_V1_MNEMONIC_WORDS, PQM1_VERSION_V1, Pqm1Error, STANDARD_ALGO_NUMBER_ML_DSA_65, assemblePqm1Payload, bincodeDecryptHint, bincodeEncryptedEnvelope, bincodeNonceAad, bincodeSignedTransaction, buildEncryptedEnvelope, buildEncryptedSubmission, bytesToHex, concatBytes, derivePqm1MlDsa65SeedFromPayload, encodeMlDsa65Opaque, encodeTransactionForHash, encryptInnerTx, expectBytes, fetchEncryptionKey, generatePqm1Mnemonic, hexToBytes, mlDsa65AddressBytes, mlDsa65AddressFromPublicKey, outerSigDigest, parsePqm1Payload, pqm1MnemonicToAddress, pqm1MnemonicToMlDsa65Backend, pqm1MnemonicToMlDsa65Seed, pqm1MnemonicToPayload, pqm1PayloadToMnemonic, submitEncryptedEnvelope };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

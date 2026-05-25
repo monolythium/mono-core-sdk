@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { blake3 } from "@noble/hashes/blake3.js";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import {
+  ADDRESS_DERIVATION_DOMAIN,
   ML_DSA_65_PUBLIC_KEY_LEN,
   ML_DSA_65_SEED_LEN,
   ML_DSA_65_SIGNATURE_LEN,
@@ -8,6 +10,7 @@ import {
   MempoolClass,
   MlDsa65Backend,
   Pqm1Error,
+  STANDARD_ALGO_NUMBER_ML_DSA_65,
   assemblePqm1Payload,
   bincodeDecryptHint,
   bincodeEncryptedEnvelope,
@@ -16,9 +19,11 @@ import {
   buildEncryptedSubmission,
   bytesToHex,
   bincodeSignedTransaction,
+  concatBytes,
   derivePqm1MlDsa65SeedFromPayload,
   encodeTransactionForHash,
   generatePqm1Mnemonic,
+  mlDsa65AddressFromPublicKey,
   outerSigDigest,
   parsePqm1Payload,
   pqm1MnemonicToAddress,
@@ -72,6 +77,18 @@ describe("crypto subpath", () => {
     expect(a.publicKey()).toHaveLength(ML_DSA_65_PUBLIC_KEY_LEN);
     expect(a.getAddress()).toBe(b.getAddress());
     expect(bytesToHex(a.publicKey())).toBe(bytesToHex(b.publicKey()));
+    expect(mlDsa65AddressFromPublicKey(a.publicKey())).toBe(a.getAddress());
+
+    const derivationPreimage = concatBytes(
+      new TextEncoder().encode(ADDRESS_DERIVATION_DOMAIN),
+      new Uint8Array([
+        STANDARD_ALGO_NUMBER_ML_DSA_65 >> 8,
+        STANDARD_ALGO_NUMBER_ML_DSA_65 & 0xff,
+      ]),
+      a.publicKey(),
+    );
+    expect(a.getAddress()).toBe(bytesToHex(blake3(derivationPreimage).slice(0, 20)));
+    expect(a.getAddress()).not.toBe(bytesToHex(keccak_256(a.publicKey()).slice(12)));
 
     const msg = new Uint8Array([1, 2, 3]);
     const sigA = a.sign(msg);
@@ -278,10 +295,10 @@ describe("crypto subpath", () => {
     expect(pqm1MnemonicToAddress(mnemonic)).toBe(backend.getAddress());
   });
 
-  it("matches a mono-core Rust-generated PQM-1 address vector", () => {
+  it("matches the ADR-0038 BLAKE3 PQM-1 address vector", () => {
     const rustMnemonic =
       "absurd aspect pioneer ozone extra early cross pony aisle example deer erode cat employ that trouble able correct body battle version tag elegant kitchen";
-    expect(pqm1MnemonicToAddress(rustMnemonic)).toBe("0x7200eb51936508214a15ef37b40858717aa804c4");
+    expect(pqm1MnemonicToAddress(rustMnemonic)).toBe("0xbcb96e78fc65d3811e95f815139605ad6cbc857a");
   });
 
   it("generates PQM-1 mnemonics from injected entropy", () => {

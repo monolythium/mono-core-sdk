@@ -105,6 +105,21 @@ function typedBech32ToAddress(address, expectedKind) {
   const out = Uint8Array.from(bytes);
   return { kind, address: address.toLowerCase(), bytes: out, hex: addressBytesToHex(out) };
 }
+function requireTypedAddress(address, expectedKind, label = "address") {
+  if (address.startsWith("0x") || address.startsWith("0X")) {
+    throw new AddressError(
+      `${label} raw 0x addresses are retired; use typed ${ADDRESS_KIND_HRPS[expectedKind]} bech32m addresses`
+    );
+  }
+  try {
+    return typedBech32ToAddress(address, expectedKind).address;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AddressError(
+      `${label} must be typed ${ADDRESS_KIND_HRPS[expectedKind]} bech32m address: ${message}`
+    );
+  }
+}
 function parseAddress(address) {
   if (address.startsWith("0x") || address.startsWith("0X")) {
     return hexToAddressBytes(address);
@@ -526,6 +541,18 @@ function expectBytes(value, len, label) {
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
+function bigintToBeBytes(value, bytes, label) {
+  if (value < 0n || value >= 1n << BigInt(bytes * 8)) {
+    throw new Error(`${label} out of ${bytes * 8}-bit range`);
+  }
+  const out = new Uint8Array(bytes);
+  let v = value;
+  for (let i = bytes - 1; i >= 0; i--) {
+    out[i] = Number(v & 0xffn);
+    v >>= 8n;
+  }
+  return out;
+}
 function parseBigint(value, label) {
   if (value === void 0) throw new Error(`${label} missing`);
   if (typeof value === "bigint") return value;
@@ -599,8 +626,18 @@ var ML_DSA_65_PUBLIC_KEY_LEN = 1952;
 var ML_DSA_65_SIGNATURE_LEN = 3309;
 var STANDARD_ALGO_NUMBER_ML_DSA_65 = 1001;
 var ENUM_VARIANT_INDEX_ML_DSA_65 = 5;
+var ADDRESS_DERIVATION_DOMAIN = "MONO_ADDRESS_BLAKE3_20_V1";
+var ADDRESS_DERIVATION_DOMAIN_BYTES = new TextEncoder().encode(ADDRESS_DERIVATION_DOMAIN);
 function mlDsa65AddressFromPublicKey(publicKey) {
-  return bytesToHex2(keccak_256(expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key")).slice(12));
+  return bytesToHex2(mlDsa65AddressBytes(publicKey));
+}
+function mlDsa65AddressBytes(publicKey) {
+  const bytes = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key");
+  return blake3(concatBytes2(
+    ADDRESS_DERIVATION_DOMAIN_BYTES,
+    bigintToBeBytes(BigInt(STANDARD_ALGO_NUMBER_ML_DSA_65), 2, "ML-DSA-65 algo id"),
+    bytes
+  )).slice(0, 20);
 }
 
 // src/crypto/envelope.ts
@@ -2328,7 +2365,7 @@ var RpcClient = class _RpcClient {
   }
   /** `lyth_getAccountPolicy` — privacy posture for an account. */
   async lythGetAccountPolicy(address) {
-    return this.call("lyth_getAccountPolicy", [address]);
+    return this.call("lyth_getAccountPolicy", [sdkTypedAddress(address, "user", "address")]);
   }
   /** `lyth_getAssetPolicy` — privacy posture for an asset. */
   async lythGetAssetPolicy(tokenId) {
@@ -2336,7 +2373,7 @@ var RpcClient = class _RpcClient {
   }
   /** `lyth_getTokenBalances` — indexed per-asset balances for one address. */
   async lythGetTokenBalances(address) {
-    return this.call("lyth_getTokenBalances", [address]);
+    return this.call("lyth_getTokenBalances", [sdkTypedAddress(address, "user", "address")]);
   }
   /** `lyth_bridgeRoutes` — read-only bridge route-selection/readiness. */
   async lythBridgeRoutes(request) {
@@ -2349,7 +2386,9 @@ var RpcClient = class _RpcClient {
   }
   /** `lyth_mrcAccount` — exact current-state native MRC account lookup. */
   async lythMrcAccount(account, spendLimit) {
-    const request = { account };
+    const request = {
+      account: sdkTypedAddress(account, "smartAccount", "account")
+    };
     if (spendLimit != null) request.spendLimit = spendLimit;
     const params = request.spendLimit == null ? [request.account] : [request.account, request.spendLimit];
     return this.call("lyth_mrcAccount", params);
@@ -2382,22 +2421,28 @@ var RpcClient = class _RpcClient {
   }
   /** `lyth_getAddressLabel` — indexed display/category label for one address. */
   async lythGetAddressLabel(address) {
-    const v = await this.call("lyth_getAddressLabel", [address]);
+    const v = await this.call("lyth_getAddressLabel", [
+      sdkTypedAddress(address, "user", "address")
+    ]);
     if (v === null || v === void 0) return null;
     return v;
   }
   /** `lyth_getAddressActivity` — indexed per-address activity timeline. */
   async lythGetAddressActivity(address, limit = 50, cursor) {
-    const params = cursor === void 0 ? [address, limit] : [address, limit, cursor];
+    const userAddress = sdkTypedAddress(address, "user", "address");
+    const params = cursor === void 0 ? [userAddress, limit] : [userAddress, limit, cursor];
     return this.call("lyth_getAddressActivity", params);
   }
   /** `lyth_addressActivityKind` — activity index coverage for one address. */
   async lythAddressActivityKind(address) {
-    return this.call("lyth_addressActivityKind", [address]);
+    return this.call("lyth_addressActivityKind", [sdkTypedAddress(address, "user", "address")]);
   }
   /** `lyth_agentReputation` — reputation accumulators for an agent provider. */
   async lythAgentReputation(provider, categoryId = 0) {
-    return this.call("lyth_agentReputation", [normalizeUserBech32Address(provider), categoryId]);
+    return this.call("lyth_agentReputation", [
+      sdkTypedAddress(provider, "user", "provider address"),
+      categoryId
+    ]);
   }
   /** `lyth_decodeTx` — explorer-grade decoded transaction envelope. */
   async lythDecodeTx(txHash) {
@@ -2511,11 +2556,11 @@ var RpcClient = class _RpcClient {
   }
   /** `lyth_addressProfile` — live account + label + activity aggregate. */
   async lythAddressProfile(address) {
-    return this.call("lyth_addressProfile", [address]);
+    return this.call("lyth_addressProfile", [sdkTypedAddress(address, "user", "address")]);
   }
   /** `lyth_addressFlow` — recent indexed address-flow aggregate. */
   async lythAddressFlow(address, limit = 250) {
-    return this.call("lyth_addressFlow", [address, limit]);
+    return this.call("lyth_addressFlow", [sdkTypedAddress(address, "user", "address"), limit]);
   }
   /** `lyth_search` — exact live resolver for hashes, addresses, blocks, and clusters. */
   async lythSearch(query, limit = 10) {
@@ -2531,7 +2576,7 @@ var RpcClient = class _RpcClient {
   }
   /** `lyth_mempoolPending` — pending txs for a sender. */
   async lythMempoolPending(sender) {
-    return this.call("lyth_mempoolPending", [sender]);
+    return this.call("lyth_mempoolPending", [sdkTypedAddress(sender, "user", "sender")]);
   }
   /** `lyth_currentRound` — latest committed height. */
   async lythCurrentRound() {
@@ -2574,22 +2619,26 @@ var RpcClient = class _RpcClient {
   }
   /** `lyth_getDelegations` — wallet delegation rows at a block. */
   async lythGetDelegations(wallet, block) {
-    const params = block === void 0 ? [wallet] : [wallet, encodeBlockSelector(block)];
+    const userWallet = sdkTypedAddress(wallet, "user", "wallet");
+    const params = block === void 0 ? [userWallet] : [userWallet, encodeBlockSelector(block)];
     return this.call("lyth_getDelegations", params);
   }
   /** `lyth_pendingRewards` — wallet pending rewards at a block. */
   async lythPendingRewards(wallet, block) {
-    const params = block === void 0 ? [wallet] : [wallet, encodeBlockSelector(block)];
+    const userWallet = sdkTypedAddress(wallet, "user", "wallet");
+    const params = block === void 0 ? [userWallet] : [userWallet, encodeBlockSelector(block)];
     return this.call("lyth_pendingRewards", params);
   }
   /** `lyth_redemptionQueue` — wallet redemption tickets at a block. */
   async lythRedemptionQueue(wallet, block) {
-    const params = block === void 0 ? [wallet] : [wallet, encodeBlockSelector(block)];
+    const userWallet = sdkTypedAddress(wallet, "user", "wallet");
+    const params = block === void 0 ? [userWallet] : [userWallet, encodeBlockSelector(block)];
     return this.call("lyth_redemptionQueue", params);
   }
   /** `lyth_getDelegationHistory` — indexed per-wallet delegation event timeline. */
   async lythGetDelegationHistory(wallet, limit = 50, cursor) {
-    const params = cursor === void 0 ? [wallet, limit] : [wallet, limit, cursor];
+    const userWallet = sdkTypedAddress(wallet, "user", "wallet");
+    const params = cursor === void 0 ? [userWallet, limit] : [userWallet, limit, cursor];
     return this.call("lyth_getDelegationHistory", params);
   }
   /** `lyth_getClusterDelegators` — delegator addresses for a cluster. */
@@ -3448,12 +3497,12 @@ function normalizeTransactionReceipt(value) {
     )
   };
 }
-function normalizeUserBech32Address(address) {
+function sdkTypedAddress(address, kind, label) {
   try {
-    return addressToBech32(typeof address === "string" ? parseAddress(address) : address);
+    return requireTypedAddress(address, kind, label);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw SdkError.malformed(`invalid provider address: ${message}`);
+    throw SdkError.malformed(message);
   }
 }
 function normalizeRoundInfo(value) {
@@ -3748,27 +3797,33 @@ var ApiClient = class {
     };
   }
   async addressProfile(address) {
-    return this.get(`/addresses/${encodePathSegment(address)}/profile`);
+    const userAddress = sdkTypedAddress2(address, "user", "address");
+    return this.get(`/addresses/${encodePathSegment(userAddress)}/profile`);
   }
   async addressFlow(address, limit = 250) {
-    return this.get(`/addresses/${encodePathSegment(address)}/flow`, { limit });
+    const userAddress = sdkTypedAddress2(address, "user", "address");
+    return this.get(`/addresses/${encodePathSegment(userAddress)}/flow`, { limit });
   }
   async addressActivity(address, limit = 50, cursor) {
-    return this.get(`/addresses/${encodePathSegment(address)}/activity`, {
+    const userAddress = sdkTypedAddress2(address, "user", "address");
+    return this.get(`/addresses/${encodePathSegment(userAddress)}/activity`, {
       limit,
       cursor
     });
   }
   async addressActivityKind(address) {
-    return this.get(`/addresses/${encodePathSegment(address)}/activity-kind`);
+    const userAddress = sdkTypedAddress2(address, "user", "address");
+    return this.get(`/addresses/${encodePathSegment(userAddress)}/activity-kind`);
   }
   async addressPendingRewards(address, block) {
-    return this.get(`/addresses/${encodePathSegment(address)}/pending-rewards`, {
+    const userAddress = sdkTypedAddress2(address, "user", "address");
+    return this.get(`/addresses/${encodePathSegment(userAddress)}/pending-rewards`, {
       block: block == null ? void 0 : encodeBlockSelector(block)
     });
   }
   async addressRedemptionQueue(address, block) {
-    return this.get(`/addresses/${encodePathSegment(address)}/redemption-queue`, {
+    const userAddress = sdkTypedAddress2(address, "user", "address");
+    return this.get(`/addresses/${encodePathSegment(userAddress)}/redemption-queue`, {
       block: block == null ? void 0 : encodeBlockSelector(block)
     });
   }
@@ -3778,7 +3833,8 @@ var ApiClient = class {
     });
   }
   async mrcAccount(account, limit) {
-    return this.get(`/mrc/accounts/${encodePathSegment(account)}`, {
+    const smartAccount = sdkTypedAddress2(account, "smartAccount", "account");
+    return this.get(`/mrc/accounts/${encodePathSegment(smartAccount)}`, {
       limit: limit ?? void 0
     });
   }
@@ -3948,6 +4004,14 @@ function nativeMarketOrderBookDeltasQuery(filter) {
     account: filter.account,
     counterparty: filter.counterparty
   };
+}
+function sdkTypedAddress2(address, kind, label) {
+  try {
+    return requireTypedAddress(address, kind, label);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw SdkError.malformed(message);
+  }
 }
 function encodePathBlock(block) {
   return encodePathSegment(encodeBlockSelector(block));
@@ -6300,7 +6364,7 @@ function spendingPolicyAddressHex() {
   return PRECOMPILE_ADDRESSES.SPENDING_POLICY.toLowerCase();
 }
 function composeClaimBoundMessage(chainId, args, opts) {
-  const precompileAddress = toAddressBytes(opts?.precompileAddress ?? PRECOMPILE_ADDRESSES.SPENDING_POLICY);
+  const precompileAddress = toRawAddressBytes(opts?.precompileAddress ?? PRECOMPILE_ADDRESSES.SPENDING_POLICY);
   const normalized = normalizeArgs(args);
   return concatBytes6(
     new TextEncoder().encode(SET_POLICY_CLAIM_DOMAIN_TAG),
@@ -6364,15 +6428,15 @@ function encodeClaimPolicyByAddressCalldata(args, subAccountSig) {
   );
 }
 function encodeEnableCalldata(subAccount) {
-  return encodeSingleAddressCall(SPENDING_POLICY_SELECTORS.enable, subAccount);
+  return encodeSingleAddressCall(SPENDING_POLICY_SELECTORS.enable, subAccount, "subAccount");
 }
 function encodeDisableCalldata(subAccount) {
-  return encodeSingleAddressCall(SPENDING_POLICY_SELECTORS.disable, subAccount);
+  return encodeSingleAddressCall(SPENDING_POLICY_SELECTORS.disable, subAccount, "subAccount");
 }
 function normalizeArgs(args) {
   return {
-    subAccount: toAddressBytes(args.subAccount),
-    principal: toAddressBytes(args.principal),
+    subAccount: toUserAddressBytes(args.subAccount, "subAccount"),
+    principal: toUserAddressBytes(args.principal, "principal"),
     dailyCapLythoshi: toBigint3(args.dailyCapLythoshi, "dailyCapLythoshi"),
     perTxCapLythoshi: toBigint3(args.perTxCapLythoshi, "perTxCapLythoshi"),
     allowRoot: expectLength4(toBytes4(args.allowRoot), 32, "allowRoot"),
@@ -6389,8 +6453,8 @@ function encodePolicyWords(args) {
     args.denyRoot
   );
 }
-function encodeSingleAddressCall(selector, address) {
-  return bytesToHex7(concatBytes6(hexToBytes6(selector), encodeAddressWord(toAddressBytes(address))));
+function encodeSingleAddressCall(selector, address, name) {
+  return bytesToHex7(concatBytes6(hexToBytes6(selector), encodeAddressWord(toUserAddressBytes(address, name))));
 }
 function encodeAddressWord(address) {
   return concatBytes6(new Uint8Array(12), address);
@@ -6398,7 +6462,21 @@ function encodeAddressWord(address) {
 function encodeUint128Word(value) {
   return concatBytes6(new Uint8Array(16), uint128Bytes(value, "uint128"));
 }
-function toAddressBytes(value) {
+function toUserAddressBytes(value, name) {
+  if (typeof value !== "string") {
+    throw new SpendingPolicyError(`${name} must be a typed mono bech32m address`);
+  }
+  if (value.startsWith("0x") || value.startsWith("0X")) {
+    throw new SpendingPolicyError(`${name} raw 0x addresses are retired; use typed mono bech32m addresses`);
+  }
+  try {
+    return typedBech32ToAddress(value, "user").bytes;
+  } catch (error) {
+    const detail = error instanceof Error ? `: ${error.message}` : "";
+    throw new SpendingPolicyError(`${name} must be a typed mono bech32m address${detail}`);
+  }
+}
+function toRawAddressBytes(value) {
   if (typeof value === "string") {
     return hexToAddressBytes(value);
   }
@@ -6547,16 +6625,24 @@ function decodeHasPubkeyReturn(data) {
   throw new PubkeyRegistryError("hasPubkey bool must be 0 or 1");
 }
 function encodeSingleAddressCall2(selector, address) {
-  return bytesToHex8(concatBytes7(hexToBytes7(selector), addressWord(toAddressBytes2(address))));
+  return bytesToHex8(concatBytes7(hexToBytes7(selector), addressWord(toAddressBytes(address))));
 }
 function addressWord(address) {
   return concatBytes7(new Uint8Array(12), address);
 }
-function toAddressBytes2(value) {
-  if (typeof value === "string") {
-    return hexToAddressBytes(value);
+function toAddressBytes(value) {
+  if (typeof value !== "string") {
+    throw new PubkeyRegistryError("address must be a typed mono bech32m address");
   }
-  return expectLength5(value instanceof Uint8Array ? value : Uint8Array.from(value), 20, "address");
+  if (value.startsWith("0x") || value.startsWith("0X")) {
+    throw new PubkeyRegistryError("raw 0x addresses are retired; use typed mono bech32m addresses");
+  }
+  try {
+    return typedBech32ToAddress(value, "user").bytes;
+  } catch (error) {
+    const detail = error instanceof Error ? `: ${error.message}` : "";
+    throw new PubkeyRegistryError(`address must be a typed mono bech32m address${detail}`);
+  }
 }
 function toBytes5(value) {
   if (typeof value === "string") {
@@ -6586,12 +6672,6 @@ function concatBytes7(...parts) {
     offset += part.length;
   }
   return out;
-}
-function expectLength5(value, len, name) {
-  if (value.length !== len) {
-    throw new PubkeyRegistryError(`${name} must be ${len} bytes`);
-  }
-  return value;
 }
 function uint256Word(value) {
   if (value < 0n || value > (1n << 256n) - 1n) {
@@ -7199,47 +7279,29 @@ function normalizeNativeMarketAddress(input, name) {
   if (typeof input === "string") {
     return normalizeNativeMarketAddressString(input, void 0, name);
   }
-  if (isAddressByteInput(input)) {
-    return { kind: "user", bytes: expectAddressBytes(input, name) };
-  }
-  if (typeof input === "object" && input !== null) {
-    const kind = input.kind ?? "user";
-    if (!(kind in NATIVE_MARKET_ADDRESS_KIND_VARIANTS)) {
+  if (typeof input === "object" && input !== null && "address" in input) {
+    const kind = input.kind;
+    if (kind !== void 0 && !(kind in NATIVE_MARKET_ADDRESS_KIND_VARIANTS)) {
       throw new MarketActionError(`${name}.kind is not a supported native address kind`);
     }
-    const address = input.address;
-    if (typeof address === "string") {
-      return normalizeNativeMarketAddressString(address, kind, name);
+    if (typeof input.address !== "string") {
+      throw new MarketActionError(`${name}.address must be a typed bech32m address`);
     }
-    return { kind, bytes: expectAddressBytes(address, name) };
+    return normalizeNativeMarketAddressString(input.address, kind, name);
   }
-  throw new MarketActionError(`${name} must be a 20-byte address`);
-}
-function isAddressByteInput(input) {
-  return input instanceof Uint8Array || Array.isArray(input);
+  throw new MarketActionError(`${name} must be a typed bech32m address`);
 }
 function normalizeNativeMarketAddressString(address, expectedKind, name) {
+  if (address.startsWith("0x") || address.startsWith("0X")) {
+    throw new MarketActionError(`${name} raw 0x addresses are retired; use typed bech32m addresses`);
+  }
   try {
-    if (address.startsWith("0x") || address.startsWith("0X")) {
-      return { kind: expectedKind ?? "user", bytes: hexToAddressBytes(address) };
-    }
     const parsed = typedBech32ToAddress(address, expectedKind);
     return { kind: parsed.kind, bytes: parsed.bytes };
   } catch (error) {
     const detail = error instanceof Error ? `: ${error.message}` : "";
-    throw new MarketActionError(`${name} must be a 20-byte hex or typed bech32m address${detail}`);
+    throw new MarketActionError(`${name} must be a typed bech32m address${detail}`);
   }
-}
-function expectAddressBytes(value, name) {
-  if (value.length !== 20) {
-    throw new MarketActionError(`${name} must be a 20-byte address`);
-  }
-  for (const byte of value) {
-    if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
-      throw new MarketActionError(`${name} must contain bytes`);
-    }
-  }
-  return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
 function uint8Word2(value) {
   const out = new Uint8Array(32);
@@ -7757,47 +7819,29 @@ function normalizeNativeAgentAddress(input, name) {
   if (typeof input === "string") {
     return normalizeNativeAgentAddressString(input, void 0, name);
   }
-  if (isAddressByteInput2(input)) {
-    return { kind: "user", bytes: expectAddressBytes2(input, name) };
-  }
-  if (typeof input === "object" && input !== null) {
-    const kind = input.kind ?? "user";
-    if (!(kind in NATIVE_AGENT_ADDRESS_KIND_VARIANTS)) {
+  if (typeof input === "object" && input !== null && "address" in input) {
+    const kind = input.kind;
+    if (kind !== void 0 && !(kind in NATIVE_AGENT_ADDRESS_KIND_VARIANTS)) {
       throw new AgentActionError(`${name}.kind is not a supported native address kind`);
     }
-    const address = input.address;
-    if (typeof address === "string") {
-      return normalizeNativeAgentAddressString(address, kind, name);
+    if (typeof input.address !== "string") {
+      throw new AgentActionError(`${name}.address must be a typed bech32m address`);
     }
-    return { kind, bytes: expectAddressBytes2(address, name) };
+    return normalizeNativeAgentAddressString(input.address, kind, name);
   }
-  throw new AgentActionError(`${name} must be a 20-byte address`);
-}
-function isAddressByteInput2(input) {
-  return input instanceof Uint8Array || Array.isArray(input);
+  throw new AgentActionError(`${name} must be a typed bech32m address`);
 }
 function normalizeNativeAgentAddressString(address, expectedKind, name) {
+  if (address.startsWith("0x") || address.startsWith("0X")) {
+    throw new AgentActionError(`${name} raw 0x addresses are retired; use typed bech32m addresses`);
+  }
   try {
-    if (address.startsWith("0x") || address.startsWith("0X")) {
-      return { kind: expectedKind ?? "user", bytes: hexToAddressBytes(address) };
-    }
     const parsed = typedBech32ToAddress(address, expectedKind);
     return { kind: parsed.kind, bytes: parsed.bytes };
   } catch (error) {
     const detail = error instanceof Error ? `: ${error.message}` : "";
-    throw new AgentActionError(`${name} must be a 20-byte hex or typed bech32m address${detail}`);
+    throw new AgentActionError(`${name} must be a typed bech32m address${detail}`);
   }
-}
-function expectAddressBytes2(value, name) {
-  if (value.length !== 20) {
-    throw new AgentActionError(`${name} must be a 20-byte address`);
-  }
-  for (const byte of value) {
-    if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
-      throw new AgentActionError(`${name} must contain bytes`);
-    }
-  }
-  return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
 
 // src/ethers/network.ts
@@ -7807,6 +7851,6 @@ var MONOLYTHIUM_TESTNET_NETWORK_NAME = "monolythium-testnet";
 // src/index.ts
 var version = "0.1.0";
 
-export { ADDRESS_HRP, ADDRESS_KIND_HRPS, API_STREAM_TOPICS, AddressError, AgentActionError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, CLOB_MARKET_ID_DOMAIN_TAG, CLOB_SELECTORS, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DelegationPrecompileError, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MarketActionError, MrvValidationError, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE, NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY, NATIVE_CALL_FORWARDER_RESPONSE_OFFSET, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NATIVE_MARKET_MODULE_ADDRESS, NATIVE_MARKET_MODULE_ADDRESS_BYTES, NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_FINALITY_EVIDENCE_SCHEMA, NO_EVM_FINALITY_EVIDENCE_SOURCE, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NoEvmReceiptProofError, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, assertNativeMarketOrderBookStreamPayload, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bridgeAddressHex, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildBridgeRouteCatalogue, buildCancelSpotOrderPlan, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildNativeCallForwarderArtifact, buildNativeMarketModuleCallEnvelope, buildNativeNftBuyListingForwarderInput, buildNativeNftBuyListingModuleCall, buildNativeNftCancelListingForwarderInput, buildNativeNftCancelListingModuleCall, buildNativeNftCreateListingForwarderInput, buildNativeNftCreateListingModuleCall, buildNativeNftPlaceAuctionBidForwarderInput, buildNativeNftPlaceAuctionBidModuleCall, buildNativeNftSettleAuctionForwarderInput, buildNativeNftSettleAuctionModuleCall, buildNativeNftSweepExpiredListingsForwarderInput, buildNativeNftSweepExpiredListingsModuleCall, buildNativeSpotCancelOrderForwarderInput, buildNativeSpotCancelOrderModuleCall, buildNativeSpotCreateMarketForwarderInput, buildNativeSpotCreateMarketModuleCall, buildNativeSpotLimitOrderForwarderInput, buildNativeSpotLimitOrderModuleCall, buildNativeSpotSettleLimitOrderForwarderInput, buildNativeSpotSettleLimitOrderModuleCall, buildNativeSpotSettleRoutedLimitOrderForwarderInput, buildNativeSpotSettleRoutedLimitOrderModuleCall, buildPlaceSpotLimitOrderPlan, buildPlaceSpotMarketOrderExPlan, buildPlaceSpotMarketOrderPlan, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, clobAddressHex, compareNativeDevVersions, composeClaimBoundMessage, computeNoEvmDacFinalityMessage, computeNoEvmLeaderFinalityMessage, computeNoEvmReceiptsRoot, computeNoEvmRoundFinalityMessage, computeNoEvmTargetReceiptHash, consumeNativeEvents, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNativeAgentStateResponse, decodeNativeMarketOrderBookDeltasResponse, decodeNativeReceiptResponse, decodeNoEvmReceiptTranscript, decodeTxFeedResponse, delegationAddressHex, deriveClobMarketId, deriveMrvContractAddress, deriveNativeSpotMarketId, deriveNativeSpotOrderId, encodeBlockSelector, encodeCancelOrderCalldata, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeNativeMarketModuleForwarderInput, encodeNativeNftBuyListingCall, encodeNativeNftCancelListingCall, encodeNativeNftCreateListingCall, encodeNativeNftPlaceAuctionBidCall, encodeNativeNftSettleAuctionCall, encodeNativeNftSweepExpiredListingsCall, encodeNativeSpotCancelOrderCall, encodeNativeSpotCreateMarketCall, encodeNativeSpotLimitOrderCall, encodeNativeSpotSettleLimitOrderCall, encodeNativeSpotSettleRoutedLimitOrderCall, encodePlaceLimitOrderCalldata, encodePlaceMarketOrderCalldata, encodePlaceMarketOrderExCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, getChainInfo, getNoEvmReceiptTrustPolicy, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isNativeMarketOrderBookStreamPayload, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeAgentStateFilterParams, nativeDevSchemaFieldNames, nativeDevUiStrings, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nativeMarketStateFilterParams, noEvmReceiptTrustPolicyFromChainInfo, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseLythToLythoshi, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, rankBridgeRoutes, resolveStudioHostStatus, selectBridgeTransferRoute, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, typedBech32ToAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, verifyNoEvmArchiveProofSignatures, verifyNoEvmBlockFinalityEvidenceMultisig, verifyNoEvmBlockFinalityEvidenceThreshold, verifyNoEvmFinalityEvidenceMultisig, verifyNoEvmFinalityEvidenceThreshold, verifyNoEvmReceiptProof, verifyNoEvmReceiptProofTrust, version };
+export { ADDRESS_HRP, ADDRESS_KIND_HRPS, API_STREAM_TOPICS, AddressError, AgentActionError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, CLOB_MARKET_ID_DOMAIN_TAG, CLOB_SELECTORS, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DelegationPrecompileError, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES, MAX_NATIVE_RECEIPT_EVENTS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MarketActionError, MrvValidationError, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE, NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY, NATIVE_CALL_FORWARDER_RESPONSE_OFFSET, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NATIVE_MARKET_MODULE_ADDRESS, NATIVE_MARKET_MODULE_ADDRESS_BYTES, NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_FINALITY_EVIDENCE_SCHEMA, NO_EVM_FINALITY_EVIDENCE_SOURCE, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NoEvmReceiptProofError, NodeRegistryError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RpcClient, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, assertNativeMarketOrderBookStreamPayload, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bridgeAddressHex, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildBridgeRouteCatalogue, buildCancelSpotOrderPlan, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildNativeCallForwarderArtifact, buildNativeMarketModuleCallEnvelope, buildNativeNftBuyListingForwarderInput, buildNativeNftBuyListingModuleCall, buildNativeNftCancelListingForwarderInput, buildNativeNftCancelListingModuleCall, buildNativeNftCreateListingForwarderInput, buildNativeNftCreateListingModuleCall, buildNativeNftPlaceAuctionBidForwarderInput, buildNativeNftPlaceAuctionBidModuleCall, buildNativeNftSettleAuctionForwarderInput, buildNativeNftSettleAuctionModuleCall, buildNativeNftSweepExpiredListingsForwarderInput, buildNativeNftSweepExpiredListingsModuleCall, buildNativeSpotCancelOrderForwarderInput, buildNativeSpotCancelOrderModuleCall, buildNativeSpotCreateMarketForwarderInput, buildNativeSpotCreateMarketModuleCall, buildNativeSpotLimitOrderForwarderInput, buildNativeSpotLimitOrderModuleCall, buildNativeSpotSettleLimitOrderForwarderInput, buildNativeSpotSettleLimitOrderModuleCall, buildNativeSpotSettleRoutedLimitOrderForwarderInput, buildNativeSpotSettleRoutedLimitOrderModuleCall, buildPlaceSpotLimitOrderPlan, buildPlaceSpotMarketOrderExPlan, buildPlaceSpotMarketOrderPlan, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, clobAddressHex, compareNativeDevVersions, composeClaimBoundMessage, computeNoEvmDacFinalityMessage, computeNoEvmLeaderFinalityMessage, computeNoEvmReceiptsRoot, computeNoEvmRoundFinalityMessage, computeNoEvmTargetReceiptHash, consumeNativeEvents, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNativeAgentStateResponse, decodeNativeMarketOrderBookDeltasResponse, decodeNativeReceiptResponse, decodeNoEvmReceiptTranscript, decodeTxFeedResponse, delegationAddressHex, deriveClobMarketId, deriveMrvContractAddress, deriveNativeSpotMarketId, deriveNativeSpotOrderId, encodeBlockSelector, encodeCancelOrderCalldata, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeNativeMarketModuleForwarderInput, encodeNativeNftBuyListingCall, encodeNativeNftCancelListingCall, encodeNativeNftCreateListingCall, encodeNativeNftPlaceAuctionBidCall, encodeNativeNftSettleAuctionCall, encodeNativeNftSweepExpiredListingsCall, encodeNativeSpotCancelOrderCall, encodeNativeSpotCreateMarketCall, encodeNativeSpotLimitOrderCall, encodeNativeSpotSettleLimitOrderCall, encodeNativeSpotSettleRoutedLimitOrderCall, encodePlaceLimitOrderCalldata, encodePlaceMarketOrderCalldata, encodePlaceMarketOrderExCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, getChainInfo, getNoEvmReceiptTrustPolicy, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isNativeMarketOrderBookStreamPayload, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeAgentStateFilterParams, nativeDevSchemaFieldNames, nativeDevUiStrings, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nativeMarketStateFilterParams, noEvmReceiptTrustPolicyFromChainInfo, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseLythToLythoshi, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, pubkeyRegistryAddressHex, rankBridgeRoutes, requireTypedAddress, resolveStudioHostStatus, selectBridgeTransferRoute, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, typedBech32ToAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, verifyNoEvmArchiveProofSignatures, verifyNoEvmBlockFinalityEvidenceMultisig, verifyNoEvmBlockFinalityEvidenceThreshold, verifyNoEvmFinalityEvidenceMultisig, verifyNoEvmFinalityEvidenceThreshold, verifyNoEvmReceiptProof, verifyNoEvmReceiptProofTrust, version };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

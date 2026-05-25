@@ -1,6 +1,7 @@
 'use strict';
 
 var mlDsa_js = require('@noble/post-quantum/ml-dsa.js');
+var blake3_js = require('@noble/hashes/blake3.js');
 var sha3_js = require('@noble/hashes/sha3.js');
 var bip39 = require('@scure/bip39');
 var english_js = require('@scure/bip39/wordlists/english.js');
@@ -241,6 +242,8 @@ var ML_DSA_65_PUBLIC_KEY_LEN = 1952;
 var ML_DSA_65_SIGNATURE_LEN = 3309;
 var STANDARD_ALGO_NUMBER_ML_DSA_65 = 1001;
 var ENUM_VARIANT_INDEX_ML_DSA_65 = 5;
+var ADDRESS_DERIVATION_DOMAIN = "MONO_ADDRESS_BLAKE3_20_V1";
+var ADDRESS_DERIVATION_DOMAIN_BYTES = new TextEncoder().encode(ADDRESS_DERIVATION_DOMAIN);
 var MlDsa65Backend = class _MlDsa65Backend {
   #secretKey;
   #publicKey;
@@ -248,7 +251,7 @@ var MlDsa65Backend = class _MlDsa65Backend {
   constructor(secretKey, publicKey) {
     this.#secretKey = expectBytes(secretKey, ML_DSA_65_SIGNING_KEY_LEN, "ML-DSA-65 secret key").slice();
     this.#publicKey = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key").slice();
-    this.#addressBytes = sha3_js.keccak_256(this.#publicKey).slice(12);
+    this.#addressBytes = mlDsa65AddressBytes(this.#publicKey);
   }
   static fromSeed(seed) {
     const kp = mlDsa_js.ml_dsa65.keygen(expectBytes(seed, ML_DSA_65_SEED_LEN, "ML-DSA-65 seed"));
@@ -297,7 +300,15 @@ var MlDsa65Backend = class _MlDsa65Backend {
   }
 };
 function mlDsa65AddressFromPublicKey(publicKey) {
-  return bytesToHex(sha3_js.keccak_256(expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key")).slice(12));
+  return bytesToHex(mlDsa65AddressBytes(publicKey));
+}
+function mlDsa65AddressBytes(publicKey) {
+  const bytes = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key");
+  return blake3_js.blake3(concatBytes(
+    ADDRESS_DERIVATION_DOMAIN_BYTES,
+    bigintToBeBytes(BigInt(STANDARD_ALGO_NUMBER_ML_DSA_65), 2, "ML-DSA-65 algo id"),
+    bytes
+  )).slice(0, 20);
 }
 function encodeMlDsa65Opaque(raw) {
   const bytes = raw instanceof Uint8Array ? raw : Uint8Array.from(raw);
@@ -576,6 +587,7 @@ function normalizeInput(value) {
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
 
+exports.ADDRESS_DERIVATION_DOMAIN = ADDRESS_DERIVATION_DOMAIN;
 exports.BincodeWriter = BincodeWriter;
 exports.DKG_AEAD_TAG_LEN = DKG_AEAD_TAG_LEN;
 exports.DKG_NONCE_LEN = DKG_NONCE_LEN;
@@ -617,6 +629,7 @@ exports.expectBytes = expectBytes;
 exports.fetchEncryptionKey = fetchEncryptionKey;
 exports.generatePqm1Mnemonic = generatePqm1Mnemonic;
 exports.hexToBytes = hexToBytes;
+exports.mlDsa65AddressBytes = mlDsa65AddressBytes;
 exports.mlDsa65AddressFromPublicKey = mlDsa65AddressFromPublicKey;
 exports.outerSigDigest = outerSigDigest;
 exports.parsePqm1Payload = parsePqm1Payload;

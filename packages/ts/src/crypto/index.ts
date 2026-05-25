@@ -6,6 +6,7 @@ export {
   hexToBytes,
 } from "./bytes.js";
 export {
+  ADDRESS_DERIVATION_DOMAIN,
   ENUM_VARIANT_INDEX_ML_DSA_65,
   ML_DSA_65_PUBLIC_KEY_LEN,
   ML_DSA_65_SEED_LEN,
@@ -14,6 +15,7 @@ export {
   MlDsa65Backend,
   STANDARD_ALGO_NUMBER_ML_DSA_65,
   encodeMlDsa65Opaque,
+  mlDsa65AddressBytes,
   mlDsa65AddressFromPublicKey,
 } from "./ml-dsa.js";
 export {

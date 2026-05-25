@@ -1,4 +1,4 @@
-import { D as RpcClient } from './native-events-OYgkLZOg.cjs';
+import { D as RpcClient } from './native-events-CMCJsrHx.js';
 
 declare const ML_KEM_768_CIPHERTEXT_LEN = 1088;
 declare const ML_KEM_768_ENCAPSULATION_KEY_LEN = 1184;
@@ -86,6 +86,7 @@ declare const ML_DSA_65_PUBLIC_KEY_LEN = 1952;
 declare const ML_DSA_65_SIGNATURE_LEN = 3309;
 declare const STANDARD_ALGO_NUMBER_ML_DSA_65 = 1001;
 declare const ENUM_VARIANT_INDEX_ML_DSA_65 = 5;
+declare const ADDRESS_DERIVATION_DOMAIN = "MONO_ADDRESS_BLAKE3_20_V1";
 declare class MlDsa65Backend {
     #private;
     private constructor();
@@ -104,6 +105,7 @@ declare class MlDsa65Backend {
     };
 }
 declare function mlDsa65AddressFromPublicKey(publicKey: Uint8Array | readonly number[]): string;
+declare function mlDsa65AddressBytes(publicKey: Uint8Array | readonly number[]): Uint8Array;
 declare function encodeMlDsa65Opaque(raw: Uint8Array | readonly number[]): Uint8Array;
 
 interface EncryptionKey {
@@ -126,4 +128,4 @@ declare function buildEncryptedSubmission(args: {
 }): Promise<EncryptedSubmission>;
 declare function submitEncryptedEnvelope(client: RpcClient, envelopeWireHex: string): Promise<string>;
 
-export { fetchEncryptionKey as A, mlDsa65AddressFromPublicKey as B, outerSigDigest as C, DKG_AEAD_TAG_LEN as D, type EncryptionKey as E, submitEncryptedEnvelope as F, MempoolClass as M, type NativeEvmTxFields as N, STANDARD_ALGO_NUMBER_ML_DSA_65 as S, MlDsa65Backend as a, DKG_NONCE_LEN as b, type DecryptHint as c, ENUM_VARIANT_INDEX_ML_DSA_65 as d, type EncryptedEnvelope as e, type EncryptedSubmission as f, ML_DSA_65_PUBLIC_KEY_LEN as g, ML_DSA_65_SEED_LEN as h, ML_DSA_65_SIGNATURE_LEN as i, ML_DSA_65_SIGNING_KEY_LEN as j, ML_KEM_768_CIPHERTEXT_LEN as k, ML_KEM_768_ENCAPSULATION_KEY_LEN as l, ML_KEM_768_SHARED_SECRET_LEN as m, type NativeTxExtension as n, type NativeTxExtensionDescriptor as o, type NativeTxExtensionLike as p, type NonceAad as q, bincodeDecryptHint as r, bincodeEncryptedEnvelope as s, bincodeNonceAad as t, bincodeSignedTransaction as u, buildEncryptedEnvelope as v, buildEncryptedSubmission as w, encodeMlDsa65Opaque as x, encodeTransactionForHash as y, encryptInnerTx as z };
+export { ADDRESS_DERIVATION_DOMAIN as A, fetchEncryptionKey as B, mlDsa65AddressBytes as C, DKG_AEAD_TAG_LEN as D, type EncryptionKey as E, mlDsa65AddressFromPublicKey as F, outerSigDigest as G, submitEncryptedEnvelope as H, MempoolClass as M, type NativeEvmTxFields as N, STANDARD_ALGO_NUMBER_ML_DSA_65 as S, MlDsa65Backend as a, DKG_NONCE_LEN as b, type DecryptHint as c, ENUM_VARIANT_INDEX_ML_DSA_65 as d, type EncryptedEnvelope as e, type EncryptedSubmission as f, ML_DSA_65_PUBLIC_KEY_LEN as g, ML_DSA_65_SEED_LEN as h, ML_DSA_65_SIGNATURE_LEN as i, ML_DSA_65_SIGNING_KEY_LEN as j, ML_KEM_768_CIPHERTEXT_LEN as k, ML_KEM_768_ENCAPSULATION_KEY_LEN as l, ML_KEM_768_SHARED_SECRET_LEN as m, type NativeTxExtension as n, type NativeTxExtensionDescriptor as o, type NativeTxExtensionLike as p, type NonceAad as q, bincodeDecryptHint as r, bincodeEncryptedEnvelope as s, bincodeNonceAad as t, bincodeSignedTransaction as u, buildEncryptedEnvelope as v, buildEncryptedSubmission as w, encodeMlDsa65Opaque as x, encodeTransactionForHash as y, encryptInnerTx as z };

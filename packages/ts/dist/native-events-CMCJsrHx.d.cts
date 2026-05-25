@@ -2475,8 +2475,8 @@ interface NetworkClientOptions extends RpcClientOptions {
     /** Probe all known endpoints and choose the first one that answers. */
     probe?: boolean;
 }
-/** User address accepted by helpers that canonicalize to `mono1...`. */
-type UserAddressInput = string | Uint8Array | readonly number[];
+/** Typed ADR-0038 user address (`mono1...`) accepted at public SDK boundaries. */
+type UserAddressInput = string;
 interface TxFeedReceipt {
     status: number;
     executionUnitsUsed: number;
