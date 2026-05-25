@@ -397,6 +397,14 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
       kind: "malformed",
       message: expect.stringContaining("raw 0x addresses are retired"),
     });
+    await expect(client.lythMempoolPending("0x1111111111111111111111111111111111111111")).rejects.toMatchObject({
+      kind: "malformed",
+      message: expect.stringContaining("raw 0x addresses are retired"),
+    });
+    await expect(client.lythMempoolPending(contract)).rejects.toMatchObject({
+      kind: "malformed",
+      message: expect.stringContaining("must be typed mono"),
+    });
     await expect(client.lythAddressActivityKind(contract)).rejects.toMatchObject({
       kind: "malformed",
       message: expect.stringContaining("must be typed mono"),
@@ -406,6 +414,18 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
       message: expect.stringContaining("must be typed monos"),
     });
     expect(calls).toHaveLength(0);
+  });
+
+  it("lyth_mempoolPending sends typed mono senders", async () => {
+    const { fetch, calls } = mockFetch([]);
+    const client = new RpcClient("http://x", { fetch });
+    const sender = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
+
+    const pending = await client.lythMempoolPending(sender);
+
+    expect(pending).toEqual([]);
+    expect(calls[0].method).toBe("lyth_mempoolPending");
+    expect(calls[0].params).toEqual([sender]);
   });
 
   it("lyth_bridgeRoutes forwards the typed readiness request", async () => {
