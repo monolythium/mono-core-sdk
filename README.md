@@ -110,7 +110,10 @@ Explorer and wallet surfaces can use the same client for the live aggregate
 views exposed by the node:
 
 ```ts
-const profile = await client.lythAddressProfile("0x123456789abcdef0112233445566778899aabbcc");
+import { addressToTypedBech32 } from "@monolythium/core-sdk";
+
+const account = addressToTypedBech32("user", "0x123456789abcdef0112233445566778899aabbcc");
+const profile = await client.lythAddressProfile(account);
 const flow = await client.lythAddressFlow(profile.address, 100);
 const search = await client.lythSearch(profile.address);
 const markets = await client.lythClobMarkets(25);
@@ -163,13 +166,14 @@ automatically.
 TypeScript:
 
 ```ts
-import { ApiClient } from "@monolythium/core-sdk";
+import { ApiClient, addressToTypedBech32 } from "@monolythium/core-sdk";
 
 const api = new ApiClient("https://rpc.testnet.monolythium.com");
 
 const health = await api.health();
 const latest = await api.block("latest");
-const activity = await api.addressActivity("0x123456789abcdef0112233445566778899aabbcc");
+const account = addressToTypedBech32("user", "0x123456789abcdef0112233445566778899aabbcc");
+const activity = await api.addressActivity(account);
 
 console.log({ status: health.status, txs: latest.data.transactionCount, rows: activity.data.entries.length });
 ```
@@ -189,9 +193,11 @@ println!("latest block {}", latest.data.block.height);
 
 ## Address Display
 
-Monolythium accounts remain 20-byte identifiers on the JSON-RPC wire for
-compatibility. Wallets, explorers, and user-facing apps should display them as
-`mono1...` bech32m.
+Monolythium accounts are 20-byte payloads wrapped in typed ADR-0038 bech32m
+strings at public SDK, wallet, explorer, REST, and JSON-RPC boundaries. User
+accounts use `mono1...`; contract calls use `monoc1...`; smart-account MRC
+lookups use `monos1...`. Raw `0x` address strings remain only for low-level
+compatibility helpers and byte conversion utilities.
 
 TypeScript:
 
@@ -199,7 +205,7 @@ TypeScript:
 import { addressToBech32, bech32ToAddress } from "@monolythium/core-sdk";
 
 const display = addressToBech32("0x123456789abcdef0112233445566778899aabbcc");
-const wire = bech32ToAddress(display);
+const hex = bech32ToAddress(display);
 ```
 
 Rust:
@@ -208,7 +214,7 @@ Rust:
 use monolythium_core_sdk::{address_to_bech32, bech32_to_address};
 
 let display = address_to_bech32([0x42; 20]);
-let wire = bech32_to_address(&display).expect("valid mono1 address");
+let bytes = bech32_to_address(&display).expect("valid mono1 address");
 ```
 
 Typed v4.1 surfaces use distinct bech32m HRPs for each address role:

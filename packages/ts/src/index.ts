@@ -368,6 +368,7 @@ export {
   hexToAddressBytes,
   normalizeAddressHex,
   parseAddress,
+  requireTypedAddress,
   typedBech32ToAddress,
 } from "./address.js";
 export type { AddressKind, TypedAddress } from "./address.js";

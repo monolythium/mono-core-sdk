@@ -7,7 +7,10 @@
  * (Law §13.2).
  */
 
-import { addressToBech32, parseAddress } from "./address.js";
+import {
+  requireTypedAddress,
+  type AddressKind,
+} from "./address.js";
 import { SdkError } from "./error.js";
 import type { BridgeRouteDisclosure, BridgeRoutesRequest, BridgeRoutesResponse } from "./bridge.js";
 import {
@@ -100,8 +103,8 @@ export interface NetworkClientOptions extends RpcClientOptions {
   probe?: boolean;
 }
 
-/** User address accepted by helpers that canonicalize to `mono1...`. */
-export type UserAddressInput = string | Uint8Array | readonly number[];
+/** Typed ADR-0038 user address (`mono1...`) accepted at public SDK boundaries. */
+export type UserAddressInput = string;
 
 export interface TxFeedReceipt {
   status: number;
@@ -1389,7 +1392,7 @@ export class RpcClient {
 
   /** `lyth_getAccountPolicy` — privacy posture for an account. */
   async lythGetAccountPolicy(address: string): Promise<AccountPolicy> {
-    return this.call("lyth_getAccountPolicy", [address]);
+    return this.call("lyth_getAccountPolicy", [sdkTypedAddress(address, "user", "address")]);
   }
 
   /** `lyth_getAssetPolicy` — privacy posture for an asset. */
@@ -1399,7 +1402,7 @@ export class RpcClient {
 
   /** `lyth_getTokenBalances` — indexed per-asset balances for one address. */
   async lythGetTokenBalances(address: string): Promise<TokenBalanceRecord[]> {
-    return this.call("lyth_getTokenBalances", [address]);
+    return this.call("lyth_getTokenBalances", [sdkTypedAddress(address, "user", "address")]);
   }
 
   /** `lyth_bridgeRoutes` — read-only bridge route-selection/readiness. */
@@ -1421,7 +1424,9 @@ export class RpcClient {
     account: string,
     spendLimit?: number | null,
   ): Promise<MrcAccountResponse> {
-    const request: MrcAccountRequest = { account };
+    const request: MrcAccountRequest = {
+      account: sdkTypedAddress(account, "smartAccount", "account"),
+    };
     if (spendLimit != null) request.spendLimit = spendLimit;
     const params =
       request.spendLimit == null
@@ -1482,7 +1487,9 @@ export class RpcClient {
 
   /** `lyth_getAddressLabel` — indexed display/category label for one address. */
   async lythGetAddressLabel(address: string): Promise<AddressLabelRecord | null> {
-    const v = await this.call<unknown>("lyth_getAddressLabel", [address]);
+    const v = await this.call<unknown>("lyth_getAddressLabel", [
+      sdkTypedAddress(address, "user", "address"),
+    ]);
     if (v === null || v === undefined) return null;
     return v as AddressLabelRecord;
   }
@@ -1493,13 +1500,14 @@ export class RpcClient {
     limit = 50,
     cursor?: string | null,
   ): Promise<AddressActivityEntry[]> {
-    const params = cursor === undefined ? [address, limit] : [address, limit, cursor];
+    const userAddress = sdkTypedAddress(address, "user", "address");
+    const params = cursor === undefined ? [userAddress, limit] : [userAddress, limit, cursor];
     return this.call("lyth_getAddressActivity", params);
   }
 
   /** `lyth_addressActivityKind` — activity index coverage for one address. */
   async lythAddressActivityKind(address: string): Promise<AddressActivityKindResponse> {
-    return this.call("lyth_addressActivityKind", [address]);
+    return this.call("lyth_addressActivityKind", [sdkTypedAddress(address, "user", "address")]);
   }
 
   /** `lyth_agentReputation` — reputation accumulators for an agent provider. */
@@ -1507,7 +1515,10 @@ export class RpcClient {
     provider: UserAddressInput,
     categoryId = 0,
   ): Promise<AgentReputationResponse> {
-    return this.call("lyth_agentReputation", [normalizeUserBech32Address(provider), categoryId]);
+    return this.call("lyth_agentReputation", [
+      sdkTypedAddress(provider, "user", "provider address"),
+      categoryId,
+    ]);
   }
 
   /** `lyth_decodeTx` — explorer-grade decoded transaction envelope. */
@@ -1679,12 +1690,12 @@ export class RpcClient {
 
   /** `lyth_addressProfile` — live account + label + activity aggregate. */
   async lythAddressProfile(address: string): Promise<AddressProfileResponse> {
-    return this.call("lyth_addressProfile", [address]);
+    return this.call("lyth_addressProfile", [sdkTypedAddress(address, "user", "address")]);
   }
 
   /** `lyth_addressFlow` — recent indexed address-flow aggregate. */
   async lythAddressFlow(address: string, limit = 250): Promise<AddressFlowResponse> {
-    return this.call("lyth_addressFlow", [address, limit]);
+    return this.call("lyth_addressFlow", [sdkTypedAddress(address, "user", "address"), limit]);
   }
 
   /** `lyth_search` — exact live resolver for hashes, addresses, blocks, and clusters. */
@@ -1763,8 +1774,9 @@ export class RpcClient {
     wallet: string,
     block?: BlockSelector,
   ): Promise<DelegationsResponse> {
+    const userWallet = sdkTypedAddress(wallet, "user", "wallet");
     const params =
-      block === undefined ? [wallet] : [wallet, encodeBlockSelector(block)];
+      block === undefined ? [userWallet] : [userWallet, encodeBlockSelector(block)];
     return this.call("lyth_getDelegations", params);
   }
 
@@ -1773,8 +1785,9 @@ export class RpcClient {
     wallet: string,
     block?: BlockSelector,
   ): Promise<PendingRewardsResponse> {
+    const userWallet = sdkTypedAddress(wallet, "user", "wallet");
     const params =
-      block === undefined ? [wallet] : [wallet, encodeBlockSelector(block)];
+      block === undefined ? [userWallet] : [userWallet, encodeBlockSelector(block)];
     return this.call("lyth_pendingRewards", params);
   }
 
@@ -1783,8 +1796,9 @@ export class RpcClient {
     wallet: string,
     block?: BlockSelector,
   ): Promise<RedemptionQueueResponse> {
+    const userWallet = sdkTypedAddress(wallet, "user", "wallet");
     const params =
-      block === undefined ? [wallet] : [wallet, encodeBlockSelector(block)];
+      block === undefined ? [userWallet] : [userWallet, encodeBlockSelector(block)];
     return this.call("lyth_redemptionQueue", params);
   }
 
@@ -1794,7 +1808,8 @@ export class RpcClient {
     limit = 50,
     cursor?: string | null,
   ): Promise<DelegationHistoryRecord[]> {
-    const params = cursor === undefined ? [wallet, limit] : [wallet, limit, cursor];
+    const userWallet = sdkTypedAddress(wallet, "user", "wallet");
+    const params = cursor === undefined ? [userWallet, limit] : [userWallet, limit, cursor];
     return this.call("lyth_getDelegationHistory", params);
   }
 
@@ -2871,12 +2886,12 @@ function normalizeTransactionReceipt(value: unknown): TransactionReceipt | null 
   };
 }
 
-function normalizeUserBech32Address(address: UserAddressInput): string {
+function sdkTypedAddress(address: string, kind: AddressKind, label: string): string {
   try {
-    return addressToBech32(typeof address === "string" ? parseAddress(address) : address);
+    return requireTypedAddress(address, kind, label);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw SdkError.malformed(`invalid provider address: ${message}`);
+    throw SdkError.malformed(message);
   }
 }
 

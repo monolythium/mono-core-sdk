@@ -56,14 +56,15 @@ The SDK also exports `ApiClient` for the node's REST-shaped `/api/v1` surface.
 Pass the JSON-RPC endpoint; the client derives `/api/v1` automatically.
 
 ```ts
-import { ApiClient } from "@monolythium/core-sdk";
+import { ApiClient, addressToTypedBech32 } from "@monolythium/core-sdk";
 
 const api = new ApiClient("https://rpc.testnet.monolythium.com");
 
 const latest = await api.block("latest");
 const txs = await api.blockTransactions("latest", 0, 25);
 const nativeReceipt = await api.transactionNativeReceipt("0x...");
-const activity = await api.addressActivity("0x123456789abcdef0112233445566778899aabbcc");
+const account = addressToTypedBech32("user", "0x123456789abcdef0112233445566778899aabbcc");
+const activity = await api.addressActivity(account);
 
 console.log(
   latest.data.block.blockHash,
@@ -100,14 +101,16 @@ the first one that answers with the expected chain id.
 
 ### Address helpers
 
-User-facing surfaces should display Monolythium addresses as `mono1...`
-bech32m, while JSON-RPC still uses 20-byte `0x...` hex.
+Public v4.1 SDK, JSON-RPC, REST, wallet, and explorer surfaces use ADR-0038
+typed bech32m addresses. User accounts use `mono1...`; smart-account MRC
+lookups use `monos1...`; RISC-V contracts use `monoc1...`. Raw `0x` strings
+remain only for low-level byte conversion helpers and compatibility adapters.
 
 ```ts
 import { addressToBech32, bech32ToAddress } from "@monolythium/core-sdk";
 
 const display = addressToBech32("0x123456789abcdef0112233445566778899aabbcc");
-const wire = bech32ToAddress(display);
+const hex = bech32ToAddress(display);
 ```
 
 V4.1 typed address helpers also encode role-specific HRPs such as `monoc` for

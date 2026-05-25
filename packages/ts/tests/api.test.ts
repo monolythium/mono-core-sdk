@@ -4,6 +4,7 @@ import {
   NO_EVM_RECEIPT_ROOT_ALGORITHM,
   SdkError,
   apiEndpointFromRpcEndpoint,
+  addressToTypedBech32,
   assessBridgeRoute,
 } from "../src/index.js";
 import type {
@@ -187,9 +188,10 @@ describe("ApiClient", () => {
   });
 
   it("forwards paging and cursor query parameters", async () => {
+    const address = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
     const { fetch, calls } = mockGet(
       apiEnvelope({
-        address: "0x1111111111111111111111111111111111111111",
+        address,
         limit: 75,
         entries: [],
         indexer: { enabled: true, currentHeight: 100, latestHeight: 101, schemaVersion: 1 },
@@ -197,16 +199,37 @@ describe("ApiClient", () => {
     );
     const client = new ApiClient("/rpc", { fetch });
 
-    await client.addressActivity("0x1111111111111111111111111111111111111111", 75, "0x1234");
+    await client.addressActivity(address, 75, "0x1234");
 
     expect(calls[0]).toEqual({
-      url: "/api/v1/addresses/0x1111111111111111111111111111111111111111/activity?limit=75&cursor=0x1234",
+      url: `/api/v1/addresses/${address}/activity?limit=75&cursor=0x1234`,
       method: "GET",
     });
   });
 
+  it("rejects raw and wrong-HRP addresses before REST address fetches", async () => {
+    const { fetch, calls } = mockGet(apiEnvelope({}));
+    const client = new ApiClient("/rpc", { fetch });
+    const contract = addressToTypedBech32("contract", "0x1111111111111111111111111111111111111111");
+    const user = addressToTypedBech32("user", "0x2222222222222222222222222222222222222222");
+
+    await expect(client.addressProfile("0x1111111111111111111111111111111111111111")).rejects.toMatchObject({
+      kind: "malformed",
+      message: expect.stringContaining("raw 0x addresses are retired"),
+    });
+    await expect(client.addressActivity(contract)).rejects.toMatchObject({
+      kind: "malformed",
+      message: expect.stringContaining("must be typed mono"),
+    });
+    await expect(client.mrcAccount(user)).rejects.toMatchObject({
+      kind: "malformed",
+      message: expect.stringContaining("must be typed monos"),
+    });
+    expect(calls).toHaveLength(0);
+  });
+
   it("reads address profile token balances with optional MRC identity", async () => {
-    const address = "0x1111111111111111111111111111111111111111";
+    const address = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
     const assetId = `0x${"bb".repeat(32)}`;
     const mrcTokenId = `0x${"cc".repeat(32)}`;
     const vaultId = `0x${"ff".repeat(32)}`;
@@ -277,7 +300,7 @@ describe("ApiClient", () => {
   });
 
   it("reads address profile bridge route disclosures", async () => {
-    const address = "0x1111111111111111111111111111111111111111";
+    const address = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
     const profileData: AddressProfileResponse = {
       schemaVersion: 1,
       address,
@@ -1309,15 +1332,16 @@ describe("ApiClient", () => {
     const marketId = `0x${"55".repeat(32)}`;
     const assetId = `0x${"bb".repeat(32)}`;
     const mrcTokenId = `0x${"cc".repeat(32)}`;
-    const account = "0x1111111111111111111111111111111111111111";
-    const mrcAccount = "monos1effvdw0d05a35j69wwxplhmctpcclx382n60yf";
+    const account = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
+    const rewardsAccount = addressToTypedBech32("user", "0x2222222222222222222222222222222222222222");
+    const mrcAccount = addressToTypedBech32("smartAccount", "0x3333333333333333333333333333333333333333");
 
     await client.search("0xabc", 5);
     await client.stats();
     await client.transactions(25, "0x1234");
     await client.addressProfile(account);
     await client.addressFlow(account, 75);
-    await client.addressPendingRewards("mono1wallet", 99);
+    await client.addressPendingRewards(rewardsAccount, 99);
     await client.assetMrcMetadata(assetId, mrcTokenId);
     await client.assetMrcMetadata(assetId);
     await client.mrcAccount(mrcAccount, 2);
@@ -1333,9 +1357,9 @@ describe("ApiClient", () => {
       "https://rpc.example/api/v1/search?q=0xabc&limit=5",
       "https://rpc.example/api/v1/stats",
       "https://rpc.example/api/v1/transactions?limit=25&cursor=0x1234",
-      "https://rpc.example/api/v1/addresses/0x1111111111111111111111111111111111111111/profile",
-      "https://rpc.example/api/v1/addresses/0x1111111111111111111111111111111111111111/flow?limit=75",
-      "https://rpc.example/api/v1/addresses/mono1wallet/pending-rewards?block=0x63",
+      `https://rpc.example/api/v1/addresses/${account}/profile`,
+      `https://rpc.example/api/v1/addresses/${account}/flow?limit=75`,
+      `https://rpc.example/api/v1/addresses/${rewardsAccount}/pending-rewards?block=0x63`,
       `https://rpc.example/api/v1/assets/${assetId}/metadata?mrcTokenId=${mrcTokenId}`,
       `https://rpc.example/api/v1/assets/${assetId}/metadata`,
       `https://rpc.example/api/v1/mrc/accounts/${mrcAccount}?limit=2`,
@@ -1389,7 +1413,7 @@ describe("ApiClient", () => {
   });
 
   it("wraps REST MRC account route and decodes policy spend rows", async () => {
-    const account = "monos1effvdw0d05a35j69wwxplhmctpcclx382n60yf";
+    const account = addressToTypedBech32("smartAccount", "0x3333333333333333333333333333333333333333");
     const controller = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
     const recovery = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
     const assetId = `0x${"bb".repeat(32)}`;

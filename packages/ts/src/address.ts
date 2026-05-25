@@ -100,6 +100,26 @@ export function typedBech32ToAddress(address: string, expectedKind?: AddressKind
   return { kind, address: address.toLowerCase(), bytes: out, hex: addressBytesToHex(out) };
 }
 
+export function requireTypedAddress(
+  address: string,
+  expectedKind: AddressKind,
+  label = "address",
+): string {
+  if (address.startsWith("0x") || address.startsWith("0X")) {
+    throw new AddressError(
+      `${label} raw 0x addresses are retired; use typed ${ADDRESS_KIND_HRPS[expectedKind]} bech32m addresses`,
+    );
+  }
+  try {
+    return typedBech32ToAddress(address, expectedKind).address;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AddressError(
+      `${label} must be typed ${ADDRESS_KIND_HRPS[expectedKind]} bech32m address: ${message}`,
+    );
+  }
+}
+
 export function parseAddress(address: string): Uint8Array {
   if (address.startsWith("0x") || address.startsWith("0X")) {
     return hexToAddressBytes(address);

@@ -40,6 +40,10 @@ import type {
   NativeEventFilter,
   TypedNativeReceiptEvent,
 } from "./native-events.js";
+import {
+  requireTypedAddress,
+  type AddressKind,
+} from "./address.js";
 import type {
   AddressFlowResponse,
   AddressProfileResponse,
@@ -628,11 +632,13 @@ export class ApiClient {
   }
 
   async addressProfile(address: string): Promise<ApiEnvelope<AddressProfileResponse>> {
-    return this.get(`/addresses/${encodePathSegment(address)}/profile`);
+    const userAddress = sdkTypedAddress(address, "user", "address");
+    return this.get(`/addresses/${encodePathSegment(userAddress)}/profile`);
   }
 
   async addressFlow(address: string, limit = 250): Promise<ApiEnvelope<AddressFlowResponse>> {
-    return this.get(`/addresses/${encodePathSegment(address)}/flow`, { limit });
+    const userAddress = sdkTypedAddress(address, "user", "address");
+    return this.get(`/addresses/${encodePathSegment(userAddress)}/flow`, { limit });
   }
 
   async addressActivity(
@@ -640,21 +646,24 @@ export class ApiClient {
     limit = 50,
     cursor?: string | null,
   ): Promise<ApiEnvelope<ApiAddressActivityData>> {
-    return this.get(`/addresses/${encodePathSegment(address)}/activity`, {
+    const userAddress = sdkTypedAddress(address, "user", "address");
+    return this.get(`/addresses/${encodePathSegment(userAddress)}/activity`, {
       limit,
       cursor,
     });
   }
 
   async addressActivityKind(address: string): Promise<ApiEnvelope<ApiAddressActivityKindData>> {
-    return this.get(`/addresses/${encodePathSegment(address)}/activity-kind`);
+    const userAddress = sdkTypedAddress(address, "user", "address");
+    return this.get(`/addresses/${encodePathSegment(userAddress)}/activity-kind`);
   }
 
   async addressPendingRewards(
     address: string,
     block?: BlockSelector | null,
   ): Promise<ApiEnvelope<PendingRewardsResponse>> {
-    return this.get(`/addresses/${encodePathSegment(address)}/pending-rewards`, {
+    const userAddress = sdkTypedAddress(address, "user", "address");
+    return this.get(`/addresses/${encodePathSegment(userAddress)}/pending-rewards`, {
       block: block == null ? undefined : encodeBlockSelector(block),
     });
   }
@@ -663,7 +672,8 @@ export class ApiClient {
     address: string,
     block?: BlockSelector | null,
   ): Promise<ApiEnvelope<RedemptionQueueResponse>> {
-    return this.get(`/addresses/${encodePathSegment(address)}/redemption-queue`, {
+    const userAddress = sdkTypedAddress(address, "user", "address");
+    return this.get(`/addresses/${encodePathSegment(userAddress)}/redemption-queue`, {
       block: block == null ? undefined : encodeBlockSelector(block),
     });
   }
@@ -681,7 +691,8 @@ export class ApiClient {
     account: string,
     limit?: number | null,
   ): Promise<ApiEnvelope<MrcAccountResponse>> {
-    return this.get(`/mrc/accounts/${encodePathSegment(account)}`, {
+    const smartAccount = sdkTypedAddress(account, "smartAccount", "account");
+    return this.get(`/mrc/accounts/${encodePathSegment(smartAccount)}`, {
       limit: limit ?? undefined,
     });
   }
@@ -907,6 +918,15 @@ function nativeMarketOrderBookDeltasQuery(
     account: filter.account,
     counterparty: filter.counterparty,
   };
+}
+
+function sdkTypedAddress(address: string, kind: AddressKind, label: string): string {
+  try {
+    return requireTypedAddress(address, kind, label);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw SdkError.malformed(message);
+  }
 }
 
 function encodePathBlock(block: BlockSelector): string {
