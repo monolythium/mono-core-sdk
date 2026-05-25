@@ -10,7 +10,6 @@ import { keccak_256 } from "@noble/hashes/sha3.js";
 import {
   ADDRESS_KIND_HRPS,
   addressToTypedBech32,
-  hexToAddressBytes,
   typedBech32ToAddress,
   type AddressKind,
 } from "./address.js";
@@ -58,11 +57,9 @@ export type SpotMarketOrderMode = "fill-or-refund" | "fill-or-rest-at-cap";
 export type NativeMarketAddressKind = AddressKind;
 export type NativeMarketAddressInput =
   | string
-  | Uint8Array
-  | readonly number[]
   | {
       kind?: NativeMarketAddressKind;
-      address: string | Uint8Array | readonly number[];
+      address: string;
     };
 
 export interface PlaceSpotLimitOrderArgs {
@@ -119,7 +116,7 @@ export interface CancelSpotOrderArgs {
 export interface EncodeNativeSpotLimitOrderArgs {
   /** 32-byte native spot market id. */
   marketId: string;
-  /** Owner MonoAddress; 0x addresses and raw 20-byte inputs default to user kind. */
+  /** Owner typed bech32m MonoAddress; optional object `kind` asserts the expected HRP. */
   owner: NativeMarketAddressInput;
   /** Per-owner order nonce encoded as uint64. */
   nonce: string | number | bigint;
@@ -134,7 +131,7 @@ export interface EncodeNativeSpotLimitOrderArgs {
 }
 
 export interface EncodeNativeSpotCreateMarketArgs {
-  /** Market owner MonoAddress; 0x addresses and raw 20-byte inputs default to user kind. */
+  /** Market owner typed bech32m MonoAddress; optional object `kind` asserts the expected HRP. */
   owner: NativeMarketAddressInput;
   /** Owner-local market nonce encoded as uint64. */
   nonce: string | number | bigint;
@@ -155,7 +152,7 @@ export interface EncodeNativeSpotCreateMarketArgs {
 export interface EncodeNativeSpotCancelOrderArgs {
   /** 32-byte native order id. */
   orderId: string;
-  /** Caller MonoAddress; 0x addresses and raw 20-byte inputs default to user kind. */
+  /** Caller typed bech32m MonoAddress; optional object `kind` asserts the expected HRP. */
   caller: NativeMarketAddressInput;
 }
 
@@ -188,7 +185,7 @@ export type NativeNftListingKind =
     };
 
 export interface EncodeNativeNftCreateListingArgs {
-  /** Seller MonoAddress; 0x addresses and raw 20-byte inputs default to user kind. */
+  /** Seller typed bech32m MonoAddress; optional object `kind` asserts the expected HRP. */
   seller: NativeMarketAddressInput;
   /** Seller-local listing nonce encoded as uint64. */
   nonce: string | number | bigint;
@@ -213,7 +210,7 @@ export interface EncodeNativeNftCreateListingArgs {
 export interface EncodeNativeNftBuyListingArgs {
   /** 32-byte native NFT listing id. */
   listingId: string;
-  /** Buyer MonoAddress; 0x addresses and raw 20-byte inputs default to user kind. */
+  /** Buyer typed bech32m MonoAddress; optional object `kind` asserts the expected HRP. */
   buyer: NativeMarketAddressInput;
   /** Current block attached to the native buy call. */
   currentBlock: string | number | bigint;
@@ -222,14 +219,14 @@ export interface EncodeNativeNftBuyListingArgs {
 export interface EncodeNativeNftCancelListingArgs {
   /** 32-byte native NFT listing id. */
   listingId: string;
-  /** Caller MonoAddress; 0x addresses and raw 20-byte inputs default to user kind. */
+  /** Caller typed bech32m MonoAddress; optional object `kind` asserts the expected HRP. */
   caller: NativeMarketAddressInput;
 }
 
 export interface EncodeNativeNftPlaceAuctionBidArgs {
   /** 32-byte native NFT auction listing id. */
   listingId: string;
-  /** Bidder MonoAddress; 0x addresses and raw 20-byte inputs default to user kind. */
+  /** Bidder typed bech32m MonoAddress; optional object `kind` asserts the expected HRP. */
   bidder: NativeMarketAddressInput;
   /** Positive integer decimal string encoded as native MrcAmount/u128. */
   amount: string;
@@ -1025,25 +1022,17 @@ function normalizeNativeMarketAddress(
   if (typeof input === "string") {
     return normalizeNativeMarketAddressString(input, undefined, name);
   }
-  if (isAddressByteInput(input)) {
-    return { kind: "user", bytes: expectAddressBytes(input, name) };
-  }
-  if (typeof input === "object" && input !== null) {
-    const kind = input.kind ?? "user";
-    if (!(kind in NATIVE_MARKET_ADDRESS_KIND_VARIANTS)) {
+  if (typeof input === "object" && input !== null && "address" in input) {
+    const kind = input.kind;
+    if (kind !== undefined && !(kind in NATIVE_MARKET_ADDRESS_KIND_VARIANTS)) {
       throw new MarketActionError(`${name}.kind is not a supported native address kind`);
     }
-    const address = input.address;
-    if (typeof address === "string") {
-      return normalizeNativeMarketAddressString(address, kind, name);
+    if (typeof input.address !== "string") {
+      throw new MarketActionError(`${name}.address must be a typed bech32m address`);
     }
-    return { kind, bytes: expectAddressBytes(address, name) };
+    return normalizeNativeMarketAddressString(input.address, kind, name);
   }
-  throw new MarketActionError(`${name} must be a 20-byte address`);
-}
-
-function isAddressByteInput(input: NativeMarketAddressInput): input is Uint8Array | readonly number[] {
-  return input instanceof Uint8Array || Array.isArray(input);
+  throw new MarketActionError(`${name} must be a typed bech32m address`);
 }
 
 function normalizeNativeMarketAddressString(
@@ -1051,28 +1040,16 @@ function normalizeNativeMarketAddressString(
   expectedKind: NativeMarketAddressKind | undefined,
   name: string,
 ): { kind: NativeMarketAddressKind; bytes: Uint8Array } {
+  if (address.startsWith("0x") || address.startsWith("0X")) {
+    throw new MarketActionError(`${name} raw 0x addresses are retired; use typed bech32m addresses`);
+  }
   try {
-    if (address.startsWith("0x") || address.startsWith("0X")) {
-      return { kind: expectedKind ?? "user", bytes: hexToAddressBytes(address) };
-    }
     const parsed = typedBech32ToAddress(address, expectedKind);
     return { kind: parsed.kind, bytes: parsed.bytes };
   } catch (error) {
     const detail = error instanceof Error ? `: ${error.message}` : "";
-    throw new MarketActionError(`${name} must be a 20-byte hex or typed bech32m address${detail}`);
+    throw new MarketActionError(`${name} must be a typed bech32m address${detail}`);
   }
-}
-
-function expectAddressBytes(value: Uint8Array | readonly number[], name: string): Uint8Array {
-  if (value.length !== 20) {
-    throw new MarketActionError(`${name} must be a 20-byte address`);
-  }
-  for (const byte of value) {
-    if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
-      throw new MarketActionError(`${name} must contain bytes`);
-    }
-  }
-  return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
 
 function uint8Word(value: 0 | 1): Uint8Array {

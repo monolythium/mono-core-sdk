@@ -6,7 +6,7 @@
  * reputation effects, or execution success.
  */
 
-import { addressToTypedBech32, hexToAddressBytes, typedBech32ToAddress, type AddressKind } from "./address.js";
+import { addressToTypedBech32, typedBech32ToAddress, type AddressKind } from "./address.js";
 import { BincodeWriter } from "./crypto/bincode.js";
 import { bytesToHex, hexToBytes } from "./crypto/bytes.js";
 
@@ -19,11 +19,9 @@ export const NATIVE_AGENT_MODULE_ADDRESS = addressToTypedBech32(
 export type NativeAgentAddressKind = AddressKind;
 export type NativeAgentAddressInput =
   | string
-  | Uint8Array
-  | readonly number[]
   | {
       kind?: NativeAgentAddressKind;
-      address: string | Uint8Array | readonly number[];
+      address: string;
     };
 
 export interface NativeAgentModuleContractCall {
@@ -665,25 +663,17 @@ function normalizeNativeAgentAddress(
   if (typeof input === "string") {
     return normalizeNativeAgentAddressString(input, undefined, name);
   }
-  if (isAddressByteInput(input)) {
-    return { kind: "user", bytes: expectAddressBytes(input, name) };
-  }
-  if (typeof input === "object" && input !== null) {
-    const kind = input.kind ?? "user";
-    if (!(kind in NATIVE_AGENT_ADDRESS_KIND_VARIANTS)) {
+  if (typeof input === "object" && input !== null && "address" in input) {
+    const kind = input.kind;
+    if (kind !== undefined && !(kind in NATIVE_AGENT_ADDRESS_KIND_VARIANTS)) {
       throw new AgentActionError(`${name}.kind is not a supported native address kind`);
     }
-    const address = input.address;
-    if (typeof address === "string") {
-      return normalizeNativeAgentAddressString(address, kind, name);
+    if (typeof input.address !== "string") {
+      throw new AgentActionError(`${name}.address must be a typed bech32m address`);
     }
-    return { kind, bytes: expectAddressBytes(address, name) };
+    return normalizeNativeAgentAddressString(input.address, kind, name);
   }
-  throw new AgentActionError(`${name} must be a 20-byte address`);
-}
-
-function isAddressByteInput(input: NativeAgentAddressInput): input is Uint8Array | readonly number[] {
-  return input instanceof Uint8Array || Array.isArray(input);
+  throw new AgentActionError(`${name} must be a typed bech32m address`);
 }
 
 function normalizeNativeAgentAddressString(
@@ -691,26 +681,14 @@ function normalizeNativeAgentAddressString(
   expectedKind: NativeAgentAddressKind | undefined,
   name: string,
 ): { kind: NativeAgentAddressKind; bytes: Uint8Array } {
+  if (address.startsWith("0x") || address.startsWith("0X")) {
+    throw new AgentActionError(`${name} raw 0x addresses are retired; use typed bech32m addresses`);
+  }
   try {
-    if (address.startsWith("0x") || address.startsWith("0X")) {
-      return { kind: expectedKind ?? "user", bytes: hexToAddressBytes(address) };
-    }
     const parsed = typedBech32ToAddress(address, expectedKind);
     return { kind: parsed.kind, bytes: parsed.bytes };
   } catch (error) {
     const detail = error instanceof Error ? `: ${error.message}` : "";
-    throw new AgentActionError(`${name} must be a 20-byte hex or typed bech32m address${detail}`);
+    throw new AgentActionError(`${name} must be a typed bech32m address${detail}`);
   }
-}
-
-function expectAddressBytes(value: Uint8Array | readonly number[], name: string): Uint8Array {
-  if (value.length !== 20) {
-    throw new AgentActionError(`${name} must be a 20-byte address`);
-  }
-  for (const byte of value) {
-    if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
-      throw new AgentActionError(`${name} must contain bytes`);
-    }
-  }
-  return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }

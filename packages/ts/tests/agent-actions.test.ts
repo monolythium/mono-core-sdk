@@ -43,6 +43,9 @@ const rustNativeRecordReputationGolden =
   "05040302" +
   `${"88".repeat(32)}`;
 
+const userAddress = (byte: string) => addressToTypedBech32("user", `0x${byte.repeat(20)}`);
+const contractAddress = (byte: string) => addressToTypedBech32("contract", `0x${byte.repeat(20)}`);
+
 describe("native agent action builders", () => {
   it("exports the native agent module address pinned to mono-core", () => {
     expect(NATIVE_AGENT_MODULE_ADDRESS_BYTES).toBe("0x4147454e545f4e41544956455f4d4f445f563031");
@@ -52,8 +55,8 @@ describe("native agent action builders", () => {
   it("encodes native agent router calls with the mono-core bincode layout", () => {
     expect(
       encodeNativeAgentSetSpendingPolicyCall({
-        owner: addressToTypedBech32("user", `0x${"11".repeat(20)}`),
-        controller: `0x${"22".repeat(20)}`,
+        owner: userAddress("11"),
+        controller: userAddress("22"),
         nonce: 7,
         assetId: `0x${"33".repeat(32)}`,
         perActionLimit: "125",
@@ -64,9 +67,9 @@ describe("native agent action builders", () => {
 
     expect(
       encodeNativeAgentCreateEscrowCall({
-        buyer: `0x${"11".repeat(20)}`,
-        provider: `0x${"22".repeat(20)}`,
-        arbiter: `0x${"33".repeat(20)}`,
+        buyer: userAddress("11"),
+        provider: userAddress("22"),
+        arbiter: userAddress("33"),
         nonce: 9,
         assetId: `0x${"44".repeat(32)}`,
         amount: "123",
@@ -76,8 +79,8 @@ describe("native agent action builders", () => {
 
     expect(
       encodeNativeAgentRecordReputationCall({
-        reviewer: { kind: "user", address: new Uint8Array(20).fill(0x66) },
-        subject: `0x${"77".repeat(20)}`,
+        reviewer: userAddress("66"),
+        subject: userAddress("77"),
         categoryId: 42,
         scores: {
           speed: 5,
@@ -104,8 +107,8 @@ describe("native agent action builders", () => {
     expect(
       buildNativeAgentSetSpendingPolicyModuleCall(
         {
-          owner: `0x${"11".repeat(20)}`,
-          controller: `0x${"22".repeat(20)}`,
+          owner: userAddress("11"),
+          controller: userAddress("22"),
           nonce: 7,
           assetId: `0x${"33".repeat(32)}`,
           perActionLimit: "125",
@@ -119,9 +122,9 @@ describe("native agent action builders", () => {
     expect(
       buildNativeAgentCreateEscrowModuleCall(
         {
-          buyer: `0x${"11".repeat(20)}`,
-          provider: `0x${"22".repeat(20)}`,
-          arbiter: `0x${"33".repeat(20)}`,
+          buyer: userAddress("11"),
+          provider: userAddress("22"),
+          arbiter: userAddress("33"),
           nonce: 9,
           assetId: `0x${"44".repeat(32)}`,
           amount: "123",
@@ -134,8 +137,8 @@ describe("native agent action builders", () => {
     expect(
       buildNativeAgentRecordReputationModuleCall(
         {
-          reviewer: `0x${"66".repeat(20)}`,
-          subject: `0x${"77".repeat(20)}`,
+          reviewer: userAddress("66"),
+          subject: userAddress("77"),
           categoryId: 42,
           scores: { speed: 5, quality: 4, communication: 3, accuracy: 2 },
           payloadHash: `0x${"88".repeat(32)}`,
@@ -148,8 +151,8 @@ describe("native agent action builders", () => {
   it("encodes native agent module calls as MRV forwarder input", () => {
     const envelope = buildNativeAgentRecordReputationModuleCall(
       {
-        reviewer: `0x${"66".repeat(20)}`,
-        subject: `0x${"77".repeat(20)}`,
+        reviewer: userAddress("66"),
+        subject: userAddress("77"),
         categoryId: 42,
         scores: { speed: 5, quality: 4, communication: 3, accuracy: 2 },
         payloadHash: `0x${"88".repeat(32)}`,
@@ -173,8 +176,8 @@ describe("native agent action builders", () => {
     expect(
       buildNativeAgentSetSpendingPolicyForwarderInput(
         {
-          owner: `0x${"11".repeat(20)}`,
-          controller: `0x${"22".repeat(20)}`,
+          owner: userAddress("11"),
+          controller: userAddress("22"),
           nonce: 7,
           assetId: `0x${"33".repeat(32)}`,
           perActionLimit: "125",
@@ -187,9 +190,9 @@ describe("native agent action builders", () => {
     expect(
       buildNativeAgentCreateEscrowForwarderInput(
         {
-          buyer: `0x${"11".repeat(20)}`,
-          provider: `0x${"22".repeat(20)}`,
-          arbiter: `0x${"33".repeat(20)}`,
+          buyer: userAddress("11"),
+          provider: userAddress("22"),
+          arbiter: userAddress("33"),
           nonce: 9,
           assetId: `0x${"44".repeat(32)}`,
           amount: "123",
@@ -201,8 +204,8 @@ describe("native agent action builders", () => {
     expect(
       buildNativeAgentRecordReputationForwarderInput(
         {
-          reviewer: `0x${"66".repeat(20)}`,
-          subject: `0x${"77".repeat(20)}`,
+          reviewer: userAddress("66"),
+          subject: userAddress("77"),
           categoryId: 42,
           scores: { speed: 5, quality: 4, communication: 3, accuracy: 2 },
           payloadHash: `0x${"88".repeat(32)}`,
@@ -215,8 +218,8 @@ describe("native agent action builders", () => {
   it("rejects malformed native agent action inputs", () => {
     expect(() =>
       encodeNativeAgentSetSpendingPolicyCall({
-        owner: `0x${"11".repeat(20)}`,
-        controller: `0x${"22".repeat(20)}`,
+        owner: userAddress("11"),
+        controller: userAddress("22"),
         nonce: -1,
         assetId: `0x${"33".repeat(32)}`,
         perActionLimit: "125",
@@ -226,22 +229,44 @@ describe("native agent action builders", () => {
     ).toThrow(AgentActionError);
     expect(() =>
       encodeNativeAgentRecordReputationCall({
-        reviewer: `0x${"66".repeat(20)}`,
-        subject: `0x${"77".repeat(20)}`,
+        reviewer: userAddress("66"),
+        subject: userAddress("77"),
         categoryId: 42,
         scores: { speed: 6, quality: 4, communication: 3, accuracy: 2 },
         payloadHash: `0x${"88".repeat(32)}`,
       }),
     ).toThrow(/between 1 and 5/);
     expect(() => encodeNativeAgentCreateEscrowCall({
-      buyer: `0x${"11".repeat(20)}`,
-      provider: `0x${"22".repeat(20)}`,
-      arbiter: `0x${"33".repeat(20)}`,
+      buyer: userAddress("11"),
+      provider: userAddress("22"),
+      arbiter: userAddress("33"),
       nonce: 9,
       assetId: "0x1234",
       amount: "123",
       termsHash: `0x${"55".repeat(32)}`,
     })).toThrow(/assetId/);
+    expect(() =>
+      encodeNativeAgentSetSpendingPolicyCall({
+        owner: `0x${"11".repeat(20)}`,
+        controller: userAddress("22"),
+        nonce: 7,
+        assetId: `0x${"33".repeat(32)}`,
+        perActionLimit: "125",
+        windowLimit: "500",
+        windowSecs: 3600,
+      }),
+    ).toThrow(/raw 0x addresses are retired/);
+    expect(() =>
+      encodeNativeAgentSetSpendingPolicyCall({
+        owner: { kind: "user", address: contractAddress("11") },
+        controller: userAddress("22"),
+        nonce: 7,
+        assetId: `0x${"33".repeat(32)}`,
+        perActionLimit: "125",
+        windowLimit: "500",
+        windowSecs: 3600,
+      }),
+    ).toThrow(/owner/);
     expect(() =>
       encodeNativeAgentModuleForwarderInput({
         module: "agent",

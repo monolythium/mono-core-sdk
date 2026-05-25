@@ -134,6 +134,9 @@ const args: PlaceSpotLimitOrderArgs = {
   expiryBlock: 500n,
 };
 
+const userAddress = (byte: string) => addressToTypedBech32("user", `0x${byte.repeat(20)}`);
+const contractAddress = (byte: string) => addressToTypedBech32("contract", `0x${byte.repeat(20)}`);
+
 describe("native market action builders", () => {
   it("exports CLOB constants pinned to mono-core", () => {
     expect(CLOB_MARKET_ID_DOMAIN_TAG).toBe(0xc1);
@@ -155,7 +158,7 @@ describe("native market action builders", () => {
   it("derives native spot market and order ids for later RPC queries", () => {
     expect(
       deriveNativeSpotMarketId({
-        owner: `0x${"10".repeat(20)}`,
+        owner: userAddress("10"),
         nonce: 4,
         baseAsset: `0x${"11".repeat(32)}`,
         quoteAsset: `0x${"12".repeat(32)}`,
@@ -164,7 +167,7 @@ describe("native market action builders", () => {
     expect(
       deriveNativeSpotOrderId({
         marketId: nativeMarketId,
-        owner: `0x${"20".repeat(20)}`,
+        owner: userAddress("20"),
         side: "buy",
         nonce: 5,
       }),
@@ -172,7 +175,7 @@ describe("native market action builders", () => {
     expect(
       deriveNativeSpotOrderId({
         marketId: nativeMarketId,
-        owner: `0x${"30".repeat(20)}`,
+        owner: userAddress("30"),
         side: "sell",
         nonce: 6,
       }),
@@ -289,7 +292,7 @@ describe("native market action builders", () => {
   it("encodes native market router calls with the mono-core bincode layout", () => {
     expect(
       encodeNativeSpotCreateMarketCall({
-        owner: `0x${"10".repeat(20)}`,
+        owner: userAddress("10"),
         nonce: 4,
         baseAsset: `0x${"11".repeat(32)}`,
         quoteAsset: `0x${"12".repeat(32)}`,
@@ -303,7 +306,7 @@ describe("native market action builders", () => {
     expect(
       encodeNativeSpotLimitOrderCall({
         marketId: `0x${"11".repeat(32)}`,
-        owner: addressToTypedBech32("user", `0x${"22".repeat(20)}`),
+        owner: userAddress("22"),
         nonce: 7,
         side: "buy",
         price: "125",
@@ -315,7 +318,7 @@ describe("native market action builders", () => {
     expect(
       encodeNativeSpotCancelOrderCall({
         orderId: `0x${"33".repeat(32)}`,
-        caller: `0x${"44".repeat(20)}`,
+        caller: userAddress("44"),
       }),
     ).toBe(rustNativeCancelOrderGolden);
 
@@ -324,7 +327,7 @@ describe("native market action builders", () => {
         makerOrderId: `0x${"31".repeat(32)}`,
         takerOrder: {
           marketId: nativeMarketId,
-          owner: `0x${"30".repeat(20)}`,
+          owner: userAddress("30"),
           nonce: 6,
           side: "sell",
           price: "120",
@@ -339,7 +342,7 @@ describe("native market action builders", () => {
         makerOrderIds: [`0x${"31".repeat(32)}`, `0x${"32".repeat(32)}`],
         takerOrder: {
           marketId: nativeMarketId,
-          owner: `0x${"30".repeat(20)}`,
+          owner: userAddress("30"),
           nonce: 7,
           side: "sell",
           price: "120",
@@ -351,7 +354,7 @@ describe("native market action builders", () => {
 
     expect(
       encodeNativeNftCreateListingCall({
-        seller: `0x${"11".repeat(20)}`,
+        seller: userAddress("11"),
         nonce: 7,
         standard: "mrc721",
         collectionId: `0x${"22".repeat(32)}`,
@@ -367,7 +370,7 @@ describe("native market action builders", () => {
     expect(
       encodeNativeNftBuyListingCall({
         listingId: `0x${"55".repeat(32)}`,
-        buyer: { kind: "user", address: new Uint8Array(20).fill(0x66) },
+        buyer: userAddress("66"),
         currentBlock: 777,
       }),
     ).toBe(rustNativeBuyListingGolden);
@@ -375,14 +378,14 @@ describe("native market action builders", () => {
     expect(
       encodeNativeNftCancelListingCall({
         listingId: `0x${"55".repeat(32)}`,
-        caller: `0x${"66".repeat(20)}`,
+        caller: userAddress("66"),
       }),
     ).toBe(rustNativeCancelListingGolden);
 
     expect(
       encodeNativeNftPlaceAuctionBidCall({
         listingId: `0x${"77".repeat(32)}`,
-        bidder: `0x${"88".repeat(20)}`,
+        bidder: userAddress("88"),
         amount: "321",
         currentBlock: 888,
       }),
@@ -404,7 +407,7 @@ describe("native market action builders", () => {
 
     expect(
       encodeNativeNftCreateListingCall({
-        seller: `0x${"11".repeat(20)}`,
+        seller: userAddress("11"),
         nonce: 7,
         standard: "mrc1155",
         collectionId: `0x${"22".repeat(32)}`,
@@ -438,7 +441,7 @@ describe("native market action builders", () => {
       buildNativeSpotLimitOrderModuleCall(
         {
           marketId: `0x${"11".repeat(32)}`,
-          owner: `0x${"22".repeat(20)}`,
+          owner: userAddress("22"),
           nonce: 7,
           side: "buy",
           price: "125",
@@ -456,7 +459,7 @@ describe("native market action builders", () => {
     expect(
       buildNativeSpotCreateMarketModuleCall(
         {
-          owner: `0x${"10".repeat(20)}`,
+          owner: userAddress("10"),
           nonce: 4,
           baseAsset: `0x${"11".repeat(32)}`,
           quoteAsset: `0x${"12".repeat(32)}`,
@@ -472,7 +475,7 @@ describe("native market action builders", () => {
       buildNativeSpotCancelOrderModuleCall(
         {
           orderId: `0x${"33".repeat(32)}`,
-          caller: `0x${"44".repeat(20)}`,
+          caller: userAddress("44"),
         },
         22_000n,
       ).call.input,
@@ -483,7 +486,7 @@ describe("native market action builders", () => {
           makerOrderId: `0x${"31".repeat(32)}`,
           takerOrder: {
             marketId: nativeMarketId,
-            owner: `0x${"30".repeat(20)}`,
+            owner: userAddress("30"),
             nonce: 6,
             side: "sell",
             price: "120",
@@ -500,7 +503,7 @@ describe("native market action builders", () => {
           makerOrderIds: [`0x${"31".repeat(32)}`, `0x${"32".repeat(32)}`],
           takerOrder: {
             marketId: nativeMarketId,
-            owner: `0x${"30".repeat(20)}`,
+            owner: userAddress("30"),
             nonce: 7,
             side: "sell",
             price: "120",
@@ -514,7 +517,7 @@ describe("native market action builders", () => {
     expect(
       buildNativeNftCreateListingModuleCall(
         {
-          seller: `0x${"11".repeat(20)}`,
+          seller: userAddress("11"),
           nonce: 7,
           standard: "mrc721",
           collectionId: `0x${"22".repeat(32)}`,
@@ -532,7 +535,7 @@ describe("native market action builders", () => {
       buildNativeNftBuyListingModuleCall(
         {
           listingId: `0x${"55".repeat(32)}`,
-          buyer: `0x${"66".repeat(20)}`,
+          buyer: userAddress("66"),
           currentBlock: 777,
         },
         22_000,
@@ -542,7 +545,7 @@ describe("native market action builders", () => {
       buildNativeNftCancelListingModuleCall(
         {
           listingId: `0x${"55".repeat(32)}`,
-          caller: `0x${"66".repeat(20)}`,
+          caller: userAddress("66"),
         },
         22_000,
       ).call.input,
@@ -551,7 +554,7 @@ describe("native market action builders", () => {
       buildNativeNftPlaceAuctionBidModuleCall(
         {
           listingId: `0x${"77".repeat(32)}`,
-          bidder: `0x${"88".repeat(20)}`,
+          bidder: userAddress("88"),
           amount: "321",
           currentBlock: 888,
         },
@@ -582,7 +585,7 @@ describe("native market action builders", () => {
     const envelope = buildNativeNftBuyListingModuleCall(
       {
         listingId: `0x${"55".repeat(32)}`,
-        buyer: `0x${"66".repeat(20)}`,
+        buyer: userAddress("66"),
         currentBlock: 777,
       },
       22_000,
@@ -605,7 +608,7 @@ describe("native market action builders", () => {
       buildNativeSpotLimitOrderForwarderInput(
         {
           marketId: `0x${"11".repeat(32)}`,
-          owner: `0x${"22".repeat(20)}`,
+          owner: userAddress("22"),
           nonce: 7,
           side: "buy",
           price: "125",
@@ -618,7 +621,7 @@ describe("native market action builders", () => {
     expect(
       buildNativeSpotCreateMarketForwarderInput(
         {
-          owner: `0x${"10".repeat(20)}`,
+          owner: userAddress("10"),
           nonce: 4,
           baseAsset: `0x${"11".repeat(32)}`,
           quoteAsset: `0x${"12".repeat(32)}`,
@@ -634,7 +637,7 @@ describe("native market action builders", () => {
       buildNativeSpotCancelOrderForwarderInput(
         {
           orderId: `0x${"33".repeat(32)}`,
-          caller: `0x${"44".repeat(20)}`,
+          caller: userAddress("44"),
         },
         22_000,
       ).requestBytes,
@@ -645,7 +648,7 @@ describe("native market action builders", () => {
           makerOrderId: `0x${"31".repeat(32)}`,
           takerOrder: {
             marketId: nativeMarketId,
-            owner: `0x${"30".repeat(20)}`,
+            owner: userAddress("30"),
             nonce: 6,
             side: "sell",
             price: "120",
@@ -662,7 +665,7 @@ describe("native market action builders", () => {
           makerOrderIds: [`0x${"31".repeat(32)}`, `0x${"32".repeat(32)}`],
           takerOrder: {
             marketId: nativeMarketId,
-            owner: `0x${"30".repeat(20)}`,
+            owner: userAddress("30"),
             nonce: 7,
             side: "sell",
             price: "120",
@@ -676,7 +679,7 @@ describe("native market action builders", () => {
     expect(
       buildNativeNftCreateListingForwarderInput(
         {
-          seller: `0x${"11".repeat(20)}`,
+          seller: userAddress("11"),
           nonce: 7,
           standard: "mrc721",
           collectionId: `0x${"22".repeat(32)}`,
@@ -694,7 +697,7 @@ describe("native market action builders", () => {
       buildNativeNftBuyListingForwarderInput(
         {
           listingId: `0x${"55".repeat(32)}`,
-          buyer: `0x${"66".repeat(20)}`,
+          buyer: userAddress("66"),
           currentBlock: 777,
         },
         22_000,
@@ -704,7 +707,7 @@ describe("native market action builders", () => {
       buildNativeNftCancelListingForwarderInput(
         {
           listingId: `0x${"55".repeat(32)}`,
-          caller: `0x${"66".repeat(20)}`,
+          caller: userAddress("66"),
         },
         22_000,
       ).requestBytes,
@@ -713,7 +716,7 @@ describe("native market action builders", () => {
       buildNativeNftPlaceAuctionBidForwarderInput(
         {
           listingId: `0x${"77".repeat(32)}`,
-          bidder: `0x${"88".repeat(20)}`,
+          bidder: userAddress("88"),
           amount: "321",
           currentBlock: 888,
         },
@@ -780,7 +783,7 @@ describe("native market action builders", () => {
     expect(() =>
       encodeNativeSpotLimitOrderCall({
         marketId: "0x1234",
-        owner: `0x${"22".repeat(20)}`,
+        owner: userAddress("22"),
         nonce: 7,
         side: "buy",
         price: "125",
@@ -791,7 +794,7 @@ describe("native market action builders", () => {
     expect(() =>
       encodeNativeSpotLimitOrderCall({
         marketId: `0x${"11".repeat(32)}`,
-        owner: new Uint8Array(19),
+        owner: new Uint8Array(19) as unknown as string,
         nonce: 7,
         side: "buy",
         price: "125",
@@ -802,7 +805,7 @@ describe("native market action builders", () => {
     expect(() =>
       encodeNativeSpotLimitOrderCall({
         marketId: `0x${"11".repeat(32)}`,
-        owner: `0x${"22".repeat(20)}`,
+        owner: userAddress("22"),
         nonce: 7,
         side: "buy",
         price: (1n << 128n).toString(),
@@ -812,7 +815,7 @@ describe("native market action builders", () => {
     ).toThrow(/price/);
     expect(() =>
       encodeNativeSpotCreateMarketCall({
-        owner: `0x${"10".repeat(20)}`,
+        owner: userAddress("10"),
         nonce: 4,
         baseAsset: `0x${"11".repeat(32)}`,
         quoteAsset: `0x${"12".repeat(32)}`,
@@ -827,7 +830,7 @@ describe("native market action builders", () => {
         makerOrderIds: [],
         takerOrder: {
           marketId: nativeMarketId,
-          owner: `0x${"30".repeat(20)}`,
+          owner: userAddress("30"),
           nonce: 7,
           side: "sell",
           price: "120",
@@ -839,12 +842,18 @@ describe("native market action builders", () => {
     expect(() =>
       encodeNativeSpotCancelOrderCall({
         orderId: `0x${"33".repeat(32)}`,
-        caller: { kind: "user", address: addressToTypedBech32("contract", `0x${"44".repeat(20)}`) },
+        caller: { kind: "user", address: contractAddress("44") },
       }),
     ).toThrow(/caller/);
     expect(() =>
+      encodeNativeSpotCancelOrderCall({
+        orderId: `0x${"33".repeat(32)}`,
+        caller: `0x${"44".repeat(20)}`,
+      }),
+    ).toThrow(/raw 0x addresses are retired/);
+    expect(() =>
       encodeNativeNftCreateListingCall({
-        seller: `0x${"11".repeat(20)}`,
+        seller: userAddress("11"),
         nonce: 7,
         standard: "erc721" as "mrc721",
         collectionId: `0x${"22".repeat(32)}`,
@@ -858,7 +867,7 @@ describe("native market action builders", () => {
     ).toThrow(/standard/);
     expect(() =>
       encodeNativeNftCreateListingCall({
-        seller: `0x${"11".repeat(20)}`,
+        seller: userAddress("11"),
         nonce: 7,
         standard: "mrc721",
         collectionId: `0x${"22".repeat(32)}`,
@@ -872,7 +881,7 @@ describe("native market action builders", () => {
     ).toThrow(/quantity/);
     expect(() =>
       encodeNativeNftCreateListingCall({
-        seller: `0x${"11".repeat(20)}`,
+        seller: userAddress("11"),
         nonce: 7,
         standard: "mrc721",
         collectionId: `0x${"22".repeat(32)}`,
@@ -887,20 +896,20 @@ describe("native market action builders", () => {
     expect(() =>
       encodeNativeNftBuyListingCall({
         listingId: `0x${"55".repeat(32)}`,
-        buyer: `0x${"66".repeat(20)}`,
+        buyer: userAddress("66"),
         currentBlock: -1,
       }),
     ).toThrow(/currentBlock/);
     expect(() =>
       encodeNativeNftCancelListingCall({
         listingId: "0x1234",
-        caller: `0x${"66".repeat(20)}`,
+        caller: userAddress("66"),
       }),
     ).toThrow(/listingId/);
     expect(() =>
       encodeNativeNftPlaceAuctionBidCall({
         listingId: `0x${"77".repeat(32)}`,
-        bidder: `0x${"88".repeat(20)}`,
+        bidder: userAddress("88"),
         amount: "0",
         currentBlock: 888,
       }),
