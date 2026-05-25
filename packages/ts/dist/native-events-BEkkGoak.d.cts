@@ -3392,7 +3392,10 @@ declare class RpcClient {
     ethCall(request: CallRequest, block?: BlockSelector): Promise<string>;
     /** `eth_estimateGas` — gas estimate for a dry-run. */
     ethEstimateGas(request: CallRequest, block?: BlockSelector): Promise<bigint>;
-    /** `eth_gasPrice` — minimum gas price the node will accept. */
+    /**
+     * `eth_gasPrice` — legacy compatibility fee quote for ethers/viem shims.
+     * Native v4.1 surfaces should use execution-unit and lythoshi fee fields.
+     */
     ethGasPrice(): Promise<bigint>;
     /** `eth_feeHistory` — base-fee + gas-used history. */
     ethFeeHistory(blockCount: number, newestBlock?: BlockSelector, rewardPercentiles?: number[]): Promise<FeeHistoryResponse>;

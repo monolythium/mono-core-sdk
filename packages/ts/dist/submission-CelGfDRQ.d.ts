@@ -1,4 +1,4 @@
-import { D as RpcClient } from './native-events-CMCJsrHx.js';
+import { D as RpcClient } from './native-events-BEkkGoak.js';
 
 declare const ML_KEM_768_CIPHERTEXT_LEN = 1088;
 declare const ML_KEM_768_ENCAPSULATION_KEY_LEN = 1184;

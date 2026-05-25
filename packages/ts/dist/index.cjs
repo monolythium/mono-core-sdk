@@ -2314,7 +2314,10 @@ var RpcClient = class _RpcClient {
       await this.call("eth_estimateGas", [request, encodeBlockSelector(block)])
     );
   }
-  /** `eth_gasPrice` — minimum gas price the node will accept. */
+  /**
+   * `eth_gasPrice` — legacy compatibility fee quote for ethers/viem shims.
+   * Native v4.1 surfaces should use execution-unit and lythoshi fee fields.
+   */
   async ethGasPrice() {
     return parseQuantityBig(await this.call("eth_gasPrice", []));
   }
