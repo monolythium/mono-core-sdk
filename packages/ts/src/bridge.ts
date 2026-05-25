@@ -383,7 +383,7 @@ export function selectBridgeTransferRoute(
         };
 
   if (selected == null && blockedReasons.length === 0) {
-    blockedReasons.push("no eligible bridge route satisfies the transfer intent and v4.1 floor");
+    blockedReasons.push("no eligible bridge route satisfies the transfer intent and route floor");
   }
 
   return { selected, candidates, blockedReasons };

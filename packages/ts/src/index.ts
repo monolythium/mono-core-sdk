@@ -6,9 +6,8 @@
  * `RpcClient` mirrors the Rust SDK 1:1 across current `lyth_*` native methods,
  * passive compatibility reads, and server-gated legacy/debug methods.
  *
- * The optional `ethers.js` v6 compat shim lives under `./ethers/`
- * and is re-exported below. `ethers` is a peerDependency — install
- * it alongside this SDK only when you use the legacy compatibility shim.
+ * Optional compatibility adapters live under the explicit `./ethers`
+ * subpath so native SDK consumers do not import that peer dependency.
  */
 
 export const version = "0.1.0";
@@ -568,24 +567,8 @@ export type {
   NativeAgentModuleContractCall,
   NativeAgentReputationScores,
 } from "./agent-actions.js";
-
-// ethers.js compat shim — ethers is a peerDependency. Importers that
-// don't use the shim never pay for the ethers types.
 export {
-  MonolythiumProvider,
-  MonolythiumSigner,
-  MONOLYTHIUM_NETWORKS,
   MONOLYTHIUM_TESTNET_CHAIN_ID,
   MONOLYTHIUM_TESTNET_NETWORK_NAME,
-  translateBlockOut,
-  translateReceiptOut,
-  translateTxIn,
-} from "./ethers/index.js";
-export type {
-  EthersBlockShape,
-  EthersReceiptShape,
-  EthersTxRequestSubset,
-  MonolythiumNetworkConfig,
-  MonolythiumProviderOptions,
-  MonolythiumSignerBackend,
-} from "./ethers/index.js";
+} from "./ethers/network.js";
+export type { MonolythiumNetworkConfig } from "./ethers/network.js";
