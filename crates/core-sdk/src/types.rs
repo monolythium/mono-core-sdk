@@ -433,6 +433,8 @@ pub const NO_EVM_RECEIPT_FINALITY_EVIDENCE_SCHEMA: &str = "mono.no_evm_receipt_f
 pub const NO_EVM_RECEIPT_FINALITY_EVIDENCE_SOURCE: &str = "blsRoundCertificate";
 
 const NO_EVM_RECEIPTS_ROOT_DOMAIN: &[u8] = b"monolythium/v2/receipts_root/1";
+const ML_DSA_65_ADDRESS_DERIVATION_DOMAIN: &[u8] = b"MONO_ADDRESS_BLAKE3_20_V1";
+const STANDARD_ALGO_NUMBER_ML_DSA_65: u16 = 1_001;
 
 /// Verified no-EVM receipt transcript with decoded receipt bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1810,8 +1812,12 @@ fn parse_no_evm_archive_signature(
 }
 
 fn no_evm_ml_dsa65_signer_id_hex(public_key: &[u8]) -> Hash {
-    let digest = Keccak256::digest(public_key);
-    hex_encode_0x(&digest[12..])
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(ML_DSA_65_ADDRESS_DERIVATION_DOMAIN);
+    hasher.update(&STANDARD_ALGO_NUMBER_ML_DSA_65.to_be_bytes());
+    hasher.update(public_key);
+    let digest = hasher.finalize();
+    hex_encode_0x(&digest.as_bytes()[..20])
 }
 
 fn validate_no_evm_receipt_finality_evidence(
@@ -7034,6 +7040,17 @@ mod tests {
         let err = serde_json::from_value::<NoEvmReceiptProof>(wire)
             .expect_err("missing covering signatureDigest must fail decoding");
         assert!(err.to_string().contains("signatureDigest"), "{err}");
+    }
+
+    #[test]
+    fn no_evm_ml_dsa65_signer_id_uses_domain_separated_blake3() {
+        let public_key = vec![0x42u8; 1_952];
+        let signer_id = no_evm_ml_dsa65_signer_id_hex(&public_key);
+
+        assert_eq!(signer_id, "0x2144e4d0785772c668132fea761382b727bd23e2");
+
+        let legacy_digest = Keccak256::digest(&public_key);
+        assert_ne!(signer_id, hex_encode_0x(&legacy_digest[12..]));
     }
 
     #[test]
