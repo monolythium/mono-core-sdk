@@ -314,15 +314,17 @@ TypeScript:
 ```ts
 import {
   PRECOMPILE_ADDRESSES,
+  addressToTypedBech32,
   encodeRegisterPubkeyCalldata,
   encodeLookupPubkeyCalldata,
   decodeLookupPubkeyReturn,
 } from "@monolythium/core-sdk";
 
+const account = addressToTypedBech32("user", "0x123456789abcdef0112233445566778899aabbcc");
 const calldata = encodeRegisterPubkeyCalldata(mlDsa65Pubkey);
 // send a transaction to PRECOMPILE_ADDRESSES.PUBKEY_REGISTRY with `calldata`
 
-const lookup = encodeLookupPubkeyCalldata("0x123456789abcdef0112233445566778899aabbcc");
+const lookup = encodeLookupPubkeyCalldata(account);
 // query PUBKEY_REGISTRY through the supported read surface for your target
 // network, then:
 const decoded = decodeLookupPubkeyReturn(returnData);
@@ -359,6 +361,8 @@ signature. `claimPolicyByAddress` is the preferred path after the sub-account
 has registered its pubkey in pubkey-registry because it avoids carrying the
 1952-byte pubkey in calldata. Legacy `setPolicy` is only for re-claims by an
 already recorded principal.
+`policyArgs.subAccount` and `policyArgs.principal` must be typed `mono1...`
+bech32m account addresses.
 
 TypeScript:
 

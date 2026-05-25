@@ -6,7 +6,7 @@
  * look the key up by address.
  */
 
-import { hexToAddressBytes } from "./address.js";
+import { typedBech32ToAddress } from "./address.js";
 import { PRECOMPILE_ADDRESSES } from "./consts.js";
 
 export const PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN = 1952;
@@ -50,11 +50,11 @@ export function encodeRegisterPubkeyCalldata(pubkey: Uint8Array | readonly numbe
   );
 }
 
-export function encodeLookupPubkeyCalldata(address: string | Uint8Array | readonly number[]): string {
+export function encodeLookupPubkeyCalldata(address: string): string {
   return encodeSingleAddressCall(PUBKEY_REGISTRY_SELECTORS.lookupPubkey, address);
 }
 
-export function encodeHasPubkeyCalldata(address: string | Uint8Array | readonly number[]): string {
+export function encodeHasPubkeyCalldata(address: string): string {
   return encodeSingleAddressCall(PUBKEY_REGISTRY_SELECTORS.hasPubkey, address);
 }
 
@@ -99,7 +99,7 @@ export function decodeHasPubkeyReturn(data: Uint8Array | readonly number[] | str
   throw new PubkeyRegistryError("hasPubkey bool must be 0 or 1");
 }
 
-function encodeSingleAddressCall(selector: string, address: string | Uint8Array | readonly number[]): string {
+function encodeSingleAddressCall(selector: string, address: string): string {
   return bytesToHex(concatBytes(hexToBytes(selector), addressWord(toAddressBytes(address))));
 }
 
@@ -107,11 +107,19 @@ function addressWord(address: Uint8Array): Uint8Array {
   return concatBytes(new Uint8Array(12), address);
 }
 
-function toAddressBytes(value: string | Uint8Array | readonly number[]): Uint8Array {
-  if (typeof value === "string") {
-    return hexToAddressBytes(value);
+function toAddressBytes(value: string): Uint8Array {
+  if (typeof value !== "string") {
+    throw new PubkeyRegistryError("address must be a typed mono bech32m address");
   }
-  return expectLength(value instanceof Uint8Array ? value : Uint8Array.from(value), 20, "address");
+  if (value.startsWith("0x") || value.startsWith("0X")) {
+    throw new PubkeyRegistryError("raw 0x addresses are retired; use typed mono bech32m addresses");
+  }
+  try {
+    return typedBech32ToAddress(value, "user").bytes;
+  } catch (error) {
+    const detail = error instanceof Error ? `: ${error.message}` : "";
+    throw new PubkeyRegistryError(`address must be a typed mono bech32m address${detail}`);
+  }
 }
 
 function toBytes(value: string | Uint8Array | readonly number[]): Uint8Array {
@@ -145,13 +153,6 @@ function concatBytes(...parts: Uint8Array[]): Uint8Array {
     offset += part.length;
   }
   return out;
-}
-
-function expectLength(value: Uint8Array, len: number, name: string): Uint8Array {
-  if (value.length !== len) {
-    throw new PubkeyRegistryError(`${name} must be ${len} bytes`);
-  }
-  return value;
 }
 
 function uint256Word(value: bigint): Uint8Array {

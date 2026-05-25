@@ -175,6 +175,8 @@ Fresh sub-account policy claims must use `claimPolicyByAddress` or
 `setPolicyClaim`, both of which bind the policy to a sub-account ML-DSA-65
 signature. Prefer `claimPolicyByAddress` after the pubkey is registered in
 pubkey-registry; it avoids carrying the 1952-byte pubkey in calldata.
+`policyArgs.subAccount` and `policyArgs.principal` must be typed `mono1...`
+bech32m account addresses.
 
 ```ts
 import {
@@ -195,13 +197,15 @@ primary ML-DSA-65 pubkey once, so contracts can look it up by address.
 
 ```ts
 import {
+  addressToTypedBech32,
   encodeRegisterPubkeyCalldata,
   encodeLookupPubkeyCalldata,
   decodeLookupPubkeyReturn,
 } from "@monolythium/core-sdk";
 
+const account = addressToTypedBech32("user", "0x123456789abcdef0112233445566778899aabbcc");
 const calldata = encodeRegisterPubkeyCalldata(mlDsa65Pubkey);
-const lookup = encodeLookupPubkeyCalldata("0x123456789abcdef0112233445566778899aabbcc");
+const lookup = encodeLookupPubkeyCalldata(account);
 const decoded = decodeLookupPubkeyReturn(returnData);
 ```
 

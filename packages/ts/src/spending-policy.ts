@@ -8,7 +8,7 @@
  * recorded on-chain.
  */
 
-import { hexToAddressBytes, addressBytesToHex } from "./address.js";
+import { addressBytesToHex, hexToAddressBytes, typedBech32ToAddress } from "./address.js";
 import { PRECOMPILE_ADDRESSES } from "./consts.js";
 
 export const SET_POLICY_CLAIM_DOMAIN_TAG = "lyth.spending-policy.claim.v1" as const;
@@ -25,8 +25,10 @@ export const SPENDING_POLICY_SELECTORS = {
 } as const;
 
 export interface SpendingPolicyArgs {
-  subAccount: string | Uint8Array | readonly number[];
-  principal: string | Uint8Array | readonly number[];
+  /** Typed `mono` bech32m sub-account address. */
+  subAccount: string;
+  /** Typed `mono` bech32m principal address. */
+  principal: string;
   dailyCapLythoshi: bigint | number | string;
   perTxCapLythoshi: bigint | number | string;
   allowRoot: string | Uint8Array | readonly number[];
@@ -49,7 +51,7 @@ export function composeClaimBoundMessage(
   args: SpendingPolicyArgs,
   opts?: { precompileAddress?: string | Uint8Array | readonly number[]; expectedPolicyVersion?: bigint | number | string },
 ): Uint8Array {
-  const precompileAddress = toAddressBytes(opts?.precompileAddress ?? PRECOMPILE_ADDRESSES.SPENDING_POLICY);
+  const precompileAddress = toRawAddressBytes(opts?.precompileAddress ?? PRECOMPILE_ADDRESSES.SPENDING_POLICY);
   const normalized = normalizeArgs(args);
   return concatBytes(
     new TextEncoder().encode(SET_POLICY_CLAIM_DOMAIN_TAG),
@@ -123,12 +125,12 @@ export function encodeClaimPolicyByAddressCalldata(
   );
 }
 
-export function encodeEnableCalldata(subAccount: string | Uint8Array | readonly number[]): string {
-  return encodeSingleAddressCall(SPENDING_POLICY_SELECTORS.enable, subAccount);
+export function encodeEnableCalldata(subAccount: string): string {
+  return encodeSingleAddressCall(SPENDING_POLICY_SELECTORS.enable, subAccount, "subAccount");
 }
 
-export function encodeDisableCalldata(subAccount: string | Uint8Array | readonly number[]): string {
-  return encodeSingleAddressCall(SPENDING_POLICY_SELECTORS.disable, subAccount);
+export function encodeDisableCalldata(subAccount: string): string {
+  return encodeSingleAddressCall(SPENDING_POLICY_SELECTORS.disable, subAccount, "subAccount");
 }
 
 interface NormalizedSpendingPolicyArgs {
@@ -142,8 +144,8 @@ interface NormalizedSpendingPolicyArgs {
 
 function normalizeArgs(args: SpendingPolicyArgs): NormalizedSpendingPolicyArgs {
   return {
-    subAccount: toAddressBytes(args.subAccount),
-    principal: toAddressBytes(args.principal),
+    subAccount: toUserAddressBytes(args.subAccount, "subAccount"),
+    principal: toUserAddressBytes(args.principal, "principal"),
     dailyCapLythoshi: toBigint(args.dailyCapLythoshi, "dailyCapLythoshi"),
     perTxCapLythoshi: toBigint(args.perTxCapLythoshi, "perTxCapLythoshi"),
     allowRoot: expectLength(toBytes(args.allowRoot), 32, "allowRoot"),
@@ -162,8 +164,8 @@ function encodePolicyWords(args: NormalizedSpendingPolicyArgs): Uint8Array {
   );
 }
 
-function encodeSingleAddressCall(selector: string, address: string | Uint8Array | readonly number[]): string {
-  return bytesToHex(concatBytes(hexToBytes(selector), encodeAddressWord(toAddressBytes(address))));
+function encodeSingleAddressCall(selector: string, address: string, name: string): string {
+  return bytesToHex(concatBytes(hexToBytes(selector), encodeAddressWord(toUserAddressBytes(address, name))));
 }
 
 function encodeAddressWord(address: Uint8Array): Uint8Array {
@@ -174,7 +176,22 @@ function encodeUint128Word(value: bigint): Uint8Array {
   return concatBytes(new Uint8Array(16), uint128Bytes(value, "uint128"));
 }
 
-function toAddressBytes(value: string | Uint8Array | readonly number[]): Uint8Array {
+function toUserAddressBytes(value: string, name: string): Uint8Array {
+  if (typeof value !== "string") {
+    throw new SpendingPolicyError(`${name} must be a typed mono bech32m address`);
+  }
+  if (value.startsWith("0x") || value.startsWith("0X")) {
+    throw new SpendingPolicyError(`${name} raw 0x addresses are retired; use typed mono bech32m addresses`);
+  }
+  try {
+    return typedBech32ToAddress(value, "user").bytes;
+  } catch (error) {
+    const detail = error instanceof Error ? `: ${error.message}` : "";
+    throw new SpendingPolicyError(`${name} must be a typed mono bech32m address${detail}`);
+  }
+}
+
+function toRawAddressBytes(value: string | Uint8Array | readonly number[]): Uint8Array {
   if (typeof value === "string") {
     return hexToAddressBytes(value);
   }
