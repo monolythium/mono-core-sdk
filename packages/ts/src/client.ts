@@ -1319,7 +1319,10 @@ export class RpcClient {
     );
   }
 
-  /** `eth_gasPrice` — minimum gas price the node will accept. */
+  /**
+   * `eth_gasPrice` — legacy compatibility fee quote for ethers/viem shims.
+   * Native v4.1 surfaces should use execution-unit and lythoshi fee fields.
+   */
   async ethGasPrice(): Promise<bigint> {
     return parseQuantityBig(await this.call<string>("eth_gasPrice", []));
   }
