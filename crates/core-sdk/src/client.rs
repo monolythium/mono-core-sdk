@@ -11,7 +11,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::address::{address_to_bech32, parse_address};
+use crate::address::{typed_bech32_to_address_kind, AddressKind};
 use crate::bridge::{BridgeRoutesRequest, BridgeRoutesResponse};
 use crate::error::SdkError;
 use crate::mrv::{
@@ -416,7 +416,11 @@ impl RpcClient {
 
     /// `lyth_getAccountPolicy` — privacy posture for an account.
     pub async fn lyth_get_account_policy(&self, address: &str) -> Result<AccountPolicy, SdkError> {
-        self.call("lyth_getAccountPolicy", json!([address])).await
+        self.call(
+            "lyth_getAccountPolicy",
+            json!([sdk_typed_address(address, AddressKind::User, "address")?]),
+        )
+        .await
     }
 
     /// `lyth_getAssetPolicy` — privacy posture for an asset
@@ -493,7 +497,11 @@ impl RpcClient {
         &self,
         address: &str,
     ) -> Result<Vec<TokenBalanceRecord>, SdkError> {
-        self.call("lyth_getTokenBalances", json!([address])).await
+        self.call(
+            "lyth_getTokenBalances",
+            json!([sdk_typed_address(address, AddressKind::User, "address")?]),
+        )
+        .await
     }
 
     /// `lyth_bridgeRoutes` — read-only bridge route-selection/readiness.
@@ -524,7 +532,7 @@ impl RpcClient {
         spend_limit: Option<u32>,
     ) -> Result<MrcAccountResponse, SdkError> {
         let request = MrcAccountRequest {
-            account: account.to_owned(),
+            account: sdk_typed_address(account, AddressKind::SmartAccount, "account")?,
             spend_limit,
         };
         let params = match request.spend_limit {
@@ -602,7 +610,12 @@ impl RpcClient {
         &self,
         address: &str,
     ) -> Result<Option<AddressLabelRecord>, SdkError> {
-        let v: Value = self.call("lyth_getAddressLabel", json!([address])).await?;
+        let v: Value = self
+            .call(
+                "lyth_getAddressLabel",
+                json!([sdk_typed_address(address, AddressKind::User, "address")?]),
+            )
+            .await?;
         if v.is_null() {
             return Ok(None);
         }
@@ -616,6 +629,7 @@ impl RpcClient {
         limit: Option<u32>,
         cursor: Option<&str>,
     ) -> Result<Vec<AddressActivityEntry>, SdkError> {
+        let address = sdk_typed_address(address, AddressKind::User, "address")?;
         let params = match (limit, cursor) {
             (None, None) => json!([address]),
             (Some(limit), None) => json!([address, limit]),
@@ -630,8 +644,11 @@ impl RpcClient {
         &self,
         address: &str,
     ) -> Result<AddressActivityKindResponse, SdkError> {
-        self.call("lyth_addressActivityKind", json!([address]))
-            .await
+        self.call(
+            "lyth_addressActivityKind",
+            json!([sdk_typed_address(address, AddressKind::User, "address")?]),
+        )
+        .await
     }
 
     /// `lyth_agentReputation` — reputation accumulators for an agent provider.
@@ -862,7 +879,11 @@ impl RpcClient {
         &self,
         address: &str,
     ) -> Result<AddressProfileResponse, SdkError> {
-        self.call("lyth_addressProfile", json!([address])).await
+        self.call(
+            "lyth_addressProfile",
+            json!([sdk_typed_address(address, AddressKind::User, "address")?]),
+        )
+        .await
     }
 
     /// `lyth_addressFlow` — recent indexed address-flow aggregate.
@@ -871,6 +892,7 @@ impl RpcClient {
         address: &str,
         limit: Option<u32>,
     ) -> Result<AddressFlowResponse, SdkError> {
+        let address = sdk_typed_address(address, AddressKind::User, "address")?;
         let params = match limit {
             Some(limit) => json!([address, limit]),
             None => json!([address]),
@@ -913,6 +935,7 @@ impl RpcClient {
         wallet: &str,
         block: Option<BlockSelector>,
     ) -> Result<DelegationsResponse, SdkError> {
+        let wallet = sdk_typed_address(wallet, AddressKind::User, "wallet")?;
         let params = match block {
             Some(block) => json!([wallet, block.to_param()]),
             None => json!([wallet]),
@@ -926,6 +949,7 @@ impl RpcClient {
         wallet: &str,
         block: Option<BlockSelector>,
     ) -> Result<PendingRewardsResponse, SdkError> {
+        let wallet = sdk_typed_address(wallet, AddressKind::User, "wallet")?;
         let params = match block {
             Some(block) => json!([wallet, block.to_param()]),
             None => json!([wallet]),
@@ -939,6 +963,7 @@ impl RpcClient {
         wallet: &str,
         block: Option<BlockSelector>,
     ) -> Result<RedemptionQueueResponse, SdkError> {
+        let wallet = sdk_typed_address(wallet, AddressKind::User, "wallet")?;
         let params = match block {
             Some(block) => json!([wallet, block.to_param()]),
             None => json!([wallet]),
@@ -953,6 +978,7 @@ impl RpcClient {
         limit: Option<u32>,
         cursor: Option<&str>,
     ) -> Result<Vec<DelegationHistoryRecord>, SdkError> {
+        let wallet = sdk_typed_address(wallet, AddressKind::User, "wallet")?;
         let params = match (limit, cursor) {
             (None, None) => json!([wallet]),
             (Some(limit), None) => json!([wallet, limit]),
@@ -1375,11 +1401,24 @@ fn parse_quantity_u64(s: &str) -> Result<u64, SdkError> {
 }
 
 fn agent_reputation_params(provider: &str, category_id: Option<u32>) -> Result<Value, SdkError> {
-    let provider = address_to_bech32(
-        parse_address(provider)
-            .map_err(|err| SdkError::Malformed(format!("invalid provider address: {err}")))?,
-    );
+    let provider = sdk_typed_address(provider, AddressKind::User, "provider address")?;
     Ok(json!([provider, category_id.unwrap_or(0)]))
+}
+
+fn sdk_typed_address(raw: &str, kind: AddressKind, label: &str) -> Result<String, SdkError> {
+    if raw.starts_with("0x") || raw.starts_with("0X") {
+        return Err(SdkError::Malformed(format!(
+            "{label} raw 0x addresses are retired; use typed {} bech32m addresses",
+            kind.hrp()
+        )));
+    }
+    typed_bech32_to_address_kind(raw, kind).map_err(|err| {
+        SdkError::Malformed(format!(
+            "{label} must be typed {} bech32m address: {err}",
+            kind.hrp()
+        ))
+    })?;
+    Ok(raw.to_ascii_lowercase())
 }
 
 fn mrv_validation_to_sdk_error(err: MrvValidationError) -> SdkError {
@@ -1398,6 +1437,10 @@ mod tests {
         build_mrv_deploy_native_tx_plan, MrvNativeTxBuildOptions, ML_DSA_65_PUBLIC_KEY_LEN,
         ML_DSA_65_SIGNATURE_LEN,
     };
+
+    fn typed_address(kind: AddressKind, byte: u8) -> String {
+        crate::address::address_to_typed_bech32(kind, [byte; 20])
+    }
 
     #[test]
     fn parses_hex_quantities() {
@@ -1434,9 +1477,9 @@ mod tests {
     }
 
     #[test]
-    fn agent_reputation_params_normalize_provider_and_default_category() {
+    fn agent_reputation_params_forwards_typed_provider_and_default_category() {
         let params =
-            agent_reputation_params("0x123456789abcdef0112233445566778899aabbcc", None).unwrap();
+            agent_reputation_params("mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4", None).unwrap();
         assert_eq!(
             params,
             serde_json::json!(["mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4", 0])
@@ -1452,6 +1495,14 @@ mod tests {
     }
 
     #[test]
+    fn agent_reputation_params_reject_raw_provider_address() {
+        let err = agent_reputation_params("0x123456789abcdef0112233445566778899aabbcc", None)
+            .unwrap_err();
+        assert!(matches!(err, SdkError::Malformed(_)));
+        assert!(err.to_string().contains("raw 0x addresses are retired"));
+    }
+
+    #[test]
     fn agent_reputation_params_reject_non_user_provider_hrp() {
         let provider = crate::address::address_to_typed_bech32(
             crate::address::AddressKind::Contract,
@@ -1459,6 +1510,19 @@ mod tests {
         );
         let err = agent_reputation_params(&provider, None).unwrap_err();
         assert!(matches!(err, SdkError::Malformed(_)));
+    }
+
+    #[test]
+    fn sdk_typed_address_rejects_raw_hex_and_wrong_hrp() {
+        let raw = "0x123456789abcdef0112233445566778899aabbcc";
+        let err = sdk_typed_address(raw, AddressKind::User, "address").unwrap_err();
+        assert!(err.to_string().contains("raw 0x addresses are retired"));
+
+        let contract = typed_address(AddressKind::Contract, 0x12);
+        let err = sdk_typed_address(&contract, AddressKind::User, "address").unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("must be typed mono bech32m address"));
     }
 
     #[test]
@@ -1482,7 +1546,7 @@ mod tests {
 
     #[tokio::test]
     async fn lyth_get_token_balances_decodes_optional_mrc_identity() {
-        let address = "0x1111111111111111111111111111111111111111";
+        let address = typed_address(AddressKind::User, 0x11);
         let (endpoint, server) = spawn_rpc_server(vec![json!([
             {
                 "tokenId": format!("0x{}", "aa".repeat(32)),
@@ -1518,7 +1582,7 @@ mod tests {
         ])]);
 
         let client = RpcClient::new(endpoint).unwrap();
-        let balances = client.lyth_get_token_balances(address).await.unwrap();
+        let balances = client.lyth_get_token_balances(&address).await.unwrap();
 
         assert_eq!(balances.len(), 4);
         let mrc = balances[0].mrc.as_ref().expect("mrc identity");
@@ -1701,7 +1765,7 @@ mod tests {
 
     #[tokio::test]
     async fn lyth_mrc_account_decodes_account_rows_and_params() {
-        let account = "monos1effvdw0d05a35j69wwxplhmctpcclx382n60yf";
+        let account = typed_address(AddressKind::SmartAccount, 0x33);
         let controller = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
         let recovery = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
         let asset_id = format!("0x{}", "bb".repeat(32));
@@ -1757,7 +1821,7 @@ mod tests {
         ]);
 
         let client = RpcClient::new(endpoint).unwrap();
-        let limited = client.lyth_mrc_account(account, Some(2)).await.unwrap();
+        let limited = client.lyth_mrc_account(&account, Some(2)).await.unwrap();
         assert_eq!(limited.account, account);
         assert_eq!(limited.spend_limit, 2);
         let smart = limited.smart_account.as_ref().expect("smart account");
@@ -1769,7 +1833,7 @@ mod tests {
         assert_eq!(limited.policy_spends[0].asset_id, asset_id);
         assert_eq!(limited.policy_spends[0].spent, "250");
 
-        let defaulted = client.lyth_mrc_account(account, None).await.unwrap();
+        let defaulted = client.lyth_mrc_account(&account, None).await.unwrap();
         assert_eq!(defaulted.spend_limit, 50);
         let policy = defaulted.policy_account.as_ref().expect("policy account");
         assert_eq!(policy.policy_hash.as_deref(), Some(policy_hash.as_str()));
@@ -1881,7 +1945,7 @@ mod tests {
 
     #[tokio::test]
     async fn lyth_address_profile_decodes_token_balance_mrc_identity() {
-        let address = "0x1111111111111111111111111111111111111111";
+        let address = typed_address(AddressKind::User, 0x11);
         let (endpoint, server) = spawn_rpc_server(vec![json!({
             "schemaVersion": 1,
             "address": address,
@@ -1917,7 +1981,7 @@ mod tests {
         })]);
 
         let client = RpcClient::new(endpoint).unwrap();
-        let profile = client.lyth_address_profile(address).await.unwrap();
+        let profile = client.lyth_address_profile(&address).await.unwrap();
 
         let mrc = profile.token_balances[0]
             .mrc

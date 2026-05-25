@@ -9,6 +9,7 @@ import {
   hexToAddressBytes,
   normalizeAddressHex,
   parseAddress,
+  requireTypedAddress,
   typedBech32ToAddress,
 } from "../src/index.js";
 
@@ -47,5 +48,16 @@ describe("address helpers", () => {
     expect(decoded.hex).toBe(hex);
     expect([...decoded.bytes]).toEqual([...hexToAddressBytes(hex)]);
     expect(() => typedBech32ToAddress(display, "user")).toThrow();
+  });
+
+  it("requires typed bech32m addresses at v4.1 public boundaries", () => {
+    const user = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
+    const contract = addressToTypedBech32("contract", "0x1111111111111111111111111111111111111111");
+
+    expect(requireTypedAddress(user, "user", "address")).toBe(user);
+    expect(() => requireTypedAddress("0x1111111111111111111111111111111111111111", "user", "address")).toThrow(
+      /raw 0x addresses are retired/,
+    );
+    expect(() => requireTypedAddress(contract, "user", "address")).toThrow(/must be typed mono/);
   });
 });

@@ -12,6 +12,7 @@ use serde::Deserialize;
 use serde_json::to_string;
 use serde_json::Value;
 
+use crate::address::{typed_bech32_to_address_kind, AddressKind};
 use crate::bridge::{BridgeRoutesRequest, BridgeRoutesResponse};
 use crate::error::SdkError;
 use crate::types::{
@@ -293,6 +294,7 @@ impl ApiClient {
         &self,
         address: &str,
     ) -> Result<ApiEnvelope<AddressProfileResponse>, SdkError> {
+        let address = sdk_typed_address(address, AddressKind::User, "address")?;
         self.get(&format!("addresses/{address}/profile"), &[]).await
     }
 
@@ -302,6 +304,7 @@ impl ApiClient {
         address: &str,
         limit: u32,
     ) -> Result<ApiEnvelope<AddressFlowResponse>, SdkError> {
+        let address = sdk_typed_address(address, AddressKind::User, "address")?;
         self.get(
             &format!("addresses/{address}/flow"),
             &[("limit", limit.to_string())],
@@ -316,6 +319,7 @@ impl ApiClient {
         limit: u32,
         cursor: Option<&str>,
     ) -> Result<ApiEnvelope<ApiAddressActivityData>, SdkError> {
+        let address = sdk_typed_address(address, AddressKind::User, "address")?;
         let mut query = vec![("limit", limit.to_string())];
         if let Some(cursor) = cursor {
             query.push(("cursor", cursor.to_owned()));
@@ -329,6 +333,7 @@ impl ApiClient {
         &self,
         address: &str,
     ) -> Result<ApiEnvelope<ApiAddressActivityKindData>, SdkError> {
+        let address = sdk_typed_address(address, AddressKind::User, "address")?;
         self.get(&format!("addresses/{address}/activity-kind"), &[])
             .await
     }
@@ -339,6 +344,7 @@ impl ApiClient {
         address: &str,
         block: Option<BlockSelector>,
     ) -> Result<ApiEnvelope<PendingRewardsResponse>, SdkError> {
+        let address = sdk_typed_address(address, AddressKind::User, "address")?;
         let query = block.map_or_else(Vec::new, |block| vec![("block", block_path(block))]);
         self.get(&format!("addresses/{address}/pending-rewards"), &query)
             .await
@@ -350,6 +356,7 @@ impl ApiClient {
         address: &str,
         block: Option<BlockSelector>,
     ) -> Result<ApiEnvelope<RedemptionQueueResponse>, SdkError> {
+        let address = sdk_typed_address(address, AddressKind::User, "address")?;
         let query = block.map_or_else(Vec::new, |block| vec![("block", block_path(block))]);
         self.get(&format!("addresses/{address}/redemption-queue"), &query)
             .await
@@ -374,6 +381,7 @@ impl ApiClient {
         account: &str,
         limit: Option<u32>,
     ) -> Result<ApiEnvelope<MrcAccountResponse>, SdkError> {
+        let account = sdk_typed_address(account, AddressKind::SmartAccount, "account")?;
         let query = limit.map_or_else(Vec::new, |limit| vec![("limit", limit.to_string())]);
         self.get(&format!("mrc/accounts/{account}"), &query).await
     }
@@ -615,6 +623,22 @@ fn block_path(block: BlockSelector) -> String {
         Value::String(s) => s,
         other => other.to_string(),
     }
+}
+
+fn sdk_typed_address(raw: &str, kind: AddressKind, label: &str) -> Result<String, SdkError> {
+    if raw.starts_with("0x") || raw.starts_with("0X") {
+        return Err(SdkError::Malformed(format!(
+            "{label} raw 0x addresses are retired; use typed {} bech32m addresses",
+            kind.hrp()
+        )));
+    }
+    typed_bech32_to_address_kind(raw, kind).map_err(|err| {
+        SdkError::Malformed(format!(
+            "{label} must be typed {} bech32m address: {err}",
+            kind.hrp()
+        ))
+    })?;
+    Ok(raw.to_ascii_lowercase())
 }
 
 /// Shared success envelope for most `/api/v1` endpoints.
@@ -961,7 +985,8 @@ pub struct ApiUpgradeStatusData {
 
 #[cfg(test)]
 mod tests {
-    use super::{api_endpoint_from_rpc_endpoint, build_url, ApiClient};
+    use super::{api_endpoint_from_rpc_endpoint, build_url, sdk_typed_address, ApiClient};
+    use crate::address::{address_to_typed_bech32, AddressKind};
     use crate::types::{NativeAgentStateFilter, NativeEventsFilter, NativeMarketStateFilter};
     use serde_json::{json, Value};
     use std::io::{Read, Write};
@@ -986,6 +1011,23 @@ mod tests {
             request.lines().next().unwrap_or_default().to_owned()
         });
         (endpoint, handle)
+    }
+
+    fn typed_address(kind: AddressKind, byte: u8) -> String {
+        address_to_typed_bech32(kind, [byte; 20])
+    }
+
+    #[test]
+    fn sdk_typed_address_rejects_raw_hex_and_wrong_hrp() {
+        let raw = "0x123456789abcdef0112233445566778899aabbcc";
+        let err = sdk_typed_address(raw, AddressKind::User, "address").unwrap_err();
+        assert!(err.to_string().contains("raw 0x addresses are retired"));
+
+        let user = typed_address(AddressKind::User, 0x12);
+        let err = sdk_typed_address(&user, AddressKind::SmartAccount, "account").unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("must be typed monos bech32m address"));
     }
 
     #[test]
@@ -1095,7 +1137,7 @@ mod tests {
 
     #[test]
     fn build_url_encodes_mrc_account_limit_query() {
-        let account = "monos1effvdw0d05a35j69wwxplhmctpcclx382n60yf";
+        let account = typed_address(AddressKind::SmartAccount, 0x33);
         let url = build_url(
             "https://rpc.example/api/v1",
             &format!("mrc/accounts/{account}"),
@@ -1110,7 +1152,7 @@ mod tests {
 
     #[tokio::test]
     async fn mrc_account_gets_rest_route_and_decodes_response() {
-        let account = "monos1effvdw0d05a35j69wwxplhmctpcclx382n60yf";
+        let account = typed_address(AddressKind::SmartAccount, 0x33);
         let controller = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
         let recovery = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
         let asset_id = format!("0x{}", "bb".repeat(32));
@@ -1168,7 +1210,7 @@ mod tests {
         }));
         let client = ApiClient::new(endpoint).unwrap();
 
-        let response = client.mrc_account(account, Some(2)).await.unwrap();
+        let response = client.mrc_account(&account, Some(2)).await.unwrap();
 
         assert_eq!(response.data.account, account);
         assert_eq!(response.data.spend_limit, 2);

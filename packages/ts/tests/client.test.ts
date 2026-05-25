@@ -368,9 +368,10 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
       },
     ]);
     const client = new RpcClient("http://x", { fetch });
-    const balances = await client.lythGetTokenBalances("0x1111111111111111111111111111111111111111");
+    const address = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
+    const balances = await client.lythGetTokenBalances(address);
     expect(calls[0].method).toBe("lyth_getTokenBalances");
-    expect(calls[0].params).toEqual(["0x1111111111111111111111111111111111111111"]);
+    expect(calls[0].params).toEqual([address]);
     expect(balances[0].mrc?.standard).toBe("mrc1155");
     expect(balances[0].mrc?.assetId).toBe(assetId);
     expect(balances[0].mrc?.tokenId).toBe(childTokenId);
@@ -384,6 +385,27 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(balances[3].mrc).toBeUndefined();
     expect(balances[3].bridgeRouteDisclosure).toBeUndefined();
     expect(balances[3].bridgeRouteDisclosures).toBeUndefined();
+  });
+
+  it("rejects raw and wrong-HRP address lookups before RPC fetches", async () => {
+    const { fetch, calls } = mockFetch([]);
+    const client = new RpcClient("http://x", { fetch });
+    const contract = addressToTypedBech32("contract", "0x1111111111111111111111111111111111111111");
+    const user = addressToTypedBech32("user", "0x2222222222222222222222222222222222222222");
+
+    await expect(client.lythGetTokenBalances("0x1111111111111111111111111111111111111111")).rejects.toMatchObject({
+      kind: "malformed",
+      message: expect.stringContaining("raw 0x addresses are retired"),
+    });
+    await expect(client.lythAddressActivityKind(contract)).rejects.toMatchObject({
+      kind: "malformed",
+      message: expect.stringContaining("must be typed mono"),
+    });
+    await expect(client.lythMrcAccount(user)).rejects.toMatchObject({
+      kind: "malformed",
+      message: expect.stringContaining("must be typed monos"),
+    });
+    expect(calls).toHaveLength(0);
   });
 
   it("lyth_bridgeRoutes forwards the typed readiness request", async () => {
@@ -519,7 +541,7 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
   });
 
   it("lyth_mrcAccount reads account rows and omits optional spend limit", async () => {
-    const account = "monos1effvdw0d05a35j69wwxplhmctpcclx382n60yf";
+    const account = addressToTypedBech32("smartAccount", "0x3333333333333333333333333333333333333333");
     const controller = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
     const recovery = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
     const assetId = `0x${"bb".repeat(32)}`;
@@ -659,15 +681,17 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
   it("lyth_getAddressLabel returns null for unlabeled addresses", async () => {
     const { fetch } = mockFetch(null);
     const client = new RpcClient("http://x", { fetch });
-    await expect(client.lythGetAddressLabel("0x1111111111111111111111111111111111111111")).resolves.toBeNull();
+    const address = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
+    await expect(client.lythGetAddressLabel(address)).resolves.toBeNull();
   });
 
   it("lyth_getDelegationHistory forwards limit and cursor", async () => {
     const { fetch, calls } = mockFetch([]);
     const client = new RpcClient("http://x", { fetch });
-    await client.lythGetDelegationHistory("0x1111111111111111111111111111111111111111", 25, "0x00");
+    const wallet = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
+    await client.lythGetDelegationHistory(wallet, 25, "0x00");
     expect(calls[0].method).toBe("lyth_getDelegationHistory");
-    expect(calls[0].params).toEqual(["0x1111111111111111111111111111111111111111", 25, "0x00"]);
+    expect(calls[0].params).toEqual([wallet, 25, "0x00"]);
   });
 
   it("lyth_pendingRewards reads settled and unsettled reward quantities", async () => {
@@ -740,13 +764,13 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
   it("lyth_getAddressActivity forwards limit and cursor", async () => {
     const { fetch, calls } = mockFetch([]);
     const client = new RpcClient("http://x", { fetch });
-    await client.lythGetAddressActivity("0x1111111111111111111111111111111111111111", 75, "0x01");
+    const address = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
+    await client.lythGetAddressActivity(address, 75, "0x01");
     expect(calls[0].method).toBe("lyth_getAddressActivity");
-    expect(calls[0].params).toEqual(["0x1111111111111111111111111111111111111111", 75, "0x01"]);
+    expect(calls[0].params).toEqual([address, 75, "0x01"]);
   });
 
   it("lyth_agentReputation sends user bech32 provider and defaults category", async () => {
-    const providerHex = "0x123456789abcdef0112233445566778899aabbcc";
     const provider = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
     const { fetch, calls } = mockFetch({
       schemaVersion: 1,
@@ -770,7 +794,7 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     });
     const client = new RpcClient("http://x", { fetch });
 
-    const reputation = await client.lythAgentReputation(providerHex);
+    const reputation = await client.lythAgentReputation(provider);
 
     expect(reputation.categoryScope).toBe("global");
     expect(reputation.record?.avgSpeedX10).toBe(92);
@@ -807,6 +831,17 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
 
     await expect(client.lythAgentReputation(contract)).rejects.toMatchObject({
       kind: "malformed",
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("lyth_agentReputation rejects raw provider addresses before fetch", async () => {
+    const { fetch, calls } = mockFetch(null);
+    const client = new RpcClient("http://x", { fetch });
+
+    await expect(client.lythAgentReputation("0x123456789abcdef0112233445566778899aabbcc")).rejects.toMatchObject({
+      kind: "malformed",
+      message: expect.stringContaining("raw 0x addresses are retired"),
     });
     expect(calls).toHaveLength(0);
   });
@@ -1839,7 +1874,7 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
   });
 
   it("live explorer helpers call the new chain RPC surfaces", async () => {
-    const address = "0x1111111111111111111111111111111111111111";
+    const address = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
     const txHash = `0x${"22".repeat(32)}`;
     const tokenId = `0x${"33".repeat(32)}`;
     const marketId = `0x${"44".repeat(32)}`;
@@ -1954,7 +1989,7 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
   });
 
   it("wraps live explorer aggregate, search, tx feed, and CLOB surfaces", async () => {
-    const address = "0x1111111111111111111111111111111111111111";
+    const address = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
     const txHash = `0x${"22".repeat(32)}`;
     const marketId = `0x${"44".repeat(32)}`;
     const cursor = `0x${"00".repeat(16)}`;
