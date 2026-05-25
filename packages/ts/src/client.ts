@@ -1715,7 +1715,7 @@ export class RpcClient {
 
   /** `lyth_mempoolPending` — pending txs for a sender. */
   async lythMempoolPending(sender: string): Promise<PendingTxSummary[]> {
-    return this.call("lyth_mempoolPending", [sender]);
+    return this.call("lyth_mempoolPending", [sdkTypedAddress(sender, "user", "sender")]);
   }
 
   /** `lyth_currentRound` — latest committed height. */
