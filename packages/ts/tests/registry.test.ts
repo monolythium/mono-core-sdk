@@ -22,38 +22,30 @@ genesis_hash = "0x325057e476b7be3730a22c92b9289f4a14a3414a2a081bd279b43eeba36b00
 binary_sha   = "44a9ec4"
 
 [[rpc]]
-url      = "http://178.105.15.216:8545"
-provider = "monolythium-foundation"
-region   = "fsn1"
+url      = "https://rpc.monolythium.com"
+provider = "monolythium"
 tier     = "official"
-notes    = "operator-2; primary foundation seed (operator-1 offline pending BLS key reissue)"
 
 [[p2p]]
-multiaddr = "/ip4/178.105.15.216/tcp/29898/p2p/12D3KooWDKk9ALxqchazXGcRGbqyopWtAGRbf4WQFS2dABV7gQGb"
-region    = "fsn1"
+multiaddr = "/dns4/p2p.monolythium.com/tcp/29898/p2p/12D3KooWDKk9ALxqchazXGcRGbqyopWtAGRbf4WQFS2dABV7gQGb"
 `;
 
 describe("chain registry snapshot", () => {
-  it("vendors the live testnet RPC IP list", () => {
+  it("vendors the public testnet RPC endpoint", () => {
     expect(TESTNET_69420.chain_id).toBe(69420);
     expect(TESTNET_69420.genesis_hash).toBe(
       "0x325057e476b7be3730a22c92b9289f4a14a3414a2a081bd279b43eeba36b0075",
     );
     expect(TESTNET_69420.binary_sha).toBe("44a9ec4");
     expect(getRpcEndpoints("testnet-69420").map((r) => r.url)).toEqual([
-      "http://178.105.15.216:8545",
-      "http://178.104.233.182:8545",
-      "http://65.108.94.1:8545",
-      "http://95.216.154.155:8545",
-      "http://87.99.145.48:8545",
-      "http://5.223.85.76:8545",
+      "https://rpc.monolythium.com",
     ]);
-    expect(getP2pSeeds("testnet-69420")).toHaveLength(6);
+    expect(getP2pSeeds("testnet-69420")).toHaveLength(0);
   });
 
   it("constructs a client from the first registry endpoint without probing", async () => {
     const client = await RpcClient.forNetwork("testnet-69420");
-    expect(client.endpoint).toBe("http://178.105.15.216:8545");
+    expect(client.endpoint).toBe("https://rpc.monolythium.com");
   });
 
   it("probes endpoints until one answers with the expected chain id", async () => {
@@ -87,12 +79,11 @@ describe("chain registry snapshot", () => {
     const parsed = parseChainRegistryToml(TESTNET_TOML);
     expect(parsed.network).toBe("testnet-69420");
     expect(parsed.rpc[0]).toMatchObject({
-      url: "http://178.105.15.216:8545",
-      provider: "monolythium-foundation",
-      region: "fsn1",
+      url: "https://rpc.monolythium.com",
+      provider: "monolythium",
       tier: "official",
     });
-    expect(parsed.p2p[0].multiaddr).toContain("/ip4/178.105.15.216/");
+    expect(parsed.p2p[0].multiaddr).toContain("/dns4/p2p.monolythium.com/");
   });
 
   it("parses optional native receipt trust policy metadata without trusting by default", () => {

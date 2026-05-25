@@ -97,86 +97,18 @@ export const TESTNET_69420: ChainInfo = {
   network: "testnet-69420",
   display_name: "Monolythium Testnet",
   description:
-    "Live development testnet for Monolythium v4.1 / LythiumDAG-BFT. Foundation-operated. Wipe + regenesis is allowed without notice — do NOT store value on this network.",
+    "Public Monolythium testnet. Testnet state may reset without notice; do not store value on this network.",
   genesis_hash:
     "0x325057e476b7be3730a22c92b9289f4a14a3414a2a081bd279b43eeba36b0075",
   binary_sha: "44a9ec4",
   rpc: [
     {
-      url: "http://178.105.15.216:8545",
-      provider: "monolythium-foundation",
-      region: "fsn1",
+      url: "https://rpc.monolythium.com",
+      provider: "monolythium",
       tier: "official",
-      notes: "operator-2; primary foundation seed (operator-1 offline pending BLS key reissue)",
-    },
-    {
-      url: "http://178.104.233.182:8545",
-      provider: "monolythium-foundation",
-      region: "nbg1",
-      tier: "official",
-      notes: "operator-3",
-    },
-    {
-      url: "http://65.108.94.1:8545",
-      provider: "monolythium-foundation",
-      region: "hel1",
-      tier: "official",
-      notes: "operator-4",
-    },
-    {
-      url: "http://95.216.154.155:8545",
-      provider: "monolythium-foundation",
-      region: "hel1",
-      tier: "official",
-      notes: "operator-5",
-    },
-    {
-      url: "http://87.99.145.48:8545",
-      provider: "monolythium-foundation",
-      region: "ash",
-      tier: "official",
-      notes: "operator-6; US east",
-    },
-    {
-      url: "http://5.223.85.76:8545",
-      provider: "monolythium-foundation",
-      region: "sin",
-      tier: "official",
-      notes: "operator-7; APAC",
     },
   ],
-  p2p: [
-    {
-      multiaddr:
-        "/ip4/178.105.15.216/tcp/29898/p2p/12D3KooWDKk9ALxqchazXGcRGbqyopWtAGRbf4WQFS2dABV7gQGb",
-      region: "fsn1",
-    },
-    {
-      multiaddr:
-        "/ip4/178.104.233.182/tcp/29898/p2p/12D3KooW9uVG8csFCtSxoFaYBsGzXBgVwQhAw84TGj4dfRi9LH1c",
-      region: "nbg1",
-    },
-    {
-      multiaddr:
-        "/ip4/65.108.94.1/tcp/29898/p2p/12D3KooWKvkjEVkA64TdbSoVjDW2sWUzgkAMbPZsZvfxZw2W6zVy",
-      region: "hel1",
-    },
-    {
-      multiaddr:
-        "/ip4/95.216.154.155/tcp/29898/p2p/12D3KooWCcVjSuERAGzG6Xb3wjUj22fGrgP2QXDJfquxQ72TBMd8",
-      region: "hel1",
-    },
-    {
-      multiaddr:
-        "/ip4/87.99.145.48/tcp/29898/p2p/12D3KooWMKw9Qxx7RE3PjQGMZq94C23UDjnTbZCNWFy6Dc4YcCdL",
-      region: "ash",
-    },
-    {
-      multiaddr:
-        "/ip4/5.223.85.76/tcp/29898/p2p/12D3KooWSTeApBSKR4DpKvJAuqKfHxNhdbNg9mi9u8f4UNfzN5Cu",
-      region: "sin",
-    },
-  ],
+  p2p: [],
 };
 
 export const CHAIN_REGISTRY: ChainRegistry = {

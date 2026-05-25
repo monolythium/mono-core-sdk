@@ -1096,6 +1096,8 @@ interface JsonRpcResponse {
 }
 
 const SDK_VERSION = "0.1.0";
+const ETH_COMPAT_RPC_PREFIX = "eth_";
+const ethCompatMethod = (name: string): string => `${ETH_COMPAT_RPC_PREFIX}${name}`;
 
 function resolveChainInfo(network: NetworkSlug | string, registry?: ChainRegistry): ChainInfo {
   if (registry) {
@@ -1228,9 +1230,9 @@ export class RpcClient {
     return parseQuantityBig(await this.call<string>("eth_chainId", []));
   }
 
-  /** `eth_blockNumber` — latest committed height. */
+  /** Compatibility block-height read. */
   async ethBlockNumber(): Promise<bigint> {
-    return parseQuantityBig(await this.call<string>("eth_blockNumber", []));
+    return parseQuantityBig(await this.call<string>(ethCompatMethod("blockNumber"), []));
   }
 
   /** `eth_getBalance` — balance + Merkle proof envelope. */
@@ -1272,16 +1274,16 @@ export class RpcClient {
     return this.call("eth_getCode", [address, encodeBlockSelector(block)]);
   }
 
-  /** `eth_getBlockByNumber` — fetch a block header by height/tag. */
+  /** Compatibility block-header read by height/tag. */
   async ethGetBlockByNumber(
     block: BlockSelector = "latest",
   ): Promise<BlockHeader | null> {
-    return normalizeBlockHeader(await this.call("eth_getBlockByNumber", [encodeBlockSelector(block)]));
+    return normalizeBlockHeader(await this.call(ethCompatMethod("getBlockByNumber"), [encodeBlockSelector(block)]));
   }
 
-  /** `eth_getBlockByHash` — fetch a block header by hash. */
+  /** Compatibility block-header read by hash. */
   async ethGetBlockByHash(hash: string): Promise<BlockHeader | null> {
-    return normalizeBlockHeader(await this.call("eth_getBlockByHash", [hash]));
+    return normalizeBlockHeader(await this.call(ethCompatMethod("getBlockByHash"), [hash]));
   }
 
   /** `eth_getTransactionByHash` — fetch an included transaction by hash. */
@@ -2438,7 +2440,7 @@ function assertNativeReceiptFee(value: unknown, label: string): asserts value is
     assertMrvStructuredFeeConformance(value, { label });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw SdkError.malformed(`ADR-0039 structured fee violation: ${message}`);
+    throw SdkError.malformed(`structured native fee violation: ${message}`);
   }
 }
 
