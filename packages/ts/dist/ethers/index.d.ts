@@ -1,5 +1,5 @@
 import { JsonRpcApiProvider, JsonRpcPayload, JsonRpcResult, JsonRpcError, AbstractSigner, Provider, TransactionRequest, TypedDataDomain, TypedDataField, BaseWallet, Signer } from 'ethers';
-import { D as RpcClient, cT as RpcClientOptions, d3 as TransactionReceipt, au as CallRequest } from '../native-events-OYgkLZOg.js';
+import { D as RpcClient, cT as RpcClientOptions, d3 as TransactionReceipt, au as CallRequest } from '../native-events-CMCJsrHx.js';
 import { b as MonolythiumNetworkConfig } from '../network-BK2u9br2.js';
 export { c as MONOLYTHIUM_NETWORKS, M as MONOLYTHIUM_TESTNET_CHAIN_ID, a as MONOLYTHIUM_TESTNET_NETWORK_NAME } from '../network-BK2u9br2.js';
 
@@ -83,11 +83,11 @@ declare class MonolythiumProvider extends JsonRpcApiProvider {
  *    a hard ethers dependency on either the chain side or the
  *    consumer side.
  *
- * The address derivation rule for any backend is **Law §2.6**:
- * `keccak256(canonical_pubkey_bytes)[12..32]`, with algo-tagged domain
- * separation. For secp256k1 (the ethers Wallet path) this collapses
- * to the standard Ethereum derivation that `ethers.computeAddress`
- * already implements — so wallets the user already has work as-is.
+ * Native Mono address derivation is ADR-0038:
+ * `BLAKE3("MONO_ADDRESS_BLAKE3_20_V1" || algo_id_be_u16 ||
+ * canonical_pubkey_bytes)[0..20]`. `fromEthersWallet` preserves the
+ * wrapped ethers address only for the compatibility signer path; native
+ * ML-DSA-65 callers should use the crypto helpers directly.
  *
  * **What the shim is not.** This is SDK-level compat (per
  * `feedback_no_ethereum_wire_retrofit.md`). The chain's protocol-native

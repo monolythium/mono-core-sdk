@@ -23,42 +23,15 @@ var RESERVED_ADDRESS_HRPS = ["monor", "monop", "monoi", "monoa"];
 var CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 var CHARSET_MAP = new Map([...CHARSET].map((c, i) => [c, i]));
 var BECH32M_CONST = 734539939;
-var HEX_20_BYTE_RE = /^0x[0-9a-fA-F]{40}$/;
 var AddressError = class extends Error {
   constructor(message) {
     super(message);
     this.name = "AddressError";
   }
 };
-function hexToAddressBytes(address) {
-  if (!HEX_20_BYTE_RE.test(address)) {
-    throw new AddressError("expected 0x-prefixed 20-byte hex address");
-  }
-  const out = new Uint8Array(20);
-  const body = address.slice(2);
-  for (let i = 0; i < 20; i++) {
-    out[i] = Number.parseInt(body.slice(i * 2, i * 2 + 2), 16);
-  }
-  return out;
-}
 function addressBytesToHex(address) {
   const bytes = expectLength(address, 20, "address");
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
-}
-function addressToBech32(address) {
-  return addressToTypedBech32("user", address);
-}
-function addressToTypedBech32(kind, address) {
-  const bytes = typeof address === "string" ? hexToAddressBytes(address) : expectLength(address, 20, "address");
-  return encodeBech32m(ADDRESS_KIND_HRPS[kind], bytes);
-}
-function encodeBech32m(hrp, bytes) {
-  const words = convertBits([...bytes], 8, 5, true);
-  const checksum = createChecksum(hrp, words);
-  return `${hrp}1${[...words, ...checksum].map((v) => CHARSET[v]).join("")}`;
-}
-function bech32ToAddressBytes(address) {
-  return typedBech32ToAddress(address, "user").bytes;
 }
 function typedBech32ToAddress(address, expectedKind) {
   const parsed = decodeBech32m(address);
@@ -69,21 +42,30 @@ function typedBech32ToAddress(address, expectedKind) {
   if (kind === void 0) {
     throw new AddressError(`unknown address hrp '${parsed.hrp}'`);
   }
-  if (kind !== expectedKind) {
+  if (expectedKind !== void 0 && kind !== expectedKind) {
     throw new AddressError(`unexpected hrp '${parsed.hrp}', expected '${ADDRESS_KIND_HRPS[expectedKind]}'`);
   }
-  const bytes = convertBits(parsed.data, 5, 8, false);
+  const bytes = convertBits(parsed.data, 5, 8);
   if (bytes.length !== 20) {
     throw new AddressError(`expected 20-byte payload, got ${bytes.length} bytes`);
   }
   const out = Uint8Array.from(bytes);
   return { kind, address: address.toLowerCase(), bytes: out, hex: addressBytesToHex(out) };
 }
-function parseAddress(address) {
+function requireTypedAddress(address, expectedKind, label = "address") {
   if (address.startsWith("0x") || address.startsWith("0X")) {
-    return hexToAddressBytes(address);
+    throw new AddressError(
+      `${label} raw 0x addresses are retired; use typed ${ADDRESS_KIND_HRPS[expectedKind]} bech32m addresses`
+    );
   }
-  return bech32ToAddressBytes(address);
+  try {
+    return typedBech32ToAddress(address, expectedKind).address;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AddressError(
+      `${label} must be typed ${ADDRESS_KIND_HRPS[expectedKind]} bech32m address: ${message}`
+    );
+  }
 }
 function decodeBech32m(input) {
   if (input.length < 8) {
@@ -138,15 +120,6 @@ function polymod(values) {
   }
   return chk >>> 0;
 }
-function createChecksum(hrp, data) {
-  const values = [...hrpExpand(hrp), ...data, 0, 0, 0, 0, 0, 0];
-  const mod = polymod(values) ^ BECH32M_CONST;
-  const out = [];
-  for (let p = 0; p < 6; p++) {
-    out.push(mod >> 5 * (5 - p) & 31);
-  }
-  return out;
-}
 function verifyChecksum(hrp, values) {
   return polymod([...hrpExpand(hrp), ...values]) === BECH32M_CONST;
 }
@@ -167,11 +140,7 @@ function convertBits(data, fromBits, toBits, pad) {
       ret.push(acc >> bits & maxv);
     }
   }
-  if (pad) {
-    if (bits > 0) {
-      ret.push(acc << toBits - bits & maxv);
-    }
-  } else if (bits >= fromBits || (acc << toBits - bits & maxv) !== 0) {
+  if (bits >= fromBits || (acc << toBits - bits & maxv) !== 0) {
     throw new AddressError("invalid bech32m padding");
   }
   return ret;
@@ -302,6 +271,8 @@ function bitCount(value) {
   }
   return count;
 }
+var ADDRESS_DERIVATION_DOMAIN = "MONO_ADDRESS_BLAKE3_20_V1";
+new TextEncoder().encode(ADDRESS_DERIVATION_DOMAIN);
 
 // src/crypto/envelope.ts
 new TextEncoder().encode("protocore/v2/mempool/dkg-mlkem768/1");
@@ -793,7 +764,7 @@ var RpcClient = class _RpcClient {
   }
   /** `lyth_getAccountPolicy` — privacy posture for an account. */
   async lythGetAccountPolicy(address) {
-    return this.call("lyth_getAccountPolicy", [address]);
+    return this.call("lyth_getAccountPolicy", [sdkTypedAddress(address, "user", "address")]);
   }
   /** `lyth_getAssetPolicy` — privacy posture for an asset. */
   async lythGetAssetPolicy(tokenId) {
@@ -801,7 +772,7 @@ var RpcClient = class _RpcClient {
   }
   /** `lyth_getTokenBalances` — indexed per-asset balances for one address. */
   async lythGetTokenBalances(address) {
-    return this.call("lyth_getTokenBalances", [address]);
+    return this.call("lyth_getTokenBalances", [sdkTypedAddress(address, "user", "address")]);
   }
   /** `lyth_bridgeRoutes` — read-only bridge route-selection/readiness. */
   async lythBridgeRoutes(request) {
@@ -814,7 +785,9 @@ var RpcClient = class _RpcClient {
   }
   /** `lyth_mrcAccount` — exact current-state native MRC account lookup. */
   async lythMrcAccount(account, spendLimit) {
-    const request = { account };
+    const request = {
+      account: sdkTypedAddress(account, "smartAccount", "account")
+    };
     if (spendLimit != null) request.spendLimit = spendLimit;
     const params = request.spendLimit == null ? [request.account] : [request.account, request.spendLimit];
     return this.call("lyth_mrcAccount", params);
@@ -847,22 +820,28 @@ var RpcClient = class _RpcClient {
   }
   /** `lyth_getAddressLabel` — indexed display/category label for one address. */
   async lythGetAddressLabel(address) {
-    const v = await this.call("lyth_getAddressLabel", [address]);
+    const v = await this.call("lyth_getAddressLabel", [
+      sdkTypedAddress(address, "user", "address")
+    ]);
     if (v === null || v === void 0) return null;
     return v;
   }
   /** `lyth_getAddressActivity` — indexed per-address activity timeline. */
   async lythGetAddressActivity(address, limit = 50, cursor) {
-    const params = cursor === void 0 ? [address, limit] : [address, limit, cursor];
+    const userAddress = sdkTypedAddress(address, "user", "address");
+    const params = cursor === void 0 ? [userAddress, limit] : [userAddress, limit, cursor];
     return this.call("lyth_getAddressActivity", params);
   }
   /** `lyth_addressActivityKind` — activity index coverage for one address. */
   async lythAddressActivityKind(address) {
-    return this.call("lyth_addressActivityKind", [address]);
+    return this.call("lyth_addressActivityKind", [sdkTypedAddress(address, "user", "address")]);
   }
   /** `lyth_agentReputation` — reputation accumulators for an agent provider. */
   async lythAgentReputation(provider, categoryId = 0) {
-    return this.call("lyth_agentReputation", [normalizeUserBech32Address(provider), categoryId]);
+    return this.call("lyth_agentReputation", [
+      sdkTypedAddress(provider, "user", "provider address"),
+      categoryId
+    ]);
   }
   /** `lyth_decodeTx` — explorer-grade decoded transaction envelope. */
   async lythDecodeTx(txHash) {
@@ -976,11 +955,11 @@ var RpcClient = class _RpcClient {
   }
   /** `lyth_addressProfile` — live account + label + activity aggregate. */
   async lythAddressProfile(address) {
-    return this.call("lyth_addressProfile", [address]);
+    return this.call("lyth_addressProfile", [sdkTypedAddress(address, "user", "address")]);
   }
   /** `lyth_addressFlow` — recent indexed address-flow aggregate. */
   async lythAddressFlow(address, limit = 250) {
-    return this.call("lyth_addressFlow", [address, limit]);
+    return this.call("lyth_addressFlow", [sdkTypedAddress(address, "user", "address"), limit]);
   }
   /** `lyth_search` — exact live resolver for hashes, addresses, blocks, and clusters. */
   async lythSearch(query, limit = 10) {
@@ -996,7 +975,7 @@ var RpcClient = class _RpcClient {
   }
   /** `lyth_mempoolPending` — pending txs for a sender. */
   async lythMempoolPending(sender) {
-    return this.call("lyth_mempoolPending", [sender]);
+    return this.call("lyth_mempoolPending", [sdkTypedAddress(sender, "user", "sender")]);
   }
   /** `lyth_currentRound` — latest committed height. */
   async lythCurrentRound() {
@@ -1039,22 +1018,26 @@ var RpcClient = class _RpcClient {
   }
   /** `lyth_getDelegations` — wallet delegation rows at a block. */
   async lythGetDelegations(wallet, block) {
-    const params = block === void 0 ? [wallet] : [wallet, encodeBlockSelector(block)];
+    const userWallet = sdkTypedAddress(wallet, "user", "wallet");
+    const params = block === void 0 ? [userWallet] : [userWallet, encodeBlockSelector(block)];
     return this.call("lyth_getDelegations", params);
   }
   /** `lyth_pendingRewards` — wallet pending rewards at a block. */
   async lythPendingRewards(wallet, block) {
-    const params = block === void 0 ? [wallet] : [wallet, encodeBlockSelector(block)];
+    const userWallet = sdkTypedAddress(wallet, "user", "wallet");
+    const params = block === void 0 ? [userWallet] : [userWallet, encodeBlockSelector(block)];
     return this.call("lyth_pendingRewards", params);
   }
   /** `lyth_redemptionQueue` — wallet redemption tickets at a block. */
   async lythRedemptionQueue(wallet, block) {
-    const params = block === void 0 ? [wallet] : [wallet, encodeBlockSelector(block)];
+    const userWallet = sdkTypedAddress(wallet, "user", "wallet");
+    const params = block === void 0 ? [userWallet] : [userWallet, encodeBlockSelector(block)];
     return this.call("lyth_redemptionQueue", params);
   }
   /** `lyth_getDelegationHistory` — indexed per-wallet delegation event timeline. */
   async lythGetDelegationHistory(wallet, limit = 50, cursor) {
-    const params = cursor === void 0 ? [wallet, limit] : [wallet, limit, cursor];
+    const userWallet = sdkTypedAddress(wallet, "user", "wallet");
+    const params = cursor === void 0 ? [userWallet, limit] : [userWallet, limit, cursor];
     return this.call("lyth_getDelegationHistory", params);
   }
   /** `lyth_getClusterDelegators` — delegator addresses for a cluster. */
@@ -1906,12 +1889,12 @@ function normalizeTransactionReceipt(value) {
     )
   };
 }
-function normalizeUserBech32Address(address) {
+function sdkTypedAddress(address, kind, label) {
   try {
-    return addressToBech32(typeof address === "string" ? parseAddress(address) : address);
+    return requireTypedAddress(address, kind, label);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw SdkError.malformed(`invalid provider address: ${message}`);
+    throw SdkError.malformed(message);
   }
 }
 function normalizeRoundInfo(value) {

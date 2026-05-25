@@ -16,11 +16,11 @@
  *    a hard ethers dependency on either the chain side or the
  *    consumer side.
  *
- * The address derivation rule for any backend is **Law §2.6**:
- * `keccak256(canonical_pubkey_bytes)[12..32]`, with algo-tagged domain
- * separation. For secp256k1 (the ethers Wallet path) this collapses
- * to the standard Ethereum derivation that `ethers.computeAddress`
- * already implements — so wallets the user already has work as-is.
+ * Native Mono address derivation is ADR-0038:
+ * `BLAKE3("MONO_ADDRESS_BLAKE3_20_V1" || algo_id_be_u16 ||
+ * canonical_pubkey_bytes)[0..20]`. `fromEthersWallet` preserves the
+ * wrapped ethers address only for the compatibility signer path; native
+ * ML-DSA-65 callers should use the crypto helpers directly.
  *
  * **What the shim is not.** This is SDK-level compat (per
  * `feedback_no_ethereum_wire_retrofit.md`). The chain's protocol-native
