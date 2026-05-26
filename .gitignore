@@ -1,4 +1,4 @@
-# --- Monolythium Vision base .gitignore (applies to every repo) ---
+# --- Monolythium base .gitignore (applies to every repo) ---
 
 # Local-only development context (NEVER push these)
 CLAUDE.md
