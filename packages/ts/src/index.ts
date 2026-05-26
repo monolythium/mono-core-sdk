@@ -370,8 +370,9 @@ export {
   parseAddress,
   requireTypedAddress,
   typedBech32ToAddress,
+  validateAddress,
 } from "./address.js";
-export type { AddressKind, TypedAddress } from "./address.js";
+export type { AddressKind, AddressValidation, TypedAddress } from "./address.js";
 export {
   DELEGATION_REVERT_TAGS,
   DELEGATION_SELECTORS,
