@@ -128,6 +128,41 @@ function parseAddress(address) {
   }
   return bech32ToAddressBytes(address);
 }
+function validateAddress(address) {
+  if (typeof address !== "string" || address.length === 0) {
+    return { valid: false, reason: "address cannot be empty" };
+  }
+  const trimmed = address.trim();
+  if (trimmed.length === 0) {
+    return { valid: false, reason: "address cannot be empty" };
+  }
+  if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
+    try {
+      const bytes = hexToAddressBytes(trimmed);
+      return {
+        valid: true,
+        normalized: addressToBech32(bytes),
+        kind: null,
+        format: "hex",
+        bytes
+      };
+    } catch (err) {
+      return { valid: false, reason: err instanceof Error ? err.message : String(err) };
+    }
+  }
+  try {
+    const typed = typedBech32ToAddress(trimmed);
+    return {
+      valid: true,
+      normalized: typed.address,
+      kind: typed.kind,
+      format: "bech32m",
+      bytes: typed.bytes
+    };
+  } catch (err) {
+    return { valid: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
 function normalizeAddressHex(address) {
   return addressBytesToHex(parseAddress(address));
 }
@@ -320,8 +355,6 @@ var PRECOMPILE_ADDRESSES = {
   PRIVACY: "0x0000000000000000000000000000000000001004",
   /** Operator + RPC node registry — non-gateable consensus invariant. */
   NODE_REGISTRY: "0x0000000000000000000000000000000000001005",
-  /** IBC light-client + packet routing — gateable. */
-  IBC: "0x0000000000000000000000000000000000001007",
   /** Native zk-light-client bridge — gateable. */
   BRIDGE: "0x0000000000000000000000000000000000001008",
   /** Decentralized multi-signer oracle (OI-0036) — non-gateable. */
@@ -334,8 +367,6 @@ var PRECOMPILE_ADDRESSES = {
   VRF: "0x0000000000000000000000000000000000001101",
   /** Streaming-payments primitive (Law §5.4 / §5.7) — gateable. */
   STREAMING_PAYMENTS: "0x0000000000000000000000000000000000001102",
-  /** Human-readable name registry (Law §5.4 / §5.8) — gateable. */
-  NAME_REGISTRY: "0x0000000000000000000000000000000000001103",
   /** Cluster-name registry. */
   CLUSTER_NAME_REGISTRY: "0x0000000000000000000000000000000000001104",
   /** Agent-commerce attestation precompile. */
@@ -355,7 +386,9 @@ var PRECOMPILE_ADDRESSES = {
   /** Agent spending policy — gateable, activated by Stage 7 milestones. */
   SPENDING_POLICY: "0x000000000000000000000000000000000000110C",
   /** Primary ML-DSA-65 pubkey registry — gateable, ADR-0034. */
-  PUBKEY_REGISTRY: "0x000000000000000000000000000000000000110D"
+  PUBKEY_REGISTRY: "0x000000000000000000000000000000000000110D",
+  /** Hierarchical name registry (Law §5.10, whitepaper §22.8) — gateable. */
+  NAME_REGISTRY: "0x000000000000000000000000000000000000110E"
 };
 
 // src/node-registry.ts
@@ -7854,7 +7887,7 @@ var MONOLYTHIUM_TESTNET_CHAIN_ID = 69420n;
 var MONOLYTHIUM_TESTNET_NETWORK_NAME = "monolythium-testnet";
 
 // src/index.ts
-var version = "0.2.0";
+var version = "0.2.1";
 
 exports.ADDRESS_HRP = ADDRESS_HRP;
 exports.ADDRESS_KIND_HRPS = ADDRESS_KIND_HRPS;
@@ -8149,6 +8182,7 @@ exports.submitMrvCallNativeTx = submitMrvCallNativeTx;
 exports.submitMrvDeployNativeTx = submitMrvDeployNativeTx;
 exports.submitMrvDeployPayloadNativeTx = submitMrvDeployPayloadNativeTx;
 exports.typedBech32ToAddress = typedBech32ToAddress;
+exports.validateAddress = validateAddress;
 exports.validateBridgeRouteCatalogue = validateBridgeRouteCatalogue;
 exports.validateMrvArtifactMetadata = validateMrvArtifactMetadata;
 exports.validateMrvCallRequest = validateMrvCallRequest;
