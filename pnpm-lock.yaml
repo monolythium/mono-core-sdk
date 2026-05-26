@@ -27,6 +27,8 @@ importers:
         specifier: ^6.16.0
         version: 6.16.0
 
+  packages/mono-dev: {}
+
   packages/ts:
     dependencies:
       '@noble/ciphers':
