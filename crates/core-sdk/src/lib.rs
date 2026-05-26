@@ -3,7 +3,7 @@
 //! This crate provides a typed [`RpcClient`] that wraps the JSON-RPC
 //! surface served by a `mono-core` node: current chain-native `lyth_*`
 //! methods, passive compatibility `eth_*` / `net_*` / `web3_*` reads, and
-//! server-gated legacy/debug methods. New v4.1 app paths should prefer the
+//! server-gated compatibility/debug methods. New v4.1 app paths should prefer the
 //! native MRV/RISC-V helpers and `lyth_*` surfaces over compatibility
 //! simulation or deployment methods.
 //!
@@ -60,7 +60,7 @@ pub use bridge::{
     BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_SUBMIT_API_BLOCKED_REASON, REVERT_BRIDGE_ADMIN_LOCKED,
     REVERT_BRIDGE_COOLDOWN_ZERO, REVERT_BRIDGE_FINALITY_ZERO, REVERT_BRIDGE_RESUME_COOLDOWN_ACTIVE,
     SIGHASH_LOCK_BRIDGE_CONFIG, SIGHASH_SET_BRIDGE_RESUME_COOLDOWN,
-    SIGHASH_SET_BRIDGE_ROUTE_FINALITY,
+    SIGHASH_SET_BRIDGE_ROUTE_FINALITY, V1_BRIDGE_ALLOWED_FEE_TOKEN, V1_BRIDGE_ALLOWED_PROTOCOL,
 };
 pub use client::{
     MrvCallNativeEncryptedSubmitResult, MrvDeployNativeEncryptedSubmitResult, RpcClient,

@@ -3,8 +3,7 @@
  *
  * Mirrors the Rust SDK's `RpcClient` — every public method maps 1:1 to
  * a method on the Rust client, returns the same wire-shape value, and
- * sends the same `lyth_*` / `eth_*` / `debug_*` JSON-RPC method strings
- * (Law §13.2).
+ * sends the same `lyth_*` / `eth_*` / `debug_*` JSON-RPC method strings.
  */
 
 import {
@@ -103,7 +102,7 @@ export interface NetworkClientOptions extends RpcClientOptions {
   probe?: boolean;
 }
 
-/** Typed ADR-0038 user address (`mono1...`) accepted at public SDK boundaries. */
+/** Typed user address (`mono1...`) accepted at public SDK boundaries. */
 export type UserAddressInput = string;
 
 export interface TxFeedReceipt {
@@ -137,6 +136,14 @@ export interface TxFeedResponse {
   limit: number;
   nextCursor: string | null;
   transactions: TxFeedTransaction[];
+}
+
+export interface ExecutionUnitPriceResponse {
+  executionUnitPriceLythoshi: string;
+  basePricePerExecutionUnitLythoshi: string;
+  priorityTipLythoshi: string;
+  blockNumber: number | null;
+  source: string;
 }
 
 export const MAX_NATIVE_RECEIPT_EVENTS = 1_000;
@@ -1372,7 +1379,7 @@ export class RpcClient {
     return this.call("web3_sha3", [data]);
   }
 
-  // ---- lyth_* (Law §13.2 native namespace) --------------------------
+  // ---- lyth_* native namespace --------------------------------------
 
   /** `lyth_listProviders` — paged registry enumeration. */
   async lythListProviders(
@@ -1726,15 +1733,29 @@ export class RpcClient {
     return normalizeRoundInfo(await this.call("lyth_currentRound", []));
   }
 
+  /** `lyth_getTransactionCount` — native sender nonce. */
+  async lythGetTransactionCount(address: string): Promise<bigint> {
+    return parseRpcBigint(
+      await this.call<unknown>("lyth_getTransactionCount", [
+        sdkTypedAddress(address, "user", "address"),
+      ]),
+      "lyth_getTransactionCount",
+    );
+  }
+
+  /** `lyth_executionUnitPrice` — native execution-unit price in lythoshi. */
+  async lythExecutionUnitPrice(): Promise<ExecutionUnitPriceResponse> {
+    return normalizeExecutionUnitPriceResponse(
+      await this.call<unknown>("lyth_executionUnitPrice", []),
+    );
+  }
+
   /** `lyth_peerSummary` — public-safe aggregate peer-network diagnostics. */
   async lythPeerSummary(): Promise<PeerSummaryAggregate> {
     return this.call("lyth_peerSummary", []);
   }
 
-  /**
-   * `lyth_listActivePrecompiles` — milestone-gated precompile catalogue
-   * (OI-0170 / ADR-0015 §5).
-   */
+  /** `lyth_listActivePrecompiles` — native precompile catalogue. */
   async lythListActivePrecompiles(
     block: BlockSelector = "latest",
   ): Promise<PrecompileCatalogueResponse> {
@@ -2908,6 +2929,35 @@ function normalizeRoundInfo(value: unknown): RoundInfo {
   };
 }
 
+function normalizeExecutionUnitPriceResponse(value: unknown): ExecutionUnitPriceResponse {
+  if (!value || typeof value !== "object") {
+    throw SdkError.malformed("execution unit price response must be an object");
+  }
+  const row = value as Record<string, unknown>;
+  return {
+    executionUnitPriceLythoshi: parseRpcBigint(
+      fieldAlias(row, ["executionUnitPriceLythoshi", "execution_unit_price_lythoshi"]),
+      "executionUnitPriceLythoshi",
+    ).toString(),
+    basePricePerExecutionUnitLythoshi: parseRpcBigint(
+      fieldAlias(row, [
+        "basePricePerExecutionUnitLythoshi",
+        "base_price_per_execution_unit_lythoshi",
+      ]),
+      "basePricePerExecutionUnitLythoshi",
+    ).toString(),
+    priorityTipLythoshi: parseRpcBigint(
+      fieldAlias(row, ["priorityTipLythoshi", "priority_tip_lythoshi"]),
+      "priorityTipLythoshi",
+    ).toString(),
+    blockNumber: parseRpcNumberNullable(
+      fieldAlias(row, ["blockNumber", "block_number"]),
+      "blockNumber",
+    ),
+    source: readStringField(row, ["source"], "execution unit price source"),
+  };
+}
+
 function normalizeMempoolSnapshot(value: unknown): MempoolSnapshot {
   if (!value || typeof value !== "object") {
     throw SdkError.malformed("mempool snapshot must be an object");
@@ -2923,6 +2973,25 @@ function normalizeMempoolSnapshot(value: unknown): MempoolSnapshot {
     mailbox_depth: parseRpcBigint(row["mailbox_depth"], "mempool mailbox_depth"),
     bytes_by_class: bytesByClass.map((v, i) => parseRpcBigint(v, `mempool bytes_by_class[${i}]`)) as MempoolSnapshot["bytes_by_class"],
   };
+}
+
+function fieldAlias(record: Record<string, unknown>, keys: readonly string[]): unknown {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(record, key)) return record[key];
+  }
+  return undefined;
+}
+
+function readStringField(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+  label: string,
+): string {
+  const value = fieldAlias(record, keys);
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw SdkError.malformed(`${label} must be a non-empty string`);
+  }
+  return value.trim();
 }
 
 function normalizeCapabilitiesResponse(value: CapabilitiesResponse): CapabilitiesResponse {

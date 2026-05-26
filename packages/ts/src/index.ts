@@ -10,7 +10,7 @@
  * subpath so native SDK consumers do not import that peer dependency.
  */
 
-export const version = "0.2.1";
+export const version = "0.2.2";
 
 export { ApiClient, apiEndpointFromRpcEndpoint } from "./api.js";
 export {
@@ -19,6 +19,7 @@ export {
   BRIDGE_SELECTORS,
   BRIDGE_SUBMIT_API_BLOCKED_REASON,
   V1_BRIDGE_ALLOWED_FEE_TOKEN,
+  V1_BRIDGE_ALLOWED_PROTOCOL,
   BridgePrecompileError,
   BridgeRouteCatalogueError,
   assessBridgeRoute,
@@ -133,6 +134,7 @@ export type {
   ClusterMemberResponse,
   ClusterStatusResponse,
   DutyAbsence,
+  ExecutionUnitPriceResponse,
   JailStatusWindow,
   KeyRotationWindow,
   LythUpgradePlanStatus,

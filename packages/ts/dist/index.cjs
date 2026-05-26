@@ -355,7 +355,7 @@ var PRECOMPILE_ADDRESSES = {
   PRIVACY: "0x0000000000000000000000000000000000001004",
   /** Operator + RPC node registry — non-gateable consensus invariant. */
   NODE_REGISTRY: "0x0000000000000000000000000000000000001005",
-  /** Native zk-light-client bridge — gateable. */
+  /** Native bridge route-control surface — gateable. */
   BRIDGE: "0x0000000000000000000000000000000000001008",
   /** Decentralized multi-signer oracle — non-gateable. */
   ORACLE: "0x0000000000000000000000000000000000001009",
@@ -2388,7 +2388,7 @@ var RpcClient = class _RpcClient {
   async web3Sha3(data) {
     return this.call("web3_sha3", [data]);
   }
-  // ---- lyth_* (Law §13.2 native namespace) --------------------------
+  // ---- lyth_* native namespace --------------------------------------
   /** `lyth_listProviders` — paged registry enumeration. */
   async lythListProviders(capabilityMask, cursor = null, limit = 100) {
     return this.call("lyth_listProviders", [capabilityMask, cursor, limit]);
@@ -2620,14 +2620,26 @@ var RpcClient = class _RpcClient {
   async lythCurrentRound() {
     return normalizeRoundInfo(await this.call("lyth_currentRound", []));
   }
+  /** `lyth_getTransactionCount` — native sender nonce. */
+  async lythGetTransactionCount(address) {
+    return parseRpcBigint(
+      await this.call("lyth_getTransactionCount", [
+        sdkTypedAddress(address, "user", "address")
+      ]),
+      "lyth_getTransactionCount"
+    );
+  }
+  /** `lyth_executionUnitPrice` — native execution-unit price in lythoshi. */
+  async lythExecutionUnitPrice() {
+    return normalizeExecutionUnitPriceResponse(
+      await this.call("lyth_executionUnitPrice", [])
+    );
+  }
   /** `lyth_peerSummary` — public-safe aggregate peer-network diagnostics. */
   async lythPeerSummary() {
     return this.call("lyth_peerSummary", []);
   }
-  /**
-   * `lyth_listActivePrecompiles` — milestone-gated precompile catalogue
-   * (OI-0170 / ADR-0015 §5).
-   */
+  /** `lyth_listActivePrecompiles` — native precompile catalogue. */
   async lythListActivePrecompiles(block = "latest") {
     return this.call("lyth_listActivePrecompiles", [encodeBlockSelector(block)]);
   }
@@ -3552,6 +3564,34 @@ function normalizeRoundInfo(value) {
     height: parseRpcBigint(row["height"], "round height")
   };
 }
+function normalizeExecutionUnitPriceResponse(value) {
+  if (!value || typeof value !== "object") {
+    throw SdkError.malformed("execution unit price response must be an object");
+  }
+  const row = value;
+  return {
+    executionUnitPriceLythoshi: parseRpcBigint(
+      fieldAlias(row, ["executionUnitPriceLythoshi", "execution_unit_price_lythoshi"]),
+      "executionUnitPriceLythoshi"
+    ).toString(),
+    basePricePerExecutionUnitLythoshi: parseRpcBigint(
+      fieldAlias(row, [
+        "basePricePerExecutionUnitLythoshi",
+        "base_price_per_execution_unit_lythoshi"
+      ]),
+      "basePricePerExecutionUnitLythoshi"
+    ).toString(),
+    priorityTipLythoshi: parseRpcBigint(
+      fieldAlias(row, ["priorityTipLythoshi", "priority_tip_lythoshi"]),
+      "priorityTipLythoshi"
+    ).toString(),
+    blockNumber: parseRpcNumberNullable(
+      fieldAlias(row, ["blockNumber", "block_number"]),
+      "blockNumber"
+    ),
+    source: readStringField(row, ["source"], "execution unit price source")
+  };
+}
 function normalizeMempoolSnapshot(value) {
   if (!value || typeof value !== "object") {
     throw SdkError.malformed("mempool snapshot must be an object");
@@ -3567,6 +3607,19 @@ function normalizeMempoolSnapshot(value) {
     mailbox_depth: parseRpcBigint(row["mailbox_depth"], "mempool mailbox_depth"),
     bytes_by_class: bytesByClass.map((v, i) => parseRpcBigint(v, `mempool bytes_by_class[${i}]`))
   };
+}
+function fieldAlias(record, keys) {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(record, key)) return record[key];
+  }
+  return void 0;
+}
+function readStringField(record, keys, label) {
+  const value = fieldAlias(record, keys);
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw SdkError.malformed(`${label} must be a non-empty string`);
+  }
+  return value.trim();
 }
 function normalizeCapabilitiesResponse(value) {
   return {
@@ -4073,6 +4126,7 @@ var BRIDGE_REVERT_TAGS = {
 var BRIDGE_QUOTE_API_BLOCKED_REASON = "bridge quote requires a mono-core live quote API/runtime primitive";
 var BRIDGE_SUBMIT_API_BLOCKED_REASON = "bridge submit requires a mono-core live submit API/runtime primitive";
 var V1_BRIDGE_ALLOWED_FEE_TOKEN = "LINK";
+var V1_BRIDGE_ALLOWED_PROTOCOL = "chainlink-ccip";
 var BridgePrecompileError = class extends Error {
   constructor(message) {
     super(message);
@@ -4134,6 +4188,9 @@ function assessBridgeRoute(route) {
   const feeToken = String(route.feeToken ?? "").trim();
   if (route.routeId.trim() === "") blockedReasons.push("route id missing");
   if (route.bridge.trim() === "") blockedReasons.push("bridge name missing");
+  if (!isChainlinkCcipRoute(route.protocol, route.bridge, route.verifier.model)) {
+    blockedReasons.push("bridge protocol must be Chainlink CCIP");
+  }
   if (route.asset.trim() === "") blockedReasons.push("asset disclosure missing");
   if (feeToken === "") {
     blockedReasons.push("route fee token missing");
@@ -4381,7 +4438,13 @@ function validateBridgeRouteCatalogueRoute(idx, value, seen, blockedReasons) {
     20,
     blockedReasons
   );
-  validateTextField(`${prefix}.bridge`, value.bridge, 64, blockedReasons);
+  const bridge = validateTextField(`${prefix}.bridge`, value.bridge, 64, blockedReasons);
+  const protocol = validateOptionalTextField(
+    `${prefix}.protocol`,
+    field(value, "protocol", "routeProtocol", "route_protocol"),
+    64,
+    blockedReasons
+  );
   validateTextField(`${prefix}.asset`, value.asset, 64, blockedReasons);
   const feeToken = validateTextField(
     `${prefix}.feeToken`,
@@ -4405,10 +4468,11 @@ function validateBridgeRouteCatalogueRoute(idx, value, seen, blockedReasons) {
     blockedReasons
   );
   const verifier = value.verifier;
+  let verifierModel = null;
   if (!isRecord2(verifier)) {
     blockedReasons.push(`${prefix}.verifier must be an object`);
   } else {
-    validateTextField(`${prefix}.verifier.model`, verifier.model, 64, blockedReasons);
+    verifierModel = validateTextField(`${prefix}.verifier.model`, verifier.model, 64, blockedReasons);
     const participantCount = field(verifier, "participantCount", "participant_count");
     if (!isU16(participantCount) || participantCount === 0) {
       blockedReasons.push(`${prefix}.verifier.participantCount must be non-zero`);
@@ -4418,6 +4482,9 @@ function validateBridgeRouteCatalogueRoute(idx, value, seen, blockedReasons) {
     } else if (isU16(participantCount) && verifier.threshold > participantCount) {
       blockedReasons.push(`${prefix}.verifier.threshold must be in 1..=participantCount`);
     }
+  }
+  if (!isChainlinkCcipRoute(protocol, bridge ?? "", verifierModel ?? "")) {
+    blockedReasons.push(`${prefix}.protocol must be Chainlink CCIP`);
   }
   if (!decimalStringIsPositiveU256(field(value, "drainCapAtomic", "drain_cap_atomic"))) {
     blockedReasons.push(`${prefix}.drainCapAtomic must be a non-zero decimal u256`);
@@ -4460,6 +4527,7 @@ function coerceBridgeRouteCatalogueRoute(value) {
     bridgeId: stringField2(value, "bridgeId", "bridge_id"),
     wrappedAsset: stringField2(value, "wrappedAsset", "wrapped_asset"),
     bridge: stringField2(value, "bridge").trim(),
+    protocol: optionalStringField(value, "protocol", "routeProtocol", "route_protocol"),
     asset: stringField2(value, "asset").trim(),
     feeToken: stringField2(value, "feeToken", "fee_token").trim(),
     sourceChain: stringField2(value, "sourceChain", "source_chain").trim(),
@@ -4489,6 +4557,19 @@ function cloneBridgeRouteCatalogueRoute(route) {
     ...route,
     verifier: { ...route.verifier }
   };
+}
+function isChainlinkCcipRoute(protocol, bridge, verifierModel) {
+  const normalizedProtocol = normalizeBridgeProtocol(protocol ?? "");
+  if (normalizedProtocol.length > 0) {
+    return normalizedProtocol === "chainlinkccip" || normalizedProtocol === "ccip";
+  }
+  return bridgeLabelLooksCcip(bridge) || bridgeLabelLooksCcip(verifierModel);
+}
+function bridgeLabelLooksCcip(value) {
+  return normalizeBridgeProtocol(value).includes("ccip");
+}
+function normalizeBridgeProtocol(value) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 function bridgeRouteCandidate(intent, intentReasons, route) {
   const assessment = assessBridgeRoute(route);
@@ -4585,16 +4666,28 @@ function trimmedEq(left, right) {
 function isRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function field(record, camel, snake) {
-  if (Object.prototype.hasOwnProperty.call(record, camel)) return record[camel];
-  if (snake != null && Object.prototype.hasOwnProperty.call(record, snake)) return record[snake];
+function field(record, ...keys) {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(record, key)) return record[key];
+  }
   return void 0;
 }
-function stringField2(record, camel, snake) {
-  return field(record, camel, snake);
+function stringField2(record, ...keys) {
+  return field(record, ...keys);
 }
-function numberField(record, camel, snake) {
-  return field(record, camel, snake);
+function optionalStringField(record, ...keys) {
+  let raw;
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(record, key)) {
+      raw = record[key];
+      break;
+    }
+  }
+  if (raw === void 0 || raw === null) return null;
+  return typeof raw === "string" ? raw.trim() : "";
+}
+function numberField(record, ...keys) {
+  return field(record, ...keys);
 }
 function validateTextField(name, value, maxLen, blockedReasons) {
   if (typeof value !== "string") {
@@ -4607,6 +4700,10 @@ function validateTextField(name, value, maxLen, blockedReasons) {
     return null;
   }
   return trimmed;
+}
+function validateOptionalTextField(name, value, maxLen, blockedReasons) {
+  if (value === void 0 || value === null) return null;
+  return validateTextField(name, value, maxLen, blockedReasons);
 }
 function validateHexBytes(name, value, expectedBytes, blockedReasons) {
   if (typeof value !== "string") {
@@ -7905,7 +8002,7 @@ var MONOLYTHIUM_TESTNET_CHAIN_ID = 69420n;
 var MONOLYTHIUM_TESTNET_NETWORK_NAME = "monolythium-testnet";
 
 // src/index.ts
-var version = "0.2.1";
+var version = "0.2.2";
 
 exports.ADDRESS_HRP = ADDRESS_HRP;
 exports.ADDRESS_KIND_HRPS = ADDRESS_KIND_HRPS;
@@ -7990,6 +8087,7 @@ exports.SdkError = SdkError;
 exports.SpendingPolicyError = SpendingPolicyError;
 exports.TESTNET_69420 = TESTNET_69420;
 exports.V1_BRIDGE_ALLOWED_FEE_TOKEN = V1_BRIDGE_ALLOWED_FEE_TOKEN;
+exports.V1_BRIDGE_ALLOWED_PROTOCOL = V1_BRIDGE_ALLOWED_PROTOCOL;
 exports.addressBytesToHex = addressBytesToHex;
 exports.addressToBech32 = addressToBech32;
 exports.addressToTypedBech32 = addressToTypedBech32;

@@ -4,7 +4,7 @@ import type { BridgeCircuitBreakerState } from "./BridgeCircuitBreakerState.js";
 import type { BridgeVerifierDisclosure } from "./BridgeVerifierDisclosure.js";
 
 /**
- * One trusted bridge route import row.
+ * One bridge route import row.
  */
 export type BridgeRouteCatalogueRoute = {
 /**
@@ -27,6 +27,10 @@ wrappedAsset: string,
  * Third-party bridge or bridge family name.
  */
 bridge: string,
+/**
+ * Route protocol. Omitted rows may still be accepted when bridge/verifier labels identify CCIP.
+ */
+protocol?: string | null,
 /**
  * Asset symbol or canonical asset id shown to users.
  */

@@ -34,13 +34,14 @@ import {
 function route(routeId: string): BridgeRouteDisclosure {
   return {
     routeId,
-    bridge: "CCIP",
+    bridge: "Chainlink CCIP",
+    protocol: "chainlink-ccip",
     asset: "USDC",
     feeToken: "LINK",
     sourceChain: "Ethereum",
     destinationChain: "Mono",
     verifier: {
-      model: "DON",
+      model: "CCIP DON",
       participantCount: 7,
       threshold: 5,
     },
@@ -61,6 +62,7 @@ function catalogueRoute(routeId: string): BridgeRouteCatalogueRoute {
     bridgeId: `0x${"b1".repeat(32)}`,
     wrappedAsset: `0x${"a5".repeat(20)}`,
     bridge: "Chainlink CCIP",
+    protocol: "chainlink-ccip",
     asset: "USDC",
     feeToken: "LINK",
     sourceChain: "Ethereum",
@@ -138,6 +140,7 @@ describe("bridge route disclosure helpers", () => {
     expect(decoded.routes[0]).toMatchObject({
       tokenId: `0x${"10".repeat(32)}`,
       routeId: "ccip-usdc-mainnet",
+      protocol: "chainlink-ccip",
       feeToken: "LINK",
       updatedAtBlock: 7,
     });
@@ -157,6 +160,7 @@ describe("bridge route disclosure helpers", () => {
         bridge_id: `0x${"b1".repeat(32)}`,
         wrapped_asset: `0x${"a5".repeat(20)}`,
         bridge: "Chainlink CCIP",
+        route_protocol: "chainlink-ccip",
         asset: "USDC",
         fee_token: "LINK",
         source_chain: "Ethereum",
@@ -192,6 +196,7 @@ describe("bridge route disclosure helpers", () => {
       drainCapAtomic: "0",
       finalityBlocks: 0,
       feeToken: "ETH",
+      protocol: "relay",
       lastIncidentDate: "20260523",
     };
     const second = {
@@ -209,6 +214,7 @@ describe("bridge route disclosure helpers", () => {
       true,
     );
     expect(validation.blockedReasons.some((reason) => reason.includes("feeToken"))).toBe(true);
+    expect(validation.blockedReasons.some((reason) => reason.includes("protocol"))).toBe(true);
     expect(validation.blockedReasons.some((reason) => reason.includes("lastIncidentDate"))).toBe(
       true,
     );
@@ -332,6 +338,19 @@ describe("bridge route disclosure helpers", () => {
     expect(assessment.blockedReasons.some((reason) => reason.includes("drain cap"))).toBe(true);
     expect(assessment.blockedReasons.some((reason) => reason.includes("fee token"))).toBe(true);
     expect(assessment.blockedReasons.some((reason) => reason.includes("circuit breaker"))).toBe(true);
+  });
+
+  it("blocks non-CCIP protocol even when the fee token is LINK", () => {
+    const disclosure = route("relay-usdc");
+    disclosure.bridge = "Generic Relay";
+    disclosure.protocol = "relay";
+    disclosure.verifier.model = "light-client";
+
+    const assessment = assessBridgeRoute(disclosure);
+    expect(assessment.accepted).toBe(false);
+    expect(assessment.blockedReasons.some((reason) => reason.includes("Chainlink CCIP"))).toBe(
+      true,
+    );
   });
 
   it("ranks accepted high-score routes ahead of warnings and blocked routes", () => {

@@ -62,13 +62,14 @@ interface Mrc4626DepositEvent extends NativeDecodedEvent {
 function bridgeRoute(routeId: string): BridgeRouteDisclosure {
   return {
     routeId,
-    bridge: "CCIP",
+    bridge: "Chainlink CCIP",
+    protocol: "chainlink-ccip",
     asset: "USDC",
     feeToken: "LINK",
     sourceChain: "Ethereum",
     destinationChain: "Mono",
     verifier: {
-      model: "DON",
+      model: "CCIP DON",
       participantCount: 7,
       threshold: 5,
     },
@@ -251,7 +252,7 @@ describe("eth_* methods", () => {
   });
 });
 
-describe("lyth_* methods (Law §13.2 native namespace)", () => {
+describe("lyth_* methods", () => {
   it("lyth_clusterDirectory sends the canonical method string", async () => {
     const { fetch, calls } = mockFetch({
       page: 0,
@@ -285,6 +286,35 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     for (const c of calls) {
       expect(c.method).not.toMatch(/^protocore_/);
     }
+  });
+
+  it("lyth_getTransactionCount and lyth_executionUnitPrice expose native nonce and fee reads", async () => {
+    const address = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
+    const { fetch, calls } = mockFetchSequence([
+      9,
+      {
+        executionUnitPriceLythoshi: "12",
+        basePricePerExecutionUnitLythoshi: "10",
+        priorityTipLythoshi: "2",
+        blockNumber: 7,
+        source: "latest_block",
+      },
+    ]);
+    const client = new RpcClient("http://x", { fetch });
+
+    await expect(client.lythGetTransactionCount(address)).resolves.toBe(9n);
+    await expect(client.lythExecutionUnitPrice()).resolves.toEqual({
+      executionUnitPriceLythoshi: "12",
+      basePricePerExecutionUnitLythoshi: "10",
+      priorityTipLythoshi: "2",
+      blockNumber: 7,
+      source: "latest_block",
+    });
+    expect(calls.map((c) => c.method)).toEqual([
+      "lyth_getTransactionCount",
+      "lyth_executionUnitPrice",
+    ]);
+    expect(calls[0].params).toEqual([address]);
   });
 
   it("lyth_listProviders forwards capability mask + cursor + limit", async () => {

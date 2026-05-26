@@ -752,7 +752,7 @@ var RpcClient = class _RpcClient {
   async web3Sha3(data) {
     return this.call("web3_sha3", [data]);
   }
-  // ---- lyth_* (Law §13.2 native namespace) --------------------------
+  // ---- lyth_* native namespace --------------------------------------
   /** `lyth_listProviders` — paged registry enumeration. */
   async lythListProviders(capabilityMask, cursor = null, limit = 100) {
     return this.call("lyth_listProviders", [capabilityMask, cursor, limit]);
@@ -984,14 +984,26 @@ var RpcClient = class _RpcClient {
   async lythCurrentRound() {
     return normalizeRoundInfo(await this.call("lyth_currentRound", []));
   }
+  /** `lyth_getTransactionCount` — native sender nonce. */
+  async lythGetTransactionCount(address) {
+    return parseRpcBigint(
+      await this.call("lyth_getTransactionCount", [
+        sdkTypedAddress(address, "user", "address")
+      ]),
+      "lyth_getTransactionCount"
+    );
+  }
+  /** `lyth_executionUnitPrice` — native execution-unit price in lythoshi. */
+  async lythExecutionUnitPrice() {
+    return normalizeExecutionUnitPriceResponse(
+      await this.call("lyth_executionUnitPrice", [])
+    );
+  }
   /** `lyth_peerSummary` — public-safe aggregate peer-network diagnostics. */
   async lythPeerSummary() {
     return this.call("lyth_peerSummary", []);
   }
-  /**
-   * `lyth_listActivePrecompiles` — milestone-gated precompile catalogue
-   * (OI-0170 / ADR-0015 §5).
-   */
+  /** `lyth_listActivePrecompiles` — native precompile catalogue. */
   async lythListActivePrecompiles(block = "latest") {
     return this.call("lyth_listActivePrecompiles", [encodeBlockSelector(block)]);
   }
@@ -1909,6 +1921,34 @@ function normalizeRoundInfo(value) {
     height: parseRpcBigint(row["height"], "round height")
   };
 }
+function normalizeExecutionUnitPriceResponse(value) {
+  if (!value || typeof value !== "object") {
+    throw SdkError.malformed("execution unit price response must be an object");
+  }
+  const row = value;
+  return {
+    executionUnitPriceLythoshi: parseRpcBigint(
+      fieldAlias(row, ["executionUnitPriceLythoshi", "execution_unit_price_lythoshi"]),
+      "executionUnitPriceLythoshi"
+    ).toString(),
+    basePricePerExecutionUnitLythoshi: parseRpcBigint(
+      fieldAlias(row, [
+        "basePricePerExecutionUnitLythoshi",
+        "base_price_per_execution_unit_lythoshi"
+      ]),
+      "basePricePerExecutionUnitLythoshi"
+    ).toString(),
+    priorityTipLythoshi: parseRpcBigint(
+      fieldAlias(row, ["priorityTipLythoshi", "priority_tip_lythoshi"]),
+      "priorityTipLythoshi"
+    ).toString(),
+    blockNumber: parseRpcNumberNullable(
+      fieldAlias(row, ["blockNumber", "block_number"]),
+      "blockNumber"
+    ),
+    source: readStringField(row, ["source"], "execution unit price source")
+  };
+}
 function normalizeMempoolSnapshot(value) {
   if (!value || typeof value !== "object") {
     throw SdkError.malformed("mempool snapshot must be an object");
@@ -1924,6 +1964,19 @@ function normalizeMempoolSnapshot(value) {
     mailbox_depth: parseRpcBigint(row["mailbox_depth"], "mempool mailbox_depth"),
     bytes_by_class: bytesByClass.map((v, i) => parseRpcBigint(v, `mempool bytes_by_class[${i}]`))
   };
+}
+function fieldAlias(record, keys) {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(record, key)) return record[key];
+  }
+  return void 0;
+}
+function readStringField(record, keys, label) {
+  const value = fieldAlias(record, keys);
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw SdkError.malformed(`${label} must be a non-empty string`);
+  }
+  return value.trim();
 }
 function normalizeCapabilitiesResponse(value) {
   return {

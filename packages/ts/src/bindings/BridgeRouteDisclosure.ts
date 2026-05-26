@@ -16,6 +16,10 @@ routeId: string,
  */
 bridge: string,
 /**
+ * Route protocol. Omitted rows may still be accepted when bridge/verifier labels identify CCIP.
+ */
+protocol?: string | null,
+/**
  * Asset symbol or canonical asset id shown to users.
  */
 asset: string,

@@ -55,6 +55,7 @@ export type { DelegationRow } from "./DelegationRow.js";
 export type { DelegationsResponse } from "./DelegationsResponse.js";
 export type { EncryptionKeyResponse } from "./EncryptionKeyResponse.js";
 export type { EntityRatchetResponse } from "./EntityRatchetResponse.js";
+export type { ExecutionUnitPriceResponse } from "./ExecutionUnitPriceResponse.js";
 export type { FeeHistoryResponse } from "./FeeHistoryResponse.js";
 export type { GapRange } from "./GapRange.js";
 export type { GapRecord } from "./GapRecord.js";
