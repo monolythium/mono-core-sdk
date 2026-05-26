@@ -1612,6 +1612,7 @@ mod tests {
             route_id: "healthy".to_owned(),
             bridge: "CCIP".to_owned(),
             asset: "USDC".to_owned(),
+            fee_token: "LINK".to_owned(),
             source_chain: "Ethereum".to_owned(),
             destination_chain: "Mono".to_owned(),
             verifier: crate::bridge::BridgeVerifierDisclosure {
@@ -1665,6 +1666,7 @@ mod tests {
             route_id: "healthy".to_owned(),
             bridge: "CCIP".to_owned(),
             asset: "USDC".to_owned(),
+            fee_token: "LINK".to_owned(),
             source_chain: "Ethereum".to_owned(),
             destination_chain: "Mono".to_owned(),
             verifier: crate::bridge::BridgeVerifierDisclosure {

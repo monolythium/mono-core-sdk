@@ -230,7 +230,7 @@ export interface NoEvmFinalityEvidence {
 interface NoEvmReceiptProofBase {
   schema: "mono.no_evm_receipt_proof.v1";
   rootAlgorithm: string;
-  receiptCodec: "bincode(protocore_evm::Receipt)";
+  receiptCodec: "bincode(protocore_execution_types::Receipt)";
   blockHash: string;
   txHash: string;
   receiptsRoot: string;

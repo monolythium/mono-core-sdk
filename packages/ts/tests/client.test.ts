@@ -64,6 +64,7 @@ function bridgeRoute(routeId: string): BridgeRouteDisclosure {
     routeId,
     bridge: "CCIP",
     asset: "USDC",
+    feeToken: "LINK",
     sourceChain: "Ethereum",
     destinationChain: "Mono",
     verifier: {
@@ -982,7 +983,7 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
       },
       archiveProof: null,
       rootAlgorithm: NO_EVM_RECEIPT_ROOT_ALGORITHM,
-      receiptCodec: "bincode(protocore_evm::Receipt)",
+      receiptCodec: "bincode(protocore_execution_types::Receipt)",
       blockHash: `0x${"33".repeat(32)}`,
       txHash,
       receiptsRoot: `0x${"44".repeat(32)}`,

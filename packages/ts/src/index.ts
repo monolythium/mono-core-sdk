@@ -18,6 +18,7 @@ export {
   BRIDGE_REVERT_TAGS,
   BRIDGE_SELECTORS,
   BRIDGE_SUBMIT_API_BLOCKED_REASON,
+  V1_BRIDGE_ALLOWED_FEE_TOKEN,
   BridgePrecompileError,
   BridgeRouteCatalogueError,
   assessBridgeRoute,

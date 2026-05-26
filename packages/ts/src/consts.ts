@@ -7,7 +7,7 @@
  */
 
 /**
- * EIP-1559 base-fee burn destination (Law §5.2).
+ * Base-fee burn destination.
  *
  * Every base-fee unit consumed by a transaction is sent to this address
  * and removed from circulating supply. The address is the canonical
@@ -27,19 +27,15 @@ export const BURN_ADDR = "0x0000000000000000000000000000000000000000" as const;
  * so surfaces can render precompile traffic by name without
  * re-defining low-band address literals.
  *
- * `0x1002`, `0x1006`, `0x1007`, and `0x1103` are intentionally absent —
- * `0x1002` and `0x1006` are reserved slots the current v4.1 surface does
- * not bind, and `0x1007` (former IBC) and `0x1103` (former simple
- * name-registry) were retired in mono-core; the chain returns a typed
- * revert on either slot. The hierarchical name-registry lives at `0x110E`
- * (whitepaper §22.8 + Law §5.10).
+ * `0x1002`, `0x1006`, `0x1007`, and `0x1103` are intentionally absent.
+ * They are not part of the current SDK surface.
  */
 export const PRECOMPILE_ADDRESSES = {
   /** Native fungible-token factory — non-gateable, foundational. */
   TOKEN_FACTORY: "0x0000000000000000000000000000000000001000",
   /** Native central-limit order book — gateable. */
   CLOB: "0x0000000000000000000000000000000000001001",
-  /** Agent execution surface (zkML-gated, ADR-0011/ADR-0020) — gateable. */
+  /** Agent execution surface — gateable. */
   AGENT: "0x0000000000000000000000000000000000001003",
   /** Account privacy policy + stealth/confidential ops — gateable. */
   PRIVACY: "0x0000000000000000000000000000000000001004",
@@ -47,15 +43,15 @@ export const PRECOMPILE_ADDRESSES = {
   NODE_REGISTRY: "0x0000000000000000000000000000000000001005",
   /** Native zk-light-client bridge — gateable. */
   BRIDGE: "0x0000000000000000000000000000000000001008",
-  /** Decentralized multi-signer oracle (OI-0036) — non-gateable. */
+  /** Decentralized multi-signer oracle — non-gateable. */
   ORACLE: "0x0000000000000000000000000000000000001009",
-  /** Distributed delegation primitive (Stage E.5a, Law §7.6) — gateable. */
+  /** Distributed delegation primitive — gateable. */
   DELEGATION: "0x000000000000000000000000000000000000100A",
-  /** One-time emergency-key registry (Law §5.4 / §2.9) — non-gateable. */
+  /** One-time emergency-key registry — non-gateable. */
   EMERGENCY_KEY: "0x0000000000000000000000000000000000001100",
-  /** VRF precompile (Law §5.4 / §5.6). */
+  /** VRF precompile. */
   VRF: "0x0000000000000000000000000000000000001101",
-  /** Streaming-payments primitive (Law §5.4 / §5.7) — gateable. */
+  /** Streaming-payments primitive — gateable. */
   STREAMING_PAYMENTS: "0x0000000000000000000000000000000000001102",
   /** Cluster-name registry. */
   CLUSTER_NAME_REGISTRY: "0x0000000000000000000000000000000000001104",
@@ -73,11 +69,11 @@ export const PRECOMPILE_ADDRESSES = {
   ESCROW: "0x000000000000000000000000000000000000110A",
   /** Agent-commerce arbiter registry. */
   ARBITER_REGISTRY: "0x000000000000000000000000000000000000110B",
-  /** Agent spending policy — gateable, activated by Stage 7 milestones. */
+  /** Agent spending policy — gateable. */
   SPENDING_POLICY: "0x000000000000000000000000000000000000110C",
-  /** Primary ML-DSA-65 pubkey registry — gateable, ADR-0034. */
+  /** Primary ML-DSA-65 pubkey registry — gateable. */
   PUBKEY_REGISTRY: "0x000000000000000000000000000000000000110D",
-  /** Hierarchical name registry (Law §5.10, whitepaper §22.8) — gateable. */
+  /** Hierarchical name registry — gateable. */
   NAME_REGISTRY: "0x000000000000000000000000000000000000110E",
 } as const;
 

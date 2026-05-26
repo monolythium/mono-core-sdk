@@ -349,7 +349,7 @@ var PRECOMPILE_ADDRESSES = {
   TOKEN_FACTORY: "0x0000000000000000000000000000000000001000",
   /** Native central-limit order book — gateable. */
   CLOB: "0x0000000000000000000000000000000000001001",
-  /** Agent execution surface (zkML-gated, ADR-0011/ADR-0020) — gateable. */
+  /** Agent execution surface — gateable. */
   AGENT: "0x0000000000000000000000000000000000001003",
   /** Account privacy policy + stealth/confidential ops — gateable. */
   PRIVACY: "0x0000000000000000000000000000000000001004",
@@ -357,15 +357,15 @@ var PRECOMPILE_ADDRESSES = {
   NODE_REGISTRY: "0x0000000000000000000000000000000000001005",
   /** Native zk-light-client bridge — gateable. */
   BRIDGE: "0x0000000000000000000000000000000000001008",
-  /** Decentralized multi-signer oracle (OI-0036) — non-gateable. */
+  /** Decentralized multi-signer oracle — non-gateable. */
   ORACLE: "0x0000000000000000000000000000000000001009",
-  /** Distributed delegation primitive (Stage E.5a, Law §7.6) — gateable. */
+  /** Distributed delegation primitive — gateable. */
   DELEGATION: "0x000000000000000000000000000000000000100A",
-  /** One-time emergency-key registry (Law §5.4 / §2.9) — non-gateable. */
+  /** One-time emergency-key registry — non-gateable. */
   EMERGENCY_KEY: "0x0000000000000000000000000000000000001100",
-  /** VRF precompile (Law §5.4 / §5.6). */
+  /** VRF precompile. */
   VRF: "0x0000000000000000000000000000000000001101",
-  /** Streaming-payments primitive (Law §5.4 / §5.7) — gateable. */
+  /** Streaming-payments primitive — gateable. */
   STREAMING_PAYMENTS: "0x0000000000000000000000000000000000001102",
   /** Cluster-name registry. */
   CLUSTER_NAME_REGISTRY: "0x0000000000000000000000000000000000001104",
@@ -383,11 +383,11 @@ var PRECOMPILE_ADDRESSES = {
   ESCROW: "0x000000000000000000000000000000000000110A",
   /** Agent-commerce arbiter registry. */
   ARBITER_REGISTRY: "0x000000000000000000000000000000000000110B",
-  /** Agent spending policy — gateable, activated by Stage 7 milestones. */
+  /** Agent spending policy — gateable. */
   SPENDING_POLICY: "0x000000000000000000000000000000000000110C",
-  /** Primary ML-DSA-65 pubkey registry — gateable, ADR-0034. */
+  /** Primary ML-DSA-65 pubkey registry — gateable. */
   PUBKEY_REGISTRY: "0x000000000000000000000000000000000000110D",
-  /** Hierarchical name registry (Law §5.10, whitepaper §22.8) — gateable. */
+  /** Hierarchical name registry — gateable. */
   NAME_REGISTRY: "0x000000000000000000000000000000000000110E"
 };
 
@@ -4072,6 +4072,7 @@ var BRIDGE_REVERT_TAGS = {
 };
 var BRIDGE_QUOTE_API_BLOCKED_REASON = "bridge quote requires a mono-core live quote API/runtime primitive";
 var BRIDGE_SUBMIT_API_BLOCKED_REASON = "bridge submit requires a mono-core live submit API/runtime primitive";
+var V1_BRIDGE_ALLOWED_FEE_TOKEN = "LINK";
 var BridgePrecompileError = class extends Error {
   constructor(message) {
     super(message);
@@ -4130,9 +4131,15 @@ function isBridgeFinalityZeroRevert(data) {
 function assessBridgeRoute(route) {
   const blockedReasons = [];
   const warnings = [];
+  const feeToken = String(route.feeToken ?? "").trim();
   if (route.routeId.trim() === "") blockedReasons.push("route id missing");
   if (route.bridge.trim() === "") blockedReasons.push("bridge name missing");
   if (route.asset.trim() === "") blockedReasons.push("asset disclosure missing");
+  if (feeToken === "") {
+    blockedReasons.push("route fee token missing");
+  } else if (feeToken.toUpperCase() !== V1_BRIDGE_ALLOWED_FEE_TOKEN) {
+    blockedReasons.push("CCIP route fee token must be LINK");
+  }
   if (route.verifier.model.trim() === "") blockedReasons.push("verifier model missing");
   if (route.verifier.threshold < 2 || route.verifier.participantCount < 2) {
     blockedReasons.push("verifier set must not be 1-of-1");
@@ -4376,6 +4383,15 @@ function validateBridgeRouteCatalogueRoute(idx, value, seen, blockedReasons) {
   );
   validateTextField(`${prefix}.bridge`, value.bridge, 64, blockedReasons);
   validateTextField(`${prefix}.asset`, value.asset, 64, blockedReasons);
+  const feeToken = validateTextField(
+    `${prefix}.feeToken`,
+    field(value, "feeToken", "fee_token"),
+    32,
+    blockedReasons
+  );
+  if (feeToken != null && feeToken.toUpperCase() !== V1_BRIDGE_ALLOWED_FEE_TOKEN) {
+    blockedReasons.push(`${prefix}.feeToken must be LINK for CCIP routes`);
+  }
   validateTextField(
     `${prefix}.sourceChain`,
     field(value, "sourceChain", "source_chain"),
@@ -4445,6 +4461,7 @@ function coerceBridgeRouteCatalogueRoute(value) {
     wrappedAsset: stringField2(value, "wrappedAsset", "wrapped_asset"),
     bridge: stringField2(value, "bridge").trim(),
     asset: stringField2(value, "asset").trim(),
+    feeToken: stringField2(value, "feeToken", "fee_token").trim(),
     sourceChain: stringField2(value, "sourceChain", "source_chain").trim(),
     destinationChain: stringField2(value, "destinationChain", "destination_chain").trim(),
     verifier: {
@@ -4720,9 +4737,10 @@ function concatBytes4(...parts) {
 var NO_EVM_RECEIPT_PROOF_SCHEMA = "mono.no_evm_receipt_proof.v1";
 var NO_EVM_RECEIPT_PROOF_TYPE = "canonicalReceiptsTranscript";
 var NO_EVM_RECEIPT_INCLUSION_PROOF_TYPE = "canonicalReceiptInclusion";
-var NO_EVM_RECEIPT_ROOT_ALGORITHM = "keccak256(monolythium/v4.1/receipts_root_empty/1|receipt_leaf/1|receipt_node/1 binary Merkle)";
+var NO_EVM_RECEIPT_ROOT_ALGORITHM = "keccak256-binary-merkle(monolythium/v4.1/receipt_leaf/1, monolythium/v4.1/receipt_node/1, duplicate-last padding)";
+var NO_EVM_LEGACY_BINARY_RECEIPT_ROOT_ALGORITHM = "keccak256(monolythium/v4.1/receipts_root_empty/1|receipt_leaf/1|receipt_node/1 binary Merkle)";
 var NO_EVM_LEGACY_RECEIPT_ROOT_ALGORITHM = "keccak256(monolythium/v2/receipts_root/1 || len || indexed bincode receipts)";
-var NO_EVM_RECEIPT_CODEC = "bincode(protocore_evm::Receipt)";
+var NO_EVM_RECEIPT_CODEC = "bincode(protocore_execution_types::Receipt)";
 var NO_EVM_RECEIPTS_ROOT_DOMAIN = "monolythium/v4.1/receipts_root_empty/1";
 var NO_EVM_RECEIPT_LEAF_DOMAIN = "monolythium/v4.1/receipt_leaf/1";
 var NO_EVM_RECEIPT_NODE_DOMAIN = "monolythium/v4.1/receipt_node/1";
@@ -5959,7 +5977,7 @@ function getOptionalHistorySource(proof) {
   return value === void 0 ? void 0 : String(value);
 }
 function assertSupportedRootAlgorithm(actual) {
-  if (actual !== NO_EVM_RECEIPT_ROOT_ALGORITHM && actual !== NO_EVM_LEGACY_RECEIPT_ROOT_ALGORITHM && actual !== NO_EVM_COMPACT_INCLUSION_TREE_ALGORITHM) {
+  if (actual !== NO_EVM_RECEIPT_ROOT_ALGORITHM && actual !== NO_EVM_LEGACY_BINARY_RECEIPT_ROOT_ALGORITHM && actual !== NO_EVM_LEGACY_RECEIPT_ROOT_ALGORITHM && actual !== NO_EVM_COMPACT_INCLUSION_TREE_ALGORITHM) {
     throw new NoEvmReceiptProofError(
       "unsupported_root_algorithm",
       `unsupported no-EVM receipt proof rootAlgorithm: ${actual}`
@@ -7971,6 +7989,7 @@ exports.SPENDING_POLICY_SELECTORS = SPENDING_POLICY_SELECTORS;
 exports.SdkError = SdkError;
 exports.SpendingPolicyError = SpendingPolicyError;
 exports.TESTNET_69420 = TESTNET_69420;
+exports.V1_BRIDGE_ALLOWED_FEE_TOKEN = V1_BRIDGE_ALLOWED_FEE_TOKEN;
 exports.addressBytesToHex = addressBytesToHex;
 exports.addressToBech32 = addressToBech32;
 exports.addressToTypedBech32 = addressToTypedBech32;

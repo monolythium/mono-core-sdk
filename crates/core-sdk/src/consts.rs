@@ -9,7 +9,7 @@
 //! (`packages/ts/tests/consts.test.ts`) is the load-bearing assertion
 //! for downstream surfaces. The Rust side is the authoritative form.
 
-/// EIP-1559 base-fee burn destination (Law §5.2).
+/// Base-fee burn destination.
 ///
 /// The canonical zero address: every base-fee unit consumed by a
 /// transaction is sent here and removed from circulating supply. There
@@ -50,28 +50,26 @@ pub mod precompile_addresses {
     pub const TOKEN_FACTORY: [u8; 20] = address([0x10, 0x00]);
     /// Native central-limit order book — gateable.
     pub const CLOB: [u8; 20] = address([0x10, 0x01]);
-    /// Agent execution surface (zkML-gated, ADR-0011/ADR-0020) — gateable.
+    /// Agent execution surface — gateable.
     pub const AGENT: [u8; 20] = address([0x10, 0x03]);
     /// Account privacy policy + stealth/confidential ops — gateable.
     pub const PRIVACY: [u8; 20] = address([0x10, 0x04]);
     /// Operator + RPC node registry — non-gateable consensus invariant.
     pub const NODE_REGISTRY: [u8; 20] = address([0x10, 0x05]);
-    /// IBC light-client + packet routing — gateable.
-    pub const IBC: [u8; 20] = address([0x10, 0x07]);
     /// Native zk-light-client bridge — gateable.
     pub const BRIDGE: [u8; 20] = address([0x10, 0x08]);
     /// Decentralized multi-signer oracle (OI-0036) — non-gateable.
     pub const ORACLE: [u8; 20] = address([0x10, 0x09]);
-    /// Distributed delegation primitive (Stage E.5a, Law §7.6) — gateable.
+    /// Distributed delegation primitive — gateable.
     pub const DELEGATION: [u8; 20] = address([0x10, 0x0A]);
-    /// One-time emergency-key registry (Law §5.4 / §2.9) — non-gateable.
+    /// One-time emergency-key registry — non-gateable.
     pub const EMERGENCY_KEY: [u8; 20] = address([0x11, 0x00]);
-    /// VRF precompile (Law §5.4 / §5.6).
+    /// VRF precompile.
     pub const VRF: [u8; 20] = address([0x11, 0x01]);
-    /// Streaming-payments primitive (Law §5.4 / §5.7) — gateable.
+    /// Streaming-payments primitive — gateable.
     pub const STREAMING_PAYMENTS: [u8; 20] = address([0x11, 0x02]);
-    /// Human-readable name registry (Law §5.4 / §5.8) — gateable.
-    pub const NAME_REGISTRY: [u8; 20] = address([0x11, 0x03]);
+    /// Hierarchical name registry — gateable.
+    pub const NAME_REGISTRY: [u8; 20] = address([0x11, 0x0E]);
     /// Cluster-name registry.
     pub const CLUSTER_NAME_REGISTRY: [u8; 20] = address([0x11, 0x04]);
     /// Agent-commerce attestation precompile.
@@ -88,9 +86,9 @@ pub mod precompile_addresses {
     pub const ESCROW: [u8; 20] = address([0x11, 0x0A]);
     /// Agent-commerce arbiter registry.
     pub const ARBITER_REGISTRY: [u8; 20] = address([0x11, 0x0B]);
-    /// Agent spending policy — gateable, activated by Stage 7 milestones.
+    /// Agent spending policy — gateable.
     pub const SPENDING_POLICY: [u8; 20] = address([0x11, 0x0C]);
-    /// Primary ML-DSA-65 pubkey registry — gateable, ADR-0034.
+    /// Primary ML-DSA-65 pubkey registry — gateable.
     pub const PUBKEY_REGISTRY: [u8; 20] = address([0x11, 0x0D]);
 
     /// Build a precompile address from its trailing two bytes. The first
@@ -111,7 +109,6 @@ pub mod precompile_addresses {
         ("AGENT", AGENT),
         ("PRIVACY", PRIVACY),
         ("NODE_REGISTRY", NODE_REGISTRY),
-        ("IBC", IBC),
         ("BRIDGE", BRIDGE),
         ("ORACLE", ORACLE),
         ("DELEGATION", DELEGATION),
@@ -168,14 +165,13 @@ mod tests {
             ("AGENT", expected_addr(0x1003)),
             ("PRIVACY", expected_addr(0x1004)),
             ("NODE_REGISTRY", expected_addr(0x1005)),
-            ("IBC", expected_addr(0x1007)),
             ("BRIDGE", expected_addr(0x1008)),
             ("ORACLE", expected_addr(0x1009)),
             ("DELEGATION", expected_addr(0x100A)),
             ("EMERGENCY_KEY", expected_addr(0x1100)),
             ("VRF", expected_addr(0x1101)),
             ("STREAMING_PAYMENTS", expected_addr(0x1102)),
-            ("NAME_REGISTRY", expected_addr(0x1103)),
+            ("NAME_REGISTRY", expected_addr(0x110E)),
             ("CLUSTER_NAME_REGISTRY", expected_addr(0x1104)),
             ("ATTESTATION", expected_addr(0x1105)),
             ("CONSENT", expected_addr(0x1106)),
@@ -195,7 +191,6 @@ mod tests {
         // chain reality — these are the ones a downstream surface is
         // most likely to confuse.
         assert_eq!(NODE_REGISTRY, expected_addr(0x1005));
-        assert_eq!(IBC, expected_addr(0x1007));
         assert_eq!(BRIDGE, expected_addr(0x1008));
         assert_eq!(PRIVACY, expected_addr(0x1004));
     }
@@ -204,18 +199,21 @@ mod tests {
     fn precompile_address_map_size_tracks_sdk_exposed_surface() {
         // Adding a new SDK-exposed precompile address should update
         // the explicit assertions above and the TypeScript constants.
-        assert_eq!(precompile_addresses::ALL.len(), 23);
+        assert_eq!(precompile_addresses::ALL.len(), 22);
     }
 
     #[test]
     fn unwired_slots_are_not_exposed() {
-        // The current v4.1 launch surface does not define application modules
-        // at 0x1002 or 0x1006, so the SDK must not advertise them.
+        // These slots are not part of the current SDK surface.
         let unwired_1002 = expected_addr(0x1002);
         let unwired_1006 = expected_addr(0x1006);
+        let unwired_1007 = expected_addr(0x1007);
+        let unwired_1103 = expected_addr(0x1103);
         for &(_, addr) in precompile_addresses::ALL {
             assert_ne!(addr, unwired_1002, "0x1002 must stay unwired");
             assert_ne!(addr, unwired_1006, "0x1006 must stay unwired");
+            assert_ne!(addr, unwired_1007, "0x1007 must stay unwired");
+            assert_ne!(addr, unwired_1103, "0x1103 must stay unwired");
         }
     }
 
