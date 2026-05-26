@@ -7,12 +7,24 @@
  * (Law §13.2).
  */
 
+import {
+  requireTypedAddress,
+  type AddressKind,
+} from "./address.js";
 import { SdkError } from "./error.js";
+import type { BridgeRouteDisclosure, BridgeRoutesRequest, BridgeRoutesResponse } from "./bridge.js";
+import {
+  nativeEventsFromHistory,
+  nativeEventsFromReceipt,
+  nativeMarketEventsFromHistory,
+  nativeMarketEventsFromReceipt,
+} from "./native-events.js";
 import {
   isConcreteServiceProbeStatus,
   isSinglePublicServiceProbeMask,
   isValidPublicServiceProbeMask,
 } from "./node-registry.js";
+import { assertMrvStructuredFeeConformance } from "./mrv.js";
 import { getChainInfo, type ChainInfo, type ChainRegistry, type NetworkSlug } from "./registry.js";
 import type {
   AccountPolicy,
@@ -46,9 +58,16 @@ import type {
   MeshSignedTxResponse,
   MeshTxIntent,
   MeshUnsignedTxResponse,
+  MrcAccountRequest,
+  MrcAccountResponse,
+  MrcHoldersRequest,
+  MrcHoldersResponse,
+  MrcMetadataResponse,
   PeerSummary,
+  PendingRewardsResponse,
   PendingTxSummary,
   PrecompileDescriptor,
+  RedemptionQueueResponse,
   RegistryRecord,
   RichListResponse,
   RoundInfo,
@@ -57,10 +76,17 @@ import type {
   TpmAttestationResponse,
   TransactionReceipt,
   TransactionView,
+  TokenBalanceMrcIdentity,
   TokenBalanceRecord,
 } from "./bindings/index.js";
 import type { BlockSelector } from "./types.js";
 import { encodeBlockSelector } from "./types.js";
+import type { ApiStreamTopic } from "./streams.js";
+import type {
+  NativeDecodedEvent,
+  NativeEventFilter,
+  TypedNativeReceiptEvent,
+} from "./native-events.js";
 
 /** Optional per-client configuration. */
 export interface RpcClientOptions {
@@ -77,9 +103,12 @@ export interface NetworkClientOptions extends RpcClientOptions {
   probe?: boolean;
 }
 
+/** Typed ADR-0038 user address (`mono1...`) accepted at public SDK boundaries. */
+export type UserAddressInput = string;
+
 export interface TxFeedReceipt {
   status: number;
-  gasUsed: number;
+  executionUnitsUsed: number;
   logsCount: number;
 }
 
@@ -92,10 +121,12 @@ export interface TxFeedTransaction {
   from: string;
   to: string | null;
   nonce: number;
+  /** Native value in lythoshi. The tx-feed wire key is still `value`. */
   value: string;
-  gasLimit: number;
-  maxFeePerGas: string;
-  maxPriorityFeePerGas: string;
+  executionUnitLimit: number;
+  maxExecutionFeeLythoshi: string;
+  priorityTipLythoshi: string;
+  fee: NativeReceiptFee;
   input: string;
   receipt: TxFeedReceipt | null;
 }
@@ -106,6 +137,479 @@ export interface TxFeedResponse {
   limit: number;
   nextCursor: string | null;
   transactions: TxFeedTransaction[];
+}
+
+export const MAX_NATIVE_RECEIPT_EVENTS = 1_000;
+
+export interface NativeReceiptCounters {
+  cycles: number;
+  syscallUnits: number;
+  stateIoUnits: number;
+}
+
+export interface NativeReceiptFee {
+  total_lythoshi: string;
+  total_lyth?: string;
+  cycles_used: number;
+  base_price_per_cycle_lythoshi: string;
+  state_io_units: number;
+  state_io_price_per_unit_lythoshi: string;
+  priority_tip_lythoshi: string;
+}
+
+export interface NativeReceiptEvent<TDecoded = unknown> {
+  blockHeight: number;
+  txIndex: number;
+  logIndex: number;
+  address: string;
+  eventTopic: string;
+  decoded: TDecoded;
+  decodedJson: string;
+}
+
+export interface NativeReceiptSource {
+  chainProvider: string;
+  indexerProvider: string;
+  metadataLogIndex: number;
+}
+
+export interface NoEvmCompactInclusionProof {
+  schema: "mono.no_evm_receipt_compact_inclusion.v1";
+  treeAlgorithm: "binary-keccak-receipt-tree";
+  root: string;
+  leafHash: string;
+  siblingHashes: string[];
+  pathSides: boolean[];
+}
+
+export interface NoEvmArchiveProof {
+  schema: "mono.no_evm_receipt_archive_binding.v1";
+  source: "indexerReceiptArchiveContentDigest" | string;
+  manifestHash: string;
+  contentHash: string;
+  signatureDigest?: string | null;
+  signatures: string[];
+  coveringSnapshot?: NoEvmArchiveCoveringSnapshot | null;
+}
+
+export interface NoEvmArchiveCoveringSnapshot {
+  snapshotHeight: number;
+  manifestHash: string;
+  signatureDigest: string;
+  contentHash: string;
+  checkpointContentHash: string;
+  checkpointFrom: number;
+  checkpointTo: number;
+  signatures: string[];
+}
+
+export interface NoEvmFinalityCertificate {
+  round: number;
+  signature: string;
+  signersBitmap: string;
+  signerIndices: number[];
+  signerCount: number;
+}
+
+export interface NoEvmFinalityBlockReference {
+  round: number;
+  authority: number;
+  digest: string;
+}
+
+export interface NoEvmFinalityEvidence {
+  schema: "mono.no_evm_receipt_finality.v1";
+  source: "blsRoundCertificate" | string;
+  round: number;
+  certificate: NoEvmFinalityCertificate;
+  blockReference?: NoEvmFinalityBlockReference | null;
+  leaderCertificate?: NoEvmFinalityCertificate | null;
+  dacCertificate?: NoEvmFinalityCertificate | null;
+}
+
+interface NoEvmReceiptProofBase {
+  schema: "mono.no_evm_receipt_proof.v1";
+  rootAlgorithm: string;
+  receiptCodec: "bincode(protocore_evm::Receipt)";
+  blockHash: string;
+  txHash: string;
+  receiptsRoot: string;
+  targetReceiptHash: string;
+  blockHeight: number;
+  txIndex: number;
+  receiptCount: number;
+  finalityEvidence?: NoEvmFinalityEvidence | null;
+}
+
+export interface NoEvmBoundedReceiptProof extends NoEvmReceiptProofBase {
+  proofKind?: "boundedCacheTranscript";
+  proofType: "canonicalReceiptsTranscript";
+  historySource?: "legacyUnspecified" | "liveBlockCache";
+  compactInclusionProof?: null;
+  archiveProof?: null;
+  missingProofMaterial?: string[];
+  receiptTranscript: string[];
+}
+
+export interface NoEvmCompactReceiptProof extends NoEvmReceiptProofBase {
+  proofKind: "compactInclusion";
+  proofType: "canonicalReceiptInclusion";
+  historySource: "liveBlockCache" | "indexerReceiptArchive";
+  compactInclusionProof: NoEvmCompactInclusionProof;
+  archiveProof?: NoEvmArchiveProof | null;
+  missingProofMaterial?: string[];
+  targetReceiptBytes: string;
+  receiptTranscript?: string[];
+}
+
+export type NoEvmReceiptProof = NoEvmBoundedReceiptProof | NoEvmCompactReceiptProof;
+
+export interface NativeReceiptResponse<TDecoded = unknown> {
+  txHash: string;
+  blockHash: string;
+  blockHeight: number;
+  txIndex: number;
+  schema: string;
+  artifactHash: string;
+  receiptCommitment: string;
+  /** Current nodes may return `null`; older nodes may omit the field. */
+  noEvmProof?: NoEvmReceiptProof | null;
+  counters: NativeReceiptCounters;
+  fee: NativeReceiptFee;
+  reverted: boolean;
+  nativeDeltaCount: number;
+  eventCount: number;
+  events: Array<NativeReceiptEvent<TDecoded>>;
+  source: NativeReceiptSource;
+}
+
+/** Filter object passed to `lyth_nativeEvents` and `/api/v1/native-events`. */
+export interface NativeEventsFilter {
+  fromBlock: number | bigint | string;
+  toBlock: number | bigint | string;
+  limit?: number | bigint | string | null;
+  txIndex?: number | bigint | string | null;
+  logIndex?: number | bigint | string | null;
+  address?: string | null;
+  eventTopic?: string | null;
+  family?: string | null;
+  eventName?: string | null;
+  primaryId?: string | null;
+  relatedId?: string | null;
+  tokenId?: string | null;
+  account?: string | null;
+  counterparty?: string | null;
+}
+
+export interface NativeEventsResponseFilters {
+  txIndex?: number | null;
+  logIndex?: number | null;
+  address?: string | null;
+  eventTopic?: string | null;
+  family?: string | null;
+  eventName?: string | null;
+  primaryId?: string | null;
+  relatedId?: string | null;
+  tokenId?: string | null;
+  account?: string | null;
+  counterparty?: string | null;
+}
+
+export interface NativeEventsSource {
+  indexerProvider: string;
+}
+
+export interface NativeEventsResponse<TDecoded = unknown> {
+  schemaVersion: number;
+  fromBlock: number;
+  toBlock: number;
+  limit: number;
+  filters: NativeEventsResponseFilters;
+  events: Array<NativeReceiptEvent<TDecoded>>;
+  source: NativeEventsSource;
+}
+
+/** Filter object passed to `lyth_nativeAgentState` and `/api/v1/native-agent-state`. */
+export interface NativeAgentStateFilter {
+  policyId?: string | null;
+  escrowId?: string | null;
+  account?: string | null;
+  includePolicySpends?: boolean | null;
+  limit?: number | bigint | string | null;
+}
+
+export interface NativeAgentStateResponseFilters {
+  policyId?: string | null;
+  escrowId?: string | null;
+  account?: string | null;
+  includePolicySpends: boolean;
+}
+
+export interface NativeAgentStateSource {
+  indexerProvider: string;
+  projection: string;
+}
+
+export interface NativeAgentPolicyStateRecord {
+  policyId: string;
+  owner: string;
+  controller: string;
+  assetId: string;
+  /** Owner/controller-local policy nonce; omitted by older nodes. */
+  nonce?: number | null;
+  enabled: boolean;
+  perActionLimit: string;
+  windowLimit: string;
+  windowSecs: number;
+  updatedAtBlock: number;
+}
+
+export interface NativeAgentPolicySpendStateRecord {
+  policyId: string;
+  controller: string;
+  assetId: string;
+  window: number;
+  amount: string;
+  spent: string;
+  updatedAtBlock: number;
+}
+
+export interface NativeAgentEscrowStateRecord {
+  escrowId: string;
+  buyer: string;
+  provider: string;
+  arbiter: string;
+  assetId: string;
+  /** Buyer-local escrow nonce; omitted by older nodes. */
+  nonce?: number | null;
+  amount: string;
+  termsHash: string;
+  round: number;
+  buyerAccepted: boolean;
+  providerAccepted: boolean;
+  submittedPayloadHash?: string | null;
+  status: string;
+  resolution?: string | null;
+  lastActor?: string | null;
+  createdAtBlock: number;
+  updatedAtBlock: number;
+}
+
+export interface NativeAgentIssuerStateRecord {
+  issuerId: string;
+  issuer: string;
+  /** Issuer-local nonce; omitted by older nodes. */
+  nonce?: number | null;
+  metadataHash?: string | null;
+  updatedAtBlock: number;
+}
+
+export interface NativeAgentAttestationStateRecord {
+  attestationId: string;
+  /** Issuer-local attestation nonce; omitted by older nodes. */
+  nonce?: number | null;
+  issuerId?: string | null;
+  issuer?: string | null;
+  subject: string;
+  schemaHash?: string | null;
+  payloadHash?: string | null;
+  active: boolean;
+  updatedAtBlock: number;
+}
+
+export interface NativeAgentConsentStateRecord {
+  consentId: string;
+  subject: string;
+  grantee: string;
+  /** Subject-local consent nonce; omitted by older nodes. */
+  nonce?: number | null;
+  scopeHash?: string | null;
+  expiresAt?: number | null;
+  active: boolean;
+  updatedAtBlock: number;
+}
+
+export interface NativeAgentServiceStateRecord {
+  serviceId: string;
+  provider: string;
+  /** Provider-local service nonce; omitted by older nodes. */
+  nonce?: number | null;
+  categoryHash?: string | null;
+  metadataHash?: string | null;
+  active: boolean;
+  updatedAtBlock: number;
+}
+
+export interface NativeAgentAvailabilityStateRecord {
+  provider: string;
+  maxConcurrent: number;
+  openRequests: number;
+  paused: boolean;
+  updatedAtBlock: number;
+}
+
+export interface NativeAgentArbiterStateRecord {
+  arbiterId: string;
+  arbiter: string;
+  /** Arbiter-local registration nonce; omitted by older nodes. */
+  nonce?: number | null;
+  tier?: number | null;
+  metadataHash?: string | null;
+  updatedAtBlock: number;
+}
+
+export interface NativeAgentReputationReviewStateRecord {
+  reviewId: string;
+  reviewer: string;
+  subject: string;
+  categoryId: number;
+  speedScore: number;
+  qualityScore: number;
+  communicationScore: number;
+  accuracyScore: number;
+  payloadHash?: string | null;
+  updatedAtBlock: number;
+}
+
+export interface NativeAgentStateResponse {
+  schemaVersion: number;
+  limit: number;
+  filters: NativeAgentStateResponseFilters;
+  issuers: NativeAgentIssuerStateRecord[];
+  attestations: NativeAgentAttestationStateRecord[];
+  consents: NativeAgentConsentStateRecord[];
+  services: NativeAgentServiceStateRecord[];
+  availability: NativeAgentAvailabilityStateRecord[];
+  arbiters: NativeAgentArbiterStateRecord[];
+  reputationReviews: NativeAgentReputationReviewStateRecord[];
+  spendingPolicies: NativeAgentPolicyStateRecord[];
+  policySpends: NativeAgentPolicySpendStateRecord[];
+  escrows: NativeAgentEscrowStateRecord[];
+  source: NativeAgentStateSource;
+}
+
+export type NativeAgentStateFilterParamValue = string | number | boolean;
+
+/** Filter object passed to `lyth_nativeMarketState` and `/api/v1/native-market-state`. */
+export interface NativeMarketStateFilter {
+  marketId?: string | null;
+  orderId?: string | null;
+  listingId?: string | null;
+  collectionId?: string | null;
+  account?: string | null;
+  includeSpotOrders?: boolean | null;
+  limit?: number | bigint | string | null;
+}
+
+export interface NativeMarketStateResponseFilters {
+  marketId?: string | null;
+  orderId?: string | null;
+  listingId?: string | null;
+  collectionId?: string | null;
+  account?: string | null;
+  includeSpotOrders: boolean;
+}
+
+export interface NativeMarketStateSource {
+  indexerProvider: string;
+  projection: string;
+}
+
+export interface NativeSpotMarketStateRecord {
+  marketId: string;
+  owner: string;
+  baseAssetId: string;
+  quoteAssetId: string;
+  tickSize: string;
+  lotSize: string;
+  minQuantity: string;
+  minNotional: string;
+  tradeCount: string;
+  totalVolumeBase: string;
+  lastPrice: string | null;
+  lastBlockHeight: number | null;
+  createdAtBlock: number;
+  updatedAtBlock: number;
+}
+
+export interface NativeSpotOrderStateRecord {
+  orderId: string;
+  marketId: string;
+  owner: string;
+  /** Owner-local spot order nonce; omitted by older nodes. */
+  nonce?: number | null;
+  side: string;
+  price: string;
+  quantity: string;
+  remaining: string;
+  status: string;
+  expiresAtBlock: number;
+  updatedAtBlock: number;
+}
+
+export interface NativeNftListingStateRecord {
+  listingId: string;
+  seller: string;
+  /** Seller-local NFT listing nonce; omitted by older nodes. */
+  nonce?: number | null;
+  standard: string;
+  collectionId: string;
+  tokenId: string;
+  quantity: string;
+  paymentAssetId: string;
+  price: string;
+  listingKind: unknown;
+  status: string;
+  expiresAtBlock: number;
+  highestBidder: string | null;
+  highestBid: string | null;
+  updatedAtBlock: number;
+}
+
+export interface NativeCollectionRoyaltyStateRecord {
+  collectionId: string;
+  creator: string | null;
+  recipient: string;
+  bps: number;
+  updatedAtBlock: number;
+}
+
+export interface NativeMarketStateResponse {
+  schemaVersion: number;
+  limit: number;
+  filters: NativeMarketStateResponseFilters;
+  spotMarkets: NativeSpotMarketStateRecord[];
+  spotOrders: NativeSpotOrderStateRecord[];
+  nftListings: NativeNftListingStateRecord[];
+  collectionRoyalties: NativeCollectionRoyaltyStateRecord[];
+  source: NativeMarketStateSource;
+}
+
+export type NativeMarketStateFilterParamValue = string | number | boolean;
+
+export type AgentReputationCategoryScope = "global" | "category";
+
+export interface AgentReputationRecord {
+  provider: string;
+  categoryId: number;
+  blockHeight: number;
+  speedSumX10: number;
+  qualitySumX10: number;
+  communicationSumX10: number;
+  accuracySumX10: number;
+  sampleCount: number;
+  avgSpeedX10: number;
+  avgQualityX10: number;
+  avgCommunicationX10: number;
+  avgAccuracyX10: number;
+}
+
+export interface AgentReputationResponse {
+  schemaVersion: 1;
+  provider: string;
+  categoryId: number;
+  categoryScope: AgentReputationCategoryScope;
+  record: AgentReputationRecord | null;
 }
 
 export interface AddressProfileResponse {
@@ -131,7 +635,9 @@ export interface AddressProfileResponse {
     tokenId: string;
     balance: string;
     updatedAtBlock: number;
+    mrc?: TokenBalanceMrcIdentity | null;
   }>;
+  bridgeRouteDisclosures?: BridgeRouteDisclosure[] | null;
 }
 
 export interface AddressFlowResponse {
@@ -593,6 +1099,8 @@ interface JsonRpcResponse {
 }
 
 const SDK_VERSION = "0.1.0";
+const ETH_COMPAT_RPC_PREFIX = "eth_";
+const ethCompatMethod = (name: string): string => `${ETH_COMPAT_RPC_PREFIX}${name}`;
 
 function resolveChainInfo(network: NetworkSlug | string, registry?: ChainRegistry): ChainInfo {
   if (registry) {
@@ -725,9 +1233,9 @@ export class RpcClient {
     return parseQuantityBig(await this.call<string>("eth_chainId", []));
   }
 
-  /** `eth_blockNumber` — latest committed height. */
+  /** Compatibility block-height read. */
   async ethBlockNumber(): Promise<bigint> {
-    return parseQuantityBig(await this.call<string>("eth_blockNumber", []));
+    return parseQuantityBig(await this.call<string>(ethCompatMethod("blockNumber"), []));
   }
 
   /** `eth_getBalance` — balance + Merkle proof envelope. */
@@ -769,16 +1277,16 @@ export class RpcClient {
     return this.call("eth_getCode", [address, encodeBlockSelector(block)]);
   }
 
-  /** `eth_getBlockByNumber` — fetch a block header by height/tag. */
+  /** Compatibility block-header read by height/tag. */
   async ethGetBlockByNumber(
     block: BlockSelector = "latest",
   ): Promise<BlockHeader | null> {
-    return normalizeBlockHeader(await this.call("eth_getBlockByNumber", [encodeBlockSelector(block)]));
+    return normalizeBlockHeader(await this.call(ethCompatMethod("getBlockByNumber"), [encodeBlockSelector(block)]));
   }
 
-  /** `eth_getBlockByHash` — fetch a block header by hash. */
+  /** Compatibility block-header read by hash. */
   async ethGetBlockByHash(hash: string): Promise<BlockHeader | null> {
-    return normalizeBlockHeader(await this.call("eth_getBlockByHash", [hash]));
+    return normalizeBlockHeader(await this.call(ethCompatMethod("getBlockByHash"), [hash]));
   }
 
   /** `eth_getTransactionByHash` — fetch an included transaction by hash. */
@@ -788,7 +1296,7 @@ export class RpcClient {
 
   /** `eth_getTransactionReceipt` — receipt for a confirmed tx. */
   async ethGetTransactionReceipt(txHash: string): Promise<TransactionReceipt | null> {
-    return this.call("eth_getTransactionReceipt", [txHash]);
+    return normalizeTransactionReceipt(await this.call("eth_getTransactionReceipt", [txHash]));
   }
 
   /** `eth_sendRawTransaction` — submit a signed raw tx. */
@@ -811,7 +1319,10 @@ export class RpcClient {
     );
   }
 
-  /** `eth_gasPrice` — minimum gas price the node will accept. */
+  /**
+   * `eth_gasPrice` — legacy compatibility fee quote for ethers/viem shims.
+   * Native v4.1 surfaces should use execution-unit and lythoshi fee fields.
+   */
   async ethGasPrice(): Promise<bigint> {
     return parseQuantityBig(await this.call<string>("eth_gasPrice", []));
   }
@@ -884,7 +1395,7 @@ export class RpcClient {
 
   /** `lyth_getAccountPolicy` — privacy posture for an account. */
   async lythGetAccountPolicy(address: string): Promise<AccountPolicy> {
-    return this.call("lyth_getAccountPolicy", [address]);
+    return this.call("lyth_getAccountPolicy", [sdkTypedAddress(address, "user", "address")]);
   }
 
   /** `lyth_getAssetPolicy` — privacy posture for an asset. */
@@ -894,12 +1405,94 @@ export class RpcClient {
 
   /** `lyth_getTokenBalances` — indexed per-asset balances for one address. */
   async lythGetTokenBalances(address: string): Promise<TokenBalanceRecord[]> {
-    return this.call("lyth_getTokenBalances", [address]);
+    return this.call("lyth_getTokenBalances", [sdkTypedAddress(address, "user", "address")]);
+  }
+
+  /** `lyth_bridgeRoutes` — read-only bridge route-selection/readiness. */
+  async lythBridgeRoutes(request: BridgeRoutesRequest): Promise<BridgeRoutesResponse> {
+    return this.call("lyth_bridgeRoutes", [request]);
+  }
+
+  /** `lyth_mrcMetadata` — exact current-state native MRC metadata lookup. */
+  async lythMrcMetadata(
+    assetId: string,
+    tokenId?: string | null,
+  ): Promise<MrcMetadataResponse> {
+    const params = tokenId == null ? [assetId] : [assetId, tokenId];
+    return this.call("lyth_mrcMetadata", params);
+  }
+
+  /** `lyth_mrcAccount` — exact current-state native MRC account lookup. */
+  async lythMrcAccount(
+    account: string,
+    spendLimit?: number | null,
+  ): Promise<MrcAccountResponse> {
+    const request: MrcAccountRequest = {
+      account: sdkTypedAddress(account, "smartAccount", "account"),
+    };
+    if (spendLimit != null) request.spendLimit = spendLimit;
+    const params =
+      request.spendLimit == null
+        ? [request.account]
+        : [request.account, request.spendLimit];
+    return this.call("lyth_mrcAccount", params);
+  }
+
+  /** `lyth_mrcHolders` — top holders for a native MRC asset/token key. */
+  async lythMrcHolders(
+    standard: string,
+    assetId: string,
+    tokenId: string,
+    limit?: number | null,
+  ): Promise<MrcHoldersResponse> {
+    return this.lythMrcHoldersScoped(standard, assetId, tokenId, limit);
+  }
+
+  /**
+   * `lyth_mrcHolders` — top holders for a native MRC asset/vault key.
+   *
+   * This is the asset-scoped form used by MRC-4626 vault share balances.
+   */
+  async lythMrcAssetHolders(
+    standard: string,
+    assetId: string,
+    limit?: number | null,
+  ): Promise<MrcHoldersResponse> {
+    return this.lythMrcHoldersScoped(standard, assetId, null, limit);
+  }
+
+  /** `lyth_mrcHolders` — top holders for MRC-4626 vault shares. */
+  async lythMrc4626Holders(
+    vaultId: string,
+    limit?: number | null,
+  ): Promise<MrcHoldersResponse> {
+    return this.lythMrcAssetHolders("mrc4626", vaultId, limit);
+  }
+
+  private async lythMrcHoldersScoped(
+    standard: string,
+    assetId: string,
+    tokenId: string | null,
+    limit?: number | null,
+  ): Promise<MrcHoldersResponse> {
+    const request: MrcHoldersRequest = {
+      standard,
+      assetId,
+      tokenId,
+    };
+    if (limit != null) request.limit = limit;
+    const params =
+      request.limit == null
+        ? [request.standard, request.assetId, request.tokenId]
+        : [request.standard, request.assetId, request.tokenId, request.limit];
+    return this.call("lyth_mrcHolders", params);
   }
 
   /** `lyth_getAddressLabel` — indexed display/category label for one address. */
   async lythGetAddressLabel(address: string): Promise<AddressLabelRecord | null> {
-    const v = await this.call<unknown>("lyth_getAddressLabel", [address]);
+    const v = await this.call<unknown>("lyth_getAddressLabel", [
+      sdkTypedAddress(address, "user", "address"),
+    ]);
     if (v === null || v === undefined) return null;
     return v as AddressLabelRecord;
   }
@@ -910,18 +1503,115 @@ export class RpcClient {
     limit = 50,
     cursor?: string | null,
   ): Promise<AddressActivityEntry[]> {
-    const params = cursor === undefined ? [address, limit] : [address, limit, cursor];
+    const userAddress = sdkTypedAddress(address, "user", "address");
+    const params = cursor === undefined ? [userAddress, limit] : [userAddress, limit, cursor];
     return this.call("lyth_getAddressActivity", params);
   }
 
   /** `lyth_addressActivityKind` — activity index coverage for one address. */
   async lythAddressActivityKind(address: string): Promise<AddressActivityKindResponse> {
-    return this.call("lyth_addressActivityKind", [address]);
+    return this.call("lyth_addressActivityKind", [sdkTypedAddress(address, "user", "address")]);
+  }
+
+  /** `lyth_agentReputation` — reputation accumulators for an agent provider. */
+  async lythAgentReputation(
+    provider: UserAddressInput,
+    categoryId = 0,
+  ): Promise<AgentReputationResponse> {
+    return this.call("lyth_agentReputation", [
+      sdkTypedAddress(provider, "user", "provider address"),
+      categoryId,
+    ]);
   }
 
   /** `lyth_decodeTx` — explorer-grade decoded transaction envelope. */
   async lythDecodeTx(txHash: string): Promise<DecodeTxResponse> {
     return this.call("lyth_decodeTx", [txHash]);
+  }
+
+  /** `lyth_nativeReceipt` — native RISC-V receipt metadata and typed native event rows. */
+  async lythNativeReceipt<TDecoded = unknown>(
+    txHash: string,
+  ): Promise<NativeReceiptResponse<TDecoded>> {
+    return decodeNativeReceiptResponse<TDecoded>(
+      await this.call<unknown>("lyth_nativeReceipt", [txHash]),
+    );
+  }
+
+  /**
+   * Typed native event rows from `lyth_nativeReceipt`.
+   *
+   * This helper intentionally consumes the existing receipt RPC surface;
+   * it does not require a separate `lyth_nativeEvents` node method.
+   */
+  async lythNativeReceiptEvents<TDecoded extends NativeDecodedEvent = NativeDecodedEvent>(
+    txHash: string,
+    filter: NativeEventFilter = {},
+  ): Promise<Array<TypedNativeReceiptEvent<TDecoded>>> {
+    const receipt = await this.lythNativeReceipt(txHash);
+    return nativeEventsFromReceipt<TDecoded>(receipt, filter);
+  }
+
+  /** Typed native market event rows from `lyth_nativeReceipt`. */
+  async lythNativeReceiptMarketEvents<TDecoded extends NativeDecodedEvent = NativeDecodedEvent>(
+    txHash: string,
+    filter: NativeEventFilter = {},
+  ): Promise<Array<TypedNativeReceiptEvent<TDecoded>>> {
+    const receipt = await this.lythNativeReceipt(txHash);
+    return nativeMarketEventsFromReceipt<TDecoded>(receipt, filter);
+  }
+
+  /** `lyth_nativeEvents` — historical indexed native event rows. */
+  async lythNativeEvents<TDecoded = unknown>(
+    filter: NativeEventsFilter,
+  ): Promise<NativeEventsResponse<TDecoded>> {
+    return this.call("lyth_nativeEvents", [nativeEventsFilterParams(filter)]);
+  }
+
+  /** `lyth_nativeEvents` with decoded rows converted into a caller-selected type. */
+  async lythNativeEventsTyped<
+    TDecoded extends NativeDecodedEvent = NativeDecodedEvent,
+  >(filter: NativeEventsFilter): Promise<NativeEventsResponse<TDecoded>> {
+    const response = await this.lythNativeEvents(filter);
+    return nativeEventsFromHistory<TDecoded>(response);
+  }
+
+  /** `lyth_nativeEvents` restricted to native marketplace event rows. */
+  async lythNativeMarketEvents<TDecoded = unknown>(
+    filter: NativeEventsFilter,
+  ): Promise<NativeEventsResponse<TDecoded>> {
+    return this.lythNativeEvents<TDecoded>({
+      ...filter,
+      family: "market",
+    });
+  }
+
+  /** `lyth_nativeEvents` market rows with decoded rows converted into a caller-selected type. */
+  async lythNativeMarketEventsTyped<
+    TDecoded extends NativeDecodedEvent = NativeDecodedEvent,
+  >(filter: NativeEventsFilter): Promise<NativeEventsResponse<TDecoded>> {
+    const response = await this.lythNativeEvents({
+      ...filter,
+      family: "market",
+    });
+    return nativeMarketEventsFromHistory<TDecoded>(response);
+  }
+
+  /** `lyth_nativeAgentState` — current-state native agent policy and escrow rows. */
+  async lythNativeAgentState(
+    filter: NativeAgentStateFilter = {},
+  ): Promise<NativeAgentStateResponse> {
+    const response = await this.call("lyth_nativeAgentState", [
+      nativeAgentStateFilterParams(filter),
+    ]);
+    return decodeNativeAgentStateResponse(response);
+  }
+
+  /** `lyth_nativeMarketState` — current-state native spot and NFT market rows. */
+  async lythNativeMarketState(
+    filter: NativeMarketStateFilter = {},
+  ): Promise<NativeMarketStateResponse> {
+    return this.call("lyth_nativeMarketState", [nativeMarketStateFilterParams(filter)]);
   }
 
   /** `lyth_gapRecords` — retained ingestion/indexing gaps for a block range. */
@@ -998,17 +1688,17 @@ export class RpcClient {
   /** `lyth_txFeed` — paged global transaction feed. */
   async lythTxFeed(limit = 50, cursor?: string | null): Promise<TxFeedResponse> {
     const params = cursor === undefined ? [limit] : [limit, cursor];
-    return this.call("lyth_txFeed", params);
+    return decodeTxFeedResponse(await this.call<unknown>("lyth_txFeed", params));
   }
 
   /** `lyth_addressProfile` — live account + label + activity aggregate. */
   async lythAddressProfile(address: string): Promise<AddressProfileResponse> {
-    return this.call("lyth_addressProfile", [address]);
+    return this.call("lyth_addressProfile", [sdkTypedAddress(address, "user", "address")]);
   }
 
   /** `lyth_addressFlow` — recent indexed address-flow aggregate. */
   async lythAddressFlow(address: string, limit = 250): Promise<AddressFlowResponse> {
-    return this.call("lyth_addressFlow", [address, limit]);
+    return this.call("lyth_addressFlow", [sdkTypedAddress(address, "user", "address"), limit]);
   }
 
   /** `lyth_search` — exact live resolver for hashes, addresses, blocks, and clusters. */
@@ -1028,7 +1718,7 @@ export class RpcClient {
 
   /** `lyth_mempoolPending` — pending txs for a sender. */
   async lythMempoolPending(sender: string): Promise<PendingTxSummary[]> {
-    return this.call("lyth_mempoolPending", [sender]);
+    return this.call("lyth_mempoolPending", [sdkTypedAddress(sender, "user", "sender")]);
   }
 
   /** `lyth_currentRound` — latest committed height. */
@@ -1054,7 +1744,9 @@ export class RpcClient {
   /** `lyth_capabilities` — address-keyed precompile capability map. */
   async lythCapabilities(block?: BlockSelector): Promise<CapabilitiesResponse> {
     const params = block === undefined ? [] : [encodeBlockSelector(block)];
-    return this.call("lyth_capabilities", params);
+    return normalizeCapabilitiesResponse(
+      await this.call<CapabilitiesResponse>("lyth_capabilities", params),
+    );
   }
 
   /**
@@ -1085,9 +1777,32 @@ export class RpcClient {
     wallet: string,
     block?: BlockSelector,
   ): Promise<DelegationsResponse> {
+    const userWallet = sdkTypedAddress(wallet, "user", "wallet");
     const params =
-      block === undefined ? [wallet] : [wallet, encodeBlockSelector(block)];
+      block === undefined ? [userWallet] : [userWallet, encodeBlockSelector(block)];
     return this.call("lyth_getDelegations", params);
+  }
+
+  /** `lyth_pendingRewards` — wallet pending rewards at a block. */
+  async lythPendingRewards(
+    wallet: string,
+    block?: BlockSelector,
+  ): Promise<PendingRewardsResponse> {
+    const userWallet = sdkTypedAddress(wallet, "user", "wallet");
+    const params =
+      block === undefined ? [userWallet] : [userWallet, encodeBlockSelector(block)];
+    return this.call("lyth_pendingRewards", params);
+  }
+
+  /** `lyth_redemptionQueue` — wallet redemption tickets at a block. */
+  async lythRedemptionQueue(
+    wallet: string,
+    block?: BlockSelector,
+  ): Promise<RedemptionQueueResponse> {
+    const userWallet = sdkTypedAddress(wallet, "user", "wallet");
+    const params =
+      block === undefined ? [userWallet] : [userWallet, encodeBlockSelector(block)];
+    return this.call("lyth_redemptionQueue", params);
   }
 
   /** `lyth_getDelegationHistory` — indexed per-wallet delegation event timeline. */
@@ -1096,7 +1811,8 @@ export class RpcClient {
     limit = 50,
     cursor?: string | null,
   ): Promise<DelegationHistoryRecord[]> {
-    const params = cursor === undefined ? [wallet, limit] : [wallet, limit, cursor];
+    const userWallet = sdkTypedAddress(wallet, "user", "wallet");
+    const params = cursor === undefined ? [userWallet, limit] : [userWallet, limit, cursor];
     return this.call("lyth_getDelegationHistory", params);
   }
 
@@ -1349,7 +2065,7 @@ export class RpcClient {
   }
 
   /** `lyth_subscribe` — WebSocket-only; returns an RPC error over HTTP. */
-  async lythSubscribe(channel: string): Promise<unknown> {
+  async lythSubscribe(channel: ApiStreamTopic | (string & {})): Promise<unknown> {
     return this.call("lyth_subscribe", [channel]);
   }
 
@@ -1362,12 +2078,12 @@ export class RpcClient {
   // Server-side gated by `RpcConfig::debug_enabled`. When the namespace
   // is disabled, every call surfaces as `SdkError.rpc`.
 
-  /** `debug_traceTransaction` — revm trace for a confirmed tx. */
+  /** `debug_traceTransaction` — legacy compatibility trace for a confirmed tx. */
   async debugTraceTransaction(txHash: string): Promise<unknown> {
     return this.call("debug_traceTransaction", [txHash]);
   }
 
-  /** `debug_traceCall` — revm trace for a dry-run. */
+  /** `debug_traceCall` — legacy compatibility trace for a dry-run. */
   async debugTraceCall(
     request: CallRequest,
     block: BlockSelector = "latest",
@@ -1375,7 +2091,7 @@ export class RpcClient {
     return this.call("debug_traceCall", [request, encodeBlockSelector(block)]);
   }
 
-  /** `debug_traceBlockByNumber` — revm traces for an entire block. */
+  /** `debug_traceBlockByNumber` — legacy compatibility traces for an entire block. */
   async debugTraceBlockByNumber(block: BlockSelector): Promise<unknown> {
     return this.call("debug_traceBlockByNumber", [encodeBlockSelector(block)]);
   }
@@ -1472,6 +2188,36 @@ function encodeRpcU64Number(v: number | bigint | string, label: string): number 
   return parseRpcNumber(v, label);
 }
 
+export function nativeEventsFilterParams(filter: NativeEventsFilter): Record<string, unknown> {
+  return {
+    fromBlock: encodeRpcU64Number(filter.fromBlock, "fromBlock"),
+    toBlock: encodeRpcU64Number(filter.toBlock, "toBlock"),
+    ...optionalRpcNumber("limit", filter.limit),
+    ...optionalRpcNumber("txIndex", filter.txIndex),
+    ...optionalRpcNumber("logIndex", filter.logIndex),
+    ...optionalString("address", filter.address),
+    ...optionalString("eventTopic", filter.eventTopic),
+    ...optionalString("family", filter.family),
+    ...optionalString("eventName", filter.eventName),
+    ...optionalString("primaryId", filter.primaryId),
+    ...optionalString("relatedId", filter.relatedId),
+    ...optionalString("tokenId", filter.tokenId),
+    ...optionalString("account", filter.account),
+    ...optionalString("counterparty", filter.counterparty),
+  };
+}
+
+function optionalRpcNumber(
+  key: string,
+  value: number | bigint | string | null | undefined,
+): Record<string, number> {
+  return value == null ? {} : { [key]: encodeRpcU64Number(value, key) };
+}
+
+function optionalString(key: string, value: string | null | undefined): Record<string, string> {
+  return value == null ? {} : { [key]: value };
+}
+
 function parseRpcBigint(value: unknown, label: string): bigint {
   if (typeof value === "bigint") {
     if (value < 0n) {
@@ -1512,11 +2258,215 @@ function parseStringNullable(value: unknown): string | null {
   return value === null || value === undefined ? null : String(value);
 }
 
+function parseStringField(value: unknown, label: string): string {
+  if (value === null || value === undefined) {
+    throw SdkError.malformed(`${label} is missing`);
+  }
+  return String(value);
+}
+
+function parseBooleanField(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") {
+    throw SdkError.malformed(`${label} must be a boolean`);
+  }
+  return value;
+}
+
+function parseRpcUint(value: unknown, label: string, max: number, typeName: string): number {
+  const parsed = parseRpcNumber(value, label);
+  if (parsed > max) {
+    throw SdkError.malformed(`${label} must be a ${typeName}`);
+  }
+  return parsed;
+}
+
+function parseRpcUintNullable(
+  value: unknown,
+  label: string,
+  max: number,
+  typeName: string,
+): number | null {
+  return value === null || value === undefined ? null : parseRpcUint(value, label, max, typeName);
+}
+
+function decodeNativeAgentStateArray<T>(
+  row: Record<string, unknown>,
+  key: string,
+  decode: (value: unknown, label: string) => T,
+  defaultMissing: boolean,
+): T[] {
+  const value = row[key];
+  if (value === undefined && defaultMissing) return [];
+  if (!Array.isArray(value)) {
+    throw SdkError.malformed(`native agent state ${key} must be an array`);
+  }
+  return value.map((item, index) => decode(item, `native agent state ${key}[${index}]`));
+}
+
+function decodeNativeAgentExistingStateRecord<T>(value: unknown, label: string): T {
+  return expectObject(value, label) as unknown as T;
+}
+
+function decodeNativeAgentIssuerStateRecord(
+  value: unknown,
+  label: string,
+): NativeAgentIssuerStateRecord {
+  const row = expectObject(value, label);
+  return {
+    issuerId: parseStringField(row["issuerId"], `${label}.issuerId`),
+    issuer: parseStringField(row["issuer"], `${label}.issuer`),
+    nonce: parseRpcNumberNullable(row["nonce"], `${label}.nonce`),
+    metadataHash: parseStringNullable(row["metadataHash"]),
+    updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`),
+  };
+}
+
+function decodeNativeAgentAttestationStateRecord(
+  value: unknown,
+  label: string,
+): NativeAgentAttestationStateRecord {
+  const row = expectObject(value, label);
+  return {
+    attestationId: parseStringField(row["attestationId"], `${label}.attestationId`),
+    nonce: parseRpcNumberNullable(row["nonce"], `${label}.nonce`),
+    issuerId: parseStringNullable(row["issuerId"]),
+    issuer: parseStringNullable(row["issuer"]),
+    subject: parseStringField(row["subject"], `${label}.subject`),
+    schemaHash: parseStringNullable(row["schemaHash"]),
+    payloadHash: parseStringNullable(row["payloadHash"]),
+    active: parseBooleanField(row["active"], `${label}.active`),
+    updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`),
+  };
+}
+
+function decodeNativeAgentConsentStateRecord(
+  value: unknown,
+  label: string,
+): NativeAgentConsentStateRecord {
+  const row = expectObject(value, label);
+  return {
+    consentId: parseStringField(row["consentId"], `${label}.consentId`),
+    subject: parseStringField(row["subject"], `${label}.subject`),
+    grantee: parseStringField(row["grantee"], `${label}.grantee`),
+    nonce: parseRpcNumberNullable(row["nonce"], `${label}.nonce`),
+    scopeHash: parseStringNullable(row["scopeHash"]),
+    expiresAt: parseRpcNumberNullable(row["expiresAt"], `${label}.expiresAt`),
+    active: parseBooleanField(row["active"], `${label}.active`),
+    updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`),
+  };
+}
+
+function decodeNativeAgentServiceStateRecord(
+  value: unknown,
+  label: string,
+): NativeAgentServiceStateRecord {
+  const row = expectObject(value, label);
+  return {
+    serviceId: parseStringField(row["serviceId"], `${label}.serviceId`),
+    provider: parseStringField(row["provider"], `${label}.provider`),
+    nonce: parseRpcNumberNullable(row["nonce"], `${label}.nonce`),
+    categoryHash: parseStringNullable(row["categoryHash"]),
+    metadataHash: parseStringNullable(row["metadataHash"]),
+    active: parseBooleanField(row["active"], `${label}.active`),
+    updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`),
+  };
+}
+
+function decodeNativeAgentAvailabilityStateRecord(
+  value: unknown,
+  label: string,
+): NativeAgentAvailabilityStateRecord {
+  const row = expectObject(value, label);
+  return {
+    provider: parseStringField(row["provider"], `${label}.provider`),
+    maxConcurrent: parseRpcUint(row["maxConcurrent"], `${label}.maxConcurrent`, 0xffffffff, "uint32"),
+    openRequests: parseRpcUint(row["openRequests"], `${label}.openRequests`, 0xffffffff, "uint32"),
+    paused: parseBooleanField(row["paused"], `${label}.paused`),
+    updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`),
+  };
+}
+
+function decodeNativeAgentArbiterStateRecord(
+  value: unknown,
+  label: string,
+): NativeAgentArbiterStateRecord {
+  const row = expectObject(value, label);
+  return {
+    arbiterId: parseStringField(row["arbiterId"], `${label}.arbiterId`),
+    arbiter: parseStringField(row["arbiter"], `${label}.arbiter`),
+    nonce: parseRpcNumberNullable(row["nonce"], `${label}.nonce`),
+    tier: parseRpcUintNullable(row["tier"], `${label}.tier`, 0xffff, "uint16"),
+    metadataHash: parseStringNullable(row["metadataHash"]),
+    updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`),
+  };
+}
+
+function decodeNativeAgentReputationReviewStateRecord(
+  value: unknown,
+  label: string,
+): NativeAgentReputationReviewStateRecord {
+  const row = expectObject(value, label);
+  return {
+    reviewId: parseStringField(row["reviewId"], `${label}.reviewId`),
+    reviewer: parseStringField(row["reviewer"], `${label}.reviewer`),
+    subject: parseStringField(row["subject"], `${label}.subject`),
+    categoryId: parseRpcUint(row["categoryId"], `${label}.categoryId`, 0xffffffff, "uint32"),
+    speedScore: parseRpcUint(row["speedScore"], `${label}.speedScore`, 0xff, "uint8"),
+    qualityScore: parseRpcUint(row["qualityScore"], `${label}.qualityScore`, 0xff, "uint8"),
+    communicationScore: parseRpcUint(
+      row["communicationScore"],
+      `${label}.communicationScore`,
+      0xff,
+      "uint8",
+    ),
+    accuracyScore: parseRpcUint(row["accuracyScore"], `${label}.accuracyScore`, 0xff, "uint8"),
+    payloadHash: parseStringNullable(row["payloadHash"]),
+    updatedAtBlock: parseRpcNumber(row["updatedAtBlock"], `${label}.updatedAtBlock`),
+  };
+}
+
 function expectObject(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw SdkError.malformed(`${label} must be an object`);
   }
   return value as Record<string, unknown>;
+}
+
+export function decodeNativeReceiptResponse<TDecoded = unknown>(
+  value: unknown,
+): NativeReceiptResponse<TDecoded> {
+  const row = expectObject(value, "native receipt response");
+  assertNativeReceiptFee(row["fee"], "native receipt response.fee");
+  return value as NativeReceiptResponse<TDecoded>;
+}
+
+export function decodeTxFeedResponse(value: unknown): TxFeedResponse {
+  const row = expectObject(value, "tx feed response");
+  const transactions = row["transactions"];
+  if (!Array.isArray(transactions)) {
+    throw SdkError.malformed("tx feed response.transactions must be an array");
+  }
+  transactions.forEach((transaction, index) => {
+    const tx = expectObject(transaction, `tx feed response.transactions[${index}]`);
+    assertNativeReceiptFee(tx["fee"], `tx feed response.transactions[${index}].fee`);
+  });
+  return value as TxFeedResponse;
+}
+
+function assertNativeReceiptFee(value: unknown, label: string): asserts value is NativeReceiptFee {
+  try {
+    assertMrvStructuredFeeConformance(value, { label });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw SdkError.malformed(`structured native fee violation: ${message}`);
+  }
+}
+
+function firstField(row: Record<string, unknown>, keys: readonly string[], label: string): unknown {
+  for (const key of keys) {
+    if (row[key] !== undefined) return row[key];
+  }
+  throw SdkError.malformed(`${label} is missing (${keys.join(" | ")})`);
 }
 
 function normalizeServiceProbe(value: unknown): ServiceProbeResponse {
@@ -1776,6 +2726,108 @@ function normalizeOperatorRisk(value: unknown): OperatorRiskResponse {
   };
 }
 
+export function nativeAgentStateFilterParams(
+  filter: NativeAgentStateFilter,
+): Record<string, NativeAgentStateFilterParamValue> {
+  const out: Record<string, NativeAgentStateFilterParamValue> = {};
+  if (filter.policyId != null) out.policyId = filter.policyId;
+  if (filter.escrowId != null) out.escrowId = filter.escrowId;
+  if (filter.account != null) out.account = filter.account;
+  if (filter.includePolicySpends != null) out.includePolicySpends = filter.includePolicySpends;
+  if (filter.limit != null) out.limit = encodeRpcU64Number(filter.limit, "limit");
+  return out;
+}
+
+export function decodeNativeAgentStateResponse(value: unknown): NativeAgentStateResponse {
+  const row = expectObject(value, "native agent state response");
+  return {
+    schemaVersion: parseRpcNumber(row["schemaVersion"], "native agent state schemaVersion"),
+    limit: parseRpcNumber(row["limit"], "native agent state limit"),
+    filters: expectObject(
+      row["filters"],
+      "native agent state filters",
+    ) as unknown as NativeAgentStateResponseFilters,
+    issuers: decodeNativeAgentStateArray(
+      row,
+      "issuers",
+      decodeNativeAgentIssuerStateRecord,
+      true,
+    ),
+    attestations: decodeNativeAgentStateArray(
+      row,
+      "attestations",
+      decodeNativeAgentAttestationStateRecord,
+      true,
+    ),
+    consents: decodeNativeAgentStateArray(
+      row,
+      "consents",
+      decodeNativeAgentConsentStateRecord,
+      true,
+    ),
+    services: decodeNativeAgentStateArray(
+      row,
+      "services",
+      decodeNativeAgentServiceStateRecord,
+      true,
+    ),
+    availability: decodeNativeAgentStateArray(
+      row,
+      "availability",
+      decodeNativeAgentAvailabilityStateRecord,
+      true,
+    ),
+    arbiters: decodeNativeAgentStateArray(
+      row,
+      "arbiters",
+      decodeNativeAgentArbiterStateRecord,
+      true,
+    ),
+    reputationReviews: decodeNativeAgentStateArray(
+      row,
+      "reputationReviews",
+      decodeNativeAgentReputationReviewStateRecord,
+      true,
+    ),
+    spendingPolicies: decodeNativeAgentStateArray(
+      row,
+      "spendingPolicies",
+      decodeNativeAgentExistingStateRecord<NativeAgentPolicyStateRecord>,
+      false,
+    ),
+    policySpends: decodeNativeAgentStateArray(
+      row,
+      "policySpends",
+      decodeNativeAgentExistingStateRecord<NativeAgentPolicySpendStateRecord>,
+      false,
+    ),
+    escrows: decodeNativeAgentStateArray(
+      row,
+      "escrows",
+      decodeNativeAgentExistingStateRecord<NativeAgentEscrowStateRecord>,
+      false,
+    ),
+    source: expectObject(
+      row["source"],
+      "native agent state source",
+    ) as unknown as NativeAgentStateSource,
+  };
+}
+
+export function nativeMarketStateFilterParams(
+  filter: NativeMarketStateFilter,
+): Record<string, NativeMarketStateFilterParamValue> {
+  const out: Record<string, NativeMarketStateFilterParamValue> = {};
+  if (filter.marketId != null) out.marketId = filter.marketId;
+  if (filter.orderId != null) out.orderId = filter.orderId;
+  if (filter.listingId != null) out.listingId = filter.listingId;
+  if (filter.collectionId != null) out.collectionId = filter.collectionId;
+  if (filter.account != null) out.account = filter.account;
+  if (filter.includeSpotOrders != null) out.includeSpotOrders = filter.includeSpotOrders;
+  if (filter.limit != null) out.limit = encodeRpcU64Number(filter.limit, "limit");
+  return out;
+}
+
 function normalizeBlockHeader(value: unknown): BlockHeader | null {
   if (value === null || value === undefined) return null;
   if (!value || typeof value !== "object") {
@@ -1785,12 +2837,65 @@ function normalizeBlockHeader(value: unknown): BlockHeader | null {
   return {
     number: parseRpcBigint(h["number"], "block header number"),
     hash: String(h["hash"]),
-    parent_hash: String(h["parent_hash"]),
-    state_root: String(h["state_root"]),
+    parent_hash: String(firstField(h, ["parent_hash", "parentHash"], "block header parent hash")),
+    state_root: String(firstField(h, ["state_root", "stateRoot"], "block header state root")),
     timestamp: parseRpcBigint(h["timestamp"], "block header timestamp"),
-    gas_used: parseRpcBigint(h["gas_used"], "block header gas_used"),
-    gas_limit: parseRpcBigint(h["gas_limit"], "block header gas_limit"),
+    executionUnitsUsed: parseRpcBigint(
+      firstField(
+        h,
+        ["executionUnitsUsed", "execution_units_used", "gas_used", "gasUsed"],
+        "block header execution units used",
+      ),
+      "block header execution units used",
+    ),
+    executionUnitLimit: parseRpcBigint(
+      firstField(
+        h,
+        ["executionUnitLimit", "execution_unit_limit", "gas_limit", "gasLimit"],
+        "block header execution unit limit",
+      ),
+      "block header execution unit limit",
+    ),
   };
+}
+
+function normalizeTransactionReceipt(value: unknown): TransactionReceipt | null {
+  if (value === null || value === undefined) return null;
+  const r = expectObject(value, "transaction receipt");
+  return {
+    tx_hash: String(
+      firstField(r, ["tx_hash", "txHash", "transactionHash"], "transaction receipt tx hash"),
+    ),
+    block_hash: String(
+      firstField(r, ["block_hash", "blockHash"], "transaction receipt block hash"),
+    ),
+    block_number: parseRpcBigint(
+      firstField(r, ["block_number", "blockNumber"], "transaction receipt block number"),
+      "transaction receipt block number",
+    ),
+    tx_index: parseRpcNumber(
+      firstField(r, ["tx_index", "txIndex", "transactionIndex"], "transaction receipt tx index"),
+      "transaction receipt tx index",
+    ),
+    status: parseRpcNumber(firstField(r, ["status"], "transaction receipt status"), "transaction receipt status"),
+    executionUnitsUsed: parseRpcBigint(
+      firstField(
+        r,
+        ["executionUnitsUsed", "execution_units_used", "gas_used", "gasUsed"],
+        "transaction receipt execution units used",
+      ),
+      "transaction receipt execution units used",
+    ),
+  };
+}
+
+function sdkTypedAddress(address: string, kind: AddressKind, label: string): string {
+  try {
+    return requireTypedAddress(address, kind, label);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw SdkError.malformed(message);
+  }
 }
 
 function normalizeRoundInfo(value: unknown): RoundInfo {
@@ -1817,5 +2922,12 @@ function normalizeMempoolSnapshot(value: unknown): MempoolSnapshot {
     count_pending: parseRpcBigint(row["count_pending"], "mempool count_pending"),
     mailbox_depth: parseRpcBigint(row["mailbox_depth"], "mempool mailbox_depth"),
     bytes_by_class: bytesByClass.map((v, i) => parseRpcBigint(v, `mempool bytes_by_class[${i}]`)) as MempoolSnapshot["bytes_by_class"],
+  };
+}
+
+function normalizeCapabilitiesResponse(value: CapabilitiesResponse): CapabilitiesResponse {
+  return {
+    ...value,
+    nativeModuleForwarders: value.nativeModuleForwarders ?? {},
   };
 }

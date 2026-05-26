@@ -1,0 +1,1007 @@
+import { describe, expect, it } from "vitest";
+import { bls12_381 } from "@noble/curves/bls12-381.js";
+import { keccak_256 } from "@noble/hashes/sha3.js";
+import {
+  NO_EVM_ARCHIVE_SIGNATURE_SCHEME,
+  NO_EVM_RECEIPT_CODEC,
+  NO_EVM_RECEIPT_PROOF_SCHEMA,
+  NO_EVM_RECEIPT_PROOF_TYPE,
+  NO_EVM_RECEIPT_ROOT_ALGORITHM,
+  NoEvmReceiptProofError,
+  computeNoEvmDacFinalityMessage,
+  computeNoEvmLeaderFinalityMessage,
+  computeNoEvmReceiptsRoot,
+  computeNoEvmRoundFinalityMessage,
+  computeNoEvmTargetReceiptHash,
+  decodeNoEvmReceiptTranscript,
+  verifyNoEvmArchiveProofSignatures,
+  verifyNoEvmBlockFinalityEvidenceMultisig,
+  verifyNoEvmBlockFinalityEvidenceThreshold,
+  verifyNoEvmFinalityEvidenceThreshold,
+  verifyNoEvmReceiptProof,
+  verifyNoEvmReceiptProofTrust,
+} from "../src/index.js";
+import { MlDsa65Backend, mlDsa65AddressFromPublicKey } from "../src/crypto/index.js";
+import type {
+  NoEvmArchiveCoveringSnapshot,
+  NoEvmFinalityBlockReference,
+  NoEvmFinalityCertificate,
+  NoEvmFinalityEvidence,
+  NoEvmReceiptProof,
+} from "../src/index.js";
+import type { NoEvmCompactReceiptProof } from "../src/client.js";
+
+const RECEIPTS = [
+  new Uint8Array([0x01, 0x02, 0x03]),
+  new Uint8Array([0x04, 0x05, 0x06, 0x07]),
+  new Uint8Array([]),
+];
+const COMPACT_INCLUSION_SCHEMA = "mono.no_evm_receipt_compact_inclusion.v1";
+const COMPACT_TREE_ALGORITHM = "binary-keccak-receipt-tree";
+const COMPACT_PROOF_TYPE = "canonicalReceiptInclusion";
+const RECEIPT_ROOT_EMPTY_DOMAIN = new TextEncoder().encode(
+  "monolythium/v4.1/receipts_root_empty/1",
+);
+const RECEIPT_LEAF_DOMAIN = new TextEncoder().encode("monolythium/v4.1/receipt_leaf/1");
+const RECEIPT_NODE_DOMAIN = new TextEncoder().encode("monolythium/v4.1/receipt_node/1");
+const VALID_ARCHIVE_SIGNATURE = `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:0x${"12".repeat(
+  20,
+)}:0x${"ab".repeat(64)}`;
+const BLS_DST = "BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
+
+function noEvmProof(): NoEvmReceiptProof {
+  return {
+    schema: NO_EVM_RECEIPT_PROOF_SCHEMA,
+    proofKind: "boundedCacheTranscript",
+    proofType: NO_EVM_RECEIPT_PROOF_TYPE,
+    historySource: "liveBlockCache",
+    compactInclusionProof: null,
+    archiveProof: null,
+    rootAlgorithm: NO_EVM_RECEIPT_ROOT_ALGORITHM,
+    receiptCodec: NO_EVM_RECEIPT_CODEC,
+    blockHash: `0x${"22".repeat(32)}`,
+    txHash: `0x${"11".repeat(32)}`,
+    receiptsRoot: computeNoEvmReceiptsRoot(RECEIPTS),
+    targetReceiptHash: "0xf53a5554601329f91c1b8baec5d7270102bd621873e3b119aff9c83c1d73d86c",
+    blockHeight: 100,
+    txIndex: 1,
+    receiptCount: RECEIPTS.length,
+    receiptTranscript: RECEIPTS.map(bytesToHex),
+  };
+}
+
+function compactNoEvmProof(): NoEvmCompactReceiptProof {
+  const material = compactInclusionMaterial(RECEIPTS, 1);
+  return {
+    schema: NO_EVM_RECEIPT_PROOF_SCHEMA,
+    proofKind: "compactInclusion",
+    proofType: COMPACT_PROOF_TYPE,
+    historySource: "liveBlockCache",
+    compactInclusionProof: {
+      schema: COMPACT_INCLUSION_SCHEMA,
+      treeAlgorithm: COMPACT_TREE_ALGORITHM,
+      root: material.root,
+      leafHash: material.leafHash,
+      siblingHashes: material.siblingHashes,
+      pathSides: material.pathSides,
+    },
+    archiveProof: null,
+    rootAlgorithm: NO_EVM_RECEIPT_ROOT_ALGORITHM,
+    receiptCodec: NO_EVM_RECEIPT_CODEC,
+    blockHash: `0x${"22".repeat(32)}`,
+    txHash: `0x${"11".repeat(32)}`,
+    receiptsRoot: material.root,
+    targetReceiptHash: computeNoEvmTargetReceiptHash(RECEIPTS[1]!),
+    blockHeight: 100,
+    txIndex: 1,
+    receiptCount: RECEIPTS.length,
+    targetReceiptBytes: bytesToHex(RECEIPTS[1]!),
+  };
+}
+
+function finalityBitmapHex(indices: readonly number[], committeeSize: number): string {
+  const maxIndex = indices.reduce((max, index) => Math.max(max, index), 0);
+  const bitCapacity = Math.max(committeeSize, maxIndex + 1);
+  const bitmap = new Uint8Array(Math.ceil(bitCapacity / 8));
+  indices.forEach((index) => {
+    bitmap[Math.floor(index / 8)] |= 1 << (index % 8);
+  });
+  return bytesToHex(bitmap);
+}
+
+function blsFinalityEvidence(args: {
+  round: number;
+  signature: Uint8Array;
+  bitmapIndices: readonly number[];
+  signerIndices: number[];
+  signerCount: number;
+  committeeSize: number;
+  blockReference?: NoEvmFinalityBlockReference;
+  leaderSignature?: Uint8Array;
+  dacSignature?: Uint8Array;
+}): NoEvmFinalityEvidence {
+  const certificate = blsFinalityCertificate(args);
+  return {
+    schema: "mono.no_evm_receipt_finality.v1",
+    source: "blsRoundCertificate",
+    round: args.round,
+    certificate,
+    blockReference: args.blockReference,
+    leaderCertificate:
+      args.leaderSignature == null
+        ? undefined
+        : blsFinalityCertificate({ ...args, signature: args.leaderSignature }),
+    dacCertificate:
+      args.dacSignature == null
+        ? undefined
+        : blsFinalityCertificate({ ...args, signature: args.dacSignature }),
+  };
+}
+
+function blsFinalityCertificate(args: {
+  round: number;
+  signature: Uint8Array;
+  bitmapIndices: readonly number[];
+  signerIndices: number[];
+  signerCount: number;
+  committeeSize: number;
+}): NoEvmFinalityCertificate {
+  return {
+    round: args.round,
+    signature: bytesToHex(args.signature),
+    signersBitmap: finalityBitmapHex(args.bitmapIndices, args.committeeSize),
+    signerIndices: args.signerIndices,
+    signerCount: args.signerCount,
+  };
+}
+
+function blsKey(seedByte: number) {
+  return bls12_381.longSignatures.keygen(new Uint8Array(48).fill(seedByte));
+}
+
+function signBlsMessage(key: ReturnType<typeof blsKey>, message: Uint8Array): Uint8Array {
+  const hashedMessage = bls12_381.longSignatures.hash(message, BLS_DST);
+  return bls12_381.longSignatures.Signature.toBytes(
+    bls12_381.longSignatures.sign(hashedMessage, key.secretKey),
+  );
+}
+
+function blsFixture(seedByte: number, chainId: number, round: number) {
+  const key = blsKey(seedByte);
+  const message = computeNoEvmRoundFinalityMessage(chainId, round);
+  const signature = signBlsMessage(key, message);
+  return { publicKey: key.publicKey.toBytes(), signature };
+}
+
+function compactNoEvmArchiveProof(signatures: string[] = []): NoEvmCompactReceiptProof {
+  return {
+    ...compactNoEvmProof(),
+    historySource: "indexerReceiptArchive",
+    archiveProof: {
+      schema: "mono.no_evm_receipt_archive_binding.v1",
+      source: "indexerReceiptArchiveContentDigest",
+      manifestHash: `0x${"53".repeat(32)}`,
+      contentHash: `0x${"54".repeat(32)}`,
+      signatureDigest: `0x${"66".repeat(32)}`,
+      signatures,
+    },
+    missingProofMaterial: [
+      "signed archive or snapshot manifest binding receipt bytes to blockHash and receiptsRoot",
+    ],
+  };
+}
+
+function validArchiveCoveringSnapshot(
+  signatures: string[] = [VALID_ARCHIVE_SIGNATURE],
+): NoEvmArchiveCoveringSnapshot {
+  return {
+    snapshotHeight: 100,
+    manifestHash: `0x${"61".repeat(32)}`,
+    signatureDigest: `0x${"62".repeat(32)}`,
+    contentHash: `0x${"63".repeat(32)}`,
+    checkpointContentHash: `0x${"54".repeat(32)}`,
+    checkpointFrom: 0,
+    checkpointTo: 100,
+    signatures,
+  };
+}
+
+function compactNoEvmCoveringArchiveProof(
+  coveringSnapshot: NoEvmArchiveCoveringSnapshot | Record<string, unknown> =
+    validArchiveCoveringSnapshot(),
+): NoEvmCompactReceiptProof {
+  const proof = compactNoEvmArchiveProof();
+  proof.archiveProof!.signatureDigest = null;
+  proof.archiveProof!.signatures = [];
+  proof.archiveProof!.coveringSnapshot =
+    coveringSnapshot as NoEvmArchiveCoveringSnapshot;
+  return proof;
+}
+
+describe("no-EVM receipt proof helpers", () => {
+  it("verifies valid transcripts and accepts null proofs", () => {
+    const proof = noEvmProof();
+
+    expect(computeNoEvmReceiptsRoot(RECEIPTS)).toBe(proof.receiptsRoot);
+    expect(computeNoEvmTargetReceiptHash(RECEIPTS[1]!)).toBe(proof.targetReceiptHash);
+    expect(decodeNoEvmReceiptTranscript(proof).map((receipt) => Array.from(receipt))).toEqual([
+      [0x01, 0x02, 0x03],
+      [0x04, 0x05, 0x06, 0x07],
+      [],
+    ]);
+
+    const verified = verifyNoEvmReceiptProof(proof);
+    expect(verified?.receiptsRoot).toBe(proof.receiptsRoot);
+    expect(verified?.targetReceiptHash).toBe(proof.targetReceiptHash);
+    expect(verified?.receiptCount).toBe(3);
+    expect(verified?.txIndex).toBe(1);
+    expect(verified?.proofKind).toBe("boundedCacheTranscript");
+    expect(Array.from(verified?.targetReceipt ?? [])).toEqual([0x04, 0x05, 0x06, 0x07]);
+    expect(verifyNoEvmReceiptProof(null)).toBeNull();
+    expect(verifyNoEvmReceiptProof(undefined)).toBeNull();
+  });
+
+  it("rejects count, root, target hash, and txIndex mismatches", () => {
+    expect(() => verifyNoEvmReceiptProof({ ...noEvmProof(), receiptCount: 2 })).toThrow(
+      NoEvmReceiptProofError,
+    );
+    expect(() =>
+      verifyNoEvmReceiptProof({ ...noEvmProof(), receiptsRoot: `0x${"00".repeat(32)}` }),
+    ).toThrow(/receiptsRoot mismatch/u);
+    expect(() => verifyNoEvmReceiptProof({ ...noEvmProof(), txIndex: 0 })).toThrow(
+      /targetReceiptHash mismatch/u,
+    );
+    expect(() => verifyNoEvmReceiptProof({ ...noEvmProof(), txIndex: 3 })).toThrow(
+      /txIndex 3 is out of bounds/u,
+    );
+  });
+
+  it("rejects malformed receipt transcript and hash bytes", () => {
+    expect(() =>
+      decodeNoEvmReceiptTranscript({
+        ...noEvmProof(),
+        receiptTranscript: ["0x010203", "0xabc", "0x"],
+      }),
+    ).toThrow(/receiptTranscript\[1\]/u);
+    expect(() =>
+      verifyNoEvmReceiptProof({
+        ...noEvmProof(),
+        receiptTranscript: ["010203", "0x04050607", "0x"],
+      }),
+    ).toThrow(/receiptTranscript\[0\]/u);
+    expect(() =>
+      verifyNoEvmReceiptProof({ ...noEvmProof(), targetReceiptHash: "0x12" }),
+    ).toThrow(/targetReceiptHash must be 32 bytes/u);
+  });
+
+  it("accepts bounded transcripts carrying the legacy root algorithm label", () => {
+    const proof = {
+      ...noEvmProof(),
+      rootAlgorithm:
+        "keccak256(monolythium/v2/receipts_root/1 || len || indexed bincode receipts)",
+    };
+
+    expect(verifyNoEvmReceiptProof(proof)?.proofKind).toBe("boundedCacheTranscript");
+  });
+
+  it("verifies compact receipt inclusion proofs", () => {
+    const proof = compactNoEvmProof();
+
+    const verified = verifyNoEvmReceiptProof(proof);
+
+    expect(verified?.proofKind).toBe("compactInclusion");
+    expect(verified?.receipts).toEqual([]);
+    expect(verified?.receiptsRoot).toBe(proof.receiptsRoot);
+    expect(verified?.targetReceiptHash).toBe(proof.targetReceiptHash);
+    expect(verified?.receiptCount).toBe(3);
+    expect(verified?.txIndex).toBe(1);
+    expect(Array.from(verified?.targetReceipt ?? [])).toEqual([0x04, 0x05, 0x06, 0x07]);
+  });
+
+  it("verifies compact receipt proofs reconstructed from the indexer archive", () => {
+    const proof = compactNoEvmArchiveProof();
+
+    const verified = verifyNoEvmReceiptProof(proof);
+
+    expect(verified?.proofKind).toBe("compactInclusion");
+    expect(verified?.receiptsRoot).toBe(proof.receiptsRoot);
+    expect(proof.archiveProof?.source).toBe("indexerReceiptArchiveContentDigest");
+  });
+
+  it("accepts compact archive proofs carrying snapshot signatures", () => {
+    const proof = compactNoEvmArchiveProof([VALID_ARCHIVE_SIGNATURE]);
+
+    const verified = verifyNoEvmReceiptProof(proof);
+
+    expect(verified?.proofKind).toBe("compactInclusion");
+    expect(proof.archiveProof?.signatures).toEqual([VALID_ARCHIVE_SIGNATURE]);
+  });
+
+  it("verifies archive proof signatures against trusted ML-DSA signers", () => {
+    const signer = MlDsa65Backend.fromSeed(new Uint8Array(32).fill(7));
+    const signatureDigest = `0x${"66".repeat(32)}`;
+    const signature = `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:${signer.getAddress()}:0x${bytesToHexRaw(
+      signer.sign(hexToBytes(signatureDigest)),
+    )}`;
+    const proof = compactNoEvmArchiveProof([signature]);
+    proof.archiveProof!.signatureDigest = signatureDigest;
+
+    const result = verifyNoEvmArchiveProofSignatures(
+      proof.archiveProof!,
+      [{ publicKey: signer.publicKey(), signerId: signer.getAddress() }],
+      1,
+    );
+
+    expect(result).toEqual({
+      verified: true,
+      threshold: 1,
+      validSigners: [signer.getAddress()],
+      checkedSignatures: 1,
+      issues: [],
+    });
+  });
+
+  it("rejects archive signature verification without signatureDigest", () => {
+    const signer = MlDsa65Backend.fromSeed(new Uint8Array(32).fill(8));
+    const proof = compactNoEvmArchiveProof([]);
+    delete proof.archiveProof!.signatureDigest;
+
+    const result = verifyNoEvmArchiveProofSignatures(
+      proof.archiveProof!,
+      [{ publicKey: signer.publicKey() }],
+      1,
+    );
+
+    expect(result.verified).toBe(false);
+    expect(result.issues.map((issue) => issue.code)).toContain("missing_signature_digest");
+  });
+
+  it("rejects untrusted, invalid, and duplicate archive signature signers", () => {
+    const signer = MlDsa65Backend.fromSeed(new Uint8Array(32).fill(9));
+    const untrusted = MlDsa65Backend.fromSeed(new Uint8Array(32).fill(10));
+    const signatureDigest = `0x${"66".repeat(32)}`;
+    const trustedSignature = `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:${signer.getAddress()}:0x${bytesToHexRaw(
+      signer.sign(hexToBytes(signatureDigest)),
+    )}`;
+    const wrongDigestSignature = `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:${signer.getAddress()}:0x${bytesToHexRaw(
+      signer.sign(hexToBytes(`0x${"67".repeat(32)}`)),
+    )}`;
+    const untrustedSignature = `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:${untrusted.getAddress()}:0x${bytesToHexRaw(
+      untrusted.sign(hexToBytes(signatureDigest)),
+    )}`;
+
+    expect(
+      verifyNoEvmArchiveProofSignatures(
+        compactNoEvmArchiveProof([untrustedSignature]).archiveProof!,
+        [{ publicKey: signer.publicKey() }],
+        1,
+      ).issues.map((issue) => issue.code),
+    ).toContain("untrusted_signer");
+    expect(
+      verifyNoEvmArchiveProofSignatures(
+        compactNoEvmArchiveProof([wrongDigestSignature]).archiveProof!,
+        [{ publicKey: signer.publicKey() }],
+        1,
+      ).issues.map((issue) => issue.code),
+    ).toContain("invalid_signature");
+    expect(
+      verifyNoEvmArchiveProofSignatures(
+        compactNoEvmArchiveProof([trustedSignature, trustedSignature]).archiveProof!,
+        [{ publicKey: signer.publicKey() }],
+        1,
+      ).issues.map((issue) => issue.code),
+    ).toContain("duplicate_signer");
+    expect(mlDsa65AddressFromPublicKey(signer.publicKey())).toBe(signer.getAddress());
+  });
+
+  it("rejects malformed compact archive proof signatures", () => {
+    const malformedSignatures = [
+      "0x1234",
+      `mono.snapshot.sig.v2:0x${"12".repeat(20)}:0xab`,
+      `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:0x${"12".repeat(19)}:0xab`,
+      `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:0x${"12".repeat(21)}:0xab`,
+      `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:0X${"12".repeat(20)}:0xab`,
+      `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:0x${"12".repeat(20)}:0Xab`,
+      `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:0x${"12".repeat(20)}:0x`,
+      `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:0x${"12".repeat(20)}:0xabc`,
+      `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:0x${"12".repeat(20)}:0xab:extra`,
+    ];
+
+    for (const signature of malformedSignatures) {
+      expect(() => verifyNoEvmReceiptProof(compactNoEvmArchiveProof([signature]))).toThrow(
+        /archiveProof\.signatures\[0\]/u,
+      );
+    }
+
+    expect(() =>
+      verifyNoEvmReceiptProof({
+        ...compactNoEvmArchiveProof(),
+        archiveProof: {
+          ...compactNoEvmArchiveProof().archiveProof!,
+          signatures: [123] as unknown as string[],
+        },
+      }),
+    ).toThrow(/archiveProof\.signatures must be an array of strings/u);
+  });
+
+  it("accepts compact archive proofs with a signed covering snapshot checkpoint", () => {
+    const proof = compactNoEvmCoveringArchiveProof();
+
+    const verified = verifyNoEvmReceiptProof(proof);
+
+    expect(verified?.proofKind).toBe("compactInclusion");
+    expect(proof.archiveProof?.signatureDigest).toBeNull();
+    expect(proof.archiveProof?.signatures).toEqual([]);
+    expect(proof.archiveProof?.coveringSnapshot?.checkpointContentHash).toBe(
+      proof.archiveProof?.contentHash,
+    );
+    expect(proof.archiveProof?.coveringSnapshot?.signatures).toEqual([VALID_ARCHIVE_SIGNATURE]);
+  });
+
+  it("rejects invalid archive covering snapshot checkpoints", () => {
+    const cases: Array<[RegExp, Partial<NoEvmArchiveCoveringSnapshot>]> = [
+      [/checkpointFrom must be 0/u, { checkpointFrom: 1 }],
+      [/checkpointTo must be <= snapshotHeight/u, { checkpointTo: 101 }],
+      [/checkpointTo must match blockHeight/u, { checkpointTo: 99 }],
+      [
+        /checkpointContentHash must match archiveProof\.contentHash/u,
+        { checkpointContentHash: `0x${"55".repeat(32)}` },
+      ],
+      [/signatures must be non-empty/u, { signatures: [] }],
+      [
+        /archiveProof\.coveringSnapshot\.signatures\[0\]/u,
+        { signatures: [`${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:0x${"12".repeat(19)}:0xab`] },
+      ],
+    ];
+
+    for (const [message, patch] of cases) {
+      const snapshot = { ...validArchiveCoveringSnapshot(), ...patch };
+      expect(() => verifyNoEvmReceiptProof(compactNoEvmCoveringArchiveProof(snapshot))).toThrow(
+        message,
+      );
+    }
+  });
+
+  it("rejects archive covering snapshots without signatureDigest", () => {
+    const snapshot = validArchiveCoveringSnapshot() as unknown as Record<string, unknown>;
+    delete snapshot["signatureDigest"];
+
+    expect(() => verifyNoEvmReceiptProof(compactNoEvmCoveringArchiveProof(snapshot))).toThrow(
+      /archiveProof\.coveringSnapshot\.signatureDigest/u,
+    );
+  });
+
+  it("verifies covering snapshot signatures when top-level signatures are absent", () => {
+    const signer = MlDsa65Backend.fromSeed(new Uint8Array(32).fill(12));
+    const signatureDigest = `0x${"62".repeat(32)}`;
+    const signature = `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:${signer.getAddress()}:0x${bytesToHexRaw(
+      signer.sign(hexToBytes(signatureDigest)),
+    )}`;
+    const proof = compactNoEvmCoveringArchiveProof(
+      validArchiveCoveringSnapshot([signature]),
+    );
+
+    const result = verifyNoEvmArchiveProofSignatures(
+      proof.archiveProof!,
+      [{ publicKey: signer.publicKey(), signerId: signer.getAddress() }],
+      1,
+    );
+
+    expect(result).toEqual({
+      verified: true,
+      threshold: 1,
+      validSigners: [signer.getAddress()],
+      checkedSignatures: 1,
+      issues: [],
+    });
+  });
+
+  it("verifies compact proof archive and finality material against one trust policy", () => {
+    const chainId = 69_420;
+    const round = 63;
+    const signer = MlDsa65Backend.fromSeed(new Uint8Array(32).fill(13));
+    const signatureDigest = `0x${"66".repeat(32)}`;
+    const archiveSignature = `${NO_EVM_ARCHIVE_SIGNATURE_SCHEME}:${signer.getAddress()}:0x${bytesToHexRaw(
+      signer.sign(hexToBytes(signatureDigest)),
+    )}`;
+    const { publicKey, signature } = blsFixture(0x49, chainId, round);
+    const proof = compactNoEvmArchiveProof([archiveSignature]);
+    proof.archiveProof!.signatureDigest = signatureDigest;
+    proof.finalityEvidence = blsFinalityEvidence({
+      round,
+      signature,
+      bitmapIndices: [2],
+      signerIndices: [2],
+      signerCount: 1,
+      committeeSize: 7,
+    });
+
+    const result = verifyNoEvmReceiptProofTrust(proof, {
+      chainId,
+      archive: {
+        threshold: 1,
+        trustedSigners: [{ publicKey: signer.publicKey(), signerId: signer.getAddress() }],
+      },
+      finality: {
+        mode: "cluster",
+        threshold: 1,
+        committeeSize: 7,
+        clusterPublicKey: publicKey,
+      },
+    });
+
+    expect(result.verified).toBe(true);
+    expect(result.receiptProof?.proofKind).toBe("compactInclusion");
+    expect(result.archiveSignatures?.verified).toBe(true);
+    expect(result.finalityEvidence?.verified).toBe(true);
+    expect(result.issues).toEqual([]);
+
+    const expired = verifyNoEvmReceiptProofTrust(proof, {
+      chainId,
+      archive: {
+        threshold: 1,
+        validToHeight: 99,
+        trustedSigners: [{ publicKey: signer.publicKey(), signerId: signer.getAddress() }],
+      },
+      finality: {
+        mode: "cluster",
+        threshold: 1,
+        validToRound: round - 1,
+        committeeSize: 7,
+        clusterPublicKey: publicKey,
+      },
+    });
+    expect(expired.verified).toBe(false);
+    expect(expired.issues.map((issue) => issue.code)).toContain(
+      "archive_policy_not_valid_at_height",
+    );
+    expect(expired.issues.map((issue) => issue.code)).toContain(
+      "finality_policy_not_valid_at_round",
+    );
+  });
+
+  it("fails trust verification when required archive or finality material is missing", () => {
+    const result = verifyNoEvmReceiptProofTrust(compactNoEvmProof(), {
+      chainId: 69_420,
+      archive: {
+        threshold: 1,
+        trustedSigners: [{ publicKey: new Uint8Array(1952) }],
+      },
+      finality: {
+        mode: "cluster",
+        threshold: 1,
+        committeeSize: 7,
+        clusterPublicKey: new Uint8Array(48),
+      },
+    });
+
+    expect(result.verified).toBe(false);
+    expect(result.issues.map((issue) => issue.code)).toEqual([
+      "missing_archive_proof",
+      "missing_finality_evidence",
+    ]);
+  });
+
+  it("accepts compact proofs carrying BLS finality evidence", () => {
+    const base = compactNoEvmProof();
+    const proof: NoEvmCompactReceiptProof = {
+      ...base,
+      finalityEvidence: {
+        schema: "mono.no_evm_receipt_finality.v1",
+        source: "blsRoundCertificate",
+        round: 57,
+        certificate: {
+          round: 57,
+          signature: "0x1234",
+          signersBitmap: "0xabcd",
+          signerIndices: [1, 3],
+          signerCount: 2,
+        },
+        blockReference: {
+          round: 57,
+          authority: 4,
+          digest: base.blockHash,
+        },
+        leaderCertificate: {
+          round: 57,
+          signature: "0x1234",
+          signersBitmap: "0xabcd",
+          signerIndices: [1, 3],
+          signerCount: 2,
+        },
+        dacCertificate: {
+          round: 57,
+          signature: "0x1234",
+          signersBitmap: "0xabcd",
+          signerIndices: [1, 3],
+          signerCount: 2,
+        },
+      },
+      missingProofMaterial: [
+        "signed archive or snapshot manifest binding receipt bytes to blockHash and receiptsRoot",
+      ],
+    };
+
+    const verified = verifyNoEvmReceiptProof(proof);
+
+    expect(verified?.proofKind).toBe("compactInclusion");
+    expect(proof.finalityEvidence?.source).toBe("blsRoundCertificate");
+    expect(proof.finalityEvidence?.certificate.signerIndices).toEqual([1, 3]);
+    expect(proof.finalityEvidence?.blockReference?.digest).toBe(base.blockHash);
+  });
+
+  it("rejects malformed BLS finality evidence", () => {
+    expect(() =>
+      verifyNoEvmReceiptProof({
+        ...compactNoEvmProof(),
+        finalityEvidence: {
+          schema: "mono.no_evm_receipt_finality.v1",
+          source: "blsRoundCertificate",
+          round: 57,
+          certificate: {
+            round: 58,
+            signature: "0x1234",
+            signersBitmap: "0xabcd",
+            signerIndices: [1, 3],
+            signerCount: 2,
+          },
+        },
+      }),
+    ).toThrow(/certificate\.round must match/u);
+  });
+
+  it("verifies threshold BLS finality evidence with a trusted cluster key", () => {
+    const chainId = 69_420;
+    const round = 58;
+    const { publicKey, signature } = blsFixture(0x44, chainId, round);
+    const finalityEvidence = blsFinalityEvidence({
+      round,
+      signature,
+      bitmapIndices: [3],
+      signerIndices: [3],
+      signerCount: 1,
+      committeeSize: 7,
+    });
+
+    const result = verifyNoEvmFinalityEvidenceThreshold(finalityEvidence, {
+      chainId,
+      clusterPublicKey: publicKey,
+      committeeSize: 7,
+      threshold: 1,
+    });
+
+    expect(result.verified).toBe(true);
+    expect(result.signatureValid).toBe(true);
+    expect(result.acceptedSignatureCount).toBe(1);
+  });
+
+  it("rejects threshold BLS finality evidence for the wrong chain id", () => {
+    const chainId = 69_420;
+    const round = 59;
+    const { publicKey, signature } = blsFixture(0x45, chainId, round);
+    const finalityEvidence = blsFinalityEvidence({
+      round,
+      signature,
+      bitmapIndices: [1],
+      signerIndices: [1],
+      signerCount: 1,
+      committeeSize: 7,
+    });
+
+    const result = verifyNoEvmFinalityEvidenceThreshold(finalityEvidence, {
+      chainId: chainId + 1,
+      clusterPublicKey: publicKey,
+      committeeSize: 7,
+      threshold: 1,
+    });
+
+    expect(result.verified).toBe(false);
+    expect(result.signatureValid).toBe(false);
+  });
+
+  it("detects finality signer bitmap and index mismatches", () => {
+    const chainId = 69_420;
+    const round = 60;
+    const { publicKey, signature } = blsFixture(0x46, chainId, round);
+    const finalityEvidence = blsFinalityEvidence({
+      round,
+      signature,
+      bitmapIndices: [1],
+      signerIndices: [1, 1],
+      signerCount: 2,
+      committeeSize: 7,
+    });
+
+    const result = verifyNoEvmFinalityEvidenceThreshold(finalityEvidence, {
+      chainId,
+      clusterPublicKey: publicKey,
+      committeeSize: 7,
+      threshold: 1,
+    });
+
+    expect(result.verified).toBe(false);
+    expect(result.signerCountMatches).toBe(false);
+    expect(result.signerBitmapMatchesIndices).toBe(false);
+  });
+
+  it("rejects finality threshold shortfall without hiding valid crypto", () => {
+    const chainId = 69_420;
+    const round = 61;
+    const { publicKey, signature } = blsFixture(0x47, chainId, round);
+    const finalityEvidence = blsFinalityEvidence({
+      round,
+      signature,
+      bitmapIndices: [2],
+      signerIndices: [2],
+      signerCount: 1,
+      committeeSize: 7,
+    });
+
+    const result = verifyNoEvmFinalityEvidenceThreshold(finalityEvidence, {
+      chainId,
+      clusterPublicKey: publicKey,
+      committeeSize: 7,
+      threshold: 2,
+    });
+
+    expect(result.verified).toBe(false);
+    expect(result.thresholdMet).toBe(false);
+    expect(result.signatureValid).toBe(true);
+  });
+
+  it("verifies block-bound BLS finality evidence with a trusted signer roster", () => {
+    const chainId = 69_420;
+    const round = 62;
+    const blockReference = {
+      round,
+      authority: 4,
+      digest: `0x${"42".repeat(32)}`,
+    };
+    const key = blsKey(0x50);
+    const publicKey = key.publicKey.toBytes();
+    const finalityEvidence = blsFinalityEvidence({
+      round,
+      signature: signBlsMessage(key, computeNoEvmRoundFinalityMessage(chainId, round)),
+      bitmapIndices: [2],
+      signerIndices: [2],
+      signerCount: 1,
+      committeeSize: 7,
+      blockReference,
+      leaderSignature: signBlsMessage(
+        key,
+        computeNoEvmLeaderFinalityMessage(chainId, blockReference),
+      ),
+      dacSignature: signBlsMessage(key, computeNoEvmDacFinalityMessage(chainId, blockReference)),
+    });
+
+    const result = verifyNoEvmBlockFinalityEvidenceMultisig(finalityEvidence, {
+      chainId,
+      trustedSigners: [{ authorityIndex: 2, publicKey }],
+      threshold: 1,
+    });
+
+    expect(result.verified).toBe(true);
+    expect(result.blockReference).toEqual(blockReference);
+    expect(result.leaderCertificate.signatureValid).toBe(true);
+    expect(result.dacCertificate.signatureValid).toBe(true);
+  });
+
+  it("rejects block-bound BLS finality evidence for the wrong chain id", () => {
+    const chainId = 69_420;
+    const round = 63;
+    const blockReference = {
+      round,
+      authority: 5,
+      digest: `0x${"43".repeat(32)}`,
+    };
+    const key = blsKey(0x51);
+    const publicKey = key.publicKey.toBytes();
+    const finalityEvidence = blsFinalityEvidence({
+      round,
+      signature: signBlsMessage(key, computeNoEvmRoundFinalityMessage(chainId, round)),
+      bitmapIndices: [3],
+      signerIndices: [3],
+      signerCount: 1,
+      committeeSize: 7,
+      blockReference,
+      leaderSignature: signBlsMessage(
+        key,
+        computeNoEvmLeaderFinalityMessage(chainId, blockReference),
+      ),
+      dacSignature: signBlsMessage(key, computeNoEvmDacFinalityMessage(chainId, blockReference)),
+    });
+
+    const result = verifyNoEvmBlockFinalityEvidenceThreshold(finalityEvidence, {
+      chainId: chainId + 1,
+      clusterPublicKey: publicKey,
+      committeeSize: 7,
+      threshold: 1,
+    });
+
+    expect(result.verified).toBe(false);
+    expect(result.leaderCertificate.signatureValid).toBe(false);
+    expect(result.dacCertificate.signatureValid).toBe(false);
+  });
+
+  it("rejects malformed finality BLS signature length", () => {
+    const { publicKey } = blsFixture(0x48, 69_420, 62);
+    const finalityEvidence = blsFinalityEvidence({
+      round: 62,
+      signature: new Uint8Array(95).fill(0x11),
+      bitmapIndices: [0],
+      signerIndices: [0],
+      signerCount: 1,
+      committeeSize: 1,
+    });
+
+    expect(() =>
+      verifyNoEvmFinalityEvidenceThreshold(finalityEvidence, {
+        chainId: 69_420,
+        clusterPublicKey: publicKey,
+        committeeSize: 1,
+        threshold: 1,
+      }),
+    ).toThrow(/signature must be 96 bytes/u);
+  });
+
+  it("rejects compact proofs with tampered target bytes", () => {
+    expect(() =>
+      verifyNoEvmReceiptProof({
+        ...compactNoEvmProof(),
+        targetReceiptBytes: "0x04050608",
+      }),
+    ).toThrow(/targetReceiptHash mismatch/u);
+  });
+
+  it("rejects compact proofs with tampered sibling hashes or path sides", () => {
+    const proof = compactNoEvmProof();
+
+    expect(() =>
+      verifyNoEvmReceiptProof({
+        ...proof,
+        compactInclusionProof: {
+          ...proof.compactInclusionProof!,
+          siblingHashes: [
+            `0x${"00".repeat(32)}`,
+            ...proof.compactInclusionProof!.siblingHashes.slice(1),
+          ],
+        },
+      }),
+    ).toThrow(/compact inclusion path mismatch/u);
+
+    expect(() =>
+      verifyNoEvmReceiptProof({
+        ...proof,
+        compactInclusionProof: {
+          ...proof.compactInclusionProof!,
+          pathSides: [false, ...proof.compactInclusionProof!.pathSides.slice(1)],
+        },
+      }),
+    ).toThrow(/compact inclusion path mismatch/u);
+  });
+
+  it("rejects compact proofs whose top-level root does not match compact root", () => {
+    expect(() =>
+      verifyNoEvmReceiptProof({
+        ...compactNoEvmProof(),
+        receiptsRoot: `0x${"00".repeat(32)}`,
+      }),
+    ).toThrow(/receiptsRoot must equal compactInclusionProof\.root/u);
+  });
+
+  it("rejects compact proofs missing target receipt bytes", () => {
+    const proof = { ...compactNoEvmProof() } as Partial<NoEvmReceiptProof>;
+    delete (proof as { targetReceiptBytes?: string }).targetReceiptBytes;
+
+    expect(() => verifyNoEvmReceiptProof(proof as NoEvmReceiptProof)).toThrow(
+      /compactInclusion proof requires targetReceiptBytes/u,
+    );
+  });
+
+  it("rejects compact proofs with mismatched sibling and path side lengths", () => {
+    const proof = compactNoEvmProof();
+
+    expect(() =>
+      verifyNoEvmReceiptProof({
+        ...proof,
+        compactInclusionProof: {
+          ...proof.compactInclusionProof!,
+          pathSides: proof.compactInclusionProof!.pathSides.slice(1),
+        },
+      }),
+    ).toThrow(/siblingHashes\/pathSides length mismatch/u);
+  });
+});
+
+function compactInclusionMaterial(
+  receipts: readonly Uint8Array[],
+  targetIndex: number,
+): {
+  root: string;
+  leafHash: string;
+  siblingHashes: string[];
+  pathSides: boolean[];
+} {
+  if (receipts.length === 0) {
+    const preimage = new Uint8Array(RECEIPT_ROOT_EMPTY_DOMAIN.length + 4);
+    preimage.set(RECEIPT_ROOT_EMPTY_DOMAIN);
+    return {
+      root: bytesToHex(keccak_256(preimage)),
+      leafHash: "0x",
+      siblingHashes: [],
+      pathSides: [],
+    };
+  }
+
+  let level = receipts.map((receipt, index) => receiptLeafHash(receipt, index));
+  let index = targetIndex;
+  const siblingHashes: string[] = [];
+  const pathSides: boolean[] = [];
+  while (level.length > 1) {
+    const siblingIndex = index % 2 === 1 ? index - 1 : Math.min(index + 1, level.length - 1);
+    siblingHashes.push(bytesToHex(level[siblingIndex]!));
+    pathSides.push(index % 2 === 1);
+
+    const nextLevel: Uint8Array[] = [];
+    for (let levelIndex = 0; levelIndex < level.length; levelIndex += 2) {
+      const left = level[levelIndex]!;
+      const right = level[levelIndex + 1] ?? left;
+      nextLevel.push(receiptNodeHash(left, right));
+    }
+    level = nextLevel;
+    index = Math.floor(index / 2);
+  }
+
+  return {
+    root: bytesToHex(level[0]!),
+    leafHash: bytesToHex(receiptLeafHash(receipts[targetIndex]!, targetIndex)),
+    siblingHashes,
+    pathSides,
+  };
+}
+
+function receiptLeafHash(receipt: Uint8Array, txIndex: number): Uint8Array {
+  const preimage = new Uint8Array(RECEIPT_LEAF_DOMAIN.length + 8 + receipt.length);
+  const view = new DataView(preimage.buffer);
+  let offset = 0;
+  preimage.set(RECEIPT_LEAF_DOMAIN, offset);
+  offset += RECEIPT_LEAF_DOMAIN.length;
+  view.setUint32(offset, txIndex, true);
+  offset += 4;
+  view.setUint32(offset, receipt.length, true);
+  offset += 4;
+  preimage.set(receipt, offset);
+  return keccak_256(preimage);
+}
+
+function receiptNodeHash(left: Uint8Array, right: Uint8Array): Uint8Array {
+  const preimage = new Uint8Array(RECEIPT_NODE_DOMAIN.length + 64);
+  let offset = 0;
+  preimage.set(RECEIPT_NODE_DOMAIN, offset);
+  offset += RECEIPT_NODE_DOMAIN.length;
+  preimage.set(left, offset);
+  offset += 32;
+  preimage.set(right, offset);
+  return keccak_256(preimage);
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  let out = "0x";
+  for (let index = 0; index < bytes.length; index++) {
+    out += bytes[index]!.toString(16).padStart(2, "0");
+  }
+  return out;
+}
+
+function bytesToHexRaw(bytes: Uint8Array): string {
+  return bytesToHex(bytes).slice(2);
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  const body = hex.slice(2);
+  const out = new Uint8Array(body.length / 2);
+  for (let index = 0; index < out.length; index++) {
+    out[index] = Number.parseInt(body.slice(index * 2, index * 2 + 2), 16);
+  }
+  return out;
+}

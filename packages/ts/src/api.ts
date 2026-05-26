@@ -7,9 +7,43 @@
  */
 
 import { SdkError } from "./error.js";
+import type { BridgeRoutesRequest, BridgeRoutesResponse } from "./bridge.js";
+import {
+  decodeNativeAgentStateResponse,
+  nativeAgentStateFilterParams,
+  decodeNativeReceiptResponse,
+  decodeTxFeedResponse,
+  nativeMarketStateFilterParams,
+} from "./client.js";
+import {
+  nativeEventsFromHistory,
+  nativeEventsFromReceipt,
+  nativeMarketEventsFromHistory,
+  nativeMarketEventsFromReceipt,
+} from "./native-events.js";
 import type { ClobMarketResponse } from "./bindings/ClobMarketResponse.js";
+import type { MrcAccountResponse } from "./bindings/MrcAccountResponse.js";
+import type { MrcHoldersResponse } from "./bindings/MrcHoldersResponse.js";
+import type { MrcMetadataResponse } from "./bindings/MrcMetadataResponse.js";
+import type { PendingRewardsResponse } from "./bindings/PendingRewardsResponse.js";
+import type { RedemptionQueueResponse } from "./bindings/RedemptionQueueResponse.js";
 import type { BlockSelector } from "./types.js";
 import { encodeBlockSelector } from "./types.js";
+import { decodeNativeMarketOrderBookDeltasResponse } from "./streams.js";
+import type {
+  ApiStreamsIndexResponse,
+  NativeMarketOrderBookDeltasRequest,
+  NativeMarketOrderBookDeltasResponse,
+} from "./streams.js";
+import type {
+  NativeDecodedEvent,
+  NativeEventFilter,
+  TypedNativeReceiptEvent,
+} from "./native-events.js";
+import {
+  requireTypedAddress,
+  type AddressKind,
+} from "./address.js";
 import type {
   AddressFlowResponse,
   AddressProfileResponse,
@@ -18,6 +52,14 @@ import type {
   ClobOhlcResponse,
   ClobOrderBookResponse,
   ClobTradesResponse,
+  NativeReceiptFee,
+  NativeReceiptResponse,
+  NativeEventsFilter,
+  NativeEventsResponse,
+  NativeAgentStateFilter,
+  NativeAgentStateResponse,
+  NativeMarketStateFilter,
+  NativeMarketStateResponse,
   OperatorCapabilitiesResponse,
   RuntimeBuildProvenance,
   RuntimeUpgradeStatus,
@@ -157,9 +199,9 @@ export interface ApiBlockHeader {
   parentHash: string;
   stateRoot: string;
   timestamp: number;
-  gasUsed: number;
-  gasLimit: number;
-  baseFeePerGas: string;
+  executionUnitsUsed: number;
+  executionUnitLimit: number;
+  basePricePerCycleLythoshi: string;
 }
 
 export interface ApiLogEntry {
@@ -176,10 +218,11 @@ export interface ApiTransactionView {
   from: string;
   to: string | null;
   nonce: number;
-  value: string;
-  maxFeePerGas: string;
-  maxPriorityFeePerGas: string;
-  gasLimit: number;
+  valueLythoshi: string;
+  maxExecutionFeeLythoshi: string;
+  priorityTipLythoshi: string;
+  executionUnitLimit: number;
+  fee: NativeReceiptFee;
   input: string;
   signedEnvelope: string;
 }
@@ -190,7 +233,7 @@ export interface ApiTransactionReceipt {
   blockHeight: number;
   txIndex: number;
   status: number;
-  gasUsed: number;
+  executionUnitsUsed: number;
   logs: ApiLogEntry[];
 }
 
@@ -234,6 +277,9 @@ export interface ApiTransactionReceiptData {
   receipt: ApiTransactionReceipt;
   source: { chainProvider: string };
 }
+
+export type ApiTransactionNativeReceiptData<TDecoded = unknown> =
+  NativeReceiptResponse<TDecoded>;
 
 export interface ApiAddressActivityData {
   address: string;
@@ -451,8 +497,16 @@ export class ApiClient {
     return this.get(`/blocks/${encodePathBlock(block)}/transactions`, { page, limit });
   }
 
+  async streams(): Promise<ApiStreamsIndexResponse> {
+    return this.get("/streams");
+  }
+
   async transactions(limit = 50, cursor?: string | null): Promise<ApiEnvelope<TxFeedResponse>> {
-    return this.get("/transactions", { limit, cursor });
+    const response = await this.get<ApiEnvelope<unknown>>("/transactions", { limit, cursor });
+    return {
+      ...response,
+      data: decodeTxFeedResponse(response.data),
+    };
   }
 
   async transaction(hash: string): Promise<ApiEnvelope<ApiTransactionData>> {
@@ -463,12 +517,128 @@ export class ApiClient {
     return this.get(`/transactions/${encodePathSegment(hash)}/receipt`);
   }
 
+  async transactionNativeReceipt<TDecoded = unknown>(
+    hash: string,
+  ): Promise<ApiEnvelope<ApiTransactionNativeReceiptData<TDecoded>>> {
+    const response = await this.get<ApiEnvelope<unknown>>(
+      `/transactions/${encodePathSegment(hash)}/native-receipt`,
+    );
+    return {
+      ...response,
+      data: decodeNativeReceiptResponse<TDecoded>(response.data),
+    };
+  }
+
+  /**
+   * Typed native event rows from `/transactions/{hash}/native-receipt`.
+   *
+   * This helper consumes the existing native receipt API route and returns
+   * its envelope metadata with `data` replaced by the filtered event rows.
+   */
+  async transactionNativeReceiptEvents<
+    TDecoded extends NativeDecodedEvent = NativeDecodedEvent,
+  >(
+    hash: string,
+    filter: NativeEventFilter = {},
+  ): Promise<ApiEnvelope<Array<TypedNativeReceiptEvent<TDecoded>>>> {
+    const receipt = await this.transactionNativeReceipt(hash);
+    return {
+      ...receipt,
+      data: nativeEventsFromReceipt<TDecoded>(receipt.data, filter),
+    };
+  }
+
+  async transactionNativeReceiptMarketEvents<
+    TDecoded extends NativeDecodedEvent = NativeDecodedEvent,
+  >(
+    hash: string,
+    filter: NativeEventFilter = {},
+  ): Promise<ApiEnvelope<Array<TypedNativeReceiptEvent<TDecoded>>>> {
+    const receipt = await this.transactionNativeReceipt(hash);
+    return {
+      ...receipt,
+      data: nativeMarketEventsFromReceipt<TDecoded>(receipt.data, filter),
+    };
+  }
+
+  async nativeEvents<TDecoded = unknown>(
+    filter: NativeEventsFilter,
+  ): Promise<ApiEnvelope<NativeEventsResponse<TDecoded>>> {
+    return this.get("/native-events", nativeEventsFilterQuery(filter));
+  }
+
+  async nativeEventsTyped<
+    TDecoded extends NativeDecodedEvent = NativeDecodedEvent,
+  >(filter: NativeEventsFilter): Promise<ApiEnvelope<NativeEventsResponse<TDecoded>>> {
+    const response = await this.nativeEvents(filter);
+    return {
+      ...response,
+      data: nativeEventsFromHistory<TDecoded>(response.data),
+    };
+  }
+
+  async nativeMarketEvents<TDecoded = unknown>(
+    filter: NativeEventsFilter,
+  ): Promise<ApiEnvelope<NativeEventsResponse<TDecoded>>> {
+    return this.nativeEvents<TDecoded>({
+      ...filter,
+      family: "market",
+    });
+  }
+
+  async nativeMarketEventsTyped<
+    TDecoded extends NativeDecodedEvent = NativeDecodedEvent,
+  >(filter: NativeEventsFilter): Promise<ApiEnvelope<NativeEventsResponse<TDecoded>>> {
+    const response = await this.nativeEvents({
+      ...filter,
+      family: "market",
+    });
+    return {
+      ...response,
+      data: nativeMarketEventsFromHistory<TDecoded>(response.data),
+    };
+  }
+
+  async nativeAgentState(
+    filter: NativeAgentStateFilter = {},
+  ): Promise<ApiEnvelope<NativeAgentStateResponse>> {
+    const response = await this.get<ApiEnvelope<unknown>>(
+      "/native-agent-state",
+      nativeAgentStateFilterParams(filter),
+    );
+    return {
+      ...response,
+      data: decodeNativeAgentStateResponse(response.data),
+    };
+  }
+
+  async nativeMarketState(
+    filter: NativeMarketStateFilter = {},
+  ): Promise<ApiEnvelope<NativeMarketStateResponse>> {
+    return this.get("/native-market-state", nativeMarketStateFilterParams(filter));
+  }
+
+  async nativeMarketOrderBookDeltas(
+    filter: NativeMarketOrderBookDeltasRequest,
+  ): Promise<ApiEnvelope<NativeMarketOrderBookDeltasResponse>> {
+    const response = await this.get<ApiEnvelope<unknown>>(
+      "/native-market-orderbook-deltas",
+      nativeMarketOrderBookDeltasQuery(filter),
+    );
+    return {
+      ...response,
+      data: decodeNativeMarketOrderBookDeltasResponse(response.data),
+    };
+  }
+
   async addressProfile(address: string): Promise<ApiEnvelope<AddressProfileResponse>> {
-    return this.get(`/addresses/${encodePathSegment(address)}/profile`);
+    const userAddress = sdkTypedAddress(address, "user", "address");
+    return this.get(`/addresses/${encodePathSegment(userAddress)}/profile`);
   }
 
   async addressFlow(address: string, limit = 250): Promise<ApiEnvelope<AddressFlowResponse>> {
-    return this.get(`/addresses/${encodePathSegment(address)}/flow`, { limit });
+    const userAddress = sdkTypedAddress(address, "user", "address");
+    return this.get(`/addresses/${encodePathSegment(userAddress)}/flow`, { limit });
   }
 
   async addressActivity(
@@ -476,14 +646,107 @@ export class ApiClient {
     limit = 50,
     cursor?: string | null,
   ): Promise<ApiEnvelope<ApiAddressActivityData>> {
-    return this.get(`/addresses/${encodePathSegment(address)}/activity`, {
+    const userAddress = sdkTypedAddress(address, "user", "address");
+    return this.get(`/addresses/${encodePathSegment(userAddress)}/activity`, {
       limit,
       cursor,
     });
   }
 
   async addressActivityKind(address: string): Promise<ApiEnvelope<ApiAddressActivityKindData>> {
-    return this.get(`/addresses/${encodePathSegment(address)}/activity-kind`);
+    const userAddress = sdkTypedAddress(address, "user", "address");
+    return this.get(`/addresses/${encodePathSegment(userAddress)}/activity-kind`);
+  }
+
+  async addressPendingRewards(
+    address: string,
+    block?: BlockSelector | null,
+  ): Promise<ApiEnvelope<PendingRewardsResponse>> {
+    const userAddress = sdkTypedAddress(address, "user", "address");
+    return this.get(`/addresses/${encodePathSegment(userAddress)}/pending-rewards`, {
+      block: block == null ? undefined : encodeBlockSelector(block),
+    });
+  }
+
+  async addressRedemptionQueue(
+    address: string,
+    block?: BlockSelector | null,
+  ): Promise<ApiEnvelope<RedemptionQueueResponse>> {
+    const userAddress = sdkTypedAddress(address, "user", "address");
+    return this.get(`/addresses/${encodePathSegment(userAddress)}/redemption-queue`, {
+      block: block == null ? undefined : encodeBlockSelector(block),
+    });
+  }
+
+  async assetMrcMetadata(
+    assetId: string,
+    mrcTokenId?: string | null,
+  ): Promise<ApiEnvelope<MrcMetadataResponse>> {
+    return this.get(`/assets/${encodePathSegment(assetId)}/metadata`, {
+      mrcTokenId: mrcTokenId ?? undefined,
+    });
+  }
+
+  async mrcAccount(
+    account: string,
+    limit?: number | null,
+  ): Promise<ApiEnvelope<MrcAccountResponse>> {
+    const smartAccount = sdkTypedAddress(account, "smartAccount", "account");
+    return this.get(`/mrc/accounts/${encodePathSegment(smartAccount)}`, {
+      limit: limit ?? undefined,
+    });
+  }
+
+  async mrcHolders(
+    standard: string,
+    assetId: string,
+    tokenId: string,
+    limit?: number | null,
+  ): Promise<ApiEnvelope<MrcHoldersResponse>> {
+    return this.get(
+      `/mrc/${encodePathSegment(standard)}/${encodePathSegment(assetId)}/${encodePathSegment(
+        tokenId,
+      )}/holders`,
+      { limit: limit ?? undefined },
+    );
+  }
+
+  /**
+   * Asset-scoped `/api/v1/mrc/{standard}/{assetId}/holders`.
+   *
+   * This is the REST form used by MRC-4626 vault share balances.
+   */
+  async mrcAssetHolders(
+    standard: string,
+    assetId: string,
+    limit?: number | null,
+  ): Promise<ApiEnvelope<MrcHoldersResponse>> {
+    return this.get(
+      `/mrc/${encodePathSegment(standard)}/${encodePathSegment(assetId)}/holders`,
+      { limit: limit ?? undefined },
+    );
+  }
+
+  /** `/api/v1/mrc/mrc4626/{vaultId}/holders`. */
+  async mrc4626Holders(
+    vaultId: string,
+    limit?: number | null,
+  ): Promise<ApiEnvelope<MrcHoldersResponse>> {
+    return this.mrcAssetHolders("mrc4626", vaultId, limit);
+  }
+
+  /**
+   * `/api/v1/bridge/routes`.
+   *
+   * The forthcoming route is read-only `GET`, so the typed request is encoded
+   * as a single JSON query value named `request`.
+   */
+  async bridgeRoutes(
+    request: BridgeRoutesRequest,
+  ): Promise<ApiEnvelope<BridgeRoutesResponse>> {
+    return this.get("/bridge/routes", {
+      request: JSON.stringify(request),
+    });
   }
 
   async clusters(page = 0, limit = 25): Promise<ApiEnvelope<ApiClustersData>> {
@@ -613,6 +876,57 @@ function buildUrl(baseUrl: string, path: string, query: Record<string, ApiQueryV
   }
   const qs = params.toString();
   return qs.length === 0 ? `${cleanBase}${cleanPath}` : `${cleanBase}${cleanPath}?${qs}`;
+}
+
+function nativeEventsFilterQuery(filter: NativeEventsFilter): Record<string, ApiQueryValue> {
+  return {
+    fromBlock: filter.fromBlock,
+    toBlock: filter.toBlock,
+    limit: filter.limit,
+    txIndex: filter.txIndex,
+    logIndex: filter.logIndex,
+    address: filter.address,
+    eventTopic: filter.eventTopic,
+    family: filter.family,
+    eventName: filter.eventName,
+    primaryId: filter.primaryId,
+    relatedId: filter.relatedId,
+    tokenId: filter.tokenId,
+    account: filter.account,
+    counterparty: filter.counterparty,
+  };
+}
+
+function nativeMarketOrderBookDeltasQuery(
+  filter: NativeMarketOrderBookDeltasRequest,
+): Record<string, ApiQueryValue> {
+  return {
+    fromBlock: filter.fromBlock,
+    toBlock: filter.toBlock,
+    limit: filter.limit,
+    cursor: filter.cursor,
+    txIndex: filter.txIndex,
+    logIndex: filter.logIndex,
+    address: filter.address,
+    eventTopic: filter.eventTopic,
+    eventName: filter.eventName,
+    marketId: filter.marketId,
+    listingId: filter.listingId,
+    primaryId: filter.primaryId,
+    relatedId: filter.relatedId,
+    tokenId: filter.tokenId,
+    account: filter.account,
+    counterparty: filter.counterparty,
+  };
+}
+
+function sdkTypedAddress(address: string, kind: AddressKind, label: string): string {
+  try {
+    return requireTypedAddress(address, kind, label);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw SdkError.malformed(message);
+  }
 }
 
 function encodePathBlock(block: BlockSelector): string {

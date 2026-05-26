@@ -3,6 +3,7 @@ import {
   PRECOMPILE_ADDRESSES,
   PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN,
   PUBKEY_REGISTRY_SELECTORS,
+  addressToTypedBech32,
   decodeHasPubkeyReturn,
   decodeLookupPubkeyReturn,
   encodeHasPubkeyCalldata,
@@ -10,6 +11,9 @@ import {
   encodeRegisterPubkeyCalldata,
   pubkeyRegistryAddressHex,
 } from "../src/index.js";
+
+const userAddress = (byte: string) => addressToTypedBech32("user", `0x${byte.repeat(20)}`);
+const contractAddress = (byte: string) => addressToTypedBech32("contract", `0x${byte.repeat(20)}`);
 
 describe("pubkey registry ABI helpers", () => {
   it("exports selectors pinned to mono-core", () => {
@@ -35,10 +39,18 @@ describe("pubkey registry ABI helpers", () => {
   });
 
   it("encodes lookup and hasPubkey one-address calls", () => {
-    const addr = "0x1111111111111111111111111111111111111111";
+    const addr = userAddress("11");
     expect(encodeLookupPubkeyCalldata(addr).startsWith(PUBKEY_REGISTRY_SELECTORS.lookupPubkey)).toBe(true);
     expect(encodeHasPubkeyCalldata(addr).startsWith(PUBKEY_REGISTRY_SELECTORS.hasPubkey)).toBe(true);
     expect((encodeLookupPubkeyCalldata(addr).length - 2) / 2).toBe(36);
+  });
+
+  it("rejects raw and wrong-HRP lookup addresses", () => {
+    expect(() => encodeLookupPubkeyCalldata("0x1111111111111111111111111111111111111111")).toThrow(
+      /raw 0x addresses are retired/,
+    );
+    expect(() => encodeHasPubkeyCalldata(contractAddress("11"))).toThrow(/address/);
+    expect(() => encodeLookupPubkeyCalldata(new Uint8Array(20) as unknown as string)).toThrow(/address/);
   });
 
   it("rejects wrong pubkey length", () => {

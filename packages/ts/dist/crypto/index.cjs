@@ -1,6 +1,7 @@
 'use strict';
 
 var mlDsa_js = require('@noble/post-quantum/ml-dsa.js');
+var blake3_js = require('@noble/hashes/blake3.js');
 var sha3_js = require('@noble/hashes/sha3.js');
 var bip39 = require('@scure/bip39');
 var english_js = require('@scure/bip39/wordlists/english.js');
@@ -145,8 +146,7 @@ function encodeTransactionForHash(fields, tag) {
     n.input,
     new Uint8Array(4),
     // access_list length
-    new Uint8Array(4)
-    // extensions length
+    encodeExtensionsForHash(n.extensions)
   );
 }
 function bincodeSignedTransaction(fields, signature, publicKey) {
@@ -163,7 +163,8 @@ function bincodeSignedTransaction(fields, signature, publicKey) {
   w.rawBytes(uint256Le(n.value, "value"));
   w.bytes(n.input);
   w.u64(0n);
-  w.u64(0n);
+  w.u64(BigInt(n.extensions.length));
+  for (const ext of n.extensions) bincodeTypedExtensionInto(w, ext);
   bincodeMlDsa65OpaqueInto(w, sig);
   bincodeMlDsa65OpaqueInto(w, pk);
   return w.toBytes();
@@ -177,7 +178,8 @@ function normalizeTxFields(fields) {
     gasLimit: parseBigint(fields.gasLimit, "gasLimit"),
     to: normalizeTo(fields.to),
     value: parseBigint(fields.value, "value"),
-    input: normalizeBytes(fields.input ?? new Uint8Array(0), "input")
+    input: normalizeBytes(fields.input ?? new Uint8Array(0), "input"),
+    extensions: normalizeExtensions(fields.extensions)
   };
 }
 function normalizeTo(value) {
@@ -188,6 +190,30 @@ function normalizeTo(value) {
 function normalizeBytes(value, label) {
   if (typeof value === "string") return hexToBytes(value, label);
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+function normalizeExtensions(value) {
+  if (value === void 0) return [];
+  return value.map((ext, index) => {
+    if (!Number.isInteger(ext.kind) || ext.kind < 0 || ext.kind > 255) {
+      throw new Error(`extensions[${index}].kind out of u8 range`);
+    }
+    const body = normalizeBytes("bodyHex" in ext ? ext.bodyHex : ext.body, `extensions[${index}].body`);
+    if (body.length > 4294967295) {
+      throw new Error(`extensions[${index}].body exceeds u32 length`);
+    }
+    return { kind: ext.kind, body };
+  });
+}
+function encodeExtensionsForHash(extensions) {
+  const chunks = [bigintToBeBytes(BigInt(extensions.length), 4, "extensions.length")];
+  for (const ext of extensions) {
+    chunks.push(
+      Uint8Array.of(ext.kind),
+      bigintToBeBytes(BigInt(ext.body.length), 4, "extension.body.length"),
+      ext.body
+    );
+  }
+  return concatBytes(...chunks);
 }
 function uint256Le(value, label) {
   if (value < 0n || value >= 1n << 256n) throw new Error(`${label} out of u256 range`);
@@ -204,6 +230,10 @@ function bincodeMlDsa65OpaqueInto(w, raw) {
   w.u16(STANDARD_ALGO_NUMBER_ML_DSA_65);
   w.bytes(raw);
 }
+function bincodeTypedExtensionInto(w, ext) {
+  w.u8(ext.kind);
+  w.bytes(ext.body);
+}
 
 // src/crypto/ml-dsa.ts
 var ML_DSA_65_SEED_LEN = 32;
@@ -212,6 +242,8 @@ var ML_DSA_65_PUBLIC_KEY_LEN = 1952;
 var ML_DSA_65_SIGNATURE_LEN = 3309;
 var STANDARD_ALGO_NUMBER_ML_DSA_65 = 1001;
 var ENUM_VARIANT_INDEX_ML_DSA_65 = 5;
+var ADDRESS_DERIVATION_DOMAIN = "MONO_ADDRESS_BLAKE3_20_V1";
+var ADDRESS_DERIVATION_DOMAIN_BYTES = new TextEncoder().encode(ADDRESS_DERIVATION_DOMAIN);
 var MlDsa65Backend = class _MlDsa65Backend {
   #secretKey;
   #publicKey;
@@ -219,7 +251,7 @@ var MlDsa65Backend = class _MlDsa65Backend {
   constructor(secretKey, publicKey) {
     this.#secretKey = expectBytes(secretKey, ML_DSA_65_SIGNING_KEY_LEN, "ML-DSA-65 secret key").slice();
     this.#publicKey = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key").slice();
-    this.#addressBytes = sha3_js.keccak_256(this.#publicKey).slice(12);
+    this.#addressBytes = mlDsa65AddressBytes(this.#publicKey);
   }
   static fromSeed(seed) {
     const kp = mlDsa_js.ml_dsa65.keygen(expectBytes(seed, ML_DSA_65_SEED_LEN, "ML-DSA-65 seed"));
@@ -268,7 +300,15 @@ var MlDsa65Backend = class _MlDsa65Backend {
   }
 };
 function mlDsa65AddressFromPublicKey(publicKey) {
-  return bytesToHex(sha3_js.keccak_256(expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key")).slice(12));
+  return bytesToHex(mlDsa65AddressBytes(publicKey));
+}
+function mlDsa65AddressBytes(publicKey) {
+  const bytes = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key");
+  return blake3_js.blake3(concatBytes(
+    ADDRESS_DERIVATION_DOMAIN_BYTES,
+    bigintToBeBytes(BigInt(STANDARD_ALGO_NUMBER_ML_DSA_65), 2, "ML-DSA-65 algo id"),
+    bytes
+  )).slice(0, 20);
 }
 function encodeMlDsa65Opaque(raw) {
   const bytes = raw instanceof Uint8Array ? raw : Uint8Array.from(raw);
@@ -387,6 +427,8 @@ var MempoolClass = {
   PrivacyOp: 2,
   CLOBOp: 3,
   AgentOp: 4,
+  FoundationOp: 5,
+  /** @deprecated Use FoundationOp. */
   GovernanceOp: 5,
   RWAOp: 6
 };
@@ -490,7 +532,6 @@ async function fetchEncryptionKey(client) {
   };
 }
 async function buildEncryptedSubmission(args) {
-  const signed = args.backend.signEvmTx(args.tx);
   const input = normalizeInput(args.tx.input);
   const to = normalizeTo2(args.tx.to);
   const nonceAad = {
@@ -498,10 +539,14 @@ async function buildEncryptedSubmission(args) {
     nonce: parseBigint(args.tx.nonce, "nonce"),
     chainId: parseBigint(args.tx.chainId, "chainId"),
     class: args.class ?? (to !== null && input.length === 0 ? MempoolClass.Transfer : MempoolClass.ContractCall),
-    maxFeePerGas: u128Saturate(parseBigint(args.tx.maxFeePerGas, "maxFeePerGas")),
-    maxPriorityFeePerGas: u128Saturate(parseBigint(args.tx.maxPriorityFeePerGas, "maxPriorityFeePerGas")),
+    maxFeePerGas: u128Checked(parseBigint(args.tx.maxFeePerGas, "maxFeePerGas"), "maxFeePerGas"),
+    maxPriorityFeePerGas: u128Checked(
+      parseBigint(args.tx.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
+      "maxPriorityFeePerGas"
+    ),
     gasLimit: parseBigint(args.tx.gasLimit, "gasLimit")
   };
+  const signed = args.backend.signEvmTx(args.tx);
   const decryptionHint = { epoch: args.encryptionKey.epoch, scheme: 0 };
   const built = await buildEncryptedEnvelope({
     signedInnerTxBincode: signed.wireBytes,
@@ -515,16 +560,19 @@ async function buildEncryptedSubmission(args) {
   return {
     envelopeWireHex: built.wireHex,
     innerSighashHex: `0x${[...signed.sighash].map((b) => b.toString(16).padStart(2, "0")).join("")}`,
+    innerTxHashHex: bytesToHex(signed.txHash),
     innerWireBytes: signed.wireBytes.length
   };
 }
 async function submitEncryptedEnvelope(client, envelopeWireHex) {
   return client.call("lyth_submitEncrypted", [envelopeWireHex]);
 }
-function u128Saturate(value) {
+function u128Checked(value, field) {
   const cap = (1n << 128n) - 1n;
-  if (value < 0n) return 0n;
-  return value > cap ? cap : value;
+  if (value < 0n || value > cap) {
+    throw new Error(`${field} must fit in u128 for encrypted nonce AAD`);
+  }
+  return value;
 }
 function normalizeTo2(value) {
   if (value === null) return null;
@@ -539,6 +587,7 @@ function normalizeInput(value) {
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
 
+exports.ADDRESS_DERIVATION_DOMAIN = ADDRESS_DERIVATION_DOMAIN;
 exports.BincodeWriter = BincodeWriter;
 exports.DKG_AEAD_TAG_LEN = DKG_AEAD_TAG_LEN;
 exports.DKG_NONCE_LEN = DKG_NONCE_LEN;
@@ -580,6 +629,7 @@ exports.expectBytes = expectBytes;
 exports.fetchEncryptionKey = fetchEncryptionKey;
 exports.generatePqm1Mnemonic = generatePqm1Mnemonic;
 exports.hexToBytes = hexToBytes;
+exports.mlDsa65AddressBytes = mlDsa65AddressBytes;
 exports.mlDsa65AddressFromPublicKey = mlDsa65AddressFromPublicKey;
 exports.outerSigDigest = outerSigDigest;
 exports.parsePqm1Payload = parsePqm1Payload;

@@ -7,12 +7,90 @@
 import { describe, expect, it } from "vitest";
 import {
   NODE_REGISTRY_CAPABILITIES,
+  NO_EVM_RECEIPT_ROOT_ALGORITHM,
   SERVICE_PROBE_STATUS,
   RpcClient,
   SdkError,
+  addressToTypedBech32,
+  assessBridgeRoute,
+  decodeNativeAgentStateResponse,
   parseQuantity,
   parseQuantityBig,
 } from "../src/index.js";
+import type {
+  BridgeRouteDisclosure,
+  NativeDecodedEvent,
+  NativeEventProjection,
+  NativeModuleForwarderDescriptor,
+  NoEvmReceiptProof,
+  TokenBalanceRecord,
+} from "../src/index.js";
+
+interface AgentEscrowCreatedEvent extends NativeDecodedEvent {
+  family: "agent";
+  event_name: "agent.escrow.created";
+  amount_lythoshi: string;
+  agent_address: string;
+  contract_address: string;
+}
+
+interface NativeMarketSaleEvent extends NativeDecodedEvent {
+  family: "market";
+  event_name: "market.nft.sale_settled";
+  market_surface: "nft";
+  market_asset_id: string;
+  market_related_asset_id: string;
+  listing_id: string;
+  price: string;
+  quantity: string;
+  remaining: string;
+  status: "filled";
+  nft_standard: "mrc721";
+  royalty_bps: number;
+}
+
+interface Mrc4626DepositEvent extends NativeDecodedEvent {
+  family: "mrc";
+  event_name: "mrc4626.deposit";
+  amount: string;
+  share_amount: string;
+  primary_id: string;
+  account: string;
+  counterparty: string;
+}
+
+function bridgeRoute(routeId: string): BridgeRouteDisclosure {
+  return {
+    routeId,
+    bridge: "CCIP",
+    asset: "USDC",
+    sourceChain: "Ethereum",
+    destinationChain: "Mono",
+    verifier: {
+      model: "DON",
+      participantCount: 7,
+      threshold: 5,
+    },
+    drainCapAtomic: "100000000",
+    finalityBlocks: 12,
+    cooldownSeconds: 3_600,
+    adminControl: "consensusOnly",
+    circuitBreaker: "armed",
+    insuranceAtomic: "500000000",
+  };
+}
+
+function nativeFee(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    total_lythoshi: "21000",
+    cycles_used: 21_000,
+    base_price_per_cycle_lythoshi: "1",
+    state_io_units: 0,
+    state_io_price_per_unit_lythoshi: "0",
+    priority_tip_lythoshi: "0",
+    ...extra,
+  };
+}
 
 interface CapturedCall {
   method: string;
@@ -101,14 +179,74 @@ describe("eth_* methods", () => {
       parent_hash: "0xdef",
       state_root: "0x000",
       timestamp: 1700000000,
-      gas_used: 0,
-      gas_limit: 30000000,
+      executionUnitsUsed: 0,
+      executionUnitLimit: 30000000,
     };
     const { fetch, calls } = mockFetch(reply);
     const client = new RpcClient("http://x", { fetch });
-    await client.ethGetBlockByNumber(256);
+    const header = await client.ethGetBlockByNumber(256);
+    expect(header?.executionUnitsUsed).toBe(0n);
+    expect(header?.executionUnitLimit).toBe(30000000n);
     expect(calls[0].method).toBe("eth_getBlockByNumber");
     expect(calls[0].params).toEqual(["0x100"]);
+  });
+
+  it("eth_getBlockByNumber accepts legacy gas field aliases", async () => {
+    const reply = {
+      number: 256,
+      hash: "0xabc",
+      parent_hash: "0xdef",
+      state_root: "0x000",
+      timestamp: 1700000000,
+      gas_used: 7,
+      gas_limit: 30000000,
+    };
+    const { fetch } = mockFetch(reply);
+    const client = new RpcClient("http://x", { fetch });
+    const header = await client.ethGetBlockByNumber(256);
+    expect(header?.executionUnitsUsed).toBe(7n);
+    expect(header?.executionUnitLimit).toBe(30000000n);
+    expect("gas_used" in header!).toBe(false);
+    expect("gas_limit" in header!).toBe(false);
+  });
+
+  it("eth_getTransactionReceipt returns execution-unit receipt fields", async () => {
+    const txHash = `0x${"11".repeat(32)}`;
+    const reply = {
+      txHash,
+      blockHash: `0x${"22".repeat(32)}`,
+      blockNumber: 12,
+      txIndex: 1,
+      status: 1,
+      executionUnitsUsed: 21_000,
+    };
+    const { fetch, calls } = mockFetch(reply);
+    const client = new RpcClient("http://x", { fetch });
+    const receipt = await client.ethGetTransactionReceipt(txHash);
+    expect(receipt?.tx_hash).toBe(txHash);
+    expect(receipt?.block_number).toBe(12n);
+    expect(receipt?.tx_index).toBe(1);
+    expect(receipt?.executionUnitsUsed).toBe(21_000n);
+    expect("gas_used" in receipt!).toBe(false);
+    expect(calls[0].method).toBe("eth_getTransactionReceipt");
+    expect(calls[0].params).toEqual([txHash]);
+  });
+
+  it("eth_getTransactionReceipt accepts legacy gas field aliases", async () => {
+    const txHash = `0x${"11".repeat(32)}`;
+    const reply = {
+      tx_hash: txHash,
+      block_hash: `0x${"22".repeat(32)}`,
+      block_number: 12,
+      tx_index: 1,
+      status: 1,
+      gas_used: 21_000,
+    };
+    const { fetch } = mockFetch(reply);
+    const client = new RpcClient("http://x", { fetch });
+    const receipt = await client.ethGetTransactionReceipt(txHash);
+    expect(receipt?.executionUnitsUsed).toBe(21_000n);
+    expect("gas_used" in receipt!).toBe(false);
   });
 });
 
@@ -179,38 +317,1584 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     expect(catalogue.blockNumber).toBe(256);
   });
 
-  it("lyth_getTokenBalances reads indexed asset rows", async () => {
+  it("lyth_getTokenBalances reads indexed asset rows with optional MRC identity", async () => {
+    const tokenId = `0x${"aa".repeat(32)}`;
+    const assetId = `0x${"bb".repeat(32)}`;
+    const childTokenId = `0x${"cc".repeat(32)}`;
+    const vaultId = `0x${"ff".repeat(32)}`;
+    const directRoute = bridgeRoute("ccip-usdc-eth");
+    const listedRoute = bridgeRoute("layerzero-usdc-eth");
+    const legacyBalance: TokenBalanceRecord = {
+      tokenId: `0x${"dd".repeat(32)}`,
+      balance: "0",
+      updatedAtBlock: 89n,
+    };
+    expect(legacyBalance.mrc).toBeUndefined();
+    expect(legacyBalance.bridgeRouteDisclosure).toBeUndefined();
+    expect(legacyBalance.bridgeRouteDisclosures).toBeUndefined();
+    const { fetch, calls } = mockFetch([
+      {
+        tokenId,
+        balance: "1000",
+        updatedAtBlock: 88,
+        mrc: {
+          standard: "mrc1155",
+          assetId,
+          tokenId: childTokenId,
+        },
+        bridgeRouteDisclosure: directRoute,
+      },
+      {
+        tokenId: `0x${"ee".repeat(32)}`,
+        balance: "25",
+        updatedAtBlock: 90,
+        mrc: null,
+        bridgeRouteDisclosures: [listedRoute],
+      },
+      {
+        tokenId: vaultId,
+        balance: "700",
+        updatedAtBlock: 92,
+        mrc: {
+          standard: "mrc4626",
+          assetId: vaultId,
+          tokenId: null,
+        },
+      },
+      {
+        tokenId: legacyBalance.tokenId,
+        balance: legacyBalance.balance,
+        updatedAtBlock: 89,
+      },
+    ]);
+    const client = new RpcClient("http://x", { fetch });
+    const address = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
+    const balances = await client.lythGetTokenBalances(address);
+    expect(calls[0].method).toBe("lyth_getTokenBalances");
+    expect(calls[0].params).toEqual([address]);
+    expect(balances[0].mrc?.standard).toBe("mrc1155");
+    expect(balances[0].mrc?.assetId).toBe(assetId);
+    expect(balances[0].mrc?.tokenId).toBe(childTokenId);
+    expect(assessBridgeRoute(balances[0].bridgeRouteDisclosure!).accepted).toBe(true);
+    expect(balances[1].mrc).toBeNull();
+    expect(assessBridgeRoute(balances[1].bridgeRouteDisclosures![0]).accepted).toBe(true);
+    expect(balances[2].tokenId).toBe(vaultId);
+    expect(balances[2].mrc?.standard).toBe("mrc4626");
+    expect(balances[2].mrc?.assetId).toBe(vaultId);
+    expect(balances[2].mrc?.tokenId).toBeNull();
+    expect(balances[3].mrc).toBeUndefined();
+    expect(balances[3].bridgeRouteDisclosure).toBeUndefined();
+    expect(balances[3].bridgeRouteDisclosures).toBeUndefined();
+  });
+
+  it("rejects raw and wrong-HRP address lookups before RPC fetches", async () => {
     const { fetch, calls } = mockFetch([]);
     const client = new RpcClient("http://x", { fetch });
-    await client.lythGetTokenBalances("0x1111111111111111111111111111111111111111");
-    expect(calls[0].method).toBe("lyth_getTokenBalances");
-    expect(calls[0].params).toEqual(["0x1111111111111111111111111111111111111111"]);
+    const contract = addressToTypedBech32("contract", "0x1111111111111111111111111111111111111111");
+    const user = addressToTypedBech32("user", "0x2222222222222222222222222222222222222222");
+
+    await expect(client.lythGetTokenBalances("0x1111111111111111111111111111111111111111")).rejects.toMatchObject({
+      kind: "malformed",
+      message: expect.stringContaining("raw 0x addresses are retired"),
+    });
+    await expect(client.lythMempoolPending("0x1111111111111111111111111111111111111111")).rejects.toMatchObject({
+      kind: "malformed",
+      message: expect.stringContaining("raw 0x addresses are retired"),
+    });
+    await expect(client.lythMempoolPending(contract)).rejects.toMatchObject({
+      kind: "malformed",
+      message: expect.stringContaining("must be typed mono"),
+    });
+    await expect(client.lythAddressActivityKind(contract)).rejects.toMatchObject({
+      kind: "malformed",
+      message: expect.stringContaining("must be typed mono"),
+    });
+    await expect(client.lythMrcAccount(user)).rejects.toMatchObject({
+      kind: "malformed",
+      message: expect.stringContaining("must be typed monos"),
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("lyth_mempoolPending sends typed mono senders", async () => {
+    const { fetch, calls } = mockFetch([]);
+    const client = new RpcClient("http://x", { fetch });
+    const sender = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
+
+    const pending = await client.lythMempoolPending(sender);
+
+    expect(pending).toEqual([]);
+    expect(calls[0].method).toBe("lyth_mempoolPending");
+    expect(calls[0].params).toEqual([sender]);
+  });
+
+  it("lyth_bridgeRoutes forwards the typed readiness request", async () => {
+    const request = {
+      intent: {
+        asset: "USDC",
+        amountAtomic: "1000000",
+        sourceChain: "Ethereum",
+        destinationChain: "Mono",
+        recipient: "mono1recipient",
+      },
+      routeDisclosures: [bridgeRoute("healthy")],
+    };
+    const { fetch, calls } = mockFetch({
+      selection: {
+        selected: {
+          intent: request.intent,
+          route: request.routeDisclosures[0],
+          assessment: assessBridgeRoute(request.routeDisclosures[0]),
+        },
+        candidates: [],
+        blockedReasons: [],
+      },
+      routeSelectionReady: true,
+      quoteReady: false,
+      submitReady: false,
+      blockedReasons: [
+        "bridge quote requires a mono-core live quote API/runtime primitive",
+        "bridge submit requires a mono-core live submit API/runtime primitive",
+      ],
+      warnings: [],
+      routes: request.routeDisclosures,
+      bridgeRouteDisclosures: request.routeDisclosures,
+      source: {
+        address: null,
+        routeCount: 1,
+        globalRouteIndexAvailable: false,
+        routeDisclosureSource: "request.routeDisclosures_or_indexer.tokenBalances",
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const response = await client.lythBridgeRoutes(request);
+
+    expect(calls[0].method).toBe("lyth_bridgeRoutes");
+    expect(calls[0].params).toEqual([request]);
+    expect(response.routeSelectionReady).toBe(true);
+    expect(response.quoteReady).toBe(false);
+    expect(response.submitReady).toBe(false);
+    expect(response.routes?.[0]?.routeId).toBe("healthy");
+    expect(response.bridgeRouteDisclosures?.[0]?.routeId).toBe("healthy");
+    expect(response.source?.routeCount).toBe(1);
+  });
+
+  it("lyth_bridgeRoutes decodes discovery-only route catalogues", async () => {
+    const request = {
+      routeDisclosures: [bridgeRoute("healthy")],
+    };
+    const { fetch, calls } = mockFetch({
+      selection: {
+        selected: null,
+        candidates: [],
+        blockedReasons: ["bridge route selection requires transfer intent"],
+      },
+      routeSelectionReady: false,
+      quoteReady: false,
+      submitReady: false,
+      blockedReasons: ["bridge route selection requires transfer intent"],
+      warnings: [],
+      routes: request.routeDisclosures,
+      bridgeRouteDisclosures: request.routeDisclosures,
+      source: {
+        address: null,
+        routeCount: 1,
+        globalRouteIndexAvailable: false,
+        routeDisclosureSource: "request.routeDisclosures_or_indexer.tokenBalances",
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const response = await client.lythBridgeRoutes(request);
+
+    expect(calls[0].method).toBe("lyth_bridgeRoutes");
+    expect(calls[0].params).toEqual([request]);
+    expect("intent" in (calls[0].params as [Record<string, unknown>])[0]).toBe(false);
+    expect(response.routeSelectionReady).toBe(false);
+    expect(response.quoteReady).toBe(false);
+    expect(response.submitReady).toBe(false);
+    expect(response.routes?.[0]?.routeId).toBe("healthy");
+    expect(response.bridgeRouteDisclosures?.[0]?.routeId).toBe("healthy");
+    expect(response.source?.routeCount).toBe(1);
+  });
+
+  it("lyth_mrcMetadata reads asset and token metadata rows", async () => {
+    const assetId = `0x${"bb".repeat(32)}`;
+    const tokenId = `0x${"cc".repeat(32)}`;
+    const { fetch, calls } = mockFetchSequence([
+      {
+        schemaVersion: 1,
+        assetId,
+        tokenId,
+        metadata: {
+          standard: "mrc1155",
+          assetId,
+          tokenId,
+          name: null,
+          symbol: null,
+          decimals: null,
+          uri: "ipfs://metadata/1",
+          updatedAtBlock: 91,
+        },
+      },
+      {
+        schemaVersion: 1,
+        assetId,
+        tokenId: null,
+        metadata: null,
+      },
+    ]);
+    const client = new RpcClient("http://x", { fetch });
+
+    const tokenMetadata = await client.lythMrcMetadata(assetId, tokenId);
+    const assetMetadata = await client.lythMrcMetadata(assetId);
+
+    expect(tokenMetadata.metadata?.uri).toBe("ipfs://metadata/1");
+    expect(tokenMetadata.metadata?.updatedAtBlock).toBe(91);
+    expect(assetMetadata.tokenId).toBeNull();
+    expect(assetMetadata.metadata).toBeNull();
+    expect(calls[0].method).toBe("lyth_mrcMetadata");
+    expect(calls[0].params).toEqual([assetId, tokenId]);
+    expect(calls[1].method).toBe("lyth_mrcMetadata");
+    expect(calls[1].params).toEqual([assetId]);
+  });
+
+  it("lyth_mrcAccount reads account rows and omits optional spend limit", async () => {
+    const account = addressToTypedBech32("smartAccount", "0x3333333333333333333333333333333333333333");
+    const controller = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+    const recovery = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+    const assetId = `0x${"bb".repeat(32)}`;
+    const policyHash = `0x${"44".repeat(32)}`;
+    const { fetch, calls } = mockFetchSequence([
+      {
+        schemaVersion: 1,
+        account,
+        spendLimit: 2,
+        smartAccount: {
+          kind: "smart_account",
+          account,
+          controller,
+          recovery,
+          policyHash: null,
+          policy: null,
+          nonce: "7",
+          updatedAtBlock: 91,
+        },
+        policyAccount: {
+          kind: "policy_account",
+          account,
+          controller,
+          recovery: null,
+          policyHash,
+          policy: {
+            enabled: true,
+            perActionLimit: "20",
+            windowLimit: "100",
+            allowedAssets: [assetId],
+          },
+          nonce: null,
+          updatedAtBlock: 90,
+        },
+        policySpends: [
+          {
+            account,
+            assetId,
+            window: "3600",
+            amount: "1000",
+            spent: "250",
+            updatedAtBlock: 92,
+          },
+        ],
+      },
+      {
+        schemaVersion: 1,
+        account,
+        spendLimit: 50,
+        smartAccount: null,
+        policyAccount: null,
+        policySpends: [],
+      },
+    ]);
+    const client = new RpcClient("http://x", { fetch });
+
+    const limited = await client.lythMrcAccount(account, 2);
+    const defaulted = await client.lythMrcAccount(account);
+
+    expect(limited.smartAccount?.controller).toBe(controller);
+    expect(limited.smartAccount?.recovery).toBe(recovery);
+    expect(limited.smartAccount?.policyHash).toBeNull();
+    expect(limited.smartAccount?.policy).toBeNull();
+    expect(limited.smartAccount?.nonce).toBe("7");
+    expect(limited.policyAccount?.policyHash).toBe(policyHash);
+    expect(limited.policyAccount?.policy).toMatchObject({
+      enabled: true,
+      perActionLimit: "20",
+      windowLimit: "100",
+      allowedAssets: [assetId],
+    });
+    expect(limited.policySpends[0]).toMatchObject({ assetId, spent: "250" });
+    expect(defaulted.spendLimit).toBe(50);
+    expect(defaulted.policySpends).toEqual([]);
+    expect(calls.map((c) => c.method)).toEqual(["lyth_mrcAccount", "lyth_mrcAccount"]);
+    expect(calls.map((c) => c.params)).toEqual([
+      [account, 2],
+      [account],
+    ]);
+  });
+
+  it("lyth_mrcHolders reads MRC holder rows and omits optional limit", async () => {
+    const assetId = `0x${"bb".repeat(32)}`;
+    const tokenId = `0x${"cc".repeat(32)}`;
+    const address = "0x1111111111111111111111111111111111111111";
+    const { fetch, calls } = mockFetchSequence([
+      {
+        schemaVersion: 1,
+        standard: "mrc1155",
+        assetId,
+        tokenId,
+        limit: 5,
+        holders: [{ rank: 1, address, balance: "42", updatedAtBlock: 91 }],
+      },
+      {
+        schemaVersion: 1,
+        standard: "mrc1155",
+        assetId,
+        tokenId,
+        limit: 50,
+        holders: [],
+      },
+      {
+        schemaVersion: 1,
+        standard: "mrc4626",
+        assetId,
+        tokenId: null,
+        limit: 10,
+        holders: [{ rank: 1, address, balance: "700", updatedAtBlock: 92 }],
+      },
+    ]);
+    const client = new RpcClient("http://x", { fetch });
+
+    const limited = await client.lythMrcHolders("mrc1155", assetId, tokenId, 5);
+    const defaulted = await client.lythMrcHolders("mrc1155", assetId, tokenId);
+    const vaultHolders = await client.lythMrc4626Holders(assetId, 10);
+
+    expect(limited.holders[0]).toMatchObject({ rank: 1, address, balance: "42" });
+    expect(limited.holders[0].updatedAtBlock).toBe(91);
+    expect(defaulted.limit).toBe(50);
+    expect(defaulted.holders).toEqual([]);
+    expect(vaultHolders.standard).toBe("mrc4626");
+    expect(vaultHolders.tokenId).toBeNull();
+    expect(vaultHolders.holders[0]).toMatchObject({ rank: 1, address, balance: "700" });
+    expect(calls.map((c) => c.method)).toEqual([
+      "lyth_mrcHolders",
+      "lyth_mrcHolders",
+      "lyth_mrcHolders",
+    ]);
+    expect(calls.map((c) => c.params)).toEqual([
+      ["mrc1155", assetId, tokenId, 5],
+      ["mrc1155", assetId, tokenId],
+      ["mrc4626", assetId, null, 10],
+    ]);
   });
 
   it("lyth_getAddressLabel returns null for unlabeled addresses", async () => {
     const { fetch } = mockFetch(null);
     const client = new RpcClient("http://x", { fetch });
-    await expect(client.lythGetAddressLabel("0x1111111111111111111111111111111111111111")).resolves.toBeNull();
+    const address = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
+    await expect(client.lythGetAddressLabel(address)).resolves.toBeNull();
   });
 
   it("lyth_getDelegationHistory forwards limit and cursor", async () => {
     const { fetch, calls } = mockFetch([]);
     const client = new RpcClient("http://x", { fetch });
-    await client.lythGetDelegationHistory("0x1111111111111111111111111111111111111111", 25, "0x00");
+    const wallet = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
+    await client.lythGetDelegationHistory(wallet, 25, "0x00");
     expect(calls[0].method).toBe("lyth_getDelegationHistory");
-    expect(calls[0].params).toEqual(["0x1111111111111111111111111111111111111111", 25, "0x00"]);
+    expect(calls[0].params).toEqual([wallet, 25, "0x00"]);
+  });
+
+  it("lyth_pendingRewards reads settled and unsettled reward quantities", async () => {
+    const wallet = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+    const { fetch, calls } = mockFetch({
+      wallet,
+      totalAmountLythoshi: "0x271f",
+      settledPendingLythoshi: "0xf",
+      unsettledAmountLythoshi: "0x2710",
+      autoCompound: true,
+      rows: [{ cluster: 7, weightBps: 2500, unsettledAmountLythoshi: "0x2710" }],
+      block: 99,
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const rewards = await client.lythPendingRewards(wallet, 99);
+
+    expect(rewards.totalAmountLythoshi).toBe("0x271f");
+    expect(rewards.settledPendingLythoshi).toBe("0xf");
+    expect(rewards.unsettledAmountLythoshi).toBe("0x2710");
+    expect(rewards.autoCompound).toBe(true);
+    expect(rewards.rows).toEqual([
+      { cluster: 7, weightBps: 2500, unsettledAmountLythoshi: "0x2710" },
+    ]);
+    expect(rewards.block).toBe(99);
+    expect(calls[0].method).toBe("lyth_pendingRewards");
+    expect(calls[0].params).toEqual([wallet, "0x63"]);
+  });
+
+  it("lyth_redemptionQueue reads wallet redemption queue tickets", async () => {
+    const wallet = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+    const { fetch, calls } = mockFetch({
+      wallet,
+      tickets: [
+        {
+          index: 0,
+          cluster: 7,
+          weightBps: 2500,
+          createdHeight: 20,
+          maturityHeight: 120,
+          mature: false,
+        },
+      ],
+      count: 1,
+      returned: 1,
+      block: 99,
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const queue = await client.lythRedemptionQueue(wallet, 99);
+
+    expect(queue.wallet).toBe(wallet);
+    expect(queue.tickets).toEqual([
+      {
+        index: 0,
+        cluster: 7,
+        weightBps: 2500,
+        createdHeight: 20,
+        maturityHeight: 120,
+        mature: false,
+      },
+    ]);
+    expect(queue.count).toBe(1);
+    expect(queue.returned).toBe(1);
+    expect(queue.block).toBe(99);
+    expect(calls[0].method).toBe("lyth_redemptionQueue");
+    expect(calls[0].params).toEqual([wallet, "0x63"]);
   });
 
   it("lyth_getAddressActivity forwards limit and cursor", async () => {
     const { fetch, calls } = mockFetch([]);
     const client = new RpcClient("http://x", { fetch });
-    await client.lythGetAddressActivity("0x1111111111111111111111111111111111111111", 75, "0x01");
+    const address = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
+    await client.lythGetAddressActivity(address, 75, "0x01");
     expect(calls[0].method).toBe("lyth_getAddressActivity");
-    expect(calls[0].params).toEqual(["0x1111111111111111111111111111111111111111", 75, "0x01"]);
+    expect(calls[0].params).toEqual([address, 75, "0x01"]);
+  });
+
+  it("lyth_agentReputation sends user bech32 provider and defaults category", async () => {
+    const provider = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+    const { fetch, calls } = mockFetch({
+      schemaVersion: 1,
+      provider,
+      categoryId: 0,
+      categoryScope: "global",
+      record: {
+        provider,
+        categoryId: 0,
+        blockHeight: 123,
+        speedSumX10: 460,
+        qualitySumX10: 450,
+        communicationSumX10: 440,
+        accuracySumX10: 430,
+        sampleCount: 5,
+        avgSpeedX10: 92,
+        avgQualityX10: 90,
+        avgCommunicationX10: 88,
+        avgAccuracyX10: 86,
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const reputation = await client.lythAgentReputation(provider);
+
+    expect(reputation.categoryScope).toBe("global");
+    expect(reputation.record?.avgSpeedX10).toBe(92);
+    expect(calls[0].method).toBe("lyth_agentReputation");
+    expect(calls[0].params).toEqual([provider, 0]);
+  });
+
+  it("lyth_agentReputation forwards explicit category for mono provider", async () => {
+    const provider = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+    const { fetch, calls } = mockFetch({
+      schemaVersion: 1,
+      provider,
+      categoryId: 7,
+      categoryScope: "category",
+      record: null,
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    await expect(client.lythAgentReputation(provider, 7)).resolves.toMatchObject({
+      categoryId: 7,
+      record: null,
+    });
+    expect(calls[0].method).toBe("lyth_agentReputation");
+    expect(calls[0].params).toEqual([provider, 7]);
+  });
+
+  it("lyth_agentReputation rejects non-user provider addresses before fetch", async () => {
+    const { fetch, calls } = mockFetch(null);
+    const client = new RpcClient("http://x", { fetch });
+    const contract = addressToTypedBech32(
+      "contract",
+      "0x123456789abcdef0112233445566778899aabbcc",
+    );
+
+    await expect(client.lythAgentReputation(contract)).rejects.toMatchObject({
+      kind: "malformed",
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("lyth_agentReputation rejects raw provider addresses before fetch", async () => {
+    const { fetch, calls } = mockFetch(null);
+    const client = new RpcClient("http://x", { fetch });
+
+    await expect(client.lythAgentReputation("0x123456789abcdef0112233445566778899aabbcc")).rejects.toMatchObject({
+      kind: "malformed",
+      message: expect.stringContaining("raw 0x addresses are retired"),
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("lyth_nativeReceipt reads typed RISC-V receipt metadata and event rows", async () => {
+    const txHash = `0x${"22".repeat(32)}`;
+    const decoded = {
+      block_height: 100,
+      tx_index: 0,
+      sequence: 0,
+      family: "agent",
+      event_name: "agent.escrow.created",
+      payload_hash: `0x${"44".repeat(32)}`,
+    };
+    const { fetch, calls } = mockFetch({
+      txHash,
+      blockHash: `0x${"33".repeat(32)}`,
+      blockHeight: 100,
+      txIndex: 0,
+      schema: "riscv.receipt.v1",
+      artifactHash: `0x${"aa".repeat(32)}`,
+      receiptCommitment: `0x${"bb".repeat(32)}`,
+      counters: { cycles: 44, syscallUnits: 3, stateIoUnits: 2 },
+      fee: {
+        total_lythoshi: "440000000000",
+        cycles_used: 44,
+        base_price_per_cycle_lythoshi: "10000000000",
+        state_io_units: 2,
+        state_io_price_per_unit_lythoshi: "0",
+        priority_tip_lythoshi: "0",
+      },
+      reverted: false,
+      nativeDeltaCount: 0,
+      eventCount: 1,
+      events: [
+        {
+          blockHeight: 100,
+          txIndex: 0,
+          logIndex: 0,
+          address: "monoc1nativeeventemitter",
+          eventTopic: `0x${"11".repeat(32)}`,
+          decoded,
+          decodedJson: JSON.stringify(decoded),
+        },
+      ],
+      source: {
+        chainProvider: "mock_chain",
+        indexerProvider: "native_events",
+        metadataLogIndex: 0xffff_ffff,
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const receipt = await client.lythNativeReceipt(txHash);
+
+    expect(receipt.artifactHash).toBe(`0x${"aa".repeat(32)}`);
+    expect(receipt.receiptCommitment).toBe(`0x${"bb".repeat(32)}`);
+    expect(receipt.noEvmProof).toBeUndefined();
+    expect(receipt.counters).toEqual({ cycles: 44, syscallUnits: 3, stateIoUnits: 2 });
+    expect(receipt.fee.total_lythoshi).toBe("440000000000");
+    expect(receipt.fee.total_lyth).toBeUndefined();
+    expect(receipt.fee.cycles_used).toBe(44);
+    expect(receipt.fee.state_io_units).toBe(2);
+    expect(receipt.nativeDeltaCount).toBe(0);
+    expect(receipt.eventCount).toBe(1);
+    expect(receipt.events[0].address).toBe("monoc1nativeeventemitter");
+    expect(receipt.events[0].eventTopic).toBe(`0x${"11".repeat(32)}`);
+    expect(receipt.events[0].decoded).toEqual(decoded);
+    expect(receipt.events[0].decodedJson).toBe(JSON.stringify(decoded));
+    expect(calls[0].method).toBe("lyth_nativeReceipt");
+    expect(calls[0].params).toEqual([txHash]);
+  });
+
+  it("lyth_nativeReceipt rejects legacy keys inside structured fee objects", async () => {
+    const txHash = `0x${"22".repeat(32)}`;
+    const { fetch } = mockFetch({
+      txHash,
+      blockHash: `0x${"33".repeat(32)}`,
+      blockHeight: 100,
+      txIndex: 0,
+      schema: "riscv.receipt.v1",
+      artifactHash: `0x${"aa".repeat(32)}`,
+      receiptCommitment: `0x${"bb".repeat(32)}`,
+      counters: { cycles: 44, syscallUnits: 3, stateIoUnits: 2 },
+      fee: nativeFee({ gasPrice: "1" }),
+      reverted: false,
+      nativeDeltaCount: 0,
+      eventCount: 0,
+      events: [],
+      source: {
+        chainProvider: "mock_chain",
+        indexerProvider: "native_events",
+        metadataLogIndex: 0xffff_ffff,
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    await expect(client.lythNativeReceipt(txHash)).rejects.toMatchObject({
+      kind: "malformed",
+      message: expect.stringContaining("gasPrice"),
+    });
+  });
+
+  it("lyth_nativeReceipt preserves typed no-EVM compact receipt proofs", async () => {
+    const txHash = `0x${"22".repeat(32)}`;
+    const noEvmProof = {
+      schema: "mono.no_evm_receipt_proof.v1",
+      proofKind: "compactInclusion",
+      proofType: "canonicalReceiptInclusion",
+      historySource: "liveBlockCache",
+      compactInclusionProof: {
+        schema: "mono.no_evm_receipt_compact_inclusion.v1",
+        treeAlgorithm: "binary-keccak-receipt-tree",
+        root: `0x${"44".repeat(32)}`,
+        leafHash: `0x${"66".repeat(32)}`,
+        siblingHashes: [`0x${"77".repeat(32)}`],
+        pathSides: [true],
+      },
+      archiveProof: null,
+      rootAlgorithm: NO_EVM_RECEIPT_ROOT_ALGORITHM,
+      receiptCodec: "bincode(protocore_evm::Receipt)",
+      blockHash: `0x${"33".repeat(32)}`,
+      txHash,
+      receiptsRoot: `0x${"44".repeat(32)}`,
+      targetReceiptHash: `0x${"55".repeat(32)}`,
+      blockHeight: 100,
+      txIndex: 0,
+      receiptCount: 2,
+      targetReceiptBytes: "0x010203",
+    } satisfies NoEvmReceiptProof;
+    const { fetch } = mockFetch({
+      txHash,
+      blockHash: noEvmProof.blockHash,
+      blockHeight: 100,
+      txIndex: 0,
+      schema: "riscv.receipt.v1",
+      artifactHash: `0x${"aa".repeat(32)}`,
+      receiptCommitment: `0x${"bb".repeat(32)}`,
+      noEvmProof,
+      counters: { cycles: 44, syscallUnits: 3, stateIoUnits: 2 },
+      fee: {
+        total_lythoshi: "440000000000",
+        total_lyth: "4,400",
+        cycles_used: 44,
+        base_price_per_cycle_lythoshi: "10000000000",
+        state_io_units: 2,
+        state_io_price_per_unit_lythoshi: "0",
+        priority_tip_lythoshi: "0",
+      },
+      reverted: false,
+      nativeDeltaCount: 0,
+      eventCount: 0,
+      events: [],
+      source: {
+        chainProvider: "mock_chain",
+        indexerProvider: "native_events",
+        metadataLogIndex: 0xffff_ffff,
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const receipt = await client.lythNativeReceipt(txHash);
+
+    const proof = receipt.noEvmProof;
+    expect(proof).toEqual(noEvmProof);
+    expect(proof?.proofKind).toBe("compactInclusion");
+    if (proof?.proofKind !== "compactInclusion") throw new Error("expected compact proof");
+    expect(proof.targetReceiptBytes).toBe("0x010203");
+  });
+
+  it("lythNativeReceiptEvents consumes typed native events from lyth_nativeReceipt", async () => {
+    const txHash = `0x${"22".repeat(32)}`;
+    const eventTopic = `0x${"11".repeat(32)}`;
+    const decoded: AgentEscrowCreatedEvent = {
+      block_height: 100,
+      tx_index: 0,
+      sequence: 0,
+      family: "agent",
+      event_name: "agent.escrow.created",
+      payload_hash: `0x${"44".repeat(32)}`,
+      amount_lythoshi: "440000000000",
+      agent_address: "mono1agentconsumer",
+      contract_address: "monoc1escrowcontract",
+    };
+    const { fetch, calls } = mockFetch({
+      txHash,
+      blockHash: `0x${"33".repeat(32)}`,
+      blockHeight: 100,
+      txIndex: 0,
+      schema: "riscv.receipt.v1",
+      artifactHash: `0x${"aa".repeat(32)}`,
+      receiptCommitment: `0x${"bb".repeat(32)}`,
+      counters: { cycles: 44, syscallUnits: 3, stateIoUnits: 2 },
+      fee: {
+        total_lythoshi: decoded.amount_lythoshi,
+        total_lyth: "4,400",
+        cycles_used: 44,
+        base_price_per_cycle_lythoshi: "10000000000",
+        state_io_units: 2,
+        state_io_price_per_unit_lythoshi: "0",
+        priority_tip_lythoshi: "0",
+      },
+      reverted: false,
+      nativeDeltaCount: 0,
+      eventCount: 1,
+      events: [
+        {
+          blockHeight: 100,
+          txIndex: 0,
+          logIndex: 0,
+          address: decoded.contract_address,
+          eventTopic,
+          decoded: null,
+          decodedJson: JSON.stringify(decoded),
+        },
+      ],
+      source: {
+        chainProvider: "mock_chain",
+        indexerProvider: "native_events",
+        metadataLogIndex: 0xffff_ffff,
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const events = await client.lythNativeReceiptEvents<AgentEscrowCreatedEvent>(txHash, {
+      family: "agent",
+      eventName: "agent.escrow.created",
+      address: decoded.contract_address,
+      eventTopic,
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0].address).toBe("monoc1escrowcontract");
+    expect(events[0].decoded.amount_lythoshi).toBe("440000000000");
+    expect(events[0].decoded.agent_address.startsWith("mono1")).toBe(true);
+    expect(events[0].decoded.contract_address.startsWith("monoc1")).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].method).toBe("lyth_nativeReceipt");
+    expect(calls[0].method).not.toBe("lyth_nativeEvents");
+    expect(calls[0].params).toEqual([txHash]);
+  });
+
+  it("lythNativeReceiptEvents preserves MRC-4626 share amount projections", async () => {
+    const txHash = `0x${"23".repeat(32)}`;
+    const eventTopic = `0x${"12".repeat(32)}`;
+    const decoded: Mrc4626DepositEvent = {
+      block_height: 100,
+      tx_index: 0,
+      sequence: 0,
+      family: "mrc",
+      event_name: "mrc4626.deposit",
+      payload_hash: `0x${"45".repeat(32)}`,
+      amount: "1000",
+      share_amount: "700",
+      primary_id: `0x${"55".repeat(32)}`,
+      account: "mono1vaultdepositor",
+      counterparty: "mono1vaultreceiver",
+    };
+    const { fetch } = mockFetch({
+      txHash,
+      blockHash: `0x${"33".repeat(32)}`,
+      blockHeight: 100,
+      txIndex: 0,
+      schema: "riscv.receipt.v1",
+      artifactHash: `0x${"aa".repeat(32)}`,
+      receiptCommitment: `0x${"bb".repeat(32)}`,
+      counters: { cycles: 44, syscallUnits: 3, stateIoUnits: 2 },
+      fee: {
+        total_lythoshi: "0",
+        total_lyth: "0",
+        cycles_used: 44,
+        base_price_per_cycle_lythoshi: "10000000000",
+        state_io_units: 2,
+        state_io_price_per_unit_lythoshi: "0",
+        priority_tip_lythoshi: "0",
+      },
+      reverted: false,
+      nativeDeltaCount: 0,
+      eventCount: 1,
+      events: [
+        {
+          blockHeight: 100,
+          txIndex: 0,
+          logIndex: 0,
+          address: "monos1nativeeventemitter",
+          eventTopic,
+          decoded: null,
+          decodedJson: JSON.stringify(decoded),
+        },
+      ],
+      source: {
+        chainProvider: "mock_chain",
+        indexerProvider: "native_events",
+        metadataLogIndex: 0xffff_ffff,
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const events = await client.lythNativeReceiptEvents<Mrc4626DepositEvent>(txHash, {
+      family: "mrc",
+      eventName: "mrc4626.deposit",
+    });
+
+    expect(events[0].decoded.amount).toBe("1000");
+    expect(events[0].decoded.share_amount).toBe("700");
+    expect(events[0].decoded.primary_id).toBe(decoded.primary_id);
+    expect(events[0].decoded.account).toBe("mono1vaultdepositor");
+    expect(events[0].decoded.counterparty).toBe("mono1vaultreceiver");
+  });
+
+  it("lythNativeReceiptEvents preserves MRC policy account bodies", async () => {
+    const txHash = `0x${"24".repeat(32)}`;
+    const eventTopic = `0x${"13".repeat(32)}`;
+    const assetId = `0x${"44".repeat(32)}`;
+    const decoded: NativeDecodedEvent = {
+      block_height: 100,
+      tx_index: 0,
+      sequence: 0,
+      family: "mrc",
+      event_name: "mrc.policy_account.updated",
+      payload_hash: `0x${"46".repeat(32)}`,
+      policy: {
+        enabled: true,
+        per_action_limit: 20,
+        window_limit: "100",
+        allowed_assets: [assetId],
+      },
+    };
+    const { fetch } = mockFetch({
+      txHash,
+      blockHash: `0x${"33".repeat(32)}`,
+      blockHeight: 100,
+      txIndex: 0,
+      schema: "riscv.receipt.v1",
+      artifactHash: `0x${"aa".repeat(32)}`,
+      receiptCommitment: `0x${"bb".repeat(32)}`,
+      counters: { cycles: 44, syscallUnits: 3, stateIoUnits: 2 },
+      fee: {
+        total_lythoshi: "0",
+        total_lyth: "0",
+        cycles_used: 44,
+        base_price_per_cycle_lythoshi: "10000000000",
+        state_io_units: 2,
+        state_io_price_per_unit_lythoshi: "0",
+        priority_tip_lythoshi: "0",
+      },
+      reverted: false,
+      nativeDeltaCount: 0,
+      eventCount: 1,
+      events: [
+        {
+          blockHeight: 100,
+          txIndex: 0,
+          logIndex: 0,
+          address: "monos1nativeeventemitter",
+          eventTopic,
+          decoded: null,
+          decodedJson: JSON.stringify(decoded),
+        },
+      ],
+      source: {
+        chainProvider: "mock_chain",
+        indexerProvider: "native_events",
+        metadataLogIndex: 0xffff_ffff,
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const events = await client.lythNativeReceiptEvents(txHash, {
+      family: "mrc",
+      eventName: "mrc.policy_account.updated",
+    });
+
+    expect(events[0].decoded.policy).toMatchObject({
+      enabled: true,
+      per_action_limit: 20,
+      window_limit: "100",
+      allowed_assets: [assetId],
+    });
+  });
+
+  it("lythNativeEvents sends historical filters and decodes typed rows", async () => {
+    const eventTopic = `0x${"11".repeat(32)}`;
+    const primaryId = `0x${"77".repeat(32)}`;
+    const decoded: AgentEscrowCreatedEvent = {
+      block_height: 100,
+      tx_index: 0,
+      sequence: 0,
+      family: "agent",
+      event_name: "agent.escrow.created",
+      payload_hash: `0x${"44".repeat(32)}`,
+      amount_lythoshi: "440000000000",
+      agent_address: "mono1agentconsumer",
+      contract_address: "monos1nativeeventemitter",
+    };
+    const { fetch, calls } = mockFetch({
+      schemaVersion: 1,
+      fromBlock: 100,
+      toBlock: 105,
+      limit: 25,
+      filters: {
+        txIndex: 0,
+        address: decoded.contract_address,
+        eventTopic,
+        family: "agent",
+        eventName: "agent.escrow.created",
+        primaryId,
+        account: decoded.agent_address,
+      },
+      events: [
+        {
+          blockHeight: 100,
+          txIndex: 0,
+          logIndex: 0,
+          address: decoded.contract_address,
+          eventTopic,
+          decoded: null,
+          decodedJson: JSON.stringify(decoded),
+        },
+      ],
+      source: {
+        indexerProvider: "native_events",
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const response = await client.lythNativeEventsTyped<AgentEscrowCreatedEvent>({
+      fromBlock: "100",
+      toBlock: 105n,
+      limit: 25,
+      txIndex: 0,
+      address: decoded.contract_address,
+      eventTopic,
+      family: "agent",
+      eventName: "agent.escrow.created",
+      primaryId,
+      account: decoded.agent_address,
+    });
+
+    expect(response.schemaVersion).toBe(1);
+    expect(response.events[0].decoded.amount_lythoshi).toBe("440000000000");
+    expect(response.events[0].decoded.agent_address).toBe("mono1agentconsumer");
+    expect(calls[0].method).toBe("lyth_nativeEvents");
+    expect(calls[0].params).toEqual([
+      {
+        fromBlock: 100,
+        toBlock: 105,
+        limit: 25,
+        txIndex: 0,
+        address: decoded.contract_address,
+        eventTopic,
+        family: "agent",
+        eventName: "agent.escrow.created",
+        primaryId,
+        account: decoded.agent_address,
+      },
+    ]);
+  });
+
+  it("lythNativeMarketEventsTyped forces market family and filters decoded rows", async () => {
+    const eventTopic = `0x${"aa".repeat(32)}`;
+    const listingId = `0x${"bb".repeat(32)}`;
+    const marketAssetId = `0x${"21".repeat(32)}`;
+    const marketRelatedAssetId = `0x${"22".repeat(32)}`;
+    const marketDecoded: NativeMarketSaleEvent = {
+      block_height: 110,
+      tx_index: 0,
+      sequence: 0,
+      family: "market",
+      event_name: "market.nft.sale_settled",
+      market_surface: "nft",
+      market_asset_id: marketAssetId,
+      market_related_asset_id: marketRelatedAssetId,
+      payload_hash: `0x${"cc".repeat(32)}`,
+      listing_id: listingId,
+      price: "900",
+      quantity: "1",
+      remaining: "0",
+      status: "filled",
+      nft_standard: "mrc721",
+      royalty_bps: 250,
+      listing_kind: { english: "fixed_price" },
+    };
+    const agentDecoded: AgentEscrowCreatedEvent = {
+      block_height: 110,
+      tx_index: 0,
+      sequence: 1,
+      family: "agent",
+      event_name: "agent.escrow.created",
+      payload_hash: `0x${"dd".repeat(32)}`,
+      amount_lythoshi: "1",
+      agent_address: "mono1agentconsumer",
+      contract_address: "monos1nativeeventemitter",
+    };
+    const { fetch, calls } = mockFetch({
+      schemaVersion: 1,
+      fromBlock: 110,
+      toBlock: 120,
+      limit: 2,
+      filters: {
+        family: "market",
+        eventName: "market.nft.sale_settled",
+      },
+      events: [
+        {
+          blockHeight: 110,
+          txIndex: 0,
+          logIndex: 0,
+          address: "monox1market",
+          eventTopic,
+          decoded: null,
+          decodedJson: JSON.stringify(marketDecoded),
+        },
+        {
+          blockHeight: 110,
+          txIndex: 0,
+          logIndex: 1,
+          address: "monox1agent",
+          eventTopic: `0x${"ee".repeat(32)}`,
+          decoded: null,
+          decodedJson: JSON.stringify(agentDecoded),
+        },
+      ],
+      source: {
+        indexerProvider: "native_events",
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const response = await client.lythNativeMarketEventsTyped<NativeMarketSaleEvent>({
+      fromBlock: 110,
+      toBlock: 120,
+      limit: 2,
+      family: "agent",
+      eventName: "market.nft.sale_settled",
+    });
+
+    expect(response.filters.family).toBe("market");
+    expect(response.events).toHaveLength(1);
+    expect(response.events[0].decoded.family).toBe("market");
+    expect(response.events[0].decoded.listing_id).toBe(listingId);
+    const projection: NativeEventProjection = response.events[0].decoded;
+    expect(projection.market_surface).toBe("nft");
+    expect(projection.market_asset_id).toBe(marketAssetId);
+    expect(projection.market_related_asset_id).toBe(marketRelatedAssetId);
+    expect(projection.price).toBe("900");
+    expect(projection.quantity).toBe("1");
+    expect(projection.remaining).toBe("0");
+    expect(projection.status).toBe("filled");
+    expect(projection.nft_standard).toBe("mrc721");
+    expect(projection.royalty_bps).toBe(250);
+    expect(calls[0].method).toBe("lyth_nativeEvents");
+    expect(calls[0].params).toEqual([
+      {
+        fromBlock: 110,
+        toBlock: 120,
+        limit: 2,
+        family: "market",
+        eventName: "market.nft.sale_settled",
+      },
+    ]);
+  });
+
+  it("lythNativeMarketEventsTyped exposes spot market order ids", async () => {
+    const marketAssetId = `0x${"31".repeat(32)}`;
+    const marketRelatedAssetId = `0x${"32".repeat(32)}`;
+    const marketOrderId = `0x${"33".repeat(32)}`;
+    const marketRelatedOrderId = `0x${"34".repeat(32)}`;
+    const decoded: NativeEventProjection = {
+      block_height: 121,
+      tx_index: 0,
+      sequence: 0,
+      family: "market",
+      event_name: "market.spot.order_filled",
+      market_surface: "spot",
+      market_asset_id: marketAssetId,
+      market_related_asset_id: marketRelatedAssetId,
+      market_order_id: marketOrderId,
+      market_related_order_id: marketRelatedOrderId,
+      payload_hash: `0x${"35".repeat(32)}`,
+      price: "50",
+      quantity: "10",
+      remaining: "0",
+      side: "ask",
+      status: "filled",
+      expires_at_block: 150,
+      tick_size: "1",
+      lot_size: "1",
+      min_quantity: "1",
+      min_notional: "50",
+    };
+    const { fetch } = mockFetch({
+      schemaVersion: 1,
+      fromBlock: 121,
+      toBlock: 121,
+      limit: 1,
+      filters: { family: "market" },
+      events: [
+        {
+          blockHeight: 121,
+          txIndex: 0,
+          logIndex: 0,
+          address: "monox1market",
+          eventTopic: `0x${"36".repeat(32)}`,
+          decoded: null,
+          decodedJson: JSON.stringify(decoded),
+        },
+      ],
+      source: {
+        indexerProvider: "native_events",
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const response = await client.lythNativeMarketEventsTyped<NativeEventProjection>({
+      fromBlock: 121,
+      toBlock: 121,
+    });
+
+    expect(response.events[0].decoded.market_order_id).toBe(marketOrderId);
+    expect(response.events[0].decoded.market_related_order_id).toBe(marketRelatedOrderId);
+    expect(response.events[0].decoded.market_asset_id).toBe(marketAssetId);
+    expect(response.events[0].decoded.market_related_asset_id).toBe(marketRelatedAssetId);
+    expect(response.events[0].decoded.price).toBe("50");
+    expect(response.events[0].decoded.min_notional).toBe("50");
+  });
+
+  it("lythNativeEventsTyped preserves agent nonce projections", async () => {
+    const decoded: NativeEventProjection = {
+      block_height: 122,
+      tx_index: 0,
+      sequence: 0,
+      family: "agent",
+      event_name: "agent.service.listed",
+      nonce: 21,
+      payload_hash: `0x${"37".repeat(32)}`,
+      service_id: `0x${"38".repeat(32)}`,
+      provider: "mono1agentprovider0000000000000000000000000",
+    };
+    const { fetch } = mockFetch({
+      schemaVersion: 1,
+      fromBlock: 122,
+      toBlock: 122,
+      limit: 1,
+      filters: { family: "agent" },
+      events: [
+        {
+          blockHeight: 122,
+          txIndex: 0,
+          logIndex: 0,
+          address: "monox1agent",
+          eventTopic: `0x${"39".repeat(32)}`,
+          decoded: null,
+          decodedJson: JSON.stringify(decoded),
+        },
+      ],
+      source: {
+        indexerProvider: "native_events",
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const response = await client.lythNativeEventsTyped<NativeEventProjection>({
+      fromBlock: 122,
+      toBlock: 122,
+      family: "agent",
+    });
+
+    expect(response.events[0].decoded.event_name).toBe("agent.service.listed");
+    expect(response.events[0].decoded.nonce).toBe(21);
+  });
+
+  it("decodeNativeAgentStateResponse preserves optional agent row nonces", () => {
+    const policyId = `0x${"aa".repeat(32)}`;
+    const escrowId = `0x${"bb".repeat(32)}`;
+    const assetId = `0x${"cc".repeat(32)}`;
+    const termsHash = `0x${"dd".repeat(32)}`;
+    const issuerId = `0x${"11".repeat(32)}`;
+    const attestationId = `0x${"12".repeat(32)}`;
+    const consentId = `0x${"13".repeat(32)}`;
+    const serviceId = `0x${"14".repeat(32)}`;
+    const arbiterId = `0x${"15".repeat(32)}`;
+    const owner = "mono1agentowner000000000000000000000000000000";
+    const controller = "mono1agentcontroller000000000000000000000000";
+    const provider = "mono1agentprovider0000000000000000000000000";
+    const arbiter = "mono1agentarbiter00000000000000000000000000";
+
+    const response = decodeNativeAgentStateResponse({
+      schemaVersion: 1,
+      limit: 5,
+      filters: {
+        policyId: null,
+        escrowId: null,
+        account: owner,
+        includePolicySpends: false,
+      },
+      issuers: [
+        {
+          issuerId,
+          issuer: owner,
+          nonce: 1,
+          metadataHash: null,
+          updatedAtBlock: 45,
+        },
+        {
+          issuerId: `0x${"10".repeat(32)}`,
+          issuer: provider,
+          metadataHash: null,
+          updatedAtBlock: 46,
+        },
+      ],
+      attestations: [
+        {
+          attestationId,
+          nonce: 2,
+          issuerId,
+          issuer: owner,
+          subject: controller,
+          schemaHash: null,
+          payloadHash: null,
+          active: true,
+          updatedAtBlock: 47,
+        },
+      ],
+      consents: [
+        {
+          consentId,
+          subject: controller,
+          grantee: arbiter,
+          nonce: 3,
+          scopeHash: null,
+          expiresAt: null,
+          active: true,
+          updatedAtBlock: 48,
+        },
+      ],
+      services: [
+        {
+          serviceId,
+          provider,
+          nonce: 4,
+          categoryHash: null,
+          metadataHash: null,
+          active: true,
+          updatedAtBlock: 49,
+        },
+      ],
+      availability: [],
+      arbiters: [
+        {
+          arbiterId,
+          arbiter,
+          nonce: 5,
+          tier: null,
+          metadataHash: null,
+          updatedAtBlock: 50,
+        },
+      ],
+      reputationReviews: [],
+      spendingPolicies: [
+        {
+          policyId,
+          owner,
+          controller,
+          assetId,
+          nonce: 6,
+          enabled: true,
+          perActionLimit: "100",
+          windowLimit: "500",
+          windowSecs: 60,
+          updatedAtBlock: 51,
+        },
+      ],
+      policySpends: [],
+      escrows: [
+        {
+          escrowId,
+          buyer: owner,
+          provider,
+          arbiter,
+          assetId,
+          nonce: 7,
+          amount: "1000",
+          termsHash,
+          round: 2,
+          buyerAccepted: true,
+          providerAccepted: false,
+          submittedPayloadHash: null,
+          status: "created",
+          resolution: null,
+          lastActor: null,
+          createdAtBlock: 40,
+          updatedAtBlock: 52,
+        },
+      ],
+      source: {
+        indexerProvider: "native_agent_state",
+        projection: "native_agent_state",
+      },
+    });
+
+    expect(response.issuers[0].nonce).toBe(1);
+    expect(response.issuers[1].nonce).toBeNull();
+    expect(response.attestations[0].nonce).toBe(2);
+    expect(response.consents[0].nonce).toBe(3);
+    expect(response.services[0].nonce).toBe(4);
+    expect(response.arbiters[0].nonce).toBe(5);
+    expect(response.spendingPolicies[0].nonce).toBe(6);
+    expect(response.escrows[0].nonce).toBe(7);
+  });
+
+  it("lythNativeAgentState forwards filter and decodes policy, spend, and escrow rows", async () => {
+    const policyId = `0x${"aa".repeat(32)}`;
+    const escrowId = `0x${"bb".repeat(32)}`;
+    const assetId = `0x${"cc".repeat(32)}`;
+    const termsHash = `0x${"dd".repeat(32)}`;
+    const submittedPayloadHash = `0x${"ee".repeat(32)}`;
+    const owner = "mono1agentowner000000000000000000000000000000";
+    const controller = "mono1agentcontroller000000000000000000000000";
+    const provider = "mono1agentprovider0000000000000000000000000";
+    const arbiter = "mono1agentarbiter00000000000000000000000000";
+    const { fetch, calls } = mockFetch({
+      schemaVersion: 1,
+      limit: 5,
+      filters: {
+        policyId: null,
+        escrowId: null,
+        account: owner,
+        includePolicySpends: true,
+      },
+      spendingPolicies: [
+        {
+          policyId,
+          owner,
+          controller,
+          assetId,
+          enabled: true,
+          perActionLimit: "100",
+          windowLimit: "500",
+          windowSecs: 60,
+          updatedAtBlock: 42,
+        },
+      ],
+      policySpends: [
+        {
+          policyId,
+          controller,
+          assetId,
+          window: 7,
+          amount: "25",
+          spent: "125",
+          updatedAtBlock: 43,
+        },
+      ],
+      escrows: [
+        {
+          escrowId,
+          buyer: owner,
+          provider,
+          arbiter,
+          assetId,
+          amount: "1000",
+          termsHash,
+          round: 2,
+          buyerAccepted: true,
+          providerAccepted: false,
+          submittedPayloadHash,
+          status: "submitted",
+          resolution: null,
+          lastActor: provider,
+          createdAtBlock: 40,
+          updatedAtBlock: 44,
+        },
+      ],
+      source: {
+        indexerProvider: "native_agent_state",
+        projection: "native_agent_state",
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const response = await client.lythNativeAgentState({
+      account: owner,
+      includePolicySpends: true,
+      limit: 5,
+    });
+
+    expect(response.spendingPolicies[0].perActionLimit).toBe("100");
+    expect(response.policySpends[0].window).toBe(7);
+    expect(response.policySpends[0].spent).toBe("125");
+    expect(response.escrows[0].submittedPayloadHash).toBe(submittedPayloadHash);
+    expect(response.escrows[0].lastActor).toBe(provider);
+    expect(response.filters.account).toBe(owner);
+    expect(calls[0].method).toBe("lyth_nativeAgentState");
+    expect(calls[0].params).toEqual([
+      {
+        account: owner,
+        includePolicySpends: true,
+        limit: 5,
+      },
+    ]);
+  });
+
+  it("lythNativeMarketState forwards filter and decodes spot, listing, and royalty rows", async () => {
+    const marketId = `0x${"aa".repeat(32)}`;
+    const orderId = `0x${"bb".repeat(32)}`;
+    const listingId = `0x${"cc".repeat(32)}`;
+    const legacyListingId = `0x${"cd".repeat(32)}`;
+    const collectionId = `0x${"dd".repeat(32)}`;
+    const owner = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+    const { fetch, calls } = mockFetch({
+      schemaVersion: 1,
+      limit: 5,
+      filters: {
+        marketId,
+        orderId: null,
+        listingId: null,
+        collectionId: null,
+        account: owner,
+        includeSpotOrders: true,
+      },
+      spotMarkets: [
+        {
+          marketId,
+          owner,
+          baseAssetId: `0x${"11".repeat(32)}`,
+          quoteAssetId: `0x${"22".repeat(32)}`,
+          tickSize: "10",
+          lotSize: "5",
+          minQuantity: "25",
+          minNotional: "1000",
+          tradeCount: "2",
+          totalVolumeBase: "40",
+          lastPrice: "7",
+          lastBlockHeight: 45,
+          createdAtBlock: 40,
+          updatedAtBlock: 45,
+        },
+      ],
+      spotOrders: [
+        {
+          orderId,
+          marketId,
+          owner,
+          nonce: 7,
+          side: "bid",
+          price: "7",
+          quantity: "30",
+          remaining: "20",
+          status: "open",
+          expiresAtBlock: 99,
+          updatedAtBlock: 45,
+        },
+      ],
+      nftListings: [
+        {
+          listingId,
+          seller: "mono1seller0000000000000000000000000000000000",
+          nonce: 11,
+          standard: "mrc721",
+          collectionId,
+          tokenId: `0x${"33".repeat(32)}`,
+          quantity: "1",
+          paymentAssetId: `0x${"44".repeat(32)}`,
+          price: "700",
+          listingKind: { fixedPrice: true },
+          status: "open",
+          expiresAtBlock: 120,
+          highestBidder: "mono1bidder0000000000000000000000000000000000",
+          highestBid: "650",
+          updatedAtBlock: 46,
+        },
+        {
+          listingId: legacyListingId,
+          seller: "mono1seller0000000000000000000000000000000000",
+          standard: "mrc721",
+          collectionId,
+          tokenId: `0x${"34".repeat(32)}`,
+          quantity: "1",
+          paymentAssetId: `0x${"44".repeat(32)}`,
+          price: "701",
+          listingKind: { fixedPrice: true },
+          status: "open",
+          expiresAtBlock: 121,
+          highestBidder: null,
+          highestBid: null,
+          updatedAtBlock: 47,
+        },
+      ],
+      collectionRoyalties: [
+        {
+          collectionId,
+          creator: null,
+          recipient: "mono1royalty00000000000000000000000000000000",
+          bps: 250,
+          updatedAtBlock: 47,
+        },
+      ],
+      source: {
+        indexerProvider: "native_market_state",
+        projection: "native_market_state",
+      },
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const response = await client.lythNativeMarketState({
+      marketId,
+      account: owner,
+      includeSpotOrders: true,
+      limit: 5,
+    });
+
+    expect(response.spotMarkets[0].tradeCount).toBe("2");
+    expect(response.spotOrders[0].nonce).toBe(7);
+    expect(response.spotOrders[0].remaining).toBe("20");
+    expect(response.nftListings[0].nonce).toBe(11);
+    expect(response.nftListings[1].nonce).toBeUndefined();
+    expect(response.nftListings[0].listingKind).toEqual({ fixedPrice: true });
+    expect(response.collectionRoyalties[0].bps).toBe(250);
+    expect(response.filters.account).toBe(owner);
+    expect(calls[0].method).toBe("lyth_nativeMarketState");
+    expect(calls[0].params).toEqual([
+      {
+        marketId,
+        account: owner,
+        includeSpotOrders: true,
+        limit: 5,
+      },
+    ]);
   });
 
   it("live explorer helpers call the new chain RPC surfaces", async () => {
-    const address = "0x1111111111111111111111111111111111111111";
+    const address = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
     const txHash = `0x${"22".repeat(32)}`;
     const tokenId = `0x${"33".repeat(32)}`;
     const marketId = `0x${"44".repeat(32)}`;
@@ -229,12 +1913,22 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
         to: null,
         value: "0",
         nonce: 1,
-        gasLimit: 21000,
-        maxFeePerGas: "1",
-        maxPriorityFeePerGas: "1",
-        gasUsed: 21000,
+        executionUnitLimit: 21000,
+        maxExecutionFeeLythoshi: "1",
+        priorityTipLythoshi: "1",
+        executionUnitsUsed: 21000,
+        fee: {
+          total_lythoshi: "21000",
+          total_lyth: "0.00021",
+          cycles_used: 21000,
+          base_price_per_cycle_lythoshi: "1",
+          state_io_units: 0,
+          state_io_price_per_unit_lythoshi: "0",
+          priority_tip_lythoshi: "0",
+        },
         decodedCalldata: null,
         memo: null,
+        extensions: [{ kind: 0x30, kindHex: "0x30", bodyHex: "0x01", body: "0x01" }],
         round: 12,
         clusterId: null,
         blsAttestation: null,
@@ -282,7 +1976,11 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     const client = new RpcClient("http://x", { fetch });
 
     await expect(client.lythAddressActivityKind(address)).resolves.toMatchObject({ kind: "found" });
-    await expect(client.lythDecodeTx(txHash)).resolves.toMatchObject({ status: "success" });
+    const decodedTx = await client.lythDecodeTx(txHash);
+    expect(decodedTx.status).toBe("success");
+    expect(decodedTx.extensions).toEqual([
+      { kind: 0x30, kindHex: "0x30", bodyHex: "0x01", body: "0x01" },
+    ]);
     await expect(client.lythGapRecords(10n, "12")).resolves.toMatchObject({
       range: { fromBlock: 10, toBlock: 12 },
     });
@@ -311,11 +2009,14 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
   });
 
   it("wraps live explorer aggregate, search, tx feed, and CLOB surfaces", async () => {
-    const address = "0x1111111111111111111111111111111111111111";
+    const address = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
     const txHash = `0x${"22".repeat(32)}`;
     const marketId = `0x${"44".repeat(32)}`;
     const cursor = `0x${"00".repeat(16)}`;
     const feedCursor = `0x${"11".repeat(12)}`;
+    const balanceTokenId = `0x${"aa".repeat(32)}`;
+    const balanceAssetId = `0x${"bb".repeat(32)}`;
+    const balanceMrcTokenId = `0x${"cc".repeat(32)}`;
     const { fetch, calls } = mockFetchSequence([
       {
         schemaVersion: 1,
@@ -393,11 +2094,20 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
             to: null,
             nonce: 1,
             value: "0",
-            gasLimit: 21000,
-            maxFeePerGas: "1",
-            maxPriorityFeePerGas: "1",
+            executionUnitLimit: 21000,
+            maxExecutionFeeLythoshi: "1",
+            priorityTipLythoshi: "1",
+            fee: {
+              total_lythoshi: "21000",
+              total_lyth: "0.00021",
+              cycles_used: 21000,
+              base_price_per_cycle_lythoshi: "1",
+              state_io_units: 0,
+              state_io_price_per_unit_lythoshi: "0",
+              priority_tip_lythoshi: "0",
+            },
             input: "0x",
-            receipt: { status: 1, gasUsed: 21000, logsCount: 0 },
+            receipt: { status: 1, executionUnitsUsed: 21000, logsCount: 0 },
           },
         ],
       },
@@ -405,14 +2115,30 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
         schemaVersion: 1,
         address,
         account: {
-          nativeBalance: "1000000000000000000",
+          nativeBalance: "100000000",
           nonce: 1,
           codeHash: `0x${"00".repeat(32)}`,
           isContract: false,
         },
         label: null,
         activity: { kind: "found", retention: null, latest: null },
-        tokenBalances: [],
+        tokenBalances: [
+          {
+            tokenId: balanceTokenId,
+            balance: "1000",
+            updatedAtBlock: 88,
+            mrc: {
+              standard: "mrc721",
+              assetId: balanceAssetId,
+              tokenId: balanceMrcTokenId,
+            },
+          },
+          {
+            tokenId: `0x${"dd".repeat(32)}`,
+            balance: "0",
+            updatedAtBlock: 88,
+          },
+        ],
       },
       {
         schemaVersion: 1,
@@ -462,9 +2188,12 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
     await expect(client.lythTxFeed(5, feedCursor)).resolves.toMatchObject({
       transactions: [{ txHash }],
     });
-    await expect(client.lythAddressProfile(address)).resolves.toMatchObject({
-      account: { nativeBalance: "1000000000000000000" },
-    });
+    const profile = await client.lythAddressProfile(address);
+    expect(profile.account.nativeBalance).toBe("100000000");
+    expect(profile.tokenBalances[0].mrc?.standard).toBe("mrc721");
+    expect(profile.tokenBalances[0].mrc?.assetId).toBe(balanceAssetId);
+    expect(profile.tokenBalances[0].mrc?.tokenId).toBe(balanceMrcTokenId);
+    expect(profile.tokenBalances[1].mrc).toBeUndefined();
     await expect(client.lythAddressFlow(address, 25)).resolves.toMatchObject({
       totals: { inbound: "10" },
     });
@@ -495,6 +2224,42 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
       [address, 5],
       [],
     ]);
+  });
+
+  it("lyth_txFeed rejects legacy keys inside structured fee objects", async () => {
+    const txHash = `0x${"22".repeat(32)}`;
+    const address = "0x1111111111111111111111111111111111111111";
+    const { fetch } = mockFetch({
+      schemaVersion: 1,
+      latestHeight: 12,
+      limit: 5,
+      nextCursor: null,
+      transactions: [
+        {
+          txHash,
+          blockHash: `0x${"33".repeat(32)}`,
+          blockNumber: 12,
+          blockTimestamp: 1700000000,
+          txIndex: 0,
+          from: address,
+          to: null,
+          nonce: 1,
+          value: "0",
+          executionUnitLimit: 21000,
+          maxExecutionFeeLythoshi: "1",
+          priorityTipLythoshi: "1",
+          fee: nativeFee({ maxFeePerGas: "1" }),
+          input: "0x",
+          receipt: null,
+        },
+      ],
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    await expect(client.lythTxFeed(5)).rejects.toMatchObject({
+      kind: "malformed",
+      message: expect.stringContaining("maxFeePerGas"),
+    });
   });
 
   it("wraps node capability, status, vertex, and metrics RPC surfaces", async () => {
@@ -668,11 +2433,31 @@ describe("lyth_* methods (Law §13.2 native namespace)", () => {
   });
 
   it("lyth_capabilities forwards an optional block selector", async () => {
-    const { fetch, calls } = mockFetch({ blockNumber: 256, capabilities: {} });
+    const marketForwarder: NativeModuleForwarderDescriptor = {
+      module: "market",
+      requestBytes: 132,
+      contractAddress: "monoc1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqxk4v02",
+      artifactProfile: "mono-rv32im-v1",
+      status: "available",
+      deploymentVerified: true,
+    };
+    const { fetch, calls } = mockFetch({
+      blockNumber: 256,
+      capabilities: {},
+      nativeModuleForwarders: { market: [marketForwarder] },
+    });
     const client = new RpcClient("http://x", { fetch });
-    await client.lythCapabilities(256);
+    const caps = await client.lythCapabilities(256);
     expect(calls[0].method).toBe("lyth_capabilities");
     expect(calls[0].params).toEqual(["0x100"]);
+    expect(caps.nativeModuleForwarders.market?.[0]).toEqual(marketForwarder);
+  });
+
+  it("lyth_capabilities defaults native module forwarders for older nodes", async () => {
+    const { fetch } = mockFetch({ blockNumber: 256, capabilities: {} });
+    const client = new RpcClient("http://x", { fetch });
+    const caps = await client.lythCapabilities();
+    expect(caps.nativeModuleForwarders).toEqual({});
   });
 
   it("lyth_getLatestCheckpoint accepts bigint heights", async () => {

@@ -1,0 +1,4722 @@
+//! Additive v4.1 MRV/RISC-V SDK surface.
+//!
+//! This module mirrors the accepted MRV artifact, typed-address, native
+//! deploy/call, and receipt terms without depending on `mono-core` internals.
+
+use std::collections::BTreeSet;
+
+use chacha20poly1305::{
+    aead::{Aead, KeyInit, Payload},
+    ChaCha20Poly1305, Key, Nonce,
+};
+use ml_kem::{kem::TryKeyInit, ml_kem_768::EncapsulationKey as MlKem768EncapsulationKey};
+use serde::{Deserialize, Serialize};
+use sha3::{Digest, Keccak256};
+use thiserror::Error;
+use zeroize::Zeroize;
+
+use crate::address::{
+    address_to_hex, address_to_typed_bech32, hex_to_address, typed_bech32_to_address,
+    typed_bech32_to_address_kind, AddressKind,
+};
+use crate::types::{EncryptionKeyResponse, NativeReceiptFee};
+
+#[cfg(feature = "ts-bindings")]
+use ts_rs::TS;
+
+/// Current MRV artifact format version.
+pub const MRV_FORMAT_VERSION: u16 = 1;
+/// Current version for the MRV deploy payload envelope.
+pub const MRV_DEPLOY_PAYLOAD_VERSION: u16 = 1;
+/// Approved RISC-V profile name.
+pub const MRV_PROFILE_MONO_RV32IM_V1: &str = "mono_rv32im_v1";
+/// RISC-V memory page size.
+pub const MRV_MEMORY_PAGE_BYTES: u32 = 65_536;
+/// Maximum code section size.
+pub const MRV_MAX_CODE_BYTES: usize = 16 * 1024 * 1024;
+/// Maximum optional debug section size.
+pub const MRV_MAX_DEBUG_BYTES: usize = 16 * 1024 * 1024;
+/// Maximum declared memory pages.
+pub const MRV_MAX_MEMORY_PAGES: u32 = 1024;
+/// Maximum ABI symbol count.
+pub const MRV_MAX_ABI_SYMBOLS: usize = 1024;
+/// Maximum storage namespace byte length.
+pub const MRV_MAX_STORAGE_NAMESPACE_BYTES: usize = 64;
+/// Native LYTH decimal precision.
+pub const LYTH_DECIMALS: u32 = 8;
+/// Native LYTH decimal precision, named for app-facing amount surfaces.
+pub const NATIVE_LYTH_DECIMALS: u32 = LYTH_DECIMALS;
+/// Lythoshi in one LYTH.
+pub const LYTHOSHI_PER_LYTH: u128 = 100_000_000;
+/// Signed transaction extension kind for MRV execution.
+pub const MRV_TX_EXTENSION_KIND: u8 = 0x30;
+/// Body byte for the first MRV extension version.
+pub const MRV_TX_EXTENSION_V1: u8 = 0x01;
+/// Required ADR-0039 structured native fee object fields.
+pub const MRV_STRUCTURED_FEE_FIELDS: [&str; 6] = [
+    "total_lythoshi",
+    "cycles_used",
+    "base_price_per_cycle_lythoshi",
+    "state_io_units",
+    "state_io_price_per_unit_lythoshi",
+    "priority_tip_lythoshi",
+];
+const MRV_OPTIONAL_STRUCTURED_FEE_FIELDS: [&str; 1] = ["total_lyth"];
+/// ML-DSA-65 public key byte length for native transaction envelopes.
+pub const ML_DSA_65_PUBLIC_KEY_LEN: usize = 1_952;
+/// ML-DSA-65 signature byte length for native transaction envelopes.
+pub const ML_DSA_65_SIGNATURE_LEN: usize = 3_309;
+/// Supported encrypted-mempool key algorithm tag.
+pub const MRV_ENCRYPTION_ALGO_ML_KEM_768: &str = "ml-kem-768";
+/// ML-KEM-768 encapsulation key byte length.
+pub const ML_KEM_768_ENCAPSULATION_KEY_LEN: usize = 1_184;
+/// ML-KEM-768 ciphertext byte length.
+pub const ML_KEM_768_CIPHERTEXT_LEN: usize = 1_088;
+/// ML-KEM-768 shared secret byte length.
+pub const ML_KEM_768_SHARED_SECRET_LEN: usize = 32;
+/// DKG encrypted-mempool AEAD nonce byte length.
+pub const DKG_NONCE_LEN: usize = 12;
+/// ChaCha20-Poly1305 authentication tag byte length.
+pub const DKG_AEAD_TAG_LEN: usize = 16;
+const STANDARD_ALGO_NUMBER_ML_DSA_65: u16 = 1_001;
+// Core builds with wallet-side classical variants cfg-gated out, so the
+// bincode variant index for PublicKey::MlDsa65 and Signature::MlDsa65 is 2.
+const ENUM_VARIANT_INDEX_ML_DSA_65: u32 = 2;
+const TX_HASH_TAG_SIGNING: u8 = 0x01;
+const TX_HASH_TAG_IDENTITY: u8 = 0x02;
+
+const MRV_CODE_HASH_DOMAIN: &[u8] = b"MONO_MRV_CODE_V1";
+const MRV_CONTRACT_ADDRESS_DOMAIN: &[u8] = b"mono:riscv:contract-address:v1";
+const ML_DSA_65_ADDRESS_DERIVATION_DOMAIN: &[u8] = b"MONO_ADDRESS_BLAKE3_20_V1";
+const DKG_AEAD_DOMAIN_TAG: &[u8] = b"protocore/v2/mempool/dkg-mlkem768/1";
+const MONO_SYSCALL_MODULE: &str = "mono";
+
+/// Formatting options for app-facing LYTH display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LythFormatOptions {
+    /// Include the trailing ` LYTH` unit label.
+    pub include_unit: bool,
+}
+
+impl LythFormatOptions {
+    /// Default wallet/app display: numeric value plus ` LYTH`.
+    pub const DEFAULT: Self = Self { include_unit: true };
+
+    /// Numeric-only display for callers composing their own unit label.
+    pub const NUMERIC_ONLY: Self = Self {
+        include_unit: false,
+    };
+}
+
+impl Default for LythFormatOptions {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// Format a lythoshi-denominated amount as canonical LYTH display text.
+#[must_use]
+pub fn format_lyth(lythoshi: u128, options: LythFormatOptions) -> String {
+    let whole = lythoshi / LYTHOSHI_PER_LYTH;
+    let fraction = lythoshi % LYTHOSHI_PER_LYTH;
+    let mut formatted = format_whole_with_commas(whole);
+    if fraction != 0 {
+        formatted.push('.');
+        formatted.push_str(&visible_fraction(fraction));
+    }
+    if options.include_unit {
+        formatted.push_str(" LYTH");
+    }
+    formatted
+}
+
+/// Alias named after the atomic unit used by public SDK callers.
+#[must_use]
+pub fn format_lythoshi(lythoshi: u128, options: LythFormatOptions) -> String {
+    format_lyth(lythoshi, options)
+}
+
+/// Parse a canonical LYTH string into lythoshi.
+///
+/// Accepts raw numeric strings (`"5000.5"`) and formatted strings from
+/// [`format_lyth`] (`"5,000.5 LYTH"`). Rejects non-canonical comma
+/// grouping and more than eight fractional digits.
+pub fn parse_lyth_to_lythoshi(input: &str) -> Result<u128, MrvValidationError> {
+    let numeric = strip_lyth_unit(input)?;
+    let mut parts = numeric.split('.');
+    let whole_raw = parts.next().unwrap_or_default();
+    let fraction_raw = parts.next().unwrap_or_default();
+    if parts.next().is_some()
+        || !is_canonical_whole_lyth(whole_raw)
+        || (numeric.contains('.') && fraction_raw.is_empty())
+        || fraction_raw.len() > NATIVE_LYTH_DECIMALS as usize
+        || !fraction_raw.bytes().all(|b| b.is_ascii_digit())
+    {
+        return Err(MrvValidationError::InvalidDecimal { field: "lyth" });
+    }
+    let whole = whole_raw
+        .replace(',', "")
+        .parse::<u128>()
+        .map_err(|_| MrvValidationError::InvalidDecimal { field: "lyth" })?;
+    let fraction = if fraction_raw.is_empty() {
+        0
+    } else {
+        let mut padded = fraction_raw.to_owned();
+        while padded.len() < NATIVE_LYTH_DECIMALS as usize {
+            padded.push('0');
+        }
+        padded
+            .parse::<u128>()
+            .map_err(|_| MrvValidationError::InvalidDecimal { field: "lyth" })?
+    };
+    whole
+        .checked_mul(LYTHOSHI_PER_LYTH)
+        .and_then(|scaled| scaled.checked_add(fraction))
+        .ok_or(MrvValidationError::InvalidDecimal { field: "lyth" })
+}
+
+/// Input captured from a wallet, explorer, CLI, or SDK fee display surface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MrvFeeDisplayConformanceInput<'a> {
+    /// Expected total fee in lythoshi.
+    pub expected_total_lythoshi: u128,
+    /// Default user-visible fee text.
+    pub default_fee_text: &'a str,
+    /// Optional explicit detail-surface text snippets.
+    pub detail_texts: &'a [&'a str],
+    /// Optional structured ADR-0039 fee object as JSON.
+    pub structured_fee: Option<&'a serde_json::Value>,
+    /// True when a default flow exposes raw custom fee controls.
+    pub custom_fee_input_visible: bool,
+    /// True when a default flow exposes speed-up or cancel controls.
+    pub speed_up_or_cancel_visible: bool,
+}
+
+impl<'a> MrvFeeDisplayConformanceInput<'a> {
+    /// Create a conformance input with no optional detail surfaces.
+    #[must_use]
+    pub const fn new(expected_total_lythoshi: u128, default_fee_text: &'a str) -> Self {
+        Self {
+            expected_total_lythoshi,
+            default_fee_text,
+            detail_texts: &[],
+            structured_fee: None,
+            custom_fee_input_visible: false,
+            speed_up_or_cancel_visible: false,
+        }
+    }
+
+    /// Attach explicit detail-surface text snippets.
+    #[must_use]
+    pub const fn detail_texts(mut self, detail_texts: &'a [&'a str]) -> Self {
+        self.detail_texts = detail_texts;
+        self
+    }
+
+    /// Attach a structured ADR-0039 fee object.
+    #[must_use]
+    pub const fn structured_fee(mut self, structured_fee: &'a serde_json::Value) -> Self {
+        self.structured_fee = Some(structured_fee);
+        self
+    }
+
+    /// Mark whether the default surface exposes raw custom fee inputs.
+    #[must_use]
+    pub const fn custom_fee_input_visible(mut self, visible: bool) -> Self {
+        self.custom_fee_input_visible = visible;
+        self
+    }
+
+    /// Mark whether the default surface exposes speed-up or cancel controls.
+    #[must_use]
+    pub const fn speed_up_or_cancel_visible(mut self, visible: bool) -> Self {
+        self.speed_up_or_cancel_visible = visible;
+        self
+    }
+}
+
+/// Fee-display conformance result for app integrations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MrvFeeDisplayConformanceReport {
+    /// True when no failures were found.
+    pub passed: bool,
+    /// Human-readable failure list.
+    pub failures: Vec<String>,
+    /// Canonical default fee text expected for this total.
+    pub expected_default_fee_text: String,
+}
+
+/// Canonical app-facing display strings for a native receipt fee object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeReceiptFeeDisplay {
+    /// Default surface text suitable for wallet/explorer rows.
+    pub default_fee_text: String,
+    /// Optional detail lines for expanded surfaces.
+    pub detail_texts: Vec<String>,
+    /// Total fee in lythoshi.
+    pub total_lythoshi: String,
+    /// Total fee in canonical LYTH text without the unit suffix.
+    pub total_lyth: String,
+}
+
+/// Check the v4.1 fee-display posture for an app-facing surface.
+#[must_use]
+pub fn check_mrv_fee_display_conformance(
+    input: &MrvFeeDisplayConformanceInput<'_>,
+) -> MrvFeeDisplayConformanceReport {
+    let expected_default_fee_text =
+        format_lyth(input.expected_total_lythoshi, LythFormatOptions::DEFAULT);
+    let mut failures = Vec::new();
+    let amount_candidates = extract_lyth_amount_candidates(input.default_fee_text);
+
+    if amount_candidates.len() != 1 {
+        failures.push(
+            "default_fee_text must contain exactly one LYTH-denominated fee amount".to_owned(),
+        );
+    } else {
+        let rendered_candidate = format!("{} LYTH", amount_candidates[0]);
+        if rendered_candidate != expected_default_fee_text {
+            failures.push(format!(
+                "default_fee_text fee must be {expected_default_fee_text}"
+            ));
+        }
+        match parse_lyth_to_lythoshi(&rendered_candidate) {
+            Ok(parsed) if parsed == input.expected_total_lythoshi => {}
+            Ok(_) => failures.push(format!(
+                "default_fee_text fee must total {} lythoshi",
+                input.expected_total_lythoshi
+            )),
+            Err(_) => failures
+                .push("default_fee_text fee must be a canonical 8-decimal LYTH amount".to_owned()),
+        }
+    }
+
+    if let Some(term) = first_forbidden_default_fee_term(input.default_fee_text) {
+        failures.push(format!(
+            "default_fee_text exposes detail-only fee term '{term}'"
+        ));
+    }
+
+    for (index, detail_text) in input.detail_texts.iter().enumerate() {
+        if let Some(term) = first_forbidden_detail_fee_term(detail_text) {
+            failures.push(format!(
+                "detail_texts[{index}] exposes inherited fee term '{term}'"
+            ));
+        }
+    }
+
+    if let Some(structured_fee) = input.structured_fee {
+        check_structured_fee_object(structured_fee, input.expected_total_lythoshi, &mut failures);
+    }
+
+    if input.custom_fee_input_visible {
+        failures.push("default surface must not expose custom fee inputs".to_owned());
+    }
+    if input.speed_up_or_cancel_visible {
+        failures.push("default surface must not expose speed-up or cancel controls".to_owned());
+    }
+
+    MrvFeeDisplayConformanceReport {
+        passed: failures.is_empty(),
+        failures,
+        expected_default_fee_text,
+    }
+}
+
+/// Return an error when [`check_mrv_fee_display_conformance`] would fail.
+///
+/// # Errors
+/// Returns [`MrvValidationError::FeeDisplayConformance`] with every discovered
+/// failure when the input does not match the v4.1 posture.
+pub fn assert_mrv_fee_display_conformance(
+    input: &MrvFeeDisplayConformanceInput<'_>,
+) -> Result<(), MrvValidationError> {
+    let report = check_mrv_fee_display_conformance(input);
+    if report.failures.is_empty() {
+        Ok(())
+    } else {
+        Err(MrvValidationError::FeeDisplayConformance {
+            failures: report.failures,
+        })
+    }
+}
+
+/// Format a native receipt fee object for app-facing default fee surfaces.
+///
+/// # Errors
+/// Returns [`MrvValidationError::InvalidDecimal`] when `fee.total_lythoshi`
+/// is not a canonical unsigned decimal value.
+pub fn format_native_receipt_fee_display(
+    fee: &NativeReceiptFee,
+) -> Result<NativeReceiptFeeDisplay, MrvValidationError> {
+    let total = parse_u128_decimal("fee.total_lythoshi", &fee.total_lythoshi)?;
+    let total_lythoshi = fee.total_lythoshi.clone();
+    let total_lyth = format_lyth(total, LythFormatOptions::NUMERIC_ONLY);
+    Ok(NativeReceiptFeeDisplay {
+        default_fee_text: format!("Network fee: {total_lyth} LYTH"),
+        detail_texts: vec![
+            format!(
+                "cycles {}, state I/O {}, total {} lythoshi",
+                fee.cycles_used, fee.state_io_units, total_lythoshi
+            ),
+            format!(
+                "cycle price {} lythoshi, state I/O price {} lythoshi, priority tip {} lythoshi",
+                fee.base_price_per_cycle_lythoshi,
+                fee.state_io_price_per_unit_lythoshi,
+                fee.priority_tip_lythoshi
+            ),
+        ],
+        total_lythoshi,
+        total_lyth,
+    })
+}
+
+/// Approved MRV RISC-V profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrvRiscvProfile.ts"))]
+#[serde(rename_all = "snake_case")]
+pub enum MrvRiscvProfile {
+    /// Mono RV32IM profile, integer-only and deterministic.
+    #[serde(rename = "mono_rv32im_v1")]
+    MonoRv32ImV1,
+}
+
+impl MrvRiscvProfile {
+    /// Stable profile name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::MonoRv32ImV1 => MRV_PROFILE_MONO_RV32IM_V1,
+        }
+    }
+}
+
+/// Typed address discriminator from ADR-0038.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrvAddressKind.ts"))]
+pub enum MrvAddressKind {
+    /// User externally-owned account.
+    #[serde(rename = "user")]
+    User,
+    /// Smart account.
+    #[serde(rename = "smartAccount")]
+    SmartAccount,
+    /// RISC-V contract account.
+    #[serde(rename = "contract")]
+    Contract,
+    /// Operator cluster identity.
+    #[serde(rename = "cluster")]
+    Cluster,
+    /// Multisig identity.
+    #[serde(rename = "multisig")]
+    Multisig,
+    /// System native module identity.
+    #[serde(rename = "systemModule")]
+    SystemModule,
+}
+
+impl MrvAddressKind {
+    /// Stable HRP for this address kind.
+    #[must_use]
+    pub const fn hrp(self) -> &'static str {
+        match self {
+            Self::User => "mono",
+            Self::SmartAccount => "monos",
+            Self::Contract => "monoc",
+            Self::Cluster => "monok",
+            Self::Multisig => "monom",
+            Self::SystemModule => "monox",
+        }
+    }
+
+    fn address_kind(self) -> AddressKind {
+        match self {
+            Self::User => AddressKind::User,
+            Self::SmartAccount => AddressKind::SmartAccount,
+            Self::Contract => AddressKind::Contract,
+            Self::Cluster => AddressKind::Cluster,
+            Self::Multisig => AddressKind::Multisig,
+            Self::SystemModule => AddressKind::SystemModule,
+        }
+    }
+
+    fn from_address_kind(kind: AddressKind) -> Self {
+        match kind {
+            AddressKind::User => Self::User,
+            AddressKind::SmartAccount => Self::SmartAccount,
+            AddressKind::Contract => Self::Contract,
+            AddressKind::Cluster => Self::Cluster,
+            AddressKind::Multisig => Self::Multisig,
+            AddressKind::SystemModule => Self::SystemModule,
+        }
+    }
+}
+
+/// Decoded typed bech32m address.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrvTypedAddress.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct MrvTypedAddress {
+    /// ADR-0038 address kind.
+    pub kind: MrvAddressKind,
+    /// Typed bech32m address string.
+    pub address: String,
+}
+
+/// Bounded memory declaration for an MRV artifact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrvMemoryLimits.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct MrvMemoryLimits {
+    /// Initial memory pages available at contract start.
+    #[serde(rename = "initialPages")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "initialPages"))]
+    pub initial_pages: u32,
+    /// Maximum memory pages the contract may grow to.
+    #[serde(rename = "maxPages")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "maxPages"))]
+    pub max_pages: u32,
+    /// Stack reservation in bytes.
+    #[serde(rename = "stackBytes")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "stackBytes"))]
+    pub stack_bytes: u32,
+}
+
+/// Stable storage namespace declaration.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "MrvStorageNamespace.ts")
+)]
+#[serde(deny_unknown_fields)]
+pub struct MrvStorageNamespace {
+    /// Lowercase namespace name.
+    pub name: String,
+    /// Namespace schema version.
+    pub version: u16,
+}
+
+/// Contract ABI manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrvAbiManifest.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct MrvAbiManifest {
+    /// ABI symbols exposed by this artifact.
+    pub symbols: Vec<MrvAbiSymbol>,
+}
+
+/// ABI symbol exposed by a contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrvAbiSymbol.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct MrvAbiSymbol {
+    /// Stable symbol name.
+    pub name: String,
+    /// Symbol kind.
+    pub kind: MrvAbiSymbolKind,
+    /// Typed input parameters.
+    pub inputs: Vec<MrvAbiParam>,
+    /// Typed output parameters.
+    pub outputs: Vec<MrvAbiParam>,
+}
+
+/// ABI symbol kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrvAbiSymbolKind.ts"))]
+#[serde(rename_all = "camelCase")]
+pub enum MrvAbiSymbolKind {
+    /// Contract constructor.
+    Constructor,
+    /// Callable function.
+    Function,
+    /// Emitted event.
+    Event,
+}
+
+/// ABI parameter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrvAbiParam.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct MrvAbiParam {
+    /// Stable parameter name.
+    pub name: String,
+    /// Parameter type.
+    pub ty: MrvAbiType,
+}
+
+/// ABI value type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrvAbiType.ts"))]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum MrvAbiType {
+    /// No value.
+    Unit,
+    /// Boolean.
+    Bool,
+    /// Unsigned 8-bit integer.
+    U8,
+    /// Unsigned 32-bit integer.
+    U32,
+    /// Unsigned 64-bit integer.
+    U64,
+    /// Unsigned 128-bit integer.
+    U128,
+    /// Variable-length bytes.
+    Bytes,
+    /// Fixed-length bytes.
+    FixedBytes {
+        /// Fixed byte length.
+        len: u16,
+    },
+    /// UTF-8 string.
+    String,
+    /// Typed Mono address.
+    Address,
+    /// BLAKE3 digest.
+    Hash,
+}
+
+/// Host syscall import declared by an artifact.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrvSyscallImport.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct MrvSyscallImport {
+    /// Host module name. Must be `mono`.
+    pub module: String,
+    /// Stable syscall import name.
+    pub name: String,
+    /// Stable numeric syscall identifier.
+    pub id: u16,
+}
+
+/// Resolved syscall import.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "MrvResolvedSyscall.ts")
+)]
+#[serde(deny_unknown_fields)]
+pub struct MrvResolvedSyscall {
+    /// Stable numeric syscall identifier.
+    pub id: u16,
+    /// Stable syscall import name.
+    pub name: String,
+}
+
+/// Build metadata recorded in an MRV artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrvBuildMetadata.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct MrvBuildMetadata {
+    /// Toolchain identifier.
+    pub toolchain: String,
+    /// `0x`-prefixed source or build-input digest.
+    #[serde(rename = "sourceDigest")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "sourceDigest"))]
+    pub source_digest: String,
+    /// Reproducible build profile label.
+    pub profile: String,
+}
+
+/// SDK JSON metadata for an MRV artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "MrvArtifactMetadata.ts")
+)]
+#[serde(deny_unknown_fields)]
+pub struct MrvArtifactMetadata {
+    /// MRV format version.
+    #[serde(rename = "formatVersion")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "formatVersion"))]
+    pub format_version: u16,
+    /// Approved RISC-V profile.
+    pub profile: MrvRiscvProfile,
+    /// BLAKE3 hash of the code section.
+    #[serde(rename = "codeHash")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "codeHash"))]
+    pub code_hash: String,
+    /// Code byte count expected by this metadata.
+    #[serde(rename = "codeBytes")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "codeBytes"))]
+    pub code_bytes: u64,
+    /// Optional debug byte count. Debug bytes are excluded from consensus hash.
+    #[serde(rename = "debugBytes")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "debugBytes"))]
+    pub debug_bytes: u64,
+    /// Contract ABI manifest.
+    pub abi: MrvAbiManifest,
+    /// Host syscall imports declared by the artifact.
+    pub imports: Vec<MrvSyscallImport>,
+    /// Bounded memory declaration.
+    pub memory: MrvMemoryLimits,
+    /// Contract storage namespace.
+    #[serde(rename = "storageNamespace")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "storageNamespace"))]
+    pub storage_namespace: MrvStorageNamespace,
+    /// Build metadata.
+    pub build: MrvBuildMetadata,
+}
+
+/// Validated artifact metadata summary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "MrvValidatedArtifactMetadata.ts")
+)]
+#[serde(deny_unknown_fields)]
+pub struct MrvValidatedArtifactMetadata {
+    /// Verified code hash.
+    #[serde(rename = "codeHash")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "codeHash"))]
+    pub code_hash: String,
+    /// Approved profile.
+    pub profile: MrvRiscvProfile,
+    /// Bounded memory declaration.
+    pub memory: MrvMemoryLimits,
+    /// Contract storage namespace.
+    #[serde(rename = "storageNamespace")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "storageNamespace"))]
+    pub storage_namespace: MrvStorageNamespace,
+    /// Resolved syscall imports in declared order.
+    pub syscalls: Vec<MrvResolvedSyscall>,
+    /// Number of ABI symbols.
+    #[serde(rename = "abiSymbolCount")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "abiSymbolCount"))]
+    pub abi_symbol_count: u64,
+    /// Verified code byte count.
+    #[serde(rename = "codeBytes")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "codeBytes"))]
+    pub code_bytes: u64,
+}
+
+/// Typed MRV transaction extension descriptor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "MrvTransactionExtension.ts")
+)]
+#[serde(deny_unknown_fields)]
+pub struct MrvTransactionExtension {
+    /// Extension kind byte.
+    pub kind: u8,
+    /// Extension body bytes as `0x`-hex.
+    #[serde(rename = "bodyHex")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "bodyHex"))]
+    pub body_hex: String,
+}
+
+/// Versioned MRV deploy payload envelope.
+///
+/// Raw artifact deploys remain valid. This envelope is only needed when a
+/// deploy carries optional constructor input alongside the canonical artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrvDeployPayload.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct MrvDeployPayload {
+    /// Payload schema version.
+    pub version: u16,
+    /// Canonical MRV artifact bytes.
+    pub artifact: Vec<u8>,
+    /// Optional constructor input already encoded with the artifact ABI.
+    #[serde(default)]
+    pub constructor: Option<Vec<u8>>,
+}
+
+/// Native MRV deploy request model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrvDeployRequest.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct MrvDeployRequest {
+    /// Optional typed user address that signs the deploy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub from: Option<String>,
+    /// Deploy input bytes as `0x`-hex.
+    ///
+    /// Raw bincode MRV artifact bytes remain accepted. Constructor-bearing
+    /// deploys use [`encode_mrv_deploy_payload`] to place a versioned payload
+    /// envelope in this field.
+    #[serde(rename = "artifactBytes")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "artifactBytes"))]
+    pub artifact_bytes: String,
+    /// Native value to endow the contract with, in lythoshi.
+    #[serde(rename = "valueLythoshi")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "valueLythoshi"))]
+    pub value_lythoshi: String,
+    /// Optional execution-unit ceiling for transaction admission.
+    #[serde(rename = "executionUnitLimit", skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "executionUnitLimit", optional))]
+    pub execution_unit_limit: Option<u64>,
+    /// Optional max execution fee in lythoshi.
+    #[serde(
+        rename = "maxExecutionFeeLythoshi",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "ts-bindings",
+        ts(rename = "maxExecutionFeeLythoshi", optional)
+    )]
+    pub max_execution_fee_lythoshi: Option<String>,
+    /// Optional priority tip in lythoshi.
+    #[serde(
+        rename = "priorityTipLythoshi",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "priorityTipLythoshi", optional))]
+    pub priority_tip_lythoshi: Option<String>,
+    /// Optional signer nonce.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub nonce: Option<u64>,
+}
+
+/// Native MRV deploy response model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "MrvDeployResponse.ts")
+)]
+#[serde(deny_unknown_fields)]
+pub struct MrvDeployResponse {
+    /// Transaction hash.
+    #[serde(rename = "txHash")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "txHash"))]
+    pub tx_hash: String,
+    /// Deployed typed contract address (`monoc1...`).
+    #[serde(rename = "contractAddress")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "contractAddress"))]
+    pub contract_address: String,
+    /// Artifact hash when supplied by the node/indexer.
+    #[serde(rename = "artifactHash", skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "artifactHash", optional))]
+    pub artifact_hash: Option<String>,
+    /// Receipt when the caller requested a confirmed response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub receipt: Option<MrvExecutionReceipt>,
+}
+
+/// Native MRV contract call request model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrvCallRequest.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct MrvCallRequest {
+    /// Optional typed user address that signs the call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub from: Option<String>,
+    /// Destination typed contract address (`monoc1...`).
+    #[serde(rename = "contractAddress")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "contractAddress"))]
+    pub contract_address: String,
+    /// Call input bytes as `0x`-hex.
+    pub input: String,
+    /// Native value sent with the call, in lythoshi.
+    #[serde(rename = "valueLythoshi")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "valueLythoshi"))]
+    pub value_lythoshi: String,
+    /// Optional execution-unit ceiling for transaction admission.
+    #[serde(rename = "executionUnitLimit", skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "executionUnitLimit", optional))]
+    pub execution_unit_limit: Option<u64>,
+    /// Optional max execution fee in lythoshi.
+    #[serde(
+        rename = "maxExecutionFeeLythoshi",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "ts-bindings",
+        ts(rename = "maxExecutionFeeLythoshi", optional)
+    )]
+    pub max_execution_fee_lythoshi: Option<String>,
+    /// Optional priority tip in lythoshi.
+    #[serde(
+        rename = "priorityTipLythoshi",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "priorityTipLythoshi", optional))]
+    pub priority_tip_lythoshi: Option<String>,
+    /// Optional signer nonce.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub nonce: Option<u64>,
+}
+
+/// Native MRV call status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrvCallStatus.ts"))]
+#[serde(rename_all = "camelCase")]
+pub enum MrvCallStatus {
+    /// Execution succeeded.
+    Success,
+    /// Execution used typed revert.
+    Reverted,
+    /// Execution halted without typed revert.
+    Halted,
+}
+
+/// Native MRV call response model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrvCallResponse.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct MrvCallResponse {
+    /// Transaction hash.
+    #[serde(rename = "txHash")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "txHash"))]
+    pub tx_hash: String,
+    /// Execution status.
+    pub status: MrvCallStatus,
+    /// Returned bytes as `0x`-hex when available.
+    #[serde(rename = "returnData")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "returnData"))]
+    pub return_data: String,
+    /// Typed RISC-V receipt when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub receipt: Option<MrvExecutionReceipt>,
+}
+
+/// Independent counters reported by MRV execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrvMeterCounters.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct MrvMeterCounters {
+    /// Deterministic instruction-cycle count.
+    pub cycles: u64,
+    /// Units consumed by host syscalls.
+    #[serde(rename = "syscallUnits")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "syscallUnits"))]
+    pub syscall_units: u64,
+    /// Units consumed by authenticated state reads and writes.
+    #[serde(rename = "stateIoUnits")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "stateIoUnits"))]
+    pub state_io_units: u64,
+}
+
+/// Typed event payload emitted by a contract or native module.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrvEventRecord.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct MrvEventRecord {
+    /// Domain-separated event topic as `0x`-hex.
+    pub topic: String,
+    /// Event payload bytes as `0x`-hex.
+    pub data: String,
+}
+
+/// Typed native-module state delta for receipts and indexers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "MrvNativeStateDelta.ts")
+)]
+#[serde(deny_unknown_fields)]
+pub struct MrvNativeStateDelta {
+    /// Native module namespace that changed.
+    pub namespace: MrvStorageNamespace,
+    /// State key inside the namespace as `0x`-hex.
+    pub key: String,
+    /// Hash of the new value, or absent when the key was deleted.
+    #[serde(rename = "valueHash", skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "valueHash", optional))]
+    pub value_hash: Option<String>,
+}
+
+/// Typed revert payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "MrvRevertPayload.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct MrvRevertPayload {
+    /// Stable contract-defined revert code.
+    pub code: u32,
+    /// Opaque revert data as `0x`-hex.
+    pub data: String,
+}
+
+/// Typed RISC-V execution receipt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "MrvExecutionReceipt.ts")
+)]
+#[serde(deny_unknown_fields)]
+pub struct MrvExecutionReceipt {
+    /// Consensus hash of the validated MRV artifact as `0x`-hex.
+    #[serde(rename = "artifactHash")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "artifactHash"))]
+    pub artifact_hash: String,
+    /// Execution counters.
+    pub counters: MrvMeterCounters,
+    /// Typed events emitted by the call.
+    pub events: Vec<MrvEventRecord>,
+    /// Native module deltas produced by the call.
+    #[serde(rename = "nativeDeltas")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "nativeDeltas"))]
+    pub native_deltas: Vec<MrvNativeStateDelta>,
+    /// Revert payload when execution failed through the typed revert path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
+    pub reverted: Option<MrvRevertPayload>,
+}
+
+/// Input options shared by MRV deploy and call request builders.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MrvRequestBuildOptions {
+    /// Optional typed user address that signs the request.
+    pub from: Option<String>,
+    /// Native value in lythoshi. Defaults to zero when omitted.
+    pub value_lythoshi: Option<u128>,
+    /// Optional execution-unit ceiling for transaction admission.
+    pub execution_unit_limit: Option<u64>,
+    /// Optional max execution fee in lythoshi.
+    pub max_execution_fee_lythoshi: Option<u128>,
+    /// Optional priority tip in lythoshi.
+    pub priority_tip_lythoshi: Option<u128>,
+    /// Optional signer nonce.
+    pub nonce: Option<u64>,
+}
+
+impl MrvRequestBuildOptions {
+    /// Empty options; builders default native value to zero lythoshi.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the typed user address that signs the request.
+    #[must_use]
+    pub fn from(mut self, from: impl Into<String>) -> Self {
+        self.from = Some(from.into());
+        self
+    }
+
+    /// Set native value in lythoshi.
+    #[must_use]
+    pub fn value_lythoshi(mut self, value: u128) -> Self {
+        self.value_lythoshi = Some(value);
+        self
+    }
+
+    /// Set the execution-unit ceiling.
+    #[must_use]
+    pub fn execution_unit_limit(mut self, limit: u64) -> Self {
+        self.execution_unit_limit = Some(limit);
+        self
+    }
+
+    /// Set max execution fee in lythoshi.
+    #[must_use]
+    pub fn max_execution_fee_lythoshi(mut self, value: u128) -> Self {
+        self.max_execution_fee_lythoshi = Some(value);
+        self
+    }
+
+    /// Set priority tip in lythoshi.
+    #[must_use]
+    pub fn priority_tip_lythoshi(mut self, value: u128) -> Self {
+        self.priority_tip_lythoshi = Some(value);
+        self
+    }
+
+    /// Set signer nonce.
+    #[must_use]
+    pub fn nonce(mut self, nonce: u64) -> Self {
+        self.nonce = Some(nonce);
+        self
+    }
+}
+
+/// Required inputs for building the current signed native transaction
+/// envelope around an MRV deploy or call.
+///
+/// Field names on [`MrvNativeTxFields`] intentionally mirror the current
+/// compatibility signing adapter (`maxFeePerGas`, `gasLimit`), but values are
+/// ADR-0037 lythoshi and execution-unit counts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MrvNativeTxBuildOptions {
+    /// Optional typed user address that signs the request.
+    pub from: Option<String>,
+    /// Chain id for the signed transaction envelope.
+    pub chain_id: u64,
+    /// Sender nonce for the signed transaction envelope.
+    pub nonce: u64,
+    /// Native value in lythoshi. Defaults to zero when omitted.
+    pub value_lythoshi: u128,
+    /// Execution-unit ceiling for transaction admission.
+    pub execution_unit_limit: u64,
+    /// Max execution fee in lythoshi.
+    pub max_execution_fee_lythoshi: u128,
+    /// Priority tip in lythoshi. Defaults to zero when omitted.
+    pub priority_tip_lythoshi: u128,
+}
+
+impl MrvNativeTxBuildOptions {
+    /// Build the required native transaction options.
+    #[must_use]
+    pub const fn new(
+        chain_id: u64,
+        nonce: u64,
+        execution_unit_limit: u64,
+        max_execution_fee_lythoshi: u128,
+    ) -> Self {
+        Self {
+            from: None,
+            chain_id,
+            nonce,
+            value_lythoshi: 0,
+            execution_unit_limit,
+            max_execution_fee_lythoshi,
+            priority_tip_lythoshi: 0,
+        }
+    }
+
+    /// Set the typed user address that signs the request.
+    #[must_use]
+    pub fn from(mut self, from: impl Into<String>) -> Self {
+        self.from = Some(from.into());
+        self
+    }
+
+    /// Set native value in lythoshi.
+    #[must_use]
+    pub const fn value_lythoshi(mut self, value: u128) -> Self {
+        self.value_lythoshi = value;
+        self
+    }
+
+    /// Set priority tip in lythoshi.
+    #[must_use]
+    pub const fn priority_tip_lythoshi(mut self, value: u128) -> Self {
+        self.priority_tip_lythoshi = value;
+        self
+    }
+
+    fn request_options(&self) -> MrvRequestBuildOptions {
+        let mut options = MrvRequestBuildOptions::new()
+            .value_lythoshi(self.value_lythoshi)
+            .execution_unit_limit(self.execution_unit_limit)
+            .max_execution_fee_lythoshi(self.max_execution_fee_lythoshi)
+            .priority_tip_lythoshi(self.priority_tip_lythoshi)
+            .nonce(self.nonce);
+        if let Some(from) = &self.from {
+            options = options.from(from.clone());
+        }
+        options
+    }
+}
+
+/// Current native transaction signing shape for MRV deploy/call envelopes.
+///
+/// `maxFeePerGas` and `gasLimit` are compatibility field names inherited by
+/// the signer adapter. MRV callers should treat them as max execution fee in
+/// lythoshi and execution-unit limit respectively.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvNativeTxFields {
+    /// Chain id.
+    #[serde(rename = "chainId")]
+    pub chain_id: u64,
+    /// Sender nonce.
+    pub nonce: u64,
+    /// Priority tip in lythoshi, rendered as a decimal string.
+    #[serde(rename = "maxPriorityFeePerGas")]
+    pub max_priority_fee_per_gas: String,
+    /// Max execution fee in lythoshi, rendered as a decimal string.
+    #[serde(rename = "maxFeePerGas")]
+    pub max_fee_per_gas: String,
+    /// Execution-unit ceiling.
+    #[serde(rename = "gasLimit")]
+    pub gas_limit: u64,
+    /// Destination 20-byte hex address, or `null` for deploy.
+    pub to: Option<String>,
+    /// Native value in lythoshi, rendered as a decimal string.
+    pub value: String,
+    /// Transaction input bytes as `0x`-hex.
+    pub input: String,
+    /// Signed transaction extensions, including the MRV v1 descriptor.
+    pub extensions: Vec<MrvTransactionExtension>,
+}
+
+impl MrvNativeTxFields {
+    fn from_parts(
+        options: &MrvNativeTxBuildOptions,
+        to: Option<String>,
+        input: String,
+        value_lythoshi: &str,
+        extension: MrvTransactionExtension,
+    ) -> Self {
+        Self {
+            chain_id: options.chain_id,
+            nonce: options.nonce,
+            max_priority_fee_per_gas: options.priority_tip_lythoshi.to_string(),
+            max_fee_per_gas: options.max_execution_fee_lythoshi.to_string(),
+            gas_limit: options.execution_unit_limit,
+            to,
+            value: value_lythoshi.to_owned(),
+            input,
+            extensions: vec![extension],
+        }
+    }
+}
+
+/// Application-facing MRV native transaction fields.
+///
+/// The separate [`MrvNativeTxFields`] value is the compatibility signing
+/// adapter shape. This facade keeps SDK plan consumers on v4.1 lythoshi and
+/// execution-unit names without asking them to inspect `maxFeePerGas` or
+/// `gasLimit`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvNativeTxFacade {
+    /// Chain id.
+    #[serde(rename = "chainId")]
+    pub chain_id: u64,
+    /// Sender nonce.
+    pub nonce: u64,
+    /// Native value in lythoshi, rendered as a decimal string.
+    #[serde(rename = "valueLythoshi")]
+    pub value_lythoshi: String,
+    /// Execution-unit ceiling.
+    #[serde(rename = "executionUnitLimit")]
+    pub execution_unit_limit: u64,
+    /// Max execution fee in lythoshi, rendered as a decimal string.
+    #[serde(rename = "maxExecutionFeeLythoshi")]
+    pub max_execution_fee_lythoshi: String,
+    /// Priority tip in lythoshi, rendered as a decimal string.
+    #[serde(rename = "priorityTipLythoshi")]
+    pub priority_tip_lythoshi: String,
+}
+
+impl MrvNativeTxFacade {
+    fn from_options(options: &MrvNativeTxBuildOptions, value_lythoshi: &str) -> Self {
+        Self {
+            chain_id: options.chain_id,
+            nonce: options.nonce,
+            value_lythoshi: value_lythoshi.to_owned(),
+            execution_unit_limit: options.execution_unit_limit,
+            max_execution_fee_lythoshi: options.max_execution_fee_lythoshi.to_string(),
+            priority_tip_lythoshi: options.priority_tip_lythoshi.to_string(),
+        }
+    }
+}
+
+/// Application-facing native fee preview for MRV deploy/call plans.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvNativeFeePreview {
+    /// Total native fee cap in lythoshi.
+    #[serde(rename = "totalLythoshi")]
+    pub total_lythoshi: String,
+    /// Total native fee cap formatted as numeric LYTH without a unit suffix.
+    #[serde(rename = "totalLyth")]
+    pub total_lyth: String,
+    /// Estimated execution units used by the plan.
+    #[serde(rename = "cyclesUsed")]
+    pub cycles_used: u64,
+    /// Execution-unit ceiling carried by the signed transaction.
+    #[serde(rename = "executionUnitLimit")]
+    pub execution_unit_limit: u64,
+    /// Max execution fee in lythoshi.
+    #[serde(rename = "maxExecutionFeeLythoshi")]
+    pub max_execution_fee_lythoshi: String,
+    /// Priority tip in lythoshi.
+    #[serde(rename = "priorityTipLythoshi")]
+    pub priority_tip_lythoshi: String,
+}
+
+impl MrvNativeFeePreview {
+    fn from_options(options: &MrvNativeTxBuildOptions) -> Self {
+        let total_lythoshi = options.max_execution_fee_lythoshi.to_string();
+        Self {
+            total_lyth: format_lyth(
+                options.max_execution_fee_lythoshi,
+                LythFormatOptions::NUMERIC_ONLY,
+            ),
+            total_lythoshi: total_lythoshi.clone(),
+            cycles_used: options.execution_unit_limit,
+            execution_unit_limit: options.execution_unit_limit,
+            max_execution_fee_lythoshi: total_lythoshi,
+            priority_tip_lythoshi: options.priority_tip_lythoshi.to_string(),
+        }
+    }
+}
+
+/// Fully-built MRV deploy request plus SDK-local execution metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvDeployPlan {
+    /// Validated native deploy request.
+    pub request: MrvDeployRequest,
+    /// MRV v1 transaction extension descriptor.
+    pub extension: MrvTransactionExtension,
+    /// Deterministic contract address when artifact hash, signer, and nonce are known.
+    #[serde(
+        rename = "expectedContractAddress",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub expected_contract_address: Option<String>,
+}
+
+/// Fully-built MRV call request plus SDK-local execution metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvCallPlan {
+    /// Validated native call request.
+    pub request: MrvCallRequest,
+    /// MRV v1 transaction extension descriptor.
+    pub extension: MrvTransactionExtension,
+}
+
+/// Fully-built MRV deploy plan plus the current sign-ready native transaction
+/// fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvDeployNativeTxPlan {
+    /// Validated native deploy request.
+    pub request: MrvDeployRequest,
+    /// MRV v1 transaction extension descriptor.
+    pub extension: MrvTransactionExtension,
+    /// Deterministic contract address when artifact hash, signer, and nonce are known.
+    #[serde(
+        rename = "expectedContractAddress",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub expected_contract_address: Option<String>,
+    /// Application-facing native transaction summary with v4.1 names.
+    #[serde(rename = "nativeTx")]
+    pub native_tx: MrvNativeTxFacade,
+    /// Application-facing native fee preview with v4.1 names.
+    #[serde(rename = "feePreview")]
+    pub fee_preview: MrvNativeFeePreview,
+    /// Sign-ready transaction fields for the current native transaction adapter.
+    pub tx: MrvNativeTxFields,
+}
+
+/// Fully-built MRV call plan plus the current sign-ready native transaction
+/// fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvCallNativeTxPlan {
+    /// Validated native call request.
+    pub request: MrvCallRequest,
+    /// MRV v1 transaction extension descriptor.
+    pub extension: MrvTransactionExtension,
+    /// Application-facing native transaction summary with v4.1 names.
+    #[serde(rename = "nativeTx")]
+    pub native_tx: MrvNativeTxFacade,
+    /// Application-facing native fee preview with v4.1 names.
+    #[serde(rename = "feePreview")]
+    pub fee_preview: MrvNativeFeePreview,
+    /// Sign-ready transaction fields for the current native transaction adapter.
+    pub tx: MrvNativeTxFields,
+}
+
+/// Signed inner native transaction material for an MRV deploy/call plan.
+///
+/// The standalone Rust SDK deliberately keeps ML-DSA-65 key management and
+/// encrypted-envelope sealing outside this module. Callers sign
+/// [`mrv_native_tx_sighash`] with their wallet/backend, then pass the raw
+/// signature and public key here to obtain the canonical inner wire bytes and
+/// inner transaction hash that the encrypted mempool will reveal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvNativeSignedSubmission {
+    /// Keccak-256 digest that the external ML-DSA-65 signer signed.
+    #[serde(rename = "innerSighashHex")]
+    pub inner_sighash_hex: String,
+    /// Canonical signed inner transaction hash.
+    #[serde(rename = "innerTxHashHex")]
+    pub inner_tx_hash_hex: String,
+    /// `0x`-hex bincode signed native transaction bytes.
+    #[serde(rename = "signedInnerTxWireHex")]
+    pub signed_inner_tx_wire_hex: String,
+    /// Byte length of the signed inner transaction wire payload.
+    #[serde(rename = "signedInnerTxWireBytes")]
+    pub signed_inner_tx_wire_bytes: usize,
+}
+
+/// Fully-built MRV deploy plan plus signed inner transaction material.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvDeployNativeSignedSubmission {
+    /// Validated native deploy request.
+    pub request: MrvDeployRequest,
+    /// MRV v1 transaction extension descriptor.
+    pub extension: MrvTransactionExtension,
+    /// Deterministic contract address when artifact hash, signer, and nonce are known.
+    #[serde(
+        rename = "expectedContractAddress",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub expected_contract_address: Option<String>,
+    /// Application-facing native transaction summary with v4.1 names.
+    #[serde(rename = "nativeTx")]
+    pub native_tx: MrvNativeTxFacade,
+    /// Application-facing native fee preview with v4.1 names.
+    #[serde(rename = "feePreview")]
+    pub fee_preview: MrvNativeFeePreview,
+    /// Sign-ready transaction fields for the current native transaction adapter.
+    pub tx: MrvNativeTxFields,
+    /// Signed inner transaction material.
+    pub submission: MrvNativeSignedSubmission,
+}
+
+/// Fully-built MRV call plan plus signed inner transaction material.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvCallNativeSignedSubmission {
+    /// Validated native call request.
+    pub request: MrvCallRequest,
+    /// MRV v1 transaction extension descriptor.
+    pub extension: MrvTransactionExtension,
+    /// Application-facing native transaction summary with v4.1 names.
+    #[serde(rename = "nativeTx")]
+    pub native_tx: MrvNativeTxFacade,
+    /// Application-facing native fee preview with v4.1 names.
+    #[serde(rename = "feePreview")]
+    pub fee_preview: MrvNativeFeePreview,
+    /// Sign-ready transaction fields for the current native transaction adapter.
+    pub tx: MrvNativeTxFields,
+    /// Signed inner transaction material.
+    pub submission: MrvNativeSignedSubmission,
+}
+
+/// Cluster encryption key used by `lyth_submitEncrypted`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvEncryptionKey {
+    /// KEM algorithm tag. The bounded MRV helper currently accepts
+    /// [`MRV_ENCRYPTION_ALGO_ML_KEM_768`].
+    #[serde(default = "default_mrv_encryption_algo")]
+    pub algo: String,
+    /// Cluster encryption epoch.
+    pub epoch: u64,
+    /// ML-KEM-768 encapsulation key as `0x`-hex.
+    #[serde(rename = "encapsulationKey")]
+    pub encapsulation_key: String,
+}
+
+impl MrvEncryptionKey {
+    /// Build an ML-KEM-768 encryption key object from raw key bytes.
+    #[must_use]
+    pub fn ml_kem_768(epoch: u64, encapsulation_key: &[u8]) -> Self {
+        Self {
+            algo: MRV_ENCRYPTION_ALGO_ML_KEM_768.to_owned(),
+            epoch,
+            encapsulation_key: hex_encode(encapsulation_key),
+        }
+    }
+}
+
+impl From<EncryptionKeyResponse> for MrvEncryptionKey {
+    fn from(value: EncryptionKeyResponse) -> Self {
+        Self {
+            algo: value.algo,
+            epoch: value.epoch,
+            encapsulation_key: value.encapsulation_key,
+        }
+    }
+}
+
+/// Encrypted mempool class committed in the nonce AAD.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum MrvMempoolClass {
+    /// Simple transfer.
+    Transfer = 0,
+    /// Contract deploy/call.
+    ContractCall = 1,
+    /// Privacy operation.
+    PrivacyOp = 2,
+    /// CLOB operation.
+    ClobOp = 3,
+    /// Agent operation.
+    AgentOp = 4,
+    /// Foundation operation.
+    FoundationOp = 5,
+    /// RWA operation.
+    RwaOp = 6,
+}
+
+impl MrvMempoolClass {
+    /// Deprecated alias for the v4.1 whitepaper term [`Self::FoundationOp`].
+    #[allow(non_upper_case_globals)]
+    #[deprecated(note = "use MrvMempoolClass::FoundationOp")]
+    pub const GovernanceOp: Self = Self::FoundationOp;
+
+    const fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Transfer),
+            1 => Some(Self::ContractCall),
+            2 => Some(Self::PrivacyOp),
+            3 => Some(Self::ClobOp),
+            4 => Some(Self::AgentOp),
+            5 => Some(Self::FoundationOp),
+            6 => Some(Self::RwaOp),
+            _ => None,
+        }
+    }
+
+    const fn as_u32(self) -> u32 {
+        self as u32
+    }
+}
+
+impl Serialize for MrvMempoolClass {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_u32(self.as_u32())
+    }
+}
+
+impl<'de> Deserialize<'de> for MrvMempoolClass {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = u32::deserialize(deserializer)?;
+        Self::from_u32(value)
+            .ok_or_else(|| serde::de::Error::custom("invalid encrypted mempool class"))
+    }
+}
+
+/// Nonce AAD committed by the encrypted mempool envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MrvEncryptedNonceAad {
+    /// Sender address bytes derived from the ML-DSA-65 public key.
+    pub sender: [u8; 20],
+    /// Sender nonce.
+    pub nonce: u64,
+    /// Chain id.
+    pub chain_id: u64,
+    /// Encrypted mempool class.
+    pub class: MrvMempoolClass,
+    /// Declared max execution-unit price in lythoshi.
+    pub max_execution_unit_price_lythoshi: u128,
+    /// Priority tip in lythoshi.
+    pub priority_tip_lythoshi: u128,
+    /// Execution-unit ceiling.
+    pub execution_unit_limit: u64,
+}
+
+/// Decrypt hint committed by the encrypted mempool envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MrvEncryptedDecryptHint {
+    /// Cluster encryption epoch.
+    pub epoch: u64,
+    /// Decryption scheme id. `0` is the current ML-KEM-768 DKG scheme.
+    pub scheme: u16,
+}
+
+/// Encrypted MRV native submission material ready for `lyth_submitEncrypted`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvNativeEncryptedSubmission {
+    /// `0x`-hex bincode encrypted envelope bytes.
+    #[serde(rename = "envelopeWireHex")]
+    pub envelope_wire_hex: String,
+    /// Keccak-256 digest that the outer ML-DSA-65 signature signs.
+    #[serde(rename = "outerSignatureDigestHex")]
+    pub outer_signature_digest_hex: String,
+    /// Keccak-256 digest that the external ML-DSA-65 inner signer signed.
+    #[serde(rename = "innerSighashHex")]
+    pub inner_sighash_hex: String,
+    /// Canonical signed inner transaction hash.
+    #[serde(rename = "innerTxHashHex")]
+    pub inner_tx_hash_hex: String,
+    /// Byte length of the signed inner transaction wire payload.
+    #[serde(rename = "innerWireBytes")]
+    pub inner_wire_bytes: usize,
+    /// Byte length of the encrypted envelope wire payload.
+    #[serde(rename = "envelopeWireBytes")]
+    pub envelope_wire_bytes: usize,
+}
+
+/// Fully-built MRV deploy plan plus encrypted envelope submission material.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvDeployNativeEncryptedSubmission {
+    /// Validated native deploy request.
+    pub request: MrvDeployRequest,
+    /// MRV v1 transaction extension descriptor.
+    pub extension: MrvTransactionExtension,
+    /// Deterministic contract address when artifact hash, signer, and nonce are known.
+    #[serde(
+        rename = "expectedContractAddress",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub expected_contract_address: Option<String>,
+    /// Application-facing native transaction summary with v4.1 names.
+    #[serde(rename = "nativeTx")]
+    pub native_tx: MrvNativeTxFacade,
+    /// Application-facing native fee preview with v4.1 names.
+    #[serde(rename = "feePreview")]
+    pub fee_preview: MrvNativeFeePreview,
+    /// Sign-ready transaction fields for the current native transaction adapter.
+    pub tx: MrvNativeTxFields,
+    /// Encrypted submission material.
+    pub submission: MrvNativeEncryptedSubmission,
+}
+
+/// Fully-built MRV call plan plus encrypted envelope submission material.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MrvCallNativeEncryptedSubmission {
+    /// Validated native call request.
+    pub request: MrvCallRequest,
+    /// MRV v1 transaction extension descriptor.
+    pub extension: MrvTransactionExtension,
+    /// Application-facing native transaction summary with v4.1 names.
+    #[serde(rename = "nativeTx")]
+    pub native_tx: MrvNativeTxFacade,
+    /// Application-facing native fee preview with v4.1 names.
+    #[serde(rename = "feePreview")]
+    pub fee_preview: MrvNativeFeePreview,
+    /// Sign-ready transaction fields for the current native transaction adapter.
+    pub tx: MrvNativeTxFields,
+    /// Encrypted submission material.
+    pub submission: MrvNativeEncryptedSubmission,
+}
+
+/// Errors returned by MRV SDK validation helpers.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum MrvValidationError {
+    /// Hex field was malformed.
+    #[error("{field} must be 0x-prefixed even-length hex")]
+    InvalidHex {
+        /// Field name.
+        field: &'static str,
+    },
+
+    /// Hex field length was wrong.
+    #[error("{field} must be {expected} bytes")]
+    InvalidHexLength {
+        /// Field name.
+        field: &'static str,
+        /// Expected byte length.
+        expected: usize,
+    },
+
+    /// Decimal field was malformed.
+    #[error("{field} must be a canonical unsigned decimal string")]
+    InvalidDecimal {
+        /// Field name.
+        field: &'static str,
+    },
+
+    /// Fee-display conformance harness found failures.
+    #[error("fee display conformance failed: {failures:?}")]
+    FeeDisplayConformance {
+        /// Human-readable conformance failures.
+        failures: Vec<String>,
+    },
+
+    /// MRV format version was unsupported.
+    #[error("unsupported MRV format version {found}, expected {expected}")]
+    UnsupportedFormatVersion {
+        /// Declared version.
+        found: u16,
+        /// Expected version.
+        expected: u16,
+    },
+
+    /// Code bytes were empty.
+    #[error("MRV code is empty")]
+    CodeEmpty,
+
+    /// Code bytes exceeded the consensus maximum.
+    #[error("MRV code has {len} bytes, max {max}")]
+    CodeTooLarge {
+        /// Actual length.
+        len: usize,
+        /// Maximum length.
+        max: usize,
+    },
+
+    /// Metadata code length did not match supplied bytes.
+    #[error("metadata codeBytes {declared} does not match supplied code length {actual}")]
+    CodeLengthMismatch {
+        /// Declared length.
+        declared: u64,
+        /// Actual length.
+        actual: u64,
+    },
+
+    /// Debug bytes exceeded the consensus maximum.
+    #[error("MRV debug section has {len} bytes, max {max}")]
+    DebugTooLarge {
+        /// Actual length.
+        len: u64,
+        /// Maximum length.
+        max: usize,
+    },
+
+    /// Code hash did not match supplied bytes.
+    #[error("MRV code hash mismatch: declared {declared}, computed {computed}")]
+    CodeHashMismatch {
+        /// Declared hash.
+        declared: String,
+        /// Computed hash.
+        computed: String,
+    },
+
+    /// Memory declaration failed validation.
+    #[error("invalid MRV memory declaration: {0}")]
+    InvalidMemory(&'static str),
+
+    /// Storage namespace failed validation.
+    #[error("invalid MRV storage namespace: {0}")]
+    InvalidStorageNamespace(&'static str),
+
+    /// ABI manifest had no symbols.
+    #[error("MRV ABI must declare at least one symbol")]
+    AbiEmpty,
+
+    /// ABI manifest had too many symbols.
+    #[error("MRV ABI has {len} symbols, max {max}")]
+    AbiTooLarge {
+        /// Actual count.
+        len: usize,
+        /// Maximum count.
+        max: usize,
+    },
+
+    /// ABI symbol name was invalid.
+    #[error("invalid MRV ABI symbol '{0}'")]
+    InvalidAbiSymbol(String),
+
+    /// ABI symbol name was duplicated.
+    #[error("duplicate MRV ABI symbol '{0}'")]
+    DuplicateAbiSymbol(String),
+
+    /// ABI parameter was invalid.
+    #[error("invalid MRV ABI parameter '{0}'")]
+    InvalidAbiParam(String),
+
+    /// Import used a forbidden host module.
+    #[error("forbidden host import {module}.{name}")]
+    ForbiddenHostImport {
+        /// Host module.
+        module: String,
+        /// Import name.
+        name: String,
+    },
+
+    /// Import used an unknown syscall id.
+    #[error("unknown MRV syscall id {0}")]
+    UnknownSyscallId(u16),
+
+    /// Import used an unknown syscall name.
+    #[error("unknown MRV syscall name '{0}'")]
+    UnknownSyscallName(String),
+
+    /// Import name and id did not identify the same syscall.
+    #[error("MRV syscall name/id mismatch for {name}: declared {declared}, expected {expected}")]
+    SyscallNameMismatch {
+        /// Declared name.
+        name: String,
+        /// Declared id.
+        declared: u16,
+        /// Expected id for the name.
+        expected: u16,
+    },
+
+    /// Import duplicated a syscall.
+    #[error("duplicate MRV syscall '{0}'")]
+    DuplicateSyscall(String),
+
+    /// Address failed parsing or did not match the required kind.
+    #[error("invalid typed address in {field}: {reason}")]
+    InvalidAddress {
+        /// Field name.
+        field: &'static str,
+        /// Parser reason.
+        reason: String,
+    },
+
+    /// Execution-unit limit must be non-zero when present.
+    #[error("{field} must be greater than zero")]
+    InvalidExecutionUnitLimit {
+        /// Field name.
+        field: &'static str,
+    },
+
+    /// Raw transaction signing input had an invalid fixed-length byte vector.
+    #[error("{field} must be {expected} bytes, got {actual}")]
+    InvalidNativeTxBytes {
+        /// Field name.
+        field: &'static str,
+        /// Expected byte length.
+        expected: usize,
+        /// Actual byte length.
+        actual: usize,
+    },
+
+    /// Raw transaction signing input exceeded a 32-bit canonical length field.
+    #[error("{field} exceeds u32 length")]
+    NativeTxLengthOverflow {
+        /// Field name.
+        field: &'static str,
+    },
+
+    /// Deploy payload envelope bytes failed bincode-shape decoding.
+    #[error("invalid MRV deploy payload: {0}")]
+    InvalidDeployPayload(&'static str),
+
+    /// Native submission plan failed MRV-specific guardrails.
+    #[error("invalid MRV native submission plan: {0}")]
+    InvalidNativeSubmission(&'static str),
+
+    /// Encrypted submission key used an unsupported algorithm.
+    #[error("unsupported MRV encryption key algorithm {found}")]
+    UnsupportedEncryptionKeyAlgorithm {
+        /// Supplied algorithm tag.
+        found: String,
+    },
+
+    /// Encrypted submission key failed ML-KEM validation.
+    #[error("invalid MRV encryption key: {0}")]
+    InvalidEncryptionKey(&'static str),
+
+    /// OS randomness failed while sealing an encrypted submission.
+    #[error("MRV encrypted submission randomness failed: {reason}")]
+    CryptoRandom {
+        /// RNG failure.
+        reason: String,
+    },
+
+    /// AEAD sealing failed while encrypting the signed inner transaction.
+    #[error("MRV encrypted submission sealing failed")]
+    EncryptionFailed,
+
+    /// The caller-supplied outer signature callback failed.
+    #[error("MRV encrypted submission outer signature failed: {reason}")]
+    OuterSignatureFailed {
+        /// Signer/backend failure.
+        reason: String,
+    },
+}
+
+/// Compute the MRV code-section BLAKE3 hash as `0x`-hex.
+#[must_use]
+pub fn mrv_code_hash_hex(code: &[u8]) -> String {
+    hex_encode(&compute_mrv_code_hash(code))
+}
+
+/// Return the canonical MRV v1 transaction extension descriptor.
+#[must_use]
+pub fn mrv_v1_transaction_extension() -> MrvTransactionExtension {
+    MrvTransactionExtension {
+        kind: MRV_TX_EXTENSION_KIND,
+        body_hex: "0x01".to_owned(),
+    }
+}
+
+/// Encode an MRV deploy payload envelope with the SDK-supported version.
+///
+/// `constructor_input` must already be encoded with the artifact ABI. Passing
+/// `None` emits an envelope without constructor input; callers that need legacy
+/// raw artifact deploy bytes should continue using [`build_mrv_deploy_request`],
+/// [`build_mrv_deploy_plan`], or [`build_mrv_deploy_native_tx_plan`].
+///
+/// # Errors
+/// Returns [`MrvValidationError`] only if a byte vector length cannot fit the
+/// bincode length field.
+pub fn encode_mrv_deploy_payload(
+    artifact_bytes: &[u8],
+    constructor_input: Option<&[u8]>,
+) -> Result<Vec<u8>, MrvValidationError> {
+    encode_mrv_deploy_payload_struct(&MrvDeployPayload {
+        version: MRV_DEPLOY_PAYLOAD_VERSION,
+        artifact: artifact_bytes.to_vec(),
+        constructor: constructor_input.map(<[u8]>::to_vec),
+    })
+}
+
+/// Decode an MRV deploy payload envelope without validating the artifact or
+/// constructor ABI.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the envelope is truncated, has trailing
+/// bytes, or uses an unsupported option tag.
+pub fn decode_mrv_deploy_payload(bytes: &[u8]) -> Result<MrvDeployPayload, MrvValidationError> {
+    let mut reader = BincodeReader::new(bytes);
+    let payload = MrvDeployPayload {
+        version: reader.u16()?,
+        artifact: reader.bytes("artifact")?,
+        constructor: reader.option_bytes("constructor")?,
+    };
+    reader.finish()?;
+    Ok(payload)
+}
+
+/// Encode a typed ADR-0038 address.
+#[must_use]
+pub fn mrv_address_to_bech32(kind: MrvAddressKind, bytes: [u8; 20]) -> String {
+    address_to_typed_bech32(kind.address_kind(), bytes)
+}
+
+/// Decode any allocated typed ADR-0038 address.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the address is malformed or uses an
+/// unallocated/reserved HRP.
+pub fn mrv_bech32_to_address(
+    address: &str,
+) -> Result<(MrvAddressKind, [u8; 20]), MrvValidationError> {
+    typed_bech32_to_address(address)
+        .map(|(kind, bytes)| (MrvAddressKind::from_address_kind(kind), bytes))
+        .map_err(|err| MrvValidationError::InvalidAddress {
+            field: "address",
+            reason: err.to_string(),
+        })
+}
+
+/// Decode a typed ADR-0038 address and require `kind`.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the address is malformed or the HRP does
+/// not match `kind`.
+pub fn mrv_bech32_to_address_kind(
+    address: &str,
+    kind: MrvAddressKind,
+) -> Result<[u8; 20], MrvValidationError> {
+    typed_bech32_to_address_kind(address, kind.address_kind()).map_err(|err| {
+        MrvValidationError::InvalidAddress {
+            field: "address",
+            reason: err.to_string(),
+        }
+    })
+}
+
+/// Derive the deterministic `monoc` address for an MRV deployment.
+///
+/// This mirrors mono-core runtime deployment address derivation so SDK
+/// callers can precompute the contract address before the deploy transaction
+/// is included.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when `deployer_address` is malformed or
+/// `artifact_hash_hex` is not a 32-byte `0x` hash.
+pub fn derive_mrv_contract_address(
+    deployer_address: &str,
+    deployer_nonce: u64,
+    artifact_hash_hex: &str,
+) -> Result<String, MrvValidationError> {
+    let (deployer_kind, deployer_bytes) = mrv_bech32_to_address(deployer_address)?;
+    let artifact_hash = decode_hex("artifactHash", artifact_hash_hex)?;
+    if artifact_hash.len() != 32 {
+        return Err(MrvValidationError::InvalidHexLength {
+            field: "artifactHash",
+            expected: 32,
+        });
+    }
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(MRV_CONTRACT_ADDRESS_DOMAIN);
+    hasher.update(deployer_kind.hrp().as_bytes());
+    hasher.update(&[0]);
+    hasher.update(&deployer_bytes);
+    hasher.update(&deployer_nonce.to_be_bytes());
+    hasher.update(&artifact_hash);
+    let digest = hasher.finalize();
+    let mut contract_bytes = [0u8; 20];
+    contract_bytes.copy_from_slice(&digest.as_bytes()[..20]);
+    Ok(mrv_address_to_bech32(
+        MrvAddressKind::Contract,
+        contract_bytes,
+    ))
+}
+
+/// Validate MRV artifact metadata against the supplied code bytes.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the metadata violates the accepted MRV
+/// bounds or the code hash does not match `code`.
+pub fn validate_mrv_artifact_metadata(
+    metadata: &MrvArtifactMetadata,
+    code: &[u8],
+) -> Result<MrvValidatedArtifactMetadata, MrvValidationError> {
+    if metadata.format_version != MRV_FORMAT_VERSION {
+        return Err(MrvValidationError::UnsupportedFormatVersion {
+            found: metadata.format_version,
+            expected: MRV_FORMAT_VERSION,
+        });
+    }
+    if code.is_empty() {
+        return Err(MrvValidationError::CodeEmpty);
+    }
+    if code.len() > MRV_MAX_CODE_BYTES {
+        return Err(MrvValidationError::CodeTooLarge {
+            len: code.len(),
+            max: MRV_MAX_CODE_BYTES,
+        });
+    }
+    let actual_code_len = u64::try_from(code.len()).unwrap_or(u64::MAX);
+    if metadata.code_bytes != actual_code_len {
+        return Err(MrvValidationError::CodeLengthMismatch {
+            declared: metadata.code_bytes,
+            actual: actual_code_len,
+        });
+    }
+    if metadata.debug_bytes > MRV_MAX_DEBUG_BYTES as u64 {
+        return Err(MrvValidationError::DebugTooLarge {
+            len: metadata.debug_bytes,
+            max: MRV_MAX_DEBUG_BYTES,
+        });
+    }
+    validate_hex_length("codeHash", &metadata.code_hash, 32)?;
+    validate_hex_length("sourceDigest", &metadata.build.source_digest, 32)?;
+    validate_memory(metadata.memory)?;
+    validate_storage_namespace(&metadata.storage_namespace)?;
+    validate_abi(&metadata.abi)?;
+    let syscalls = validate_imports(&metadata.imports)?;
+    let computed = mrv_code_hash_hex(code);
+    if metadata.code_hash.to_ascii_lowercase() != computed {
+        return Err(MrvValidationError::CodeHashMismatch {
+            declared: metadata.code_hash.clone(),
+            computed,
+        });
+    }
+    Ok(MrvValidatedArtifactMetadata {
+        code_hash: computed,
+        profile: metadata.profile,
+        memory: metadata.memory,
+        storage_namespace: metadata.storage_namespace.clone(),
+        syscalls,
+        abi_symbol_count: metadata.abi.symbols.len() as u64,
+        code_bytes: actual_code_len,
+    })
+}
+
+/// Validate an MRV deploy request.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when typed addresses, hex bytes, amount
+/// strings, or execution-unit fields are malformed.
+pub fn validate_mrv_deploy_request(request: &MrvDeployRequest) -> Result<(), MrvValidationError> {
+    if let Some(from) = &request.from {
+        validate_typed_address("from", from, MrvAddressKind::User)?;
+    }
+    decode_hex("artifactBytes", &request.artifact_bytes)?;
+    validate_decimal("valueLythoshi", &request.value_lythoshi)?;
+    validate_optional_decimal(
+        "maxExecutionFeeLythoshi",
+        request.max_execution_fee_lythoshi.as_deref(),
+    )?;
+    validate_optional_decimal(
+        "priorityTipLythoshi",
+        request.priority_tip_lythoshi.as_deref(),
+    )?;
+    validate_execution_unit_limit("executionUnitLimit", request.execution_unit_limit)?;
+    Ok(())
+}
+
+/// Validate an MRV call request.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when typed addresses, hex bytes, amount
+/// strings, or execution-unit fields are malformed.
+pub fn validate_mrv_call_request(request: &MrvCallRequest) -> Result<(), MrvValidationError> {
+    if let Some(from) = &request.from {
+        validate_typed_address("from", from, MrvAddressKind::User)?;
+    }
+    validate_typed_address(
+        "contractAddress",
+        &request.contract_address,
+        MrvAddressKind::Contract,
+    )?;
+    decode_hex("input", &request.input)?;
+    validate_decimal("valueLythoshi", &request.value_lythoshi)?;
+    validate_optional_decimal(
+        "maxExecutionFeeLythoshi",
+        request.max_execution_fee_lythoshi.as_deref(),
+    )?;
+    validate_optional_decimal(
+        "priorityTipLythoshi",
+        request.priority_tip_lythoshi.as_deref(),
+    )?;
+    validate_execution_unit_limit("executionUnitLimit", request.execution_unit_limit)?;
+    Ok(())
+}
+
+/// Build and validate an MRV deploy request from raw artifact bytes.
+///
+/// This helper owns the SDK wire naming (`artifactBytes`, `valueLythoshi`,
+/// `executionUnitLimit`) so applications do not have to hand-assemble JSON.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when options contain malformed typed
+/// addresses or invalid execution-unit fields.
+pub fn build_mrv_deploy_request(
+    artifact_bytes: &[u8],
+    options: MrvRequestBuildOptions,
+) -> Result<MrvDeployRequest, MrvValidationError> {
+    let request = MrvDeployRequest {
+        from: options.from,
+        artifact_bytes: hex_encode(artifact_bytes),
+        value_lythoshi: options.value_lythoshi.unwrap_or_default().to_string(),
+        execution_unit_limit: options.execution_unit_limit,
+        max_execution_fee_lythoshi: options
+            .max_execution_fee_lythoshi
+            .map(|value| value.to_string()),
+        priority_tip_lythoshi: options.priority_tip_lythoshi.map(|value| value.to_string()),
+        nonce: options.nonce,
+    };
+    validate_mrv_deploy_request(&request)?;
+    Ok(request)
+}
+
+/// Build and validate an MRV deploy request from a versioned deploy payload.
+///
+/// The returned request places the encoded [`MrvDeployPayload`] envelope in
+/// `artifactBytes`. Use [`build_mrv_deploy_request`] for legacy raw-artifact
+/// deploys.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when options contain malformed typed
+/// addresses or invalid execution-unit fields.
+pub fn build_mrv_deploy_payload_request(
+    artifact_bytes: &[u8],
+    constructor_input: Option<&[u8]>,
+    options: MrvRequestBuildOptions,
+) -> Result<MrvDeployRequest, MrvValidationError> {
+    let payload_bytes = encode_mrv_deploy_payload(artifact_bytes, constructor_input)?;
+    build_mrv_deploy_request(&payload_bytes, options)
+}
+
+/// Build and validate an MRV call request from raw input bytes.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the contract address or options are
+/// malformed.
+pub fn build_mrv_call_request(
+    contract_address: &str,
+    input: &[u8],
+    options: MrvRequestBuildOptions,
+) -> Result<MrvCallRequest, MrvValidationError> {
+    let request = MrvCallRequest {
+        from: options.from,
+        contract_address: contract_address.to_owned(),
+        input: hex_encode(input),
+        value_lythoshi: options.value_lythoshi.unwrap_or_default().to_string(),
+        execution_unit_limit: options.execution_unit_limit,
+        max_execution_fee_lythoshi: options
+            .max_execution_fee_lythoshi
+            .map(|value| value.to_string()),
+        priority_tip_lythoshi: options.priority_tip_lythoshi.map(|value| value.to_string()),
+        nonce: options.nonce,
+    };
+    validate_mrv_call_request(&request)?;
+    Ok(request)
+}
+
+/// Build an MRV deploy plan with the v1 extension descriptor attached.
+///
+/// When `artifact_hash_hex`, `from`, and `nonce` are all present, the helper
+/// also precomputes the deterministic contract address.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when request validation fails or when a
+/// supplied artifact hash is not a 32-byte `0x` hash.
+pub fn build_mrv_deploy_plan(
+    artifact_bytes: &[u8],
+    artifact_hash_hex: Option<&str>,
+    options: MrvRequestBuildOptions,
+) -> Result<MrvDeployPlan, MrvValidationError> {
+    let from = options.from.clone();
+    let nonce = options.nonce;
+    let request = build_mrv_deploy_request(artifact_bytes, options)?;
+    let expected_contract_address = match (artifact_hash_hex, from.as_deref(), nonce) {
+        (Some(artifact_hash), Some(from), Some(nonce)) => {
+            Some(derive_mrv_contract_address(from, nonce, artifact_hash)?)
+        }
+        (Some(artifact_hash), _, _) => {
+            validate_hex_length("artifactHash", artifact_hash, 32)?;
+            None
+        }
+        (None, _, _) => None,
+    };
+    Ok(MrvDeployPlan {
+        request,
+        extension: mrv_v1_transaction_extension(),
+        expected_contract_address,
+    })
+}
+
+/// Build an MRV deploy plan whose transaction input is a deploy payload
+/// envelope.
+///
+/// Expected contract address derivation still uses the raw artifact hash, not
+/// the envelope bytes.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when request validation fails or when a
+/// supplied artifact hash is not a 32-byte `0x` hash.
+pub fn build_mrv_deploy_payload_plan(
+    artifact_bytes: &[u8],
+    artifact_hash_hex: Option<&str>,
+    constructor_input: Option<&[u8]>,
+    options: MrvRequestBuildOptions,
+) -> Result<MrvDeployPlan, MrvValidationError> {
+    let from = options.from.clone();
+    let nonce = options.nonce;
+    let request = build_mrv_deploy_payload_request(artifact_bytes, constructor_input, options)?;
+    let expected_contract_address = match (artifact_hash_hex, from.as_deref(), nonce) {
+        (Some(artifact_hash), Some(from), Some(nonce)) => {
+            Some(derive_mrv_contract_address(from, nonce, artifact_hash)?)
+        }
+        (Some(artifact_hash), _, _) => {
+            validate_hex_length("artifactHash", artifact_hash, 32)?;
+            None
+        }
+        (None, _, _) => None,
+    };
+    Ok(MrvDeployPlan {
+        request,
+        extension: mrv_v1_transaction_extension(),
+        expected_contract_address,
+    })
+}
+
+/// Build an MRV call plan with the v1 extension descriptor attached.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when request validation fails.
+pub fn build_mrv_call_plan(
+    contract_address: &str,
+    input: &[u8],
+    options: MrvRequestBuildOptions,
+) -> Result<MrvCallPlan, MrvValidationError> {
+    Ok(MrvCallPlan {
+        request: build_mrv_call_request(contract_address, input, options)?,
+        extension: mrv_v1_transaction_extension(),
+    })
+}
+
+/// Build an MRV deploy plan plus current sign-ready native transaction fields.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when request validation fails, a supplied
+/// artifact hash is malformed, or the optional signer address is not a typed
+/// user address.
+pub fn build_mrv_deploy_native_tx_plan(
+    artifact_bytes: &[u8],
+    artifact_hash_hex: Option<&str>,
+    options: MrvNativeTxBuildOptions,
+) -> Result<MrvDeployNativeTxPlan, MrvValidationError> {
+    let plan = build_mrv_deploy_plan(artifact_bytes, artifact_hash_hex, options.request_options())?;
+    let tx = MrvNativeTxFields::from_parts(
+        &options,
+        None,
+        plan.request.artifact_bytes.clone(),
+        &plan.request.value_lythoshi,
+        plan.extension.clone(),
+    );
+    let native_tx = MrvNativeTxFacade::from_options(&options, &plan.request.value_lythoshi);
+    let fee_preview = MrvNativeFeePreview::from_options(&options);
+    Ok(MrvDeployNativeTxPlan {
+        request: plan.request,
+        extension: plan.extension,
+        expected_contract_address: plan.expected_contract_address,
+        native_tx,
+        fee_preview,
+        tx,
+    })
+}
+
+/// Build an MRV deploy payload plan plus current sign-ready native transaction
+/// fields.
+///
+/// The raw deploy helper remains [`build_mrv_deploy_native_tx_plan`]. This
+/// variant places a versioned deploy payload envelope in the transaction input
+/// so deployments can include optional constructor input.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when request validation fails, a supplied
+/// artifact hash is malformed, or the optional signer address is not a typed
+/// user address.
+pub fn build_mrv_deploy_payload_native_tx_plan(
+    artifact_bytes: &[u8],
+    artifact_hash_hex: Option<&str>,
+    constructor_input: Option<&[u8]>,
+    options: MrvNativeTxBuildOptions,
+) -> Result<MrvDeployNativeTxPlan, MrvValidationError> {
+    let plan = build_mrv_deploy_payload_plan(
+        artifact_bytes,
+        artifact_hash_hex,
+        constructor_input,
+        options.request_options(),
+    )?;
+    let tx = MrvNativeTxFields::from_parts(
+        &options,
+        None,
+        plan.request.artifact_bytes.clone(),
+        &plan.request.value_lythoshi,
+        plan.extension.clone(),
+    );
+    let native_tx = MrvNativeTxFacade::from_options(&options, &plan.request.value_lythoshi);
+    let fee_preview = MrvNativeFeePreview::from_options(&options);
+    Ok(MrvDeployNativeTxPlan {
+        request: plan.request,
+        extension: plan.extension,
+        expected_contract_address: plan.expected_contract_address,
+        native_tx,
+        fee_preview,
+        tx,
+    })
+}
+
+/// Build an MRV call plan plus current sign-ready native transaction fields.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when request validation fails or the contract
+/// address is not a typed `monoc` address.
+pub fn build_mrv_call_native_tx_plan(
+    contract_address: &str,
+    input: &[u8],
+    options: MrvNativeTxBuildOptions,
+) -> Result<MrvCallNativeTxPlan, MrvValidationError> {
+    let plan = build_mrv_call_plan(contract_address, input, options.request_options())?;
+    let to = address_to_hex(mrv_bech32_to_address_kind(
+        &plan.request.contract_address,
+        MrvAddressKind::Contract,
+    )?);
+    let tx = MrvNativeTxFields::from_parts(
+        &options,
+        Some(to),
+        plan.request.input.clone(),
+        &plan.request.value_lythoshi,
+        plan.extension.clone(),
+    );
+    let native_tx = MrvNativeTxFacade::from_options(&options, &plan.request.value_lythoshi);
+    let fee_preview = MrvNativeFeePreview::from_options(&options);
+    Ok(MrvCallNativeTxPlan {
+        request: plan.request,
+        extension: plan.extension,
+        native_tx,
+        fee_preview,
+        tx,
+    })
+}
+
+/// Assert that a deploy native transaction plan is safe to hand to an
+/// encrypted MRV submission path.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the sign-ready adapter diverges from
+/// the app-facing native facade, the MRV v1 extension is missing/mutated, or
+/// fee fields cannot fit the encrypted AAD u128 budget.
+pub fn assert_mrv_deploy_native_submission_plan(
+    plan: &MrvDeployNativeTxPlan,
+) -> Result<(), MrvValidationError> {
+    assert_mrv_native_submission_envelope(&plan.extension, &plan.native_tx, &plan.tx)?;
+    if plan.tx.to.is_some() {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "deploy tx.to must be null",
+        ));
+    }
+    if plan.tx.input != plan.request.artifact_bytes {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "deploy tx.input must match artifactBytes",
+        ));
+    }
+    Ok(())
+}
+
+/// Assert that a call native transaction plan is safe to hand to an encrypted
+/// MRV submission path.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the sign-ready adapter diverges from
+/// the app-facing native facade, the MRV v1 extension is missing/mutated, the
+/// destination is not the expected 20-byte contract address, or fee fields
+/// cannot fit the encrypted AAD u128 budget.
+pub fn assert_mrv_call_native_submission_plan(
+    plan: &MrvCallNativeTxPlan,
+) -> Result<(), MrvValidationError> {
+    assert_mrv_native_submission_envelope(&plan.extension, &plan.native_tx, &plan.tx)?;
+    let Some(actual_to) = &plan.tx.to else {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "call tx.to must be a 20-byte contract address",
+        ));
+    };
+    let expected_to = address_to_hex(mrv_bech32_to_address_kind(
+        &plan.request.contract_address,
+        MrvAddressKind::Contract,
+    )?);
+    let actual = hex_to_address(actual_to).map_err(|err| MrvValidationError::InvalidAddress {
+        field: "tx.to",
+        reason: err.to_string(),
+    })?;
+    if address_to_hex(actual) != expected_to {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "call tx.to must match contractAddress",
+        ));
+    }
+    if plan.tx.input != plan.request.input {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "call tx.input must match request input",
+        ));
+    }
+    Ok(())
+}
+
+/// Build signed inner transaction material from an MRV native transaction.
+///
+/// This does not encrypt or submit the transaction. It validates the current
+/// native transaction adapter fields, verifies ML-DSA-65 byte lengths, encodes
+/// the canonical signed inner wire payload, and returns the inner hashes needed
+/// by the encrypted-envelope layer.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the transaction, signature, or public
+/// key fields are malformed.
+pub fn build_mrv_native_signed_submission(
+    tx: &MrvNativeTxFields,
+    signature: &[u8],
+    public_key: &[u8],
+) -> Result<MrvNativeSignedSubmission, MrvValidationError> {
+    let inner_sighash_hex = hex_encode(&mrv_native_tx_sighash(tx)?);
+    let inner_tx_hash_hex = hex_encode(&mrv_native_tx_hash(tx, signature, public_key)?);
+    let signed_inner_tx_wire = encode_mrv_signed_native_tx_bincode(tx, signature, public_key)?;
+    Ok(MrvNativeSignedSubmission {
+        inner_sighash_hex,
+        inner_tx_hash_hex,
+        signed_inner_tx_wire_hex: hex_encode(&signed_inner_tx_wire),
+        signed_inner_tx_wire_bytes: signed_inner_tx_wire.len(),
+    })
+}
+
+/// Validate an MRV deploy plan and attach signed inner transaction material.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the plan guardrails fail or when the
+/// signature/public key cannot produce canonical signed inner bytes.
+pub fn build_mrv_deploy_native_signed_submission(
+    plan: &MrvDeployNativeTxPlan,
+    signature: &[u8],
+    public_key: &[u8],
+) -> Result<MrvDeployNativeSignedSubmission, MrvValidationError> {
+    assert_mrv_deploy_native_submission_plan(plan)?;
+    let submission = build_mrv_native_signed_submission(&plan.tx, signature, public_key)?;
+    Ok(MrvDeployNativeSignedSubmission {
+        request: plan.request.clone(),
+        extension: plan.extension.clone(),
+        expected_contract_address: plan.expected_contract_address.clone(),
+        native_tx: plan.native_tx.clone(),
+        fee_preview: plan.fee_preview.clone(),
+        tx: plan.tx.clone(),
+        submission,
+    })
+}
+
+/// Validate an MRV call plan and attach signed inner transaction material.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the plan guardrails fail or when the
+/// signature/public key cannot produce canonical signed inner bytes.
+pub fn build_mrv_call_native_signed_submission(
+    plan: &MrvCallNativeTxPlan,
+    signature: &[u8],
+    public_key: &[u8],
+) -> Result<MrvCallNativeSignedSubmission, MrvValidationError> {
+    assert_mrv_call_native_submission_plan(plan)?;
+    let submission = build_mrv_native_signed_submission(&plan.tx, signature, public_key)?;
+    Ok(MrvCallNativeSignedSubmission {
+        request: plan.request.clone(),
+        extension: plan.extension.clone(),
+        native_tx: plan.native_tx.clone(),
+        fee_preview: plan.fee_preview.clone(),
+        tx: plan.tx.clone(),
+        submission,
+    })
+}
+
+/// Build encrypted native submission material for a sign-ready native
+/// transaction.
+///
+/// The caller supplies the already-produced inner ML-DSA-65 signature/public
+/// key and a callback that signs the outer envelope digest. This helper never
+/// handles private key material.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when transaction fields, cryptographic input
+/// lengths, the ML-KEM key, encryption, or the outer signature callback fail.
+pub fn build_mrv_native_encrypted_submission<F>(
+    tx: &MrvNativeTxFields,
+    inner_signature: &[u8],
+    public_key: &[u8],
+    encryption_key: &MrvEncryptionKey,
+    mempool_class: Option<MrvMempoolClass>,
+    sign_outer_digest: F,
+) -> Result<MrvNativeEncryptedSubmission, MrvValidationError>
+where
+    F: FnOnce(&[u8; 32]) -> Result<Vec<u8>, MrvValidationError>,
+{
+    expect_len("signature", inner_signature, ML_DSA_65_SIGNATURE_LEN)?;
+    expect_len("publicKey", public_key, ML_DSA_65_PUBLIC_KEY_LEN)?;
+
+    let sender = ml_dsa65_address_bytes(public_key)?;
+    let nonce_aad = mrv_encrypted_nonce_aad_from_tx(tx, sender, mempool_class)?;
+    let decrypt_hint = MrvEncryptedDecryptHint {
+        epoch: encryption_key.epoch,
+        scheme: 0,
+    };
+    let signed_inner_tx_wire =
+        encode_mrv_signed_native_tx_bincode(tx, inner_signature, public_key)?;
+    let ciphertext =
+        encrypt_mrv_signed_inner_tx(&signed_inner_tx_wire, &nonce_aad, encryption_key)?;
+    let outer_signature_digest =
+        mrv_encrypted_outer_signature_digest(&nonce_aad, &ciphertext, &decrypt_hint, public_key)?;
+    let outer_signature = sign_outer_digest(&outer_signature_digest)?;
+    expect_len("outerSignature", &outer_signature, ML_DSA_65_SIGNATURE_LEN)?;
+    let envelope_wire = encode_mrv_encrypted_envelope_bincode(
+        &nonce_aad,
+        &ciphertext,
+        &decrypt_hint,
+        public_key,
+        &outer_signature,
+        &sender,
+    )?;
+
+    Ok(MrvNativeEncryptedSubmission {
+        envelope_wire_hex: hex_encode(&envelope_wire),
+        outer_signature_digest_hex: hex_encode(&outer_signature_digest),
+        inner_sighash_hex: hex_encode(&mrv_native_tx_sighash(tx)?),
+        inner_tx_hash_hex: hex_encode(&mrv_native_tx_hash(tx, inner_signature, public_key)?),
+        inner_wire_bytes: signed_inner_tx_wire.len(),
+        envelope_wire_bytes: envelope_wire.len(),
+    })
+}
+
+/// Validate an MRV deploy plan and build encrypted envelope submission
+/// material.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the plan guardrails fail, the request
+/// `from` address does not match the supplied ML-DSA-65 public key, or
+/// encrypted envelope construction fails.
+pub fn build_mrv_deploy_native_encrypted_submission<F>(
+    plan: &MrvDeployNativeTxPlan,
+    inner_signature: &[u8],
+    public_key: &[u8],
+    encryption_key: &MrvEncryptionKey,
+    mempool_class: Option<MrvMempoolClass>,
+    sign_outer_digest: F,
+) -> Result<MrvDeployNativeEncryptedSubmission, MrvValidationError>
+where
+    F: FnOnce(&[u8; 32]) -> Result<Vec<u8>, MrvValidationError>,
+{
+    assert_mrv_deploy_native_submission_plan(plan)?;
+    validate_mrv_submission_sender(plan.request.from.as_deref(), public_key)?;
+    let submission = build_mrv_native_encrypted_submission(
+        &plan.tx,
+        inner_signature,
+        public_key,
+        encryption_key,
+        mempool_class,
+        sign_outer_digest,
+    )?;
+    Ok(MrvDeployNativeEncryptedSubmission {
+        request: plan.request.clone(),
+        extension: plan.extension.clone(),
+        expected_contract_address: plan.expected_contract_address.clone(),
+        native_tx: plan.native_tx.clone(),
+        fee_preview: plan.fee_preview.clone(),
+        tx: plan.tx.clone(),
+        submission,
+    })
+}
+
+/// Validate an MRV call plan and build encrypted envelope submission material.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the plan guardrails fail, the request
+/// `from` address does not match the supplied ML-DSA-65 public key, or
+/// encrypted envelope construction fails.
+pub fn build_mrv_call_native_encrypted_submission<F>(
+    plan: &MrvCallNativeTxPlan,
+    inner_signature: &[u8],
+    public_key: &[u8],
+    encryption_key: &MrvEncryptionKey,
+    mempool_class: Option<MrvMempoolClass>,
+    sign_outer_digest: F,
+) -> Result<MrvCallNativeEncryptedSubmission, MrvValidationError>
+where
+    F: FnOnce(&[u8; 32]) -> Result<Vec<u8>, MrvValidationError>,
+{
+    assert_mrv_call_native_submission_plan(plan)?;
+    validate_mrv_submission_sender(plan.request.from.as_deref(), public_key)?;
+    let submission = build_mrv_native_encrypted_submission(
+        &plan.tx,
+        inner_signature,
+        public_key,
+        encryption_key,
+        mempool_class,
+        sign_outer_digest,
+    )?;
+    Ok(MrvCallNativeEncryptedSubmission {
+        request: plan.request.clone(),
+        extension: plan.extension.clone(),
+        native_tx: plan.native_tx.clone(),
+        fee_preview: plan.fee_preview.clone(),
+        tx: plan.tx.clone(),
+        submission,
+    })
+}
+
+/// Encode encrypted nonce AAD using the current bincode wire shape.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] only if an internal bounded length cannot fit
+/// the bincode length field.
+pub fn bincode_mrv_encrypted_nonce_aad(
+    aad: &MrvEncryptedNonceAad,
+) -> Result<Vec<u8>, MrvValidationError> {
+    let mut out = Vec::new();
+    push_bincode_bytes(&mut out, "nonceAad.sender", &aad.sender)?;
+    push_u64_le(&mut out, aad.nonce);
+    push_u64_le(&mut out, aad.chain_id);
+    out.extend_from_slice(&aad.class.as_u32().to_le_bytes());
+    out.extend_from_slice(&aad.max_execution_unit_price_lythoshi.to_le_bytes());
+    out.extend_from_slice(&aad.priority_tip_lythoshi.to_le_bytes());
+    push_u64_le(&mut out, aad.execution_unit_limit);
+    Ok(out)
+}
+
+/// Encode encrypted-envelope decrypt hint using the current bincode wire
+/// shape.
+#[must_use]
+pub fn bincode_mrv_encrypted_decrypt_hint(hint: &MrvEncryptedDecryptHint) -> Vec<u8> {
+    let mut out = Vec::new();
+    push_u64_le(&mut out, hint.epoch);
+    out.extend_from_slice(&hint.scheme.to_le_bytes());
+    out
+}
+
+/// Compute the Keccak-256 digest signed by the encrypted envelope's outer
+/// signature.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when the sender public key length is wrong.
+pub fn mrv_encrypted_outer_signature_digest(
+    nonce_aad: &MrvEncryptedNonceAad,
+    ciphertext: &[u8],
+    decrypt_hint: &MrvEncryptedDecryptHint,
+    sender_public_key: &[u8],
+) -> Result<[u8; 32], MrvValidationError> {
+    expect_len("senderPubkey", sender_public_key, ML_DSA_65_PUBLIC_KEY_LEN)?;
+    let mut preimage = bincode_mrv_encrypted_nonce_aad(nonce_aad)?;
+    preimage.extend_from_slice(ciphertext);
+    preimage.extend_from_slice(&bincode_mrv_encrypted_decrypt_hint(decrypt_hint));
+    preimage.extend_from_slice(sender_public_key);
+    Ok(keccak32(&preimage))
+}
+
+/// Encode the canonical transaction preimage that native transaction signers
+/// hash before signing.
+///
+/// The returned bytes are not the signed wire envelope. Hash them with
+/// Keccak-256 or call [`mrv_native_tx_sighash`] directly.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when decimal, hex, address, or extension
+/// fields are malformed.
+pub fn encode_mrv_native_tx_signing_preimage(
+    tx: &MrvNativeTxFields,
+) -> Result<Vec<u8>, MrvValidationError> {
+    encode_mrv_native_tx_for_hash(tx, TX_HASH_TAG_SIGNING)
+}
+
+/// Compute the Keccak-256 digest that an external ML-DSA-65 signer signs for a
+/// native MRV transaction.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when transaction fields are malformed.
+pub fn mrv_native_tx_sighash(tx: &MrvNativeTxFields) -> Result<[u8; 32], MrvValidationError> {
+    Ok(keccak32(&encode_mrv_native_tx_signing_preimage(tx)?))
+}
+
+/// Compute the signed transaction identity hash from the transaction fields,
+/// raw ML-DSA-65 signature, and raw ML-DSA-65 public key.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when transaction fields are malformed or the
+/// signature/public key lengths are wrong.
+pub fn mrv_native_tx_hash(
+    tx: &MrvNativeTxFields,
+    signature: &[u8],
+    public_key: &[u8],
+) -> Result<[u8; 32], MrvValidationError> {
+    expect_len("signature", signature, ML_DSA_65_SIGNATURE_LEN)?;
+    expect_len("publicKey", public_key, ML_DSA_65_PUBLIC_KEY_LEN)?;
+    let mut preimage = encode_mrv_native_tx_for_hash(tx, TX_HASH_TAG_IDENTITY)?;
+    preimage.extend_from_slice(signature);
+    preimage.extend_from_slice(public_key);
+    Ok(keccak32(&preimage))
+}
+
+/// Encode the current bincode signed native transaction envelope from an
+/// already-produced ML-DSA-65 signature and public key.
+///
+/// # Errors
+/// Returns [`MrvValidationError`] when transaction fields are malformed or the
+/// signature/public key lengths are wrong.
+pub fn encode_mrv_signed_native_tx_bincode(
+    tx: &MrvNativeTxFields,
+    signature: &[u8],
+    public_key: &[u8],
+) -> Result<Vec<u8>, MrvValidationError> {
+    expect_len("signature", signature, ML_DSA_65_SIGNATURE_LEN)?;
+    expect_len("publicKey", public_key, ML_DSA_65_PUBLIC_KEY_LEN)?;
+
+    let input = decode_hex("input", &tx.input)?;
+    let to = tx
+        .to
+        .as_deref()
+        .map(|to| {
+            hex_to_address(to).map_err(|err| MrvValidationError::InvalidAddress {
+                field: "to",
+                reason: err.to_string(),
+            })
+        })
+        .transpose()?;
+    let extensions = decode_native_tx_extensions(&tx.extensions)?;
+    let mut out = Vec::new();
+    push_u64_le(&mut out, tx.chain_id);
+    push_u64_le(&mut out, tx.nonce);
+    push_u256_le(
+        &mut out,
+        parse_u128_decimal("maxPriorityFeePerGas", &tx.max_priority_fee_per_gas)?,
+    );
+    push_u256_le(
+        &mut out,
+        parse_u128_decimal("maxFeePerGas", &tx.max_fee_per_gas)?,
+    );
+    push_u64_le(&mut out, tx.gas_limit);
+    match to {
+        Some(addr) => {
+            out.push(1);
+            out.extend_from_slice(&addr);
+        }
+        None => out.push(0),
+    }
+    push_u256_le(&mut out, parse_u128_decimal("value", &tx.value)?);
+    push_bincode_bytes(&mut out, "input", &input)?;
+    push_u64_le(&mut out, 0);
+    push_u64_le(
+        &mut out,
+        u64::try_from(extensions.len()).unwrap_or(u64::MAX),
+    );
+    for extension in extensions {
+        out.push(extension.kind);
+        push_bincode_bytes(&mut out, "extension.body", &extension.body)?;
+    }
+    push_ml_dsa65_opaque(&mut out, signature)?;
+    push_ml_dsa65_opaque(&mut out, public_key)?;
+    Ok(out)
+}
+
+struct DecodedNativeTxExtension {
+    kind: u8,
+    body: Vec<u8>,
+}
+
+fn encode_mrv_native_tx_for_hash(
+    tx: &MrvNativeTxFields,
+    tag: u8,
+) -> Result<Vec<u8>, MrvValidationError> {
+    let input = decode_hex("input", &tx.input)?;
+    let to = tx
+        .to
+        .as_deref()
+        .map(|to| {
+            hex_to_address(to).map_err(|err| MrvValidationError::InvalidAddress {
+                field: "to",
+                reason: err.to_string(),
+            })
+        })
+        .transpose()?;
+    let extensions = decode_native_tx_extensions(&tx.extensions)?;
+    let mut out = Vec::new();
+    out.push(tag);
+    out.extend_from_slice(&tx.chain_id.to_be_bytes());
+    out.extend_from_slice(&tx.nonce.to_be_bytes());
+    push_u256_be(
+        &mut out,
+        parse_u128_decimal("maxPriorityFeePerGas", &tx.max_priority_fee_per_gas)?,
+    );
+    push_u256_be(
+        &mut out,
+        parse_u128_decimal("maxFeePerGas", &tx.max_fee_per_gas)?,
+    );
+    out.extend_from_slice(&tx.gas_limit.to_be_bytes());
+    match to {
+        Some(addr) => {
+            out.push(1);
+            out.extend_from_slice(&addr);
+        }
+        None => out.push(0),
+    }
+    push_u256_be(&mut out, parse_u128_decimal("value", &tx.value)?);
+    push_u32_len_be(&mut out, "input.length", input.len())?;
+    out.extend_from_slice(&input);
+    out.extend_from_slice(&0_u32.to_be_bytes());
+    push_u32_len_be(&mut out, "extensions.length", extensions.len())?;
+    for extension in extensions {
+        out.push(extension.kind);
+        push_u32_len_be(&mut out, "extension.body", extension.body.len())?;
+        out.extend_from_slice(&extension.body);
+    }
+    Ok(out)
+}
+
+fn decode_native_tx_extensions(
+    extensions: &[MrvTransactionExtension],
+) -> Result<Vec<DecodedNativeTxExtension>, MrvValidationError> {
+    extensions
+        .iter()
+        .map(|extension| {
+            Ok(DecodedNativeTxExtension {
+                kind: extension.kind,
+                body: decode_hex("extension.bodyHex", &extension.body_hex)?,
+            })
+        })
+        .collect()
+}
+
+fn parse_u128_decimal(field: &'static str, value: &str) -> Result<u128, MrvValidationError> {
+    validate_decimal(field, value)?;
+    value
+        .parse::<u128>()
+        .map_err(|_| MrvValidationError::InvalidDecimal { field })
+}
+
+fn visible_fraction(fraction: u128) -> String {
+    format!("{fraction:08}").trim_end_matches('0').to_owned()
+}
+
+fn format_whole_with_commas(value: u128) -> String {
+    let digits = value.to_string();
+    let first_group_len = digits.len() % 3;
+    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
+    let mut index = 0;
+    if first_group_len != 0 {
+        formatted.push_str(&digits[..first_group_len]);
+        index = first_group_len;
+        if index < digits.len() {
+            formatted.push(',');
+        }
+    }
+    while index < digits.len() {
+        formatted.push_str(&digits[index..index + 3]);
+        index += 3;
+        if index < digits.len() {
+            formatted.push(',');
+        }
+    }
+    formatted
+}
+
+fn strip_lyth_unit(input: &str) -> Result<&str, MrvValidationError> {
+    let trimmed = input.trim();
+    let numeric = if trimmed.len() >= 4 && trimmed[trimmed.len() - 4..].eq_ignore_ascii_case("LYTH")
+    {
+        let before_unit = &trimmed[..trimmed.len() - 4];
+        if before_unit
+            .as_bytes()
+            .last()
+            .is_none_or(u8::is_ascii_whitespace)
+        {
+            before_unit.trim_end()
+        } else {
+            return Err(MrvValidationError::InvalidDecimal { field: "lyth" });
+        }
+    } else {
+        trimmed
+    };
+    if numeric.is_empty() {
+        return Err(MrvValidationError::InvalidDecimal { field: "lyth" });
+    }
+    Ok(numeric)
+}
+
+fn is_canonical_whole_lyth(value: &str) -> bool {
+    if value == "0" {
+        return true;
+    }
+    if !value.contains(',') {
+        return !value.starts_with('0') && value.bytes().all(|b| b.is_ascii_digit());
+    }
+    let mut groups = value.split(',');
+    let Some(first) = groups.next() else {
+        return false;
+    };
+    if first.is_empty()
+        || first.len() > 3
+        || first.starts_with('0')
+        || !first.bytes().all(|b| b.is_ascii_digit())
+    {
+        return false;
+    }
+    groups.all(|group| group.len() == 3 && group.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn extract_lyth_amount_candidates(text: &str) -> Vec<String> {
+    let tokens = text.split_whitespace().collect::<Vec<_>>();
+    let mut candidates = Vec::new();
+    for pair in tokens.windows(2) {
+        if trim_unit_token(pair[1]) == "LYTH" {
+            let amount = trim_amount_token(pair[0]);
+            if !amount.is_empty() {
+                candidates.push(amount.to_owned());
+            }
+        }
+    }
+    candidates
+}
+
+fn trim_unit_token(token: &str) -> &str {
+    token.trim_matches(|ch: char| {
+        matches!(
+            ch,
+            ':' | ';' | ',' | '.' | '!' | '?' | '(' | ')' | '[' | ']'
+        )
+    })
+}
+
+fn trim_amount_token(token: &str) -> &str {
+    token.trim_matches(|ch: char| !ch.is_ascii_digit() && ch != ',' && ch != '.')
+}
+
+fn first_forbidden_default_fee_term(text: &str) -> Option<&'static str> {
+    let tokens = fee_term_tokens(text);
+    for forbidden in ["gas", "gwei", "wei", "cycle", "cycles", "lythoshi"] {
+        if tokens.iter().any(|token| token == forbidden) {
+            return Some(forbidden);
+        }
+    }
+    if has_adjacent_terms(&tokens, "state", "io") || has_state_i_o_terms(&tokens) {
+        return Some("state I/O");
+    }
+    None
+}
+
+fn first_forbidden_detail_fee_term(text: &str) -> Option<&'static str> {
+    let tokens = fee_term_tokens(text);
+    ["gas", "gwei", "wei"]
+        .into_iter()
+        .find(|forbidden| tokens.iter().any(|token| token == forbidden))
+}
+
+fn fee_term_tokens(text: &str) -> Vec<String> {
+    text.to_ascii_lowercase()
+        .split(|ch: char| !ch.is_ascii_alphabetic())
+        .filter(|token| !token.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn has_adjacent_terms(tokens: &[String], first: &str, second: &str) -> bool {
+    tokens
+        .windows(2)
+        .any(|window| window[0] == first && window[1] == second)
+}
+
+fn has_state_i_o_terms(tokens: &[String]) -> bool {
+    tokens
+        .windows(3)
+        .any(|window| window[0] == "state" && window[1] == "i" && window[2] == "o")
+}
+
+fn check_structured_fee_object(
+    value: &serde_json::Value,
+    expected_total_lythoshi: u128,
+    failures: &mut Vec<String>,
+) {
+    let Some(object) = value.as_object() else {
+        failures.push("structured_fee must be an object".to_owned());
+        return;
+    };
+    let required_fields = MRV_STRUCTURED_FEE_FIELDS
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let allowed_fields = required_fields
+        .iter()
+        .copied()
+        .chain(MRV_OPTIONAL_STRUCTURED_FEE_FIELDS)
+        .collect::<BTreeSet<_>>();
+    let actual_fields = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    for field in required_fields.difference(&actual_fields) {
+        failures.push(format!("structured_fee is missing '{field}'"));
+    }
+    for field in actual_fields.difference(&allowed_fields) {
+        failures.push(format!("structured_fee has unexpected field '{field}'"));
+    }
+
+    if let Some(total_lythoshi) = json_decimal_string(object, "total_lythoshi", failures) {
+        if total_lythoshi != expected_total_lythoshi.to_string() {
+            failures.push(format!(
+                "structured_fee.total_lythoshi must be {expected_total_lythoshi}"
+            ));
+        }
+    }
+    let expected_total_lyth = format_lyth(expected_total_lythoshi, LythFormatOptions::NUMERIC_ONLY);
+    if object.contains_key("total_lyth") {
+        if let Some(total_lyth) = json_lyth_decimal_string(object, "total_lyth", failures) {
+            if total_lyth != expected_total_lyth {
+                failures.push(format!(
+                    "structured_fee.total_lyth must be {expected_total_lyth}"
+                ));
+            }
+        }
+    }
+    for field in [
+        "base_price_per_cycle_lythoshi",
+        "state_io_price_per_unit_lythoshi",
+        "priority_tip_lythoshi",
+    ] {
+        json_decimal_string(object, field, failures);
+    }
+    for field in ["cycles_used", "state_io_units"] {
+        json_nonnegative_integer(object, field, failures);
+    }
+}
+
+fn json_decimal_string<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    field: &'static str,
+    failures: &mut Vec<String>,
+) -> Option<&'a str> {
+    match object.get(field).and_then(serde_json::Value::as_str) {
+        Some(value) if validate_decimal(field, value).is_ok() => Some(value),
+        _ => {
+            failures.push(format!(
+                "structured_fee.{field} must be a canonical unsigned decimal string"
+            ));
+            None
+        }
+    }
+}
+
+fn json_lyth_decimal_string<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    field: &'static str,
+    failures: &mut Vec<String>,
+) -> Option<&'a str> {
+    match object.get(field).and_then(serde_json::Value::as_str) {
+        Some(value) if parse_lyth_to_lythoshi(&format!("{value} LYTH")).is_ok() => Some(value),
+        _ => {
+            failures.push(format!(
+                "structured_fee.{field} must be a canonical LYTH decimal string"
+            ));
+            None
+        }
+    }
+}
+
+fn json_nonnegative_integer(
+    object: &serde_json::Map<String, serde_json::Value>,
+    field: &'static str,
+    failures: &mut Vec<String>,
+) {
+    if object
+        .get(field)
+        .and_then(serde_json::Value::as_u64)
+        .is_none()
+    {
+        failures.push(format!(
+            "structured_fee.{field} must be a non-negative integer"
+        ));
+    }
+}
+
+fn assert_mrv_native_submission_envelope(
+    extension: &MrvTransactionExtension,
+    native_tx: &MrvNativeTxFacade,
+    tx: &MrvNativeTxFields,
+) -> Result<(), MrvValidationError> {
+    if tx.extensions.len() != 1 {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "native submission must carry exactly one transaction extension",
+        ));
+    }
+    assert_mrv_v1_extension(extension, "extension")?;
+    assert_mrv_v1_extension(&tx.extensions[0], "tx.extensions[0]")?;
+    if tx.chain_id != native_tx.chain_id
+        || tx.nonce != native_tx.nonce
+        || tx.gas_limit != native_tx.execution_unit_limit
+    {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "transaction adapter counters must match nativeTx",
+        ));
+    }
+    if tx.value != native_tx.value_lythoshi {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "tx.value must match nativeTx.valueLythoshi",
+        ));
+    }
+    if tx.max_fee_per_gas != native_tx.max_execution_fee_lythoshi {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "tx.maxFeePerGas must match nativeTx.maxExecutionFeeLythoshi",
+        ));
+    }
+    if tx.max_priority_fee_per_gas != native_tx.priority_tip_lythoshi {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "tx.maxPriorityFeePerGas must match nativeTx.priorityTipLythoshi",
+        ));
+    }
+    parse_u128_decimal(
+        "maxExecutionFeeLythoshi",
+        &native_tx.max_execution_fee_lythoshi,
+    )?;
+    parse_u128_decimal("priorityTipLythoshi", &native_tx.priority_tip_lythoshi)?;
+    parse_u128_decimal("tx.maxFeePerGas", &tx.max_fee_per_gas)?;
+    parse_u128_decimal("tx.maxPriorityFeePerGas", &tx.max_priority_fee_per_gas)?;
+    Ok(())
+}
+
+fn assert_mrv_v1_extension(
+    extension: &MrvTransactionExtension,
+    field: &'static str,
+) -> Result<(), MrvValidationError> {
+    if extension.kind != MRV_TX_EXTENSION_KIND || extension.body_hex != "0x01" {
+        return Err(MrvValidationError::InvalidNativeSubmission(field));
+    }
+    Ok(())
+}
+
+fn default_mrv_encryption_algo() -> String {
+    MRV_ENCRYPTION_ALGO_ML_KEM_768.to_owned()
+}
+
+fn validate_mrv_submission_sender(
+    from: Option<&str>,
+    public_key: &[u8],
+) -> Result<(), MrvValidationError> {
+    let Some(from) = from else {
+        return Ok(());
+    };
+    let expected = ml_dsa65_address_bytes(public_key)?;
+    let actual =
+        mrv_bech32_to_address_kind(from, MrvAddressKind::User).map_err(|err| match err {
+            MrvValidationError::InvalidAddress { reason, .. } => {
+                MrvValidationError::InvalidAddress {
+                    field: "from",
+                    reason,
+                }
+            }
+            other => other,
+        })?;
+    if actual != expected {
+        return Err(MrvValidationError::InvalidNativeSubmission(
+            "request.from must match ML-DSA-65 public key",
+        ));
+    }
+    Ok(())
+}
+
+fn mrv_encrypted_nonce_aad_from_tx(
+    tx: &MrvNativeTxFields,
+    sender: [u8; 20],
+    mempool_class: Option<MrvMempoolClass>,
+) -> Result<MrvEncryptedNonceAad, MrvValidationError> {
+    let input = decode_hex("input", &tx.input)?;
+    if let Some(to) = &tx.to {
+        hex_to_address(to).map_err(|err| MrvValidationError::InvalidAddress {
+            field: "to",
+            reason: err.to_string(),
+        })?;
+    }
+    let class = mempool_class.unwrap_or_else(|| {
+        if tx.to.is_some() && input.is_empty() {
+            MrvMempoolClass::Transfer
+        } else {
+            MrvMempoolClass::ContractCall
+        }
+    });
+    Ok(MrvEncryptedNonceAad {
+        sender,
+        nonce: tx.nonce,
+        chain_id: tx.chain_id,
+        class,
+        max_execution_unit_price_lythoshi: parse_u128_decimal("maxFeePerGas", &tx.max_fee_per_gas)?,
+        priority_tip_lythoshi: parse_u128_decimal(
+            "maxPriorityFeePerGas",
+            &tx.max_priority_fee_per_gas,
+        )?,
+        execution_unit_limit: tx.gas_limit,
+    })
+}
+
+fn ml_dsa65_address_bytes(public_key: &[u8]) -> Result<[u8; 20], MrvValidationError> {
+    expect_len("publicKey", public_key, ML_DSA_65_PUBLIC_KEY_LEN)?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(ML_DSA_65_ADDRESS_DERIVATION_DOMAIN);
+    hasher.update(&STANDARD_ALGO_NUMBER_ML_DSA_65.to_be_bytes());
+    hasher.update(public_key);
+    let digest = hasher.finalize();
+    let mut out = [0u8; 20];
+    out.copy_from_slice(&digest.as_bytes()[..20]);
+    Ok(out)
+}
+
+fn validate_mrv_encryption_key(
+    encryption_key: &MrvEncryptionKey,
+) -> Result<Vec<u8>, MrvValidationError> {
+    if encryption_key.algo != MRV_ENCRYPTION_ALGO_ML_KEM_768 {
+        return Err(MrvValidationError::UnsupportedEncryptionKeyAlgorithm {
+            found: encryption_key.algo.clone(),
+        });
+    }
+    let encapsulation_key = decode_hex("encapsulationKey", &encryption_key.encapsulation_key)?;
+    expect_len(
+        "encapsulationKey",
+        &encapsulation_key,
+        ML_KEM_768_ENCAPSULATION_KEY_LEN,
+    )?;
+    Ok(encapsulation_key)
+}
+
+fn encrypt_mrv_signed_inner_tx(
+    signed_inner_tx_bincode: &[u8],
+    nonce_aad: &MrvEncryptedNonceAad,
+    encryption_key: &MrvEncryptionKey,
+) -> Result<Vec<u8>, MrvValidationError> {
+    let encapsulation_key = validate_mrv_encryption_key(encryption_key)?;
+    let ek = MlKem768EncapsulationKey::new_from_slice(&encapsulation_key).map_err(|_| {
+        MrvValidationError::InvalidEncryptionKey("ML-KEM-768 encapsulation key failed validation")
+    })?;
+
+    let mut kem_random = [0u8; ML_KEM_768_SHARED_SECRET_LEN];
+    getrandom::fill(&mut kem_random).map_err(|err| MrvValidationError::CryptoRandom {
+        reason: err.to_string(),
+    })?;
+    let mut kem_random_array: ml_kem::B32 = kem_random.into();
+    let (kem_ciphertext, mut shared_secret) = ek.encapsulate_deterministic(&kem_random_array);
+    kem_random.zeroize();
+    kem_random_array.zeroize();
+
+    let mut nonce = [0u8; DKG_NONCE_LEN];
+    getrandom::fill(&mut nonce).map_err(|err| MrvValidationError::CryptoRandom {
+        reason: err.to_string(),
+    })?;
+    let aead_aad = mrv_encrypted_aead_aad(nonce_aad)?;
+    let cipher = ChaCha20Poly1305::new(Key::from_slice(shared_secret.as_ref()));
+    let aead_ciphertext = cipher
+        .encrypt(
+            Nonce::from_slice(&nonce),
+            Payload {
+                msg: signed_inner_tx_bincode,
+                aad: &aead_aad,
+            },
+        )
+        .map_err(|_| MrvValidationError::EncryptionFailed)?;
+    shared_secret.zeroize();
+
+    let mut out =
+        Vec::with_capacity(ML_KEM_768_CIPHERTEXT_LEN + DKG_NONCE_LEN + aead_ciphertext.len());
+    out.extend_from_slice(kem_ciphertext.as_ref());
+    out.extend_from_slice(&nonce);
+    out.extend_from_slice(&aead_ciphertext);
+    Ok(out)
+}
+
+fn mrv_encrypted_aead_aad(nonce_aad: &MrvEncryptedNonceAad) -> Result<Vec<u8>, MrvValidationError> {
+    let encoded = bincode_mrv_encrypted_nonce_aad(nonce_aad)?;
+    let mut out = Vec::with_capacity(DKG_AEAD_DOMAIN_TAG.len() + encoded.len());
+    out.extend_from_slice(DKG_AEAD_DOMAIN_TAG);
+    out.extend_from_slice(&encoded);
+    Ok(out)
+}
+
+fn encode_mrv_encrypted_envelope_bincode(
+    nonce_aad: &MrvEncryptedNonceAad,
+    ciphertext: &[u8],
+    decrypt_hint: &MrvEncryptedDecryptHint,
+    sender_public_key: &[u8],
+    outer_signature: &[u8],
+    sender: &[u8; 20],
+) -> Result<Vec<u8>, MrvValidationError> {
+    expect_len("senderPubkey", sender_public_key, ML_DSA_65_PUBLIC_KEY_LEN)?;
+    expect_len("outerSignature", outer_signature, ML_DSA_65_SIGNATURE_LEN)?;
+    let mut out = bincode_mrv_encrypted_nonce_aad(nonce_aad)?;
+    push_bincode_bytes(&mut out, "ciphertext", ciphertext)?;
+    out.extend_from_slice(&bincode_mrv_encrypted_decrypt_hint(decrypt_hint));
+    push_ml_dsa65_opaque(&mut out, sender_public_key)?;
+    push_ml_dsa65_opaque(&mut out, outer_signature)?;
+    push_bincode_bytes(&mut out, "sender", sender)?;
+    Ok(out)
+}
+
+fn encode_mrv_deploy_payload_struct(
+    payload: &MrvDeployPayload,
+) -> Result<Vec<u8>, MrvValidationError> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&payload.version.to_le_bytes());
+    push_deploy_payload_bytes(&mut out, &payload.artifact)?;
+    match &payload.constructor {
+        Some(constructor) => {
+            out.push(1);
+            push_deploy_payload_bytes(&mut out, constructor)?;
+        }
+        None => out.push(0),
+    }
+    Ok(out)
+}
+
+fn push_deploy_payload_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), MrvValidationError> {
+    let len = u64::try_from(bytes.len())
+        .map_err(|_| MrvValidationError::InvalidDeployPayload("length overflow"))?;
+    push_u64_le(out, len);
+    out.extend_from_slice(bytes);
+    Ok(())
+}
+
+struct BincodeReader<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> BincodeReader<'a> {
+    const fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn u8(&mut self) -> Result<u8, MrvValidationError> {
+        let value = self
+            .bytes
+            .get(self.offset)
+            .copied()
+            .ok_or(MrvValidationError::InvalidDeployPayload("truncated"))?;
+        self.offset += 1;
+        Ok(value)
+    }
+
+    fn u16(&mut self) -> Result<u16, MrvValidationError> {
+        let bytes = self.take_array::<2>()?;
+        Ok(u16::from_le_bytes(bytes))
+    }
+
+    fn u64(&mut self) -> Result<u64, MrvValidationError> {
+        let bytes = self.take_array::<8>()?;
+        Ok(u64::from_le_bytes(bytes))
+    }
+
+    fn bytes(&mut self, _field: &'static str) -> Result<Vec<u8>, MrvValidationError> {
+        let len = usize::try_from(self.u64()?)
+            .map_err(|_| MrvValidationError::InvalidDeployPayload("length overflow"))?;
+        let end = self
+            .offset
+            .checked_add(len)
+            .ok_or(MrvValidationError::InvalidDeployPayload("length overflow"))?;
+        let bytes = self
+            .bytes
+            .get(self.offset..end)
+            .ok_or(MrvValidationError::InvalidDeployPayload("truncated"))?;
+        self.offset = end;
+        Ok(bytes.to_vec())
+    }
+
+    fn option_bytes(&mut self, field: &'static str) -> Result<Option<Vec<u8>>, MrvValidationError> {
+        match self.u8()? {
+            0 => Ok(None),
+            1 => self.bytes(field).map(Some),
+            _ => Err(MrvValidationError::InvalidDeployPayload(
+                "invalid option tag",
+            )),
+        }
+    }
+
+    fn finish(&self) -> Result<(), MrvValidationError> {
+        if self.offset == self.bytes.len() {
+            Ok(())
+        } else {
+            Err(MrvValidationError::InvalidDeployPayload("trailing bytes"))
+        }
+    }
+
+    fn take_array<const N: usize>(&mut self) -> Result<[u8; N], MrvValidationError> {
+        let end = self
+            .offset
+            .checked_add(N)
+            .ok_or(MrvValidationError::InvalidDeployPayload("length overflow"))?;
+        let bytes = self
+            .bytes
+            .get(self.offset..end)
+            .ok_or(MrvValidationError::InvalidDeployPayload("truncated"))?;
+        self.offset = end;
+        let mut out = [0u8; N];
+        out.copy_from_slice(bytes);
+        Ok(out)
+    }
+}
+
+fn push_u256_be(out: &mut Vec<u8>, value: u128) {
+    out.extend_from_slice(&[0u8; 16]);
+    out.extend_from_slice(&value.to_be_bytes());
+}
+
+fn push_u256_le(out: &mut Vec<u8>, value: u128) {
+    out.extend_from_slice(&value.to_le_bytes());
+    out.extend_from_slice(&[0u8; 16]);
+}
+
+fn push_u32_len_be(
+    out: &mut Vec<u8>,
+    field: &'static str,
+    len: usize,
+) -> Result<(), MrvValidationError> {
+    let len =
+        u32::try_from(len).map_err(|_| MrvValidationError::NativeTxLengthOverflow { field })?;
+    out.extend_from_slice(&len.to_be_bytes());
+    Ok(())
+}
+
+fn push_u64_le(out: &mut Vec<u8>, value: u64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_bincode_bytes(
+    out: &mut Vec<u8>,
+    field: &'static str,
+    bytes: &[u8],
+) -> Result<(), MrvValidationError> {
+    let len = u64::try_from(bytes.len())
+        .map_err(|_| MrvValidationError::NativeTxLengthOverflow { field })?;
+    push_u64_le(out, len);
+    out.extend_from_slice(bytes);
+    Ok(())
+}
+
+fn push_ml_dsa65_opaque(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), MrvValidationError> {
+    out.extend_from_slice(&ENUM_VARIANT_INDEX_ML_DSA_65.to_le_bytes());
+    out.extend_from_slice(&STANDARD_ALGO_NUMBER_ML_DSA_65.to_le_bytes());
+    push_bincode_bytes(out, "ml_dsa_65", bytes)
+}
+
+fn expect_len(
+    field: &'static str,
+    bytes: &[u8],
+    expected: usize,
+) -> Result<(), MrvValidationError> {
+    if bytes.len() != expected {
+        return Err(MrvValidationError::InvalidNativeTxBytes {
+            field,
+            expected,
+            actual: bytes.len(),
+        });
+    }
+    Ok(())
+}
+
+fn keccak32(bytes: &[u8]) -> [u8; 32] {
+    let digest = Keccak256::digest(bytes);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
+    out
+}
+
+fn compute_mrv_code_hash(code: &[u8]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(MRV_CODE_HASH_DOMAIN);
+    let len = u64::try_from(code.len()).unwrap_or(u64::MAX);
+    hasher.update(&len.to_be_bytes());
+    hasher.update(code);
+    hasher.finalize().into()
+}
+
+fn validate_memory(memory: MrvMemoryLimits) -> Result<(), MrvValidationError> {
+    if memory.initial_pages == 0 {
+        return Err(MrvValidationError::InvalidMemory("initialPages is zero"));
+    }
+    if memory.max_pages == 0 {
+        return Err(MrvValidationError::InvalidMemory("maxPages is zero"));
+    }
+    if memory.initial_pages > memory.max_pages {
+        return Err(MrvValidationError::InvalidMemory(
+            "initialPages exceeds maxPages",
+        ));
+    }
+    if memory.max_pages > MRV_MAX_MEMORY_PAGES {
+        return Err(MrvValidationError::InvalidMemory("maxPages exceeds bound"));
+    }
+    if memory.stack_bytes == 0 {
+        return Err(MrvValidationError::InvalidMemory("stackBytes is zero"));
+    }
+    let Some(max_bytes) = memory.max_pages.checked_mul(MRV_MEMORY_PAGE_BYTES) else {
+        return Err(MrvValidationError::InvalidMemory(
+            "max memory overflows u32",
+        ));
+    };
+    if memory.stack_bytes > max_bytes {
+        return Err(MrvValidationError::InvalidMemory(
+            "stackBytes exceeds max memory",
+        ));
+    }
+    if !memory.stack_bytes.is_multiple_of(16) {
+        return Err(MrvValidationError::InvalidMemory(
+            "stackBytes must be 16-byte aligned",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_storage_namespace(namespace: &MrvStorageNamespace) -> Result<(), MrvValidationError> {
+    if namespace.version == 0 {
+        return Err(MrvValidationError::InvalidStorageNamespace(
+            "version must be non-zero",
+        ));
+    }
+    if namespace.name.len() > MRV_MAX_STORAGE_NAMESPACE_BYTES {
+        return Err(MrvValidationError::InvalidStorageNamespace(
+            "namespace is too long",
+        ));
+    }
+    if !is_identifier(&namespace.name) {
+        return Err(MrvValidationError::InvalidStorageNamespace(
+            "namespace is not canonical",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_abi(abi: &MrvAbiManifest) -> Result<(), MrvValidationError> {
+    if abi.symbols.is_empty() {
+        return Err(MrvValidationError::AbiEmpty);
+    }
+    if abi.symbols.len() > MRV_MAX_ABI_SYMBOLS {
+        return Err(MrvValidationError::AbiTooLarge {
+            len: abi.symbols.len(),
+            max: MRV_MAX_ABI_SYMBOLS,
+        });
+    }
+    let mut seen = BTreeSet::new();
+    for symbol in &abi.symbols {
+        if !is_identifier(&symbol.name) {
+            return Err(MrvValidationError::InvalidAbiSymbol(symbol.name.clone()));
+        }
+        if !seen.insert(symbol.name.as_str()) {
+            return Err(MrvValidationError::DuplicateAbiSymbol(symbol.name.clone()));
+        }
+        for param in symbol.inputs.iter().chain(symbol.outputs.iter()) {
+            if !is_identifier(&param.name) {
+                return Err(MrvValidationError::InvalidAbiParam(param.name.clone()));
+            }
+            validate_abi_type(&param.ty)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_abi_type(ty: &MrvAbiType) -> Result<(), MrvValidationError> {
+    if matches!(ty, MrvAbiType::FixedBytes { len: 0 }) {
+        return Err(MrvValidationError::InvalidAbiParam(
+            "fixed bytes length is zero".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_imports(
+    imports: &[MrvSyscallImport],
+) -> Result<Vec<MrvResolvedSyscall>, MrvValidationError> {
+    let mut seen = BTreeSet::new();
+    let mut resolved = Vec::with_capacity(imports.len());
+    for import in imports {
+        let syscall = resolve_syscall_import(import)?;
+        if !seen.insert(syscall.id) {
+            return Err(MrvValidationError::DuplicateSyscall(syscall.name));
+        }
+        resolved.push(syscall);
+    }
+    Ok(resolved)
+}
+
+fn resolve_syscall_import(
+    import: &MrvSyscallImport,
+) -> Result<MrvResolvedSyscall, MrvValidationError> {
+    if import.module != MONO_SYSCALL_MODULE {
+        return Err(MrvValidationError::ForbiddenHostImport {
+            module: import.module.clone(),
+            name: import.name.clone(),
+        });
+    }
+    let expected_name =
+        syscall_name(import.id).ok_or(MrvValidationError::UnknownSyscallId(import.id))?;
+    let expected_id = syscall_id(&import.name)
+        .ok_or_else(|| MrvValidationError::UnknownSyscallName(import.name.clone()))?;
+    if expected_id != import.id {
+        return Err(MrvValidationError::SyscallNameMismatch {
+            name: import.name.clone(),
+            declared: import.id,
+            expected: expected_id,
+        });
+    }
+    Ok(MrvResolvedSyscall {
+        id: import.id,
+        name: expected_name.to_owned(),
+    })
+}
+
+fn syscall_name(id: u16) -> Option<&'static str> {
+    match id {
+        0x0101 => Some("storage_read"),
+        0x0102 => Some("storage_write"),
+        0x0103 => Some("storage_delete"),
+        0x0201 => Some("caller"),
+        0x0202 => Some("contract_address"),
+        0x0203 => Some("block_height"),
+        0x0204 => Some("block_hash"),
+        0x0301 => Some("call_contract"),
+        0x0302 => Some("emit_event"),
+        0x0303 => Some("transfer_native"),
+        0x0401 => Some("verify_signature"),
+        0x0402 => Some("hash"),
+        0x0501 => Some("revert"),
+        _ => None,
+    }
+}
+
+fn syscall_id(name: &str) -> Option<u16> {
+    match name {
+        "storage_read" => Some(0x0101),
+        "storage_write" => Some(0x0102),
+        "storage_delete" => Some(0x0103),
+        "caller" => Some(0x0201),
+        "contract_address" => Some(0x0202),
+        "block_height" => Some(0x0203),
+        "block_hash" => Some(0x0204),
+        "call_contract" => Some(0x0301),
+        "emit_event" => Some(0x0302),
+        "transfer_native" => Some(0x0303),
+        "verify_signature" => Some(0x0401),
+        "hash" => Some(0x0402),
+        "revert" => Some(0x0501),
+        _ => None,
+    }
+}
+
+fn validate_typed_address(
+    field: &'static str,
+    address: &str,
+    expected: MrvAddressKind,
+) -> Result<(), MrvValidationError> {
+    typed_bech32_to_address_kind(address, expected.address_kind())
+        .map(|_| ())
+        .map_err(|err| MrvValidationError::InvalidAddress {
+            field,
+            reason: err.to_string(),
+        })
+}
+
+fn validate_execution_unit_limit(
+    field: &'static str,
+    value: Option<u64>,
+) -> Result<(), MrvValidationError> {
+    if value == Some(0) {
+        return Err(MrvValidationError::InvalidExecutionUnitLimit { field });
+    }
+    Ok(())
+}
+
+fn validate_optional_decimal(
+    field: &'static str,
+    value: Option<&str>,
+) -> Result<(), MrvValidationError> {
+    if let Some(value) = value {
+        validate_decimal(field, value)?;
+    }
+    Ok(())
+}
+
+fn validate_decimal(field: &'static str, value: &str) -> Result<(), MrvValidationError> {
+    if value.is_empty() || (value.len() > 1 && value.starts_with('0')) {
+        return Err(MrvValidationError::InvalidDecimal { field });
+    }
+    if !value.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(MrvValidationError::InvalidDecimal { field });
+    }
+    value
+        .parse::<u128>()
+        .map(|_| ())
+        .map_err(|_| MrvValidationError::InvalidDecimal { field })
+}
+
+fn validate_hex_length(
+    field: &'static str,
+    value: &str,
+    expected: usize,
+) -> Result<(), MrvValidationError> {
+    let bytes = decode_hex(field, value)?;
+    if bytes.len() != expected {
+        return Err(MrvValidationError::InvalidHexLength { field, expected });
+    }
+    Ok(())
+}
+
+fn decode_hex(field: &'static str, value: &str) -> Result<Vec<u8>, MrvValidationError> {
+    let Some(body) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    else {
+        return Err(MrvValidationError::InvalidHex { field });
+    };
+    if body.len() % 2 != 0 {
+        return Err(MrvValidationError::InvalidHex { field });
+    }
+    let mut out = Vec::with_capacity(body.len() / 2);
+    for i in 0..body.len() / 2 {
+        let hi = decode_hex_nibble(body.as_bytes()[i * 2])
+            .ok_or(MrvValidationError::InvalidHex { field })?;
+        let lo = decode_hex_nibble(body.as_bytes()[i * 2 + 1])
+            .ok_or(MrvValidationError::InvalidHex { field })?;
+        out.push((hi << 4) | lo);
+    }
+    Ok(out)
+}
+
+fn decode_hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(2 + bytes.len() * 2);
+    out.push_str("0x");
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+fn is_identifier(value: &str) -> bool {
+    let mut chars = value.bytes();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_lowercase() {
+        return false;
+    }
+    chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == b'_')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lyth_amount_helpers_use_eight_decimal_precision() {
+        let cases = [
+            (0, "0 LYTH"),
+            (1, "0.00000001 LYTH"),
+            (50_000, "0.0005 LYTH"),
+            (12_340_000, "0.1234 LYTH"),
+            (12_345_678, "0.12345678 LYTH"),
+            (500_050_000_000, "5,000.5 LYTH"),
+        ];
+
+        assert_eq!(NATIVE_LYTH_DECIMALS, 8);
+        for (lythoshi, expected) in cases {
+            assert_eq!(format_lyth(lythoshi, LythFormatOptions::DEFAULT), expected);
+            assert_eq!(
+                format_lythoshi(lythoshi, LythFormatOptions::DEFAULT),
+                expected
+            );
+            assert_eq!(parse_lyth_to_lythoshi(expected).unwrap(), lythoshi);
+        }
+        assert_eq!(
+            format_lyth(500_050_000_000, LythFormatOptions::NUMERIC_ONLY),
+            "5,000.5"
+        );
+        assert_eq!(parse_lyth_to_lythoshi("1.00000001").unwrap(), 100_000_001);
+        assert!(parse_lyth_to_lythoshi("1.").is_err());
+        assert!(parse_lyth_to_lythoshi("1.000000001").is_err());
+        assert!(parse_lyth_to_lythoshi("12,34 LYTH").is_err());
+    }
+
+    #[test]
+    fn fee_display_conformance_checks_default_and_structured_surfaces() {
+        let fee = serde_json::json!({
+            "total_lythoshi": "50000",
+            "cycles_used": 42,
+            "base_price_per_cycle_lythoshi": "1000",
+            "state_io_units": 8,
+            "state_io_price_per_unit_lythoshi": "250",
+            "priority_tip_lythoshi": "0",
+        });
+        assert_eq!(
+            fee.as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            MRV_STRUCTURED_FEE_FIELDS
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+        );
+
+        let detail_texts = ["cycles 42, state I/O 8, total 50000 lythoshi"];
+        let input = MrvFeeDisplayConformanceInput::new(50_000, "Network fee: 0.0005 LYTH")
+            .detail_texts(&detail_texts)
+            .structured_fee(&fee);
+        let report = check_mrv_fee_display_conformance(&input);
+        assert_eq!(
+            report,
+            MrvFeeDisplayConformanceReport {
+                passed: true,
+                failures: vec![],
+                expected_default_fee_text: "0.0005 LYTH".to_owned(),
+            }
+        );
+        assert_mrv_fee_display_conformance(&input).unwrap();
+        let fee_with_optional_total_lyth = serde_json::json!({
+            "total_lythoshi": "50000",
+            "total_lyth": "0.0005",
+            "cycles_used": 42,
+            "base_price_per_cycle_lythoshi": "1000",
+            "state_io_units": 8,
+            "state_io_price_per_unit_lythoshi": "250",
+            "priority_tip_lythoshi": "0",
+        });
+        assert_mrv_fee_display_conformance(
+            &MrvFeeDisplayConformanceInput::new(50_000, "Network fee: 0.0005 LYTH")
+                .structured_fee(&fee_with_optional_total_lyth),
+        )
+        .unwrap();
+
+        let failed_fee = serde_json::json!({
+            "total_lythoshi": "50000",
+            "total_lyth": "0.00050000",
+            "cycles_used": 42,
+            "base_price_per_cycle_lythoshi": "1000",
+            "state_io_units": 8,
+            "state_io_price_per_unit_lythoshi": "250",
+            "priority_tip_lythoshi": "0",
+            "gas_price": "1",
+        });
+        let failed_details = ["gas price 10 gwei"];
+        let failed = check_mrv_fee_display_conformance(
+            &MrvFeeDisplayConformanceInput::new(
+                50_000,
+                "50000 lythoshi / 42 cycles / gas price 0.00050000 LYTH",
+            )
+            .detail_texts(&failed_details)
+            .structured_fee(&failed_fee)
+            .custom_fee_input_visible(true)
+            .speed_up_or_cancel_visible(true),
+        );
+        assert!(!failed.passed);
+        assert!(failed
+            .failures
+            .contains(&"default_fee_text fee must be 0.0005 LYTH".to_owned()));
+        assert!(failed
+            .failures
+            .contains(&"default_fee_text exposes detail-only fee term 'gas'".to_owned()));
+        assert!(failed
+            .failures
+            .contains(&"detail_texts[0] exposes inherited fee term 'gas'".to_owned()));
+        assert!(failed
+            .failures
+            .contains(&"structured_fee has unexpected field 'gas_price'".to_owned()));
+        assert!(failed
+            .failures
+            .contains(&"structured_fee.total_lyth must be 0.0005".to_owned()));
+        assert!(matches!(
+            assert_mrv_fee_display_conformance(&MrvFeeDisplayConformanceInput::new(
+                50_000,
+                "42 cycles 0.0005 LYTH"
+            )),
+            Err(MrvValidationError::FeeDisplayConformance { .. })
+        ));
+    }
+
+    #[test]
+    fn native_receipt_fee_display_formats_default_surface() {
+        let fee = NativeReceiptFee {
+            total_lythoshi: "825000000000".to_owned(),
+            total_lyth: None,
+            cycles_used: 47,
+            base_price_per_cycle_lythoshi: "10000000000".to_owned(),
+            state_io_units: 2,
+            state_io_price_per_unit_lythoshi: "40000000000".to_owned(),
+            priority_tip_lythoshi: "15000000000".to_owned(),
+        };
+
+        let display = format_native_receipt_fee_display(&fee).unwrap();
+        assert_eq!(
+            display,
+            NativeReceiptFeeDisplay {
+                default_fee_text: "Network fee: 8,250 LYTH".to_owned(),
+                detail_texts: vec![
+                    "cycles 47, state I/O 2, total 825000000000 lythoshi".to_owned(),
+                    "cycle price 10000000000 lythoshi, state I/O price 40000000000 lythoshi, priority tip 15000000000 lythoshi".to_owned(),
+                ],
+                total_lythoshi: "825000000000".to_owned(),
+                total_lyth: "8,250".to_owned(),
+            }
+        );
+        let detail_refs = display
+            .detail_texts
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        assert_mrv_fee_display_conformance(
+            &MrvFeeDisplayConformanceInput::new(825_000_000_000, &display.default_fee_text)
+                .detail_texts(&detail_refs),
+        )
+        .unwrap();
+    }
+
+    fn valid_metadata() -> MrvArtifactMetadata {
+        let code = [0x13, 0x00, 0x00, 0x00];
+        MrvArtifactMetadata {
+            format_version: MRV_FORMAT_VERSION,
+            profile: MrvRiscvProfile::MonoRv32ImV1,
+            code_hash: mrv_code_hash_hex(&code),
+            code_bytes: code.len() as u64,
+            debug_bytes: 0,
+            abi: MrvAbiManifest {
+                symbols: vec![MrvAbiSymbol {
+                    name: "transfer".to_owned(),
+                    kind: MrvAbiSymbolKind::Function,
+                    inputs: vec![MrvAbiParam {
+                        name: "amount".to_owned(),
+                        ty: MrvAbiType::U128,
+                    }],
+                    outputs: vec![MrvAbiParam {
+                        name: "ok".to_owned(),
+                        ty: MrvAbiType::Bool,
+                    }],
+                }],
+            },
+            imports: vec![
+                MrvSyscallImport {
+                    module: "mono".to_owned(),
+                    name: "storage_read".to_owned(),
+                    id: 0x0101,
+                },
+                MrvSyscallImport {
+                    module: "mono".to_owned(),
+                    name: "emit_event".to_owned(),
+                    id: 0x0302,
+                },
+            ],
+            memory: MrvMemoryLimits {
+                initial_pages: 1,
+                max_pages: 4,
+                stack_bytes: 16 * 1024,
+            },
+            storage_namespace: MrvStorageNamespace {
+                name: "contract_state".to_owned(),
+                version: 1,
+            },
+            build: MrvBuildMetadata {
+                toolchain: "mono-riscv-test".to_owned(),
+                source_digest: "0x0707070707070707070707070707070707070707070707070707070707070707"
+                    .to_owned(),
+                profile: "release-deterministic".to_owned(),
+            },
+        }
+    }
+
+    #[test]
+    fn artifact_metadata_validates_and_serializes_to_wire_shape() {
+        let code = [0x13, 0x00, 0x00, 0x00];
+        let metadata = valid_metadata();
+        let validated = validate_mrv_artifact_metadata(&metadata, &code).unwrap();
+        assert_eq!(validated.profile, MrvRiscvProfile::MonoRv32ImV1);
+        assert_eq!(validated.code_hash, metadata.code_hash);
+        assert_eq!(validated.abi_symbol_count, 1);
+        assert_eq!(
+            validated.syscalls,
+            vec![
+                MrvResolvedSyscall {
+                    id: 0x0101,
+                    name: "storage_read".to_owned()
+                },
+                MrvResolvedSyscall {
+                    id: 0x0302,
+                    name: "emit_event".to_owned()
+                }
+            ]
+        );
+
+        let value = serde_json::to_value(&metadata).unwrap();
+        assert_eq!(value["formatVersion"], 1);
+        assert_eq!(value["profile"], "mono_rv32im_v1");
+        assert_eq!(value["codeBytes"], 4);
+        assert_eq!(value["memory"]["initialPages"], 1);
+        assert_eq!(value["storageNamespace"]["name"], "contract_state");
+        assert!(value.get("gas").is_none());
+    }
+
+    #[test]
+    fn artifact_metadata_rejects_bad_hash_and_imports() {
+        let code = [0x13, 0x00, 0x00, 0x00];
+        let mut metadata = valid_metadata();
+        metadata.code_hash =
+            "0x9999999999999999999999999999999999999999999999999999999999999999".to_owned();
+        assert!(matches!(
+            validate_mrv_artifact_metadata(&metadata, &code),
+            Err(MrvValidationError::CodeHashMismatch { .. })
+        ));
+
+        let mut metadata = valid_metadata();
+        metadata.imports.push(MrvSyscallImport {
+            module: "wasi_snapshot_preview1".to_owned(),
+            name: "fd_read".to_owned(),
+            id: 0x0101,
+        });
+        assert!(matches!(
+            validate_mrv_artifact_metadata(&metadata, &code),
+            Err(MrvValidationError::ForbiddenHostImport { .. })
+        ));
+    }
+
+    #[test]
+    fn typed_address_helpers_round_trip_contract_hrp() {
+        let bytes = [0x22; 20];
+        let contract = mrv_address_to_bech32(MrvAddressKind::Contract, bytes);
+        assert!(contract.starts_with("monoc1"));
+        assert_eq!(
+            mrv_bech32_to_address(&contract).unwrap(),
+            (MrvAddressKind::Contract, bytes)
+        );
+        assert_eq!(
+            mrv_bech32_to_address_kind(&contract, MrvAddressKind::Contract).unwrap(),
+            bytes
+        );
+        assert!(mrv_bech32_to_address_kind(&contract, MrvAddressKind::User).is_err());
+    }
+
+    #[test]
+    fn derives_mrv_deploy_contract_address_from_runtime_preimage() {
+        let deployer = mrv_address_to_bech32(MrvAddressKind::User, [0x11; 20]);
+        let smart_account = mrv_address_to_bech32(MrvAddressKind::SmartAccount, [0x11; 20]);
+        let artifact_hash = "0x598501b99b388ca564905b49040c6d315a55fb13bf34a6f002aa04960a27895d";
+
+        let contract = derive_mrv_contract_address(&deployer, 7, artifact_hash).unwrap();
+        let (kind, bytes) = mrv_bech32_to_address(&contract).unwrap();
+
+        assert_eq!(kind, MrvAddressKind::Contract);
+        assert_eq!(bytes.len(), 20);
+        assert_eq!(
+            contract,
+            derive_mrv_contract_address(&deployer, 7, artifact_hash).unwrap()
+        );
+        assert_ne!(
+            contract,
+            derive_mrv_contract_address(&deployer, 8, artifact_hash).unwrap()
+        );
+        assert_ne!(
+            contract,
+            derive_mrv_contract_address(&smart_account, 7, artifact_hash).unwrap()
+        );
+        assert!(derive_mrv_contract_address(&deployer, 7, "0x1234").is_err());
+    }
+
+    #[test]
+    fn deploy_and_call_request_validation_uses_lythoshi_and_execution_units() {
+        let user = mrv_address_to_bech32(MrvAddressKind::User, [0x11; 20]);
+        let contract = mrv_address_to_bech32(MrvAddressKind::Contract, [0x22; 20]);
+        let deploy = MrvDeployRequest {
+            from: Some(user.clone()),
+            artifact_bytes: "0x13000000".to_owned(),
+            value_lythoshi: "100000000".to_owned(),
+            execution_unit_limit: Some(1_000_000),
+            max_execution_fee_lythoshi: Some("10".to_owned()),
+            priority_tip_lythoshi: Some("1".to_owned()),
+            nonce: Some(7),
+        };
+        validate_mrv_deploy_request(&deploy).unwrap();
+        let call = MrvCallRequest {
+            from: Some(user),
+            contract_address: contract,
+            input: "0x0102".to_owned(),
+            value_lythoshi: "0".to_owned(),
+            execution_unit_limit: Some(50_000),
+            max_execution_fee_lythoshi: None,
+            priority_tip_lythoshi: None,
+            nonce: None,
+        };
+        validate_mrv_call_request(&call).unwrap();
+        assert_eq!(mrv_v1_transaction_extension().kind, MRV_TX_EXTENSION_KIND);
+        assert_eq!(mrv_v1_transaction_extension().body_hex, "0x01");
+        assert!(serde_json::to_string(&call)
+            .unwrap()
+            .contains("valueLythoshi"));
+        assert!(!serde_json::to_string(&call).unwrap().contains("gas"));
+    }
+
+    #[test]
+    fn builders_create_valid_mrv_plans_without_handwritten_wire_fields() {
+        let user = mrv_address_to_bech32(MrvAddressKind::User, [0x11; 20]);
+        let contract = mrv_address_to_bech32(MrvAddressKind::Contract, [0x22; 20]);
+        let artifact_hash = "0x598501b99b388ca564905b49040c6d315a55fb13bf34a6f002aa04960a27895d";
+
+        let deploy = build_mrv_deploy_request(
+            &[0x13, 0x00, 0x00, 0x00],
+            MrvRequestBuildOptions::new()
+                .from(user.clone())
+                .value_lythoshi(100_000_000)
+                .execution_unit_limit(1_000_000)
+                .max_execution_fee_lythoshi(25)
+                .priority_tip_lythoshi(1)
+                .nonce(7),
+        )
+        .unwrap();
+        assert_eq!(deploy.artifact_bytes, "0x13000000");
+        assert_eq!(deploy.value_lythoshi, "100000000");
+        assert_eq!(deploy.execution_unit_limit, Some(1_000_000));
+        assert_eq!(deploy.max_execution_fee_lythoshi.as_deref(), Some("25"));
+        assert_eq!(deploy.priority_tip_lythoshi.as_deref(), Some("1"));
+
+        let deploy_plan = build_mrv_deploy_plan(
+            &[0x13, 0x00, 0x00, 0x00],
+            Some(artifact_hash),
+            MrvRequestBuildOptions::new().from(user.clone()).nonce(7),
+        )
+        .unwrap();
+        assert_eq!(deploy_plan.request.value_lythoshi, "0");
+        assert_eq!(deploy_plan.extension.kind, MRV_TX_EXTENSION_KIND);
+        assert_eq!(deploy_plan.extension.body_hex, "0x01");
+        let expected_address = derive_mrv_contract_address(&user, 7, artifact_hash).unwrap();
+        assert_eq!(
+            deploy_plan.expected_contract_address.as_deref(),
+            Some(expected_address.as_str())
+        );
+
+        let call_plan = build_mrv_call_plan(
+            &contract,
+            &[0x01, 0x02],
+            MrvRequestBuildOptions::new().from(user),
+        )
+        .unwrap();
+        assert_eq!(call_plan.request.contract_address, contract);
+        assert_eq!(call_plan.request.input, "0x0102");
+        assert_eq!(call_plan.request.value_lythoshi, "0");
+
+        let wire = serde_json::to_string(&deploy_plan).unwrap();
+        assert!(wire.contains("artifactBytes"));
+        assert!(wire.contains("valueLythoshi"));
+        assert!(wire.contains("expectedContractAddress"));
+        assert!(!wire.contains("gas"));
+        assert!(
+            build_mrv_deploy_plan(&[0x13], Some("0x1234"), MrvRequestBuildOptions::new()).is_err()
+        );
+        assert!(build_mrv_call_request(
+            &contract,
+            &[0x01],
+            MrvRequestBuildOptions::new().execution_unit_limit(0)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn deploy_payload_envelope_encodes_constructor_input() {
+        let encoded = encode_mrv_deploy_payload(&[0xaa, 0xbb], Some(&[0x01, 0x02])).unwrap();
+        assert_eq!(
+            hex_encode(&encoded),
+            "0x01000200000000000000aabb0102000000000000000102"
+        );
+
+        let decoded = decode_mrv_deploy_payload(&encoded).unwrap();
+        assert_eq!(decoded.version, MRV_DEPLOY_PAYLOAD_VERSION);
+        assert_eq!(decoded.artifact, vec![0xaa, 0xbb]);
+        assert_eq!(decoded.constructor, Some(vec![0x01, 0x02]));
+
+        let no_constructor = encode_mrv_deploy_payload(&[0xaa, 0xbb], None).unwrap();
+        assert_eq!(hex_encode(&no_constructor), "0x01000200000000000000aabb00");
+        assert_eq!(
+            decode_mrv_deploy_payload(&no_constructor)
+                .unwrap()
+                .constructor,
+            None
+        );
+        assert!(decode_mrv_deploy_payload(&encoded[..encoded.len() - 1]).is_err());
+    }
+
+    #[test]
+    fn deploy_payload_builders_preserve_raw_deploy_compatibility() {
+        let user = mrv_address_to_bech32(MrvAddressKind::User, [0x11; 20]);
+        let artifact_hash = "0x598501b99b388ca564905b49040c6d315a55fb13bf34a6f002aa04960a27895d";
+        let raw = build_mrv_deploy_native_tx_plan(
+            &[0xaa, 0xbb],
+            Some(artifact_hash),
+            MrvNativeTxBuildOptions::new(69_420, 7, 100_000, 25).from(user.clone()),
+        )
+        .unwrap();
+        assert_eq!(raw.request.artifact_bytes, "0xaabb");
+        assert_eq!(raw.tx.input, "0xaabb");
+
+        let payload = build_mrv_deploy_payload_native_tx_plan(
+            &[0xaa, 0xbb],
+            Some(artifact_hash),
+            Some(&[0x01, 0x02]),
+            MrvNativeTxBuildOptions::new(69_420, 7, 100_000, 25).from(user.clone()),
+        )
+        .unwrap();
+        assert_eq!(
+            payload.request.artifact_bytes,
+            "0x01000200000000000000aabb0102000000000000000102"
+        );
+        assert_eq!(payload.tx.input, payload.request.artifact_bytes);
+        assert_eq!(
+            payload.expected_contract_address,
+            raw.expected_contract_address
+        );
+
+        let request = build_mrv_deploy_payload_request(
+            &[0xaa, 0xbb],
+            None,
+            MrvRequestBuildOptions::new().from(user),
+        )
+        .unwrap();
+        assert_eq!(request.artifact_bytes, "0x01000200000000000000aabb00");
+    }
+
+    #[test]
+    fn builders_create_signer_ready_native_tx_plans() {
+        let user = mrv_address_to_bech32(MrvAddressKind::User, [0x11; 20]);
+        let contract = mrv_address_to_bech32(MrvAddressKind::Contract, [0x22; 20]);
+        let artifact_hash = "0x598501b99b388ca564905b49040c6d315a55fb13bf34a6f002aa04960a27895d";
+
+        let deploy = build_mrv_deploy_native_tx_plan(
+            &[0x13, 0x00, 0x00, 0x00],
+            Some(artifact_hash),
+            MrvNativeTxBuildOptions::new(69_420, 7, 100_000, 25)
+                .from(user.clone())
+                .priority_tip_lythoshi(1),
+        )
+        .unwrap();
+        assert_eq!(
+            deploy.expected_contract_address.as_deref(),
+            Some(
+                derive_mrv_contract_address(&user, 7, artifact_hash)
+                    .unwrap()
+                    .as_str()
+            )
+        );
+        assert_eq!(deploy.native_tx.chain_id, 69_420);
+        assert_eq!(deploy.native_tx.nonce, 7);
+        assert_eq!(deploy.native_tx.value_lythoshi, "0");
+        assert_eq!(deploy.native_tx.execution_unit_limit, 100_000);
+        assert_eq!(deploy.native_tx.max_execution_fee_lythoshi, "25");
+        assert_eq!(deploy.native_tx.priority_tip_lythoshi, "1");
+        assert_eq!(deploy.fee_preview.total_lythoshi, "25");
+        assert_eq!(deploy.fee_preview.total_lyth, "0.00000025");
+        assert_eq!(deploy.fee_preview.cycles_used, 100_000);
+        assert_eq!(deploy.fee_preview.execution_unit_limit, 100_000);
+        assert_eq!(deploy.fee_preview.max_execution_fee_lythoshi, "25");
+        assert_eq!(deploy.fee_preview.priority_tip_lythoshi, "1");
+        assert_eq!(deploy.tx.chain_id, 69_420);
+        assert_eq!(deploy.tx.nonce, 7);
+        assert_eq!(deploy.tx.max_priority_fee_per_gas, "1");
+        assert_eq!(deploy.tx.max_fee_per_gas, "25");
+        assert_eq!(deploy.tx.gas_limit, 100_000);
+        assert_eq!(deploy.tx.to, None);
+        assert_eq!(deploy.tx.value, "0");
+        assert_eq!(deploy.tx.input, "0x13000000");
+        assert_eq!(
+            deploy.tx.extensions,
+            vec![MrvTransactionExtension {
+                kind: MRV_TX_EXTENSION_KIND,
+                body_hex: "0x01".to_owned(),
+            }]
+        );
+
+        let call = build_mrv_call_native_tx_plan(
+            &contract,
+            &[0x01, 0x02],
+            MrvNativeTxBuildOptions::new(69_420, 8, 50_000, 10)
+                .from(user)
+                .value_lythoshi(3),
+        )
+        .unwrap();
+        assert_eq!(call.native_tx.chain_id, 69_420);
+        assert_eq!(call.native_tx.nonce, 8);
+        assert_eq!(call.native_tx.value_lythoshi, "3");
+        assert_eq!(call.native_tx.execution_unit_limit, 50_000);
+        assert_eq!(call.native_tx.max_execution_fee_lythoshi, "10");
+        assert_eq!(call.native_tx.priority_tip_lythoshi, "0");
+        assert_eq!(call.fee_preview.total_lythoshi, "10");
+        assert_eq!(call.fee_preview.total_lyth, "0.0000001");
+        assert_eq!(call.fee_preview.cycles_used, 50_000);
+        assert_eq!(call.fee_preview.execution_unit_limit, 50_000);
+        assert_eq!(call.fee_preview.max_execution_fee_lythoshi, "10");
+        assert_eq!(call.fee_preview.priority_tip_lythoshi, "0");
+        assert_eq!(call.tx.chain_id, 69_420);
+        assert_eq!(call.tx.nonce, 8);
+        assert_eq!(call.tx.max_priority_fee_per_gas, "0");
+        assert_eq!(call.tx.max_fee_per_gas, "10");
+        assert_eq!(call.tx.gas_limit, 50_000);
+        assert_eq!(
+            call.tx.to.as_deref(),
+            Some("0x2222222222222222222222222222222222222222")
+        );
+        assert_eq!(call.tx.value, "3");
+        assert_eq!(call.tx.input, "0x0102");
+        assert_eq!(call.tx.extensions[0].kind, MRV_TX_EXTENSION_KIND);
+
+        let mut wire = serde_json::to_value(&call).unwrap();
+        assert_eq!(wire["tx"]["chainId"], 69_420);
+        assert_eq!(wire["tx"]["maxFeePerGas"], "10");
+        assert_eq!(wire["tx"]["gasLimit"], 50_000);
+        assert_eq!(wire["tx"]["extensions"][0]["bodyHex"], "0x01");
+        assert_eq!(wire["nativeTx"]["maxExecutionFeeLythoshi"], "10");
+        assert_eq!(wire["nativeTx"]["executionUnitLimit"], 50_000);
+        assert_eq!(wire["feePreview"]["totalLythoshi"], "10");
+        assert_eq!(wire["feePreview"]["totalLyth"], "0.0000001");
+        assert_eq!(wire["feePreview"]["cyclesUsed"], 50_000);
+        let signing_adapter = wire.as_object_mut().unwrap().remove("tx").unwrap();
+        let app_facing_wire = serde_json::to_string(&wire).unwrap().to_lowercase();
+        assert!(!app_facing_wire.contains("gas"));
+        assert!(!app_facing_wire.contains("wei"));
+        assert!(serde_json::to_string(&signing_adapter)
+            .unwrap()
+            .contains("gasLimit"));
+
+        assert!(build_mrv_call_native_tx_plan(
+            &mrv_address_to_bech32(MrvAddressKind::User, [0x33; 20]),
+            &[],
+            MrvNativeTxBuildOptions::new(69_420, 0, 1, 1)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn native_submission_plan_guardrails_reject_mutated_signing_adapter() {
+        let user = mrv_address_to_bech32(MrvAddressKind::User, [0x11; 20]);
+        let contract = mrv_address_to_bech32(MrvAddressKind::Contract, [0x22; 20]);
+        let deploy = build_mrv_deploy_native_tx_plan(
+            &[0x13, 0x00, 0x00, 0x00],
+            None,
+            MrvNativeTxBuildOptions::new(69_420, 7, 100_000, 25).from(user.clone()),
+        )
+        .unwrap();
+        let call = build_mrv_call_native_tx_plan(
+            &contract,
+            &[0x01, 0x02],
+            MrvNativeTxBuildOptions::new(69_420, 8, 50_000, 10).from(user),
+        )
+        .unwrap();
+
+        assert_mrv_deploy_native_submission_plan(&deploy).unwrap();
+        assert_mrv_call_native_submission_plan(&call).unwrap();
+
+        let mut bad_deploy = deploy.clone();
+        bad_deploy.tx.to = Some("0x2222222222222222222222222222222222222222".to_owned());
+        assert!(matches!(
+            assert_mrv_deploy_native_submission_plan(&bad_deploy),
+            Err(MrvValidationError::InvalidNativeSubmission(
+                "deploy tx.to must be null"
+            ))
+        ));
+
+        let mut bad_call = call.clone();
+        bad_call.tx.to = Some("0x2222".to_owned());
+        assert!(matches!(
+            assert_mrv_call_native_submission_plan(&bad_call),
+            Err(MrvValidationError::InvalidAddress { field: "tx.to", .. })
+        ));
+
+        let mut bad_extension = call.clone();
+        bad_extension.tx.extensions[0].body_hex = "0x02".to_owned();
+        assert!(matches!(
+            assert_mrv_call_native_submission_plan(&bad_extension),
+            Err(MrvValidationError::InvalidNativeSubmission(
+                "tx.extensions[0]"
+            ))
+        ));
+
+        let mut bad_fee = call;
+        bad_fee.tx.max_fee_per_gas = "340282366920938463463374607431768211456".to_owned();
+        assert!(matches!(
+            assert_mrv_call_native_submission_plan(&bad_fee),
+            Err(MrvValidationError::InvalidNativeSubmission(
+                "tx.maxFeePerGas must match nativeTx.maxExecutionFeeLythoshi"
+            ))
+        ));
+
+        let mut bad_u128 = deploy;
+        bad_u128.native_tx.max_execution_fee_lythoshi =
+            "340282366920938463463374607431768211456".to_owned();
+        bad_u128.tx.max_fee_per_gas = bad_u128.native_tx.max_execution_fee_lythoshi.clone();
+        assert!(matches!(
+            assert_mrv_deploy_native_submission_plan(&bad_u128),
+            Err(MrvValidationError::InvalidDecimal {
+                field: "maxExecutionFeeLythoshi"
+            })
+        ));
+    }
+
+    #[test]
+    fn native_signed_submission_wraps_guarded_plan_material() {
+        let user = mrv_address_to_bech32(MrvAddressKind::User, [0x11; 20]);
+        let contract = mrv_address_to_bech32(MrvAddressKind::Contract, [0x22; 20]);
+        let sig = vec![0x55; ML_DSA_65_SIGNATURE_LEN];
+        let public_key = vec![0x66; ML_DSA_65_PUBLIC_KEY_LEN];
+        let deploy = build_mrv_deploy_native_tx_plan(
+            &[0x13, 0x00, 0x00, 0x00],
+            None,
+            MrvNativeTxBuildOptions::new(69_420, 7, 100_000, 25)
+                .from(user)
+                .priority_tip_lythoshi(1),
+        )
+        .unwrap();
+        let call = build_mrv_call_native_tx_plan(
+            &contract,
+            &[0x01, 0x02],
+            MrvNativeTxBuildOptions::new(69_420, 8, 50_000, 10),
+        )
+        .unwrap();
+
+        let deploy_submission =
+            build_mrv_deploy_native_signed_submission(&deploy, &sig, &public_key).unwrap();
+        assert_eq!(deploy_submission.request.artifact_bytes, "0x13000000");
+        assert_eq!(deploy_submission.native_tx.max_execution_fee_lythoshi, "25");
+        assert_eq!(
+            deploy_submission.submission.inner_sighash_hex,
+            "0xb680eb3b3e67b441d22c4ac441c9355809cac860dc2c0773ed47e49f273725c3"
+        );
+        assert_eq!(
+            deploy_submission.submission.inner_tx_hash_hex,
+            "0x0f826159573ebe870876d03e9b54541fbbb652de4642552abc9a65a481781789"
+        );
+        assert_eq!(
+            deploy_submission.submission.signed_inner_tx_wire_bytes,
+            5_448
+        );
+        assert!(deploy_submission
+            .submission
+            .signed_inner_tx_wire_hex
+            .starts_with("0x2c0f010000000000070000000000000001"));
+
+        let call_submission =
+            build_mrv_call_native_signed_submission(&call, &sig, &public_key).unwrap();
+        assert_eq!(call_submission.request.contract_address, contract);
+        assert_eq!(call_submission.native_tx.execution_unit_limit, 50_000);
+        assert_eq!(
+            call_submission.submission.signed_inner_tx_wire_bytes,
+            call_submission.submission.signed_inner_tx_wire_hex.len() / 2 - 1
+        );
+
+        let mut app_facing = serde_json::to_value(&deploy_submission).unwrap();
+        let signing_adapter = app_facing.as_object_mut().unwrap().remove("tx").unwrap();
+        let app_wire = serde_json::to_string(&app_facing).unwrap().to_lowercase();
+        assert!(!app_wire.contains("gas"));
+        assert!(!app_wire.contains("wei"));
+        assert!(serde_json::to_string(&signing_adapter)
+            .unwrap()
+            .contains("maxFeePerGas"));
+
+        assert!(matches!(
+            build_mrv_deploy_native_signed_submission(&deploy, &sig[..10], &public_key),
+            Err(MrvValidationError::InvalidNativeTxBytes {
+                field: "signature",
+                ..
+            })
+        ));
+        let mut bad_deploy = deploy;
+        bad_deploy.tx.extensions.clear();
+        assert!(matches!(
+            build_mrv_deploy_native_signed_submission(&bad_deploy, &sig, &public_key),
+            Err(MrvValidationError::InvalidNativeSubmission(
+                "native submission must carry exactly one transaction extension"
+            ))
+        ));
+    }
+
+    #[test]
+    fn encrypted_envelope_bincode_matches_core_wire_shape() {
+        let aad = MrvEncryptedNonceAad {
+            sender: [0x11; 20],
+            nonce: 7,
+            chain_id: 69_420,
+            class: MrvMempoolClass::FoundationOp,
+            max_execution_unit_price_lythoshi: 25,
+            priority_tip_lythoshi: 1,
+            execution_unit_limit: 100_000,
+        };
+        let hint = MrvEncryptedDecryptHint {
+            epoch: 9,
+            scheme: 0,
+        };
+        let ciphertext =
+            vec![0x44; ML_KEM_768_CIPHERTEXT_LEN + DKG_NONCE_LEN + 4 + DKG_AEAD_TAG_LEN];
+        let public_key = vec![0x66; ML_DSA_65_PUBLIC_KEY_LEN];
+        let outer_signature = vec![0x55; ML_DSA_65_SIGNATURE_LEN];
+
+        assert_eq!(MrvMempoolClass::FoundationOp.as_u32(), 5);
+        assert_eq!(
+            MrvMempoolClass::from_u32(5),
+            Some(MrvMempoolClass::FoundationOp)
+        );
+        assert_eq!(
+            hex_encode(&bincode_mrv_encrypted_nonce_aad(&aad).unwrap()),
+            concat!(
+                "0x14000000000000001111111111111111111111111111111111111111",
+                "07000000000000002c0f010000000000050000001900000000000000",
+                "000000000000000001000000000000000000000000000000a086010000000000"
+            )
+        );
+        assert_eq!(
+            hex_encode(&bincode_mrv_encrypted_decrypt_hint(&hint)),
+            "0x09000000000000000000"
+        );
+        assert_eq!(
+            hex_encode(
+                &mrv_encrypted_outer_signature_digest(&aad, &ciphertext, &hint, &public_key)
+                    .unwrap()
+            ),
+            "0xd84fed20413cab193ea41e1c73cf58dbba0ee4071e11a3071bdccab6ed61f9a5"
+        );
+
+        let wire = encode_mrv_encrypted_envelope_bincode(
+            &aad,
+            &ciphertext,
+            &hint,
+            &public_key,
+            &outer_signature,
+            &aad.sender,
+        )
+        .unwrap();
+        assert_eq!(wire.len(), 6_543);
+        let expected_prefix = format!(
+            "{}{}",
+            concat!(
+                "0x14000000000000001111111111111111111111111111111111111111",
+                "07000000000000002c0f010000000000050000001900000000000000",
+                "000000000000000001000000000000000000000000000000a086010000000000",
+                "6004000000000000",
+            ),
+            "44".repeat(84)
+        );
+        assert_eq!(hex_encode(&wire[..180]), expected_prefix);
+        let expected_suffix = format!(
+            "{}{}{}",
+            "0x",
+            "55".repeat(52),
+            "14000000000000001111111111111111111111111111111111111111"
+        );
+        assert_eq!(hex_encode(&wire[wire.len() - 80..]), expected_suffix);
+    }
+
+    #[test]
+    fn encrypted_submission_builds_envelope_for_guarded_plan() {
+        use ml_kem::{kem::KeyExport, DecapsulationKey, MlKem768};
+
+        let sig = vec![0x55; ML_DSA_65_SIGNATURE_LEN];
+        let public_key = vec![0x66; ML_DSA_65_PUBLIC_KEY_LEN];
+        let sender = ml_dsa65_address_bytes(&public_key).unwrap();
+        let user = mrv_address_to_bech32(MrvAddressKind::User, sender);
+        let plan = build_mrv_deploy_native_tx_plan(
+            &[0x13, 0x00, 0x00, 0x00],
+            None,
+            MrvNativeTxBuildOptions::new(69_420, 7, 100_000, 25)
+                .from(user)
+                .priority_tip_lythoshi(1),
+        )
+        .unwrap();
+        let seed: ml_kem::Seed = [0x42; 64].into();
+        let dk = DecapsulationKey::<MlKem768>::from_seed(seed);
+        let encryption_key =
+            MrvEncryptionKey::ml_kem_768(9, dk.encapsulation_key().to_bytes().as_ref());
+
+        let submission = build_mrv_deploy_native_encrypted_submission(
+            &plan,
+            &sig,
+            &public_key,
+            &encryption_key,
+            Some(MrvMempoolClass::ContractCall),
+            |digest| {
+                assert_eq!(digest.len(), 32);
+                Ok(vec![0x77; ML_DSA_65_SIGNATURE_LEN])
+            },
+        )
+        .unwrap();
+
+        assert_eq!(submission.request.artifact_bytes, "0x13000000");
+        assert!(submission.submission.envelope_wire_hex.starts_with("0x"));
+        assert_eq!(
+            submission.submission.envelope_wire_bytes,
+            submission.submission.envelope_wire_hex.len() / 2 - 1
+        );
+        assert_eq!(submission.submission.inner_wire_bytes, 5_448);
+        assert_eq!(
+            submission.submission.inner_sighash_hex,
+            "0xb680eb3b3e67b441d22c4ac441c9355809cac860dc2c0773ed47e49f273725c3"
+        );
+        assert_eq!(
+            submission.submission.inner_tx_hash_hex,
+            "0x0f826159573ebe870876d03e9b54541fbbb652de4642552abc9a65a481781789"
+        );
+        assert_eq!(submission.submission.outer_signature_digest_hex.len(), 66);
+    }
+
+    #[test]
+    fn encrypted_submission_rejects_sender_and_key_mismatch() {
+        use ml_kem::{kem::KeyExport, DecapsulationKey, MlKem768};
+
+        let sig = vec![0x55; ML_DSA_65_SIGNATURE_LEN];
+        let public_key = vec![0x66; ML_DSA_65_PUBLIC_KEY_LEN];
+        let wrong_user = mrv_address_to_bech32(MrvAddressKind::User, [0x11; 20]);
+        let plan = build_mrv_deploy_native_tx_plan(
+            &[0x13, 0x00, 0x00, 0x00],
+            None,
+            MrvNativeTxBuildOptions::new(69_420, 7, 100_000, 25).from(wrong_user),
+        )
+        .unwrap();
+        let seed: ml_kem::Seed = [0x43; 64].into();
+        let dk = DecapsulationKey::<MlKem768>::from_seed(seed);
+        let mut encryption_key =
+            MrvEncryptionKey::ml_kem_768(9, dk.encapsulation_key().to_bytes().as_ref());
+
+        assert!(matches!(
+            build_mrv_deploy_native_encrypted_submission(
+                &plan,
+                &sig,
+                &public_key,
+                &encryption_key,
+                None,
+                |_| Ok(vec![0x77; ML_DSA_65_SIGNATURE_LEN]),
+            ),
+            Err(MrvValidationError::InvalidNativeSubmission(
+                "request.from must match ML-DSA-65 public key"
+            ))
+        ));
+
+        encryption_key.algo = "x25519".to_owned();
+        let mut no_from_plan = plan;
+        no_from_plan.request.from = None;
+        assert!(matches!(
+            build_mrv_deploy_native_encrypted_submission(
+                &no_from_plan,
+                &sig,
+                &public_key,
+                &encryption_key,
+                None,
+                |_| Ok(vec![0x77; ML_DSA_65_SIGNATURE_LEN]),
+            ),
+            Err(MrvValidationError::UnsupportedEncryptionKeyAlgorithm { .. })
+        ));
+    }
+
+    #[test]
+    fn native_tx_encoding_commits_to_mrv_extensions() {
+        let contract = mrv_address_to_bech32(MrvAddressKind::Contract, [0x22; 20]);
+        let plan = build_mrv_call_native_tx_plan(
+            &contract,
+            &[0x01, 0x02],
+            MrvNativeTxBuildOptions::new(69_420, 8, 50_000, 10).value_lythoshi(3),
+        )
+        .unwrap();
+        let mut no_extension = plan.tx.clone();
+        no_extension.extensions.clear();
+
+        let no_extension_preimage = encode_mrv_native_tx_signing_preimage(&no_extension).unwrap();
+        let with_extension_preimage = encode_mrv_native_tx_signing_preimage(&plan.tx).unwrap();
+        assert_ne!(with_extension_preimage, no_extension_preimage);
+        assert!(hex_encode(&no_extension_preimage).ends_with("0000000000000000"));
+        assert!(hex_encode(&with_extension_preimage).ends_with("0000000001300000000101"));
+
+        let sig = vec![0x55; ML_DSA_65_SIGNATURE_LEN];
+        let public_key = vec![0x66; ML_DSA_65_PUBLIC_KEY_LEN];
+        let sighash = mrv_native_tx_sighash(&plan.tx).unwrap();
+        let tx_hash = mrv_native_tx_hash(&plan.tx, &sig, &public_key).unwrap();
+        assert_eq!(sighash.len(), 32);
+        assert_eq!(tx_hash.len(), 32);
+        assert_ne!(sighash, tx_hash);
+
+        let wire = encode_mrv_signed_native_tx_bincode(&plan.tx, &sig, &public_key).unwrap();
+        assert!(hex_encode(&wire)
+            .contains("000000000000000001000000000000003001000000000000000102000000"));
+        assert!(encode_mrv_signed_native_tx_bincode(&plan.tx, &sig[..10], &public_key).is_err());
+    }
+
+    #[test]
+    fn native_tx_encoding_matches_core_golden_vector() {
+        let plan = build_mrv_deploy_native_tx_plan(
+            &[0x13, 0x00, 0x00, 0x00],
+            None,
+            MrvNativeTxBuildOptions::new(69_420, 7, 100_000, 25).priority_tip_lythoshi(1),
+        )
+        .unwrap();
+        let sig = vec![0x55; ML_DSA_65_SIGNATURE_LEN];
+        let public_key = vec![0x66; ML_DSA_65_PUBLIC_KEY_LEN];
+
+        let signing_preimage = encode_mrv_native_tx_signing_preimage(&plan.tx).unwrap();
+        let identity_preimage =
+            encode_mrv_native_tx_for_hash(&plan.tx, TX_HASH_TAG_IDENTITY).unwrap();
+        let sighash = mrv_native_tx_sighash(&plan.tx).unwrap();
+        let tx_hash = mrv_native_tx_hash(&plan.tx, &sig, &public_key).unwrap();
+        let wire = encode_mrv_signed_native_tx_bincode(&plan.tx, &sig, &public_key).unwrap();
+
+        assert_eq!(
+            hex_encode(&signing_preimage),
+            "0x010000000000010f2c00000000000000070000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000001900000000000186a000000000000000000000000000000000000000000000000000000000000000000000000004130000000000000000000001300000000101"
+        );
+        assert_eq!(
+            hex_encode(&identity_preimage),
+            "0x020000000000010f2c00000000000000070000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000001900000000000186a000000000000000000000000000000000000000000000000000000000000000000000000004130000000000000000000001300000000101"
+        );
+        assert_eq!(
+            hex_encode(&sighash),
+            "0xb680eb3b3e67b441d22c4ac441c9355809cac860dc2c0773ed47e49f273725c3"
+        );
+        assert_eq!(
+            hex_encode(&tx_hash),
+            "0x0f826159573ebe870876d03e9b54541fbbb652de4642552abc9a65a481781789"
+        );
+        assert_eq!(wire.len(), 5_448);
+        assert_eq!(
+            hex_encode(&wire[..160]),
+            "0x2c0f010000000000070000000000000001000000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000000000000000a086010000000000000000000000000000000000000000000000000000000000000000000000000000040000000000000013000000000000000000000001000000000000003001000000000000000102"
+        );
+        assert_eq!(
+            hex_encode(&wire[wire.len() - 80..]),
+            concat!(
+                "0x666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666",
+                "6666666666666666666666666666666666666666666666666666666666666666"
+            )
+        );
+    }
+}

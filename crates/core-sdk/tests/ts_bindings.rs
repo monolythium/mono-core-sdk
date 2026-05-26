@@ -10,20 +10,48 @@
 
 #![cfg(feature = "ts-bindings")]
 
+use monolythium_core_sdk::bridge::{
+    BridgeAdminControl, BridgeCircuitBreakerState, BridgeQuoteSubmitReadiness, BridgeRiskTier,
+    BridgeRouteAssessment, BridgeRouteCandidate, BridgeRouteCatalogue, BridgeRouteCatalogueRoute,
+    BridgeRouteCatalogueValidation, BridgeRouteDisclosure, BridgeRouteSelection,
+    BridgeRoutesRequest, BridgeRoutesResponse, BridgeRoutesSource, BridgeTransferIntent,
+    BridgeTransferRequest, BridgeVerifierDisclosure,
+};
+use monolythium_core_sdk::mrv::{
+    MrvAbiManifest, MrvAbiParam, MrvAbiSymbol, MrvAbiSymbolKind, MrvAbiType, MrvAddressKind,
+    MrvArtifactMetadata, MrvBuildMetadata, MrvCallRequest, MrvCallResponse, MrvCallStatus,
+    MrvDeployPayload, MrvDeployRequest, MrvDeployResponse, MrvEventRecord, MrvExecutionReceipt,
+    MrvMemoryLimits, MrvMeterCounters, MrvNativeStateDelta, MrvResolvedSyscall, MrvRevertPayload,
+    MrvRiscvProfile, MrvStorageNamespace, MrvSyscallImport, MrvTransactionExtension,
+    MrvTypedAddress, MrvValidatedArtifactMetadata,
+};
 use monolythium_core_sdk::types::{
     AccountPolicy, AccountProofResponse, AddressActivityArchiveRedirect, AddressActivityEntry,
-    AddressActivityKindResponse, AddressActivityKindRetention, AddressLabelRecord, AssetPolicy,
+    AddressActivityKindResponse, AddressActivityKindRetention, AddressLabelRecord,
+    AgentReputationCategoryScope, AgentReputationRecord, AgentReputationResponse, AssetPolicy,
     BlockHeader, BlockTag, BlsCertificateResponse, CallRequest, CapabilitiesResponse,
     CapabilityDescriptor, CheckpointRecord, ClobMarketRecord, ClobMarketResponse,
     ClusterDelegatorsResponse, ClusterEntityResponse, ClusterResignationRow,
-    ClusterResignationsResponse, DagParent, DagParentsResponse, DagSyncStatus, DecodeTxLog,
-    DecodeTxPqAttestation, DecodeTxResponse, DelegationCapResponse, DelegationHistoryRecord,
-    DelegationRow, DelegationsResponse, EncryptionKeyResponse, EntityRatchetResponse,
-    FeeHistoryResponse, GapRange, GapRecord, GapRecordsResponse, IndexerStatus, MempoolSnapshot,
-    MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse, PeerSummary,
-    PendingTxSummary, PrecompileDescriptor, RegistryRecord, RichListHolder, RichListResponse,
-    RoundInfo, StorageProofBatch, SyncStatus, TokenBalanceRecord, TpmAttestationResponse,
-    TransactionReceipt, TransactionView,
+    ClusterResignationsResponse, DagParent, DagParentsResponse, DagSyncStatus, DecodeTxExtension,
+    DecodeTxLog, DecodeTxPqAttestation, DecodeTxResponse, DelegationCapResponse,
+    DelegationHistoryRecord, DelegationRow, DelegationsResponse, EncryptionKeyResponse,
+    EntityRatchetResponse, FeeHistoryResponse, GapRange, GapRecord, GapRecordsResponse,
+    IndexerStatus, MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent,
+    MeshUnsignedTxResponse, MrcAccountRecord, MrcAccountRequest, MrcAccountResponse,
+    MrcHoldersRequest, MrcHoldersResponse, MrcMetadataRecord, MrcMetadataResponse, MrcPolicyRecord,
+    MrcPolicySpendRecord, NativeAgentArbiterStateRecord, NativeAgentAttestationStateRecord,
+    NativeAgentAvailabilityStateRecord, NativeAgentConsentStateRecord,
+    NativeAgentEscrowStateRecord, NativeAgentIssuerStateRecord, NativeAgentPolicySpendStateRecord,
+    NativeAgentPolicyStateRecord, NativeAgentReputationReviewStateRecord,
+    NativeAgentServiceStateRecord, NativeAgentStateFilter, NativeAgentStateResponse,
+    NativeAgentStateResponseFilters, NativeAgentStateSource, NativeCollectionRoyaltyStateRecord,
+    NativeMarketStateFilter, NativeMarketStateResponse, NativeMarketStateResponseFilters,
+    NativeMarketStateSource, NativeModuleForwarderDescriptor, NativeNftListingStateRecord,
+    NativeReceiptFee, NativeSpotMarketStateRecord, NativeSpotOrderStateRecord, PeerSummary,
+    PendingRewardsResponse, PendingRewardsRow, PendingTxSummary, PrecompileDescriptor,
+    RedemptionQueueResponse, RedemptionQueueTicket, RegistryRecord, RichListHolder,
+    RichListResponse, RoundInfo, StorageProofBatch, SyncStatus, TokenBalanceMrcIdentity,
+    TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt, TransactionView,
 };
 use ts_rs::TS;
 
@@ -42,7 +70,27 @@ fn export_bindings() {
     AddressActivityKindResponse::export_all_to(&out).expect("AddressActivityKindResponse");
     AddressActivityKindRetention::export_all_to(&out).expect("AddressActivityKindRetention");
     AddressLabelRecord::export_all_to(&out).expect("AddressLabelRecord");
+    AgentReputationCategoryScope::export_all_to(&out).expect("AgentReputationCategoryScope");
+    AgentReputationRecord::export_all_to(&out).expect("AgentReputationRecord");
+    AgentReputationResponse::export_all_to(&out).expect("AgentReputationResponse");
     AssetPolicy::export_all_to(&out).expect("AssetPolicy");
+    BridgeAdminControl::export_all_to(&out).expect("BridgeAdminControl");
+    BridgeCircuitBreakerState::export_all_to(&out).expect("BridgeCircuitBreakerState");
+    BridgeQuoteSubmitReadiness::export_all_to(&out).expect("BridgeQuoteSubmitReadiness");
+    BridgeRiskTier::export_all_to(&out).expect("BridgeRiskTier");
+    BridgeRouteAssessment::export_all_to(&out).expect("BridgeRouteAssessment");
+    BridgeRouteCandidate::export_all_to(&out).expect("BridgeRouteCandidate");
+    BridgeRouteCatalogue::export_all_to(&out).expect("BridgeRouteCatalogue");
+    BridgeRouteCatalogueRoute::export_all_to(&out).expect("BridgeRouteCatalogueRoute");
+    BridgeRouteCatalogueValidation::export_all_to(&out).expect("BridgeRouteCatalogueValidation");
+    BridgeRouteDisclosure::export_all_to(&out).expect("BridgeRouteDisclosure");
+    BridgeRouteSelection::export_all_to(&out).expect("BridgeRouteSelection");
+    BridgeRoutesRequest::export_all_to(&out).expect("BridgeRoutesRequest");
+    BridgeRoutesResponse::export_all_to(&out).expect("BridgeRoutesResponse");
+    BridgeRoutesSource::export_all_to(&out).expect("BridgeRoutesSource");
+    BridgeTransferIntent::export_all_to(&out).expect("BridgeTransferIntent");
+    BridgeTransferRequest::export_all_to(&out).expect("BridgeTransferRequest");
+    BridgeVerifierDisclosure::export_all_to(&out).expect("BridgeVerifierDisclosure");
     BlsCertificateResponse::export_all_to(&out).expect("BlsCertificateResponse");
     BlockHeader::export_all_to(&out).expect("BlockHeader");
     BlockTag::export_all_to(&out).expect("BlockTag");
@@ -59,6 +107,7 @@ fn export_bindings() {
     DagParent::export_all_to(&out).expect("DagParent");
     DagParentsResponse::export_all_to(&out).expect("DagParentsResponse");
     DagSyncStatus::export_all_to(&out).expect("DagSyncStatus");
+    DecodeTxExtension::export_all_to(&out).expect("DecodeTxExtension");
     DecodeTxLog::export_all_to(&out).expect("DecodeTxLog");
     DecodeTxPqAttestation::export_all_to(&out).expect("DecodeTxPqAttestation");
     DecodeTxResponse::export_all_to(&out).expect("DecodeTxResponse");
@@ -78,19 +127,91 @@ fn export_bindings() {
     MeshSignedTxResponse::export_all_to(&out).expect("MeshSignedTxResponse");
     MeshTxIntent::export_all_to(&out).expect("MeshTxIntent");
     MeshUnsignedTxResponse::export_all_to(&out).expect("MeshUnsignedTxResponse");
+    MrcAccountRecord::export_all_to(&out).expect("MrcAccountRecord");
+    MrcAccountRequest::export_all_to(&out).expect("MrcAccountRequest");
+    MrcAccountResponse::export_all_to(&out).expect("MrcAccountResponse");
+    MrcHoldersRequest::export_all_to(&out).expect("MrcHoldersRequest");
+    MrcHoldersResponse::export_all_to(&out).expect("MrcHoldersResponse");
+    MrcMetadataRecord::export_all_to(&out).expect("MrcMetadataRecord");
+    MrcMetadataResponse::export_all_to(&out).expect("MrcMetadataResponse");
+    MrcPolicyRecord::export_all_to(&out).expect("MrcPolicyRecord");
+    MrcPolicySpendRecord::export_all_to(&out).expect("MrcPolicySpendRecord");
+    NativeAgentIssuerStateRecord::export_all_to(&out).expect("NativeAgentIssuerStateRecord");
+    NativeAgentAttestationStateRecord::export_all_to(&out)
+        .expect("NativeAgentAttestationStateRecord");
+    NativeAgentConsentStateRecord::export_all_to(&out).expect("NativeAgentConsentStateRecord");
+    NativeAgentServiceStateRecord::export_all_to(&out).expect("NativeAgentServiceStateRecord");
+    NativeAgentAvailabilityStateRecord::export_all_to(&out)
+        .expect("NativeAgentAvailabilityStateRecord");
+    NativeAgentArbiterStateRecord::export_all_to(&out).expect("NativeAgentArbiterStateRecord");
+    NativeAgentEscrowStateRecord::export_all_to(&out).expect("NativeAgentEscrowStateRecord");
+    NativeAgentPolicySpendStateRecord::export_all_to(&out)
+        .expect("NativeAgentPolicySpendStateRecord");
+    NativeAgentPolicyStateRecord::export_all_to(&out).expect("NativeAgentPolicyStateRecord");
+    NativeAgentReputationReviewStateRecord::export_all_to(&out)
+        .expect("NativeAgentReputationReviewStateRecord");
+    NativeAgentStateFilter::export_all_to(&out).expect("NativeAgentStateFilter");
+    NativeAgentStateResponse::export_all_to(&out).expect("NativeAgentStateResponse");
+    NativeAgentStateResponseFilters::export_all_to(&out).expect("NativeAgentStateResponseFilters");
+    NativeAgentStateSource::export_all_to(&out).expect("NativeAgentStateSource");
+    NativeCollectionRoyaltyStateRecord::export_all_to(&out)
+        .expect("NativeCollectionRoyaltyStateRecord");
+    NativeMarketStateFilter::export_all_to(&out).expect("NativeMarketStateFilter");
+    NativeMarketStateResponse::export_all_to(&out).expect("NativeMarketStateResponse");
+    NativeMarketStateResponseFilters::export_all_to(&out)
+        .expect("NativeMarketStateResponseFilters");
+    NativeMarketStateSource::export_all_to(&out).expect("NativeMarketStateSource");
+    NativeModuleForwarderDescriptor::export_all_to(&out).expect("NativeModuleForwarderDescriptor");
+    NativeNftListingStateRecord::export_all_to(&out).expect("NativeNftListingStateRecord");
+    NativeReceiptFee::export_all_to(&out).expect("NativeReceiptFee");
+    NativeSpotMarketStateRecord::export_all_to(&out).expect("NativeSpotMarketStateRecord");
+    NativeSpotOrderStateRecord::export_all_to(&out).expect("NativeSpotOrderStateRecord");
     PeerSummary::export_all_to(&out).expect("PeerSummary");
+    PendingRewardsResponse::export_all_to(&out).expect("PendingRewardsResponse");
+    PendingRewardsRow::export_all_to(&out).expect("PendingRewardsRow");
     PendingTxSummary::export_all_to(&out).expect("PendingTxSummary");
     PrecompileDescriptor::export_all_to(&out).expect("PrecompileDescriptor");
+    RedemptionQueueResponse::export_all_to(&out).expect("RedemptionQueueResponse");
+    RedemptionQueueTicket::export_all_to(&out).expect("RedemptionQueueTicket");
     RegistryRecord::export_all_to(&out).expect("RegistryRecord");
     RichListHolder::export_all_to(&out).expect("RichListHolder");
     RichListResponse::export_all_to(&out).expect("RichListResponse");
     RoundInfo::export_all_to(&out).expect("RoundInfo");
     StorageProofBatch::export_all_to(&out).expect("StorageProofBatch");
     SyncStatus::export_all_to(&out).expect("SyncStatus");
+    TokenBalanceMrcIdentity::export_all_to(&out).expect("TokenBalanceMrcIdentity");
     TokenBalanceRecord::export_all_to(&out).expect("TokenBalanceRecord");
     TpmAttestationResponse::export_all_to(&out).expect("TpmAttestationResponse");
     TransactionReceipt::export_all_to(&out).expect("TransactionReceipt");
     TransactionView::export_all_to(&out).expect("TransactionView");
+
+    MrvAbiManifest::export_all_to(&out).expect("MrvAbiManifest");
+    MrvAbiParam::export_all_to(&out).expect("MrvAbiParam");
+    MrvAbiSymbol::export_all_to(&out).expect("MrvAbiSymbol");
+    MrvAbiSymbolKind::export_all_to(&out).expect("MrvAbiSymbolKind");
+    MrvAbiType::export_all_to(&out).expect("MrvAbiType");
+    MrvAddressKind::export_all_to(&out).expect("MrvAddressKind");
+    MrvArtifactMetadata::export_all_to(&out).expect("MrvArtifactMetadata");
+    MrvBuildMetadata::export_all_to(&out).expect("MrvBuildMetadata");
+    MrvCallRequest::export_all_to(&out).expect("MrvCallRequest");
+    MrvCallResponse::export_all_to(&out).expect("MrvCallResponse");
+    MrvCallStatus::export_all_to(&out).expect("MrvCallStatus");
+    MrvDeployPayload::export_all_to(&out).expect("MrvDeployPayload");
+    MrvDeployRequest::export_all_to(&out).expect("MrvDeployRequest");
+    MrvDeployResponse::export_all_to(&out).expect("MrvDeployResponse");
+    MrvEventRecord::export_all_to(&out).expect("MrvEventRecord");
+    MrvExecutionReceipt::export_all_to(&out).expect("MrvExecutionReceipt");
+    MrvMemoryLimits::export_all_to(&out).expect("MrvMemoryLimits");
+    MrvMeterCounters::export_all_to(&out).expect("MrvMeterCounters");
+    MrvNativeStateDelta::export_all_to(&out).expect("MrvNativeStateDelta");
+    MrvResolvedSyscall::export_all_to(&out).expect("MrvResolvedSyscall");
+    MrvRevertPayload::export_all_to(&out).expect("MrvRevertPayload");
+    MrvRiscvProfile::export_all_to(&out).expect("MrvRiscvProfile");
+    MrvStorageNamespace::export_all_to(&out).expect("MrvStorageNamespace");
+    MrvSyscallImport::export_all_to(&out).expect("MrvSyscallImport");
+    MrvTransactionExtension::export_all_to(&out).expect("MrvTransactionExtension");
+    MrvTypedAddress::export_all_to(&out).expect("MrvTypedAddress");
+    MrvValidatedArtifactMetadata::export_all_to(&out).expect("MrvValidatedArtifactMetadata");
 
     // Sanity check — at least one file should exist.
     let count = std::fs::read_dir(&out)

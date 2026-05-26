@@ -115,10 +115,10 @@ export interface EthersReceiptShape {
  * surface a usable `TransactionResponse` to ethers callers.
  *
  * The chain's receipt today is intentionally narrow — log emission,
- * cumulative-gas aggregation, and effective-gas-price disclosure are
+ * cumulative execution-unit aggregation, and effective-fee disclosure are
  * tracked OI items. This translator fills in zero-equivalent values for
- * those gaps; callers that need the full surface (logs, effective gas
- * price) consume the native SDK shape directly.
+ * those gaps; callers that need the full native surface consume the SDK
+ * receipt shape directly.
  */
 export function translateReceiptOut(
   monoReceipt: MonoTransactionReceipt,
@@ -131,8 +131,8 @@ export function translateReceiptOut(
     blockNumber: `0x${BigInt(monoReceipt.block_number).toString(16)}`,
     transactionIndex: `0x${monoReceipt.tx_index.toString(16)}`,
     status: monoReceipt.status === 1 ? "0x1" : "0x0",
-    gasUsed: `0x${BigInt(monoReceipt.gas_used).toString(16)}`,
-    cumulativeGasUsed: `0x${BigInt(monoReceipt.gas_used).toString(16)}`,
+    gasUsed: `0x${BigInt(monoReceipt.executionUnitsUsed).toString(16)}`,
+    cumulativeGasUsed: `0x${BigInt(monoReceipt.executionUnitsUsed).toString(16)}`,
     effectiveGasPrice: "0x0",
     contractAddress: null,
     from: fromAddress ?? "0x0000000000000000000000000000000000000000",
@@ -188,16 +188,16 @@ export function translateBlockOut(header: {
   parent_hash: string;
   state_root: string;
   timestamp: bigint;
-  gas_used: bigint;
-  gas_limit: bigint;
+  executionUnitsUsed: bigint;
+  executionUnitLimit: bigint;
 }): EthersBlockShape {
   return {
     number: `0x${header.number.toString(16)}`,
     hash: header.hash,
     parentHash: header.parent_hash,
     timestamp: `0x${header.timestamp.toString(16)}`,
-    gasUsed: `0x${header.gas_used.toString(16)}`,
-    gasLimit: `0x${header.gas_limit.toString(16)}`,
+    gasUsed: `0x${header.executionUnitsUsed.toString(16)}`,
+    gasLimit: `0x${header.executionUnitLimit.toString(16)}`,
     stateRoot: header.state_root,
     miner: "0x0000000000000000000000000000000000000000",
     difficulty: "0x0",

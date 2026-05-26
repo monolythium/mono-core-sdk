@@ -341,7 +341,7 @@ describe("ethers compat — reference kit", () => {
     expect(await signer.getAddress()).toBe(wallet.address);
   });
 
-  it("end-to-end Solidity dev kit: deploy Counter, call inc(), read n()", async () => {
+  it("end-to-end legacy ethers dev kit: deploy Counter, call inc(), read n()", async () => {
     const { client, node } = makeMockedClient();
     const provider = new MonolythiumProvider(client);
 
@@ -351,7 +351,7 @@ describe("ethers compat — reference kit", () => {
     );
     const signer = MonolythiumSigner.fromEthersWallet(wallet, provider);
 
-    // 1. Deploy Counter through ethers' standard ContractFactory.
+    // 1. Deploy Counter through ethers' standard factory path.
     const factory = new ContractFactory(COUNTER_ABI, COUNTER_BYTECODE, signer);
     const deployed = await factory.deploy();
     await deployed.waitForDeployment();

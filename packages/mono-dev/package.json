@@ -1,0 +1,18 @@
+{
+  "name": "@monolythium/mono-dev",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Mono DevKit command surface for native MRV/MRC developer workflows.",
+  "license": "Apache-2.0",
+  "bin": {
+    "mono-dev": "./bin/mono-dev.mjs"
+  },
+  "scripts": {
+    "test": "node scripts/smoke.mjs",
+    "pack:local": "node scripts/create-local-devkit.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

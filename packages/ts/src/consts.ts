@@ -21,14 +21,15 @@
 export const BURN_ADDR = "0x0000000000000000000000000000000000000000" as const;
 
 /**
- * SDK-exposed precompile address map (whitepaper v4.0).
+ * SDK-exposed native/precompile address map for the current v4.1 surface.
  *
  * Sourced from `mono-core` runtime/precompile constants and pinned here
  * so surfaces can render precompile traffic by name without
  * re-defining low-band address literals.
  *
  * `0x1002` and `0x1006` are intentionally absent from the SDK surface
- * because whitepaper v4.0 does not define those application surfaces.
+ * because the current v4.1 launch surface does not define those application
+ * modules.
  */
 export const PRECOMPILE_ADDRESSES = {
   /** Native fungible-token factory — non-gateable, foundational. */
