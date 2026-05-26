@@ -53,5 +53,10 @@
     "@noble/hashes": "^2.2.0",
     "@noble/post-quantum": "^0.6.1",
     "@scure/bip39": "^2.2.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "ws@<8.20.1": ">=8.20.1"
+    }
   }
 }
