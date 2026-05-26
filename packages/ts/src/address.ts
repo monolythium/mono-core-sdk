@@ -127,6 +127,62 @@ export function parseAddress(address: string): Uint8Array {
   return bech32ToAddressBytes(address);
 }
 
+/** Address-validation result for non-throwing callers (UI forms, search). */
+export type AddressValidation =
+  | {
+      valid: true;
+      /** Lower-case bech32m representation; matches what the wire format expects. */
+      normalized: string;
+      /** Bech32m kind when the input is a typed bech32m address, otherwise null. */
+      kind: AddressKind | null;
+      /** Which surface the input came from. */
+      format: "hex" | "bech32m";
+      /** Raw 20-byte payload, useful for client-side bytes-derived lookups. */
+      bytes: Uint8Array;
+    }
+  | { valid: false; reason: string };
+
+/**
+ * Validate an address string without throwing. Accepts both raw hex and
+ * typed bech32m. On success returns the canonical bech32m form along with
+ * the kind/format/bytes; on failure returns a short reason string.
+ */
+export function validateAddress(address: string): AddressValidation {
+  if (typeof address !== "string" || address.length === 0) {
+    return { valid: false, reason: "address cannot be empty" };
+  }
+  const trimmed = address.trim();
+  if (trimmed.length === 0) {
+    return { valid: false, reason: "address cannot be empty" };
+  }
+  if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
+    try {
+      const bytes = hexToAddressBytes(trimmed);
+      return {
+        valid: true,
+        normalized: addressToBech32(bytes),
+        kind: null,
+        format: "hex",
+        bytes,
+      };
+    } catch (err) {
+      return { valid: false, reason: err instanceof Error ? err.message : String(err) };
+    }
+  }
+  try {
+    const typed = typedBech32ToAddress(trimmed);
+    return {
+      valid: true,
+      normalized: typed.address,
+      kind: typed.kind,
+      format: "bech32m",
+      bytes: typed.bytes,
+    };
+  } catch (err) {
+    return { valid: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export function normalizeAddressHex(address: string): string {
   return addressBytesToHex(parseAddress(address));
 }

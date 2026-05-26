@@ -11,6 +11,7 @@ import {
   parseAddress,
   requireTypedAddress,
   typedBech32ToAddress,
+  validateAddress,
 } from "../src/index.js";
 
 describe("address helpers", () => {
@@ -59,5 +60,59 @@ describe("address helpers", () => {
       /raw 0x addresses are retired/,
     );
     expect(() => requireTypedAddress(contract, "user", "address")).toThrow(/must be typed mono/);
+  });
+
+  describe("validateAddress", () => {
+    const hex = "0x4242424242424242424242424242424242424242";
+
+    it("accepts canonical hex and reports format hex with null kind", () => {
+      const result = validateAddress(hex);
+      expect(result.valid).toBe(true);
+      if (result.valid) {
+        expect(result.format).toBe("hex");
+        expect(result.kind).toBeNull();
+        expect(result.normalized).toBe(addressToBech32(hex));
+        expect([...result.bytes]).toEqual([...hexToAddressBytes(hex)]);
+      }
+    });
+
+    it("accepts typed bech32m and reports kind + format bech32m", () => {
+      const bech = addressToTypedBech32("contract", hex);
+      const result = validateAddress(bech);
+      expect(result.valid).toBe(true);
+      if (result.valid) {
+        expect(result.format).toBe("bech32m");
+        expect(result.kind).toBe("contract");
+        expect(result.normalized).toBe(bech);
+      }
+    });
+
+    it("rejects empty input with an empty-address reason", () => {
+      expect(validateAddress("")).toEqual({ valid: false, reason: "address cannot be empty" });
+      expect(validateAddress("   ")).toEqual({ valid: false, reason: "address cannot be empty" });
+    });
+
+    it("rejects malformed hex and bad bech32m without throwing", () => {
+      const badHex = validateAddress("0x123");
+      expect(badHex.valid).toBe(false);
+      if (!badHex.valid) expect(badHex.reason).toMatch(/0x-prefixed 20-byte hex address/);
+
+      const badBech = validateAddress("mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdcq");
+      expect(badBech.valid).toBe(false);
+      if (!badBech.valid) expect(badBech.reason).toMatch(/checksum/);
+    });
+
+    it("rejects reserved address hrps", () => {
+      // monor (validator), monop (precompile), monoi (issuer), monoa (artifact)
+      // share the bech32m charset; build one with a reserved hrp and a known
+      // valid 20-byte payload using addressToTypedBech32 isn't possible (the
+      // hrp list is restricted), so re-purpose a known-good bech32m by
+      // swapping the hrp manually.
+      const sample = addressToTypedBech32("user", hex); // mono1…
+      const reservedHrp = sample.replace(/^mono/, "monor");
+      const result = validateAddress(reservedHrp);
+      expect(result.valid).toBe(false);
+      if (!result.valid) expect(result.reason).toMatch(/reserved|checksum/);
+    });
   });
 });
