@@ -17,15 +17,15 @@ from?: string,
  */
 to?: string,
 /**
- * Gas limit.
+ * Execution-unit limit.
  */
 gas?: string,
 /**
- * Gas price (legacy / non-EIP-1559).
+ * Fee per execution unit on legacy / non-EIP-1559 paths.
  */
 gasPrice?: string,
 /**
- * Wei to transfer.
+ * Native value to transfer, in lythoshi.
  */
 value?: string,
 /**

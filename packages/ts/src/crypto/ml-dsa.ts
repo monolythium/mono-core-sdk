@@ -1,4 +1,5 @@
 import { ml_dsa65 } from "@noble/post-quantum/ml-dsa.js";
+import { blake3 } from "@noble/hashes/blake3.js";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { bigintToBeBytes, bytesToHex, concatBytes, expectBytes } from "./bytes.js";
 import { bincodeSignedTransaction, encodeTransactionForHash, type NativeEvmTxFields } from "./tx.js";
@@ -9,6 +10,9 @@ export const ML_DSA_65_PUBLIC_KEY_LEN = 1952;
 export const ML_DSA_65_SIGNATURE_LEN = 3309;
 export const STANDARD_ALGO_NUMBER_ML_DSA_65 = 1001;
 export const ENUM_VARIANT_INDEX_ML_DSA_65 = 5;
+export const ADDRESS_DERIVATION_DOMAIN = "MONO_ADDRESS_BLAKE3_20_V1";
+
+const ADDRESS_DERIVATION_DOMAIN_BYTES = new TextEncoder().encode(ADDRESS_DERIVATION_DOMAIN);
 
 export class MlDsa65Backend {
   readonly #secretKey: Uint8Array;
@@ -18,7 +22,7 @@ export class MlDsa65Backend {
   private constructor(secretKey: Uint8Array, publicKey: Uint8Array) {
     this.#secretKey = expectBytes(secretKey, ML_DSA_65_SIGNING_KEY_LEN, "ML-DSA-65 secret key").slice();
     this.#publicKey = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key").slice();
-    this.#addressBytes = keccak_256(this.#publicKey).slice(12);
+    this.#addressBytes = mlDsa65AddressBytes(this.#publicKey);
   }
 
   static fromSeed(seed: Uint8Array | readonly number[]): MlDsa65Backend {
@@ -81,7 +85,16 @@ export class MlDsa65Backend {
 }
 
 export function mlDsa65AddressFromPublicKey(publicKey: Uint8Array | readonly number[]): string {
-  return bytesToHex(keccak_256(expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key")).slice(12));
+  return bytesToHex(mlDsa65AddressBytes(publicKey));
+}
+
+export function mlDsa65AddressBytes(publicKey: Uint8Array | readonly number[]): Uint8Array {
+  const bytes = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key");
+  return blake3(concatBytes(
+    ADDRESS_DERIVATION_DOMAIN_BYTES,
+    bigintToBeBytes(BigInt(STANDARD_ALGO_NUMBER_ML_DSA_65), 2, "ML-DSA-65 algo id"),
+    bytes,
+  )).slice(0, 20);
 }
 
 export function encodeMlDsa65Opaque(raw: Uint8Array | readonly number[]): Uint8Array {

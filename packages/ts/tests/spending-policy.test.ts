@@ -5,6 +5,7 @@ import {
   PRECOMPILE_ADDRESSES,
   SET_POLICY_CLAIM_DOMAIN_TAG,
   SPENDING_POLICY_SELECTORS,
+  addressToTypedBech32,
   composeClaimBoundMessage,
   encodeClaimPolicyByAddressCalldata,
   encodeDisableCalldata,
@@ -15,11 +16,14 @@ import {
   type SpendingPolicyArgs,
 } from "../src/index.js";
 
+const userAddress = (byte: string) => addressToTypedBech32("user", `0x${byte.repeat(20)}`);
+const contractAddress = (byte: string) => addressToTypedBech32("contract", `0x${byte.repeat(20)}`);
+
 const args: SpendingPolicyArgs = {
-  subAccount: "0x1111111111111111111111111111111111111111",
-  principal: "0x2222222222222222222222222222222222222222",
-  dailyCapWei: 100n,
-  perTxCapWei: 7n,
+  subAccount: userAddress("11"),
+  principal: userAddress("22"),
+  dailyCapLythoshi: 100n,
+  perTxCapLythoshi: 7n,
   allowRoot: `0x${"aa".repeat(32)}`,
   denyRoot: `0x${"bb".repeat(32)}`,
 };
@@ -84,5 +88,21 @@ describe("spending policy ABI helpers", () => {
     expect(() => encodeSetPolicyClaimCalldata(args, new Uint8Array(1), new Uint8Array(ML_DSA_65_SIGNATURE_LEN))).toThrow();
     expect(() => encodeSetPolicyClaimCalldata(args, new Uint8Array(ML_DSA_65_PUBLIC_KEY_LEN), new Uint8Array(1))).toThrow();
     expect(() => encodeClaimPolicyByAddressCalldata(args, new Uint8Array(1))).toThrow();
+  });
+
+  it("rejects raw and wrong-HRP account addresses", () => {
+    expect(() =>
+      encodeSetPolicyCalldata({
+        ...args,
+        subAccount: "0x1111111111111111111111111111111111111111",
+      }),
+    ).toThrow(/raw 0x addresses are retired/);
+    expect(() =>
+      encodeSetPolicyCalldata({
+        ...args,
+        principal: contractAddress("22"),
+      }),
+    ).toThrow(/principal/);
+    expect(() => encodeEnableCalldata(new Uint8Array(20) as unknown as string)).toThrow(/subAccount/);
   });
 });

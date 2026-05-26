@@ -9,13 +9,21 @@ use std::sync::Arc;
 use reqwest::Url;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde_json::to_string;
 use serde_json::Value;
 
+use crate::address::{typed_bech32_to_address_kind, AddressKind};
+use crate::bridge::{BridgeRoutesRequest, BridgeRoutesResponse};
 use crate::error::SdkError;
 use crate::types::{
-    AddressFlowResponse, AddressProfileResponse, BlockSelector, ChainStatsResponse,
-    ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse,
-    ClobTradesResponse, SearchResponse, TxFeedResponse,
+    native_events_from_receipt, native_market_events_filter, native_market_events_from_receipt,
+    typed_native_events_from_response, AddressFlowResponse, AddressProfileResponse, BlockSelector,
+    ChainStatsResponse, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse,
+    ClobOrderBookResponse, ClobTradesResponse, MrcAccountResponse, MrcHoldersResponse,
+    MrcMetadataResponse, NativeAgentStateFilter, NativeAgentStateResponse, NativeEventFilter,
+    NativeEventsFilter, NativeEventsResponse, NativeMarketStateFilter, NativeMarketStateResponse,
+    NativeReceiptFee, NativeReceiptResponse, PendingRewardsResponse, RedemptionQueueResponse,
+    SearchResponse, TxFeedResponse, TypedNativeEventsResponse, TypedNativeReceiptEvent,
 };
 
 /// Typed HTTP API client for `/api/v1`.
@@ -159,11 +167,134 @@ impl ApiClient {
         self.get(&format!("transactions/{hash}/receipt"), &[]).await
     }
 
+    /// `/api/v1/transactions/{hash}/native-receipt`.
+    pub async fn transaction_native_receipt(
+        &self,
+        hash: &str,
+    ) -> Result<ApiEnvelope<NativeReceiptResponse>, SdkError> {
+        self.get(&format!("transactions/{hash}/native-receipt"), &[])
+            .await
+    }
+
+    /// Typed native event rows from `/transactions/{hash}/native-receipt`.
+    ///
+    /// This helper consumes the existing native receipt API route and
+    /// returns its envelope metadata with `data` replaced by the filtered
+    /// event rows.
+    pub async fn transaction_native_receipt_events<TDecoded>(
+        &self,
+        hash: &str,
+        filter: NativeEventFilter<'_>,
+    ) -> Result<ApiEnvelope<Vec<TypedNativeReceiptEvent<TDecoded>>>, SdkError>
+    where
+        TDecoded: DeserializeOwned,
+    {
+        let receipt = self.transaction_native_receipt(hash).await?;
+        Ok(ApiEnvelope {
+            schema_version: receipt.schema_version,
+            chain_id: receipt.chain_id,
+            genesis_hash: receipt.genesis_hash,
+            latest: receipt.latest,
+            data: native_events_from_receipt::<TDecoded>(&receipt.data, filter)?,
+        })
+    }
+
+    /// Typed native market event rows from `/transactions/{hash}/native-receipt`.
+    pub async fn transaction_native_receipt_market_events<TDecoded>(
+        &self,
+        hash: &str,
+        filter: NativeEventFilter<'_>,
+    ) -> Result<ApiEnvelope<Vec<TypedNativeReceiptEvent<TDecoded>>>, SdkError>
+    where
+        TDecoded: DeserializeOwned,
+    {
+        let receipt = self.transaction_native_receipt(hash).await?;
+        Ok(ApiEnvelope {
+            schema_version: receipt.schema_version,
+            chain_id: receipt.chain_id,
+            genesis_hash: receipt.genesis_hash,
+            latest: receipt.latest,
+            data: native_market_events_from_receipt::<TDecoded>(&receipt.data, filter)?,
+        })
+    }
+
+    /// `/api/v1/native-events`.
+    pub async fn native_events(
+        &self,
+        filter: NativeEventsFilter<'_>,
+    ) -> Result<ApiEnvelope<NativeEventsResponse>, SdkError> {
+        self.get("native-events", &filter.to_query_pairs()).await
+    }
+
+    /// `/api/v1/native-events` with decoded rows converted into a caller-selected type.
+    pub async fn native_events_typed<TDecoded>(
+        &self,
+        filter: NativeEventsFilter<'_>,
+    ) -> Result<ApiEnvelope<TypedNativeEventsResponse<TDecoded>>, SdkError>
+    where
+        TDecoded: DeserializeOwned,
+    {
+        let response = self.native_events(filter).await?;
+        Ok(ApiEnvelope {
+            schema_version: response.schema_version,
+            chain_id: response.chain_id,
+            genesis_hash: response.genesis_hash,
+            latest: response.latest,
+            data: typed_native_events_from_response::<TDecoded>(&response.data)?,
+        })
+    }
+
+    /// `/api/v1/native-events` restricted to native marketplace event rows.
+    pub async fn native_market_events(
+        &self,
+        filter: NativeEventsFilter<'_>,
+    ) -> Result<ApiEnvelope<NativeEventsResponse>, SdkError> {
+        self.native_events(native_market_events_filter(filter))
+            .await
+    }
+
+    /// `/api/v1/native-events` market rows converted into a caller-selected type.
+    pub async fn native_market_events_typed<TDecoded>(
+        &self,
+        filter: NativeEventsFilter<'_>,
+    ) -> Result<ApiEnvelope<TypedNativeEventsResponse<TDecoded>>, SdkError>
+    where
+        TDecoded: DeserializeOwned,
+    {
+        let response = self.native_market_events(filter).await?;
+        Ok(ApiEnvelope {
+            schema_version: response.schema_version,
+            chain_id: response.chain_id,
+            genesis_hash: response.genesis_hash,
+            latest: response.latest,
+            data: typed_native_events_from_response::<TDecoded>(&response.data)?,
+        })
+    }
+
+    /// `/api/v1/native-agent-state`.
+    pub async fn native_agent_state(
+        &self,
+        filter: NativeAgentStateFilter<'_>,
+    ) -> Result<ApiEnvelope<NativeAgentStateResponse>, SdkError> {
+        self.get("native-agent-state", &filter.to_query_pairs())
+            .await
+    }
+
+    /// `/api/v1/native-market-state`.
+    pub async fn native_market_state(
+        &self,
+        filter: NativeMarketStateFilter<'_>,
+    ) -> Result<ApiEnvelope<NativeMarketStateResponse>, SdkError> {
+        self.get("native-market-state", &filter.to_query_pairs())
+            .await
+    }
+
     /// `/api/v1/addresses/{address}/profile`.
     pub async fn address_profile(
         &self,
         address: &str,
     ) -> Result<ApiEnvelope<AddressProfileResponse>, SdkError> {
+        let address = sdk_typed_address(address, AddressKind::User, "address")?;
         self.get(&format!("addresses/{address}/profile"), &[]).await
     }
 
@@ -173,6 +304,7 @@ impl ApiClient {
         address: &str,
         limit: u32,
     ) -> Result<ApiEnvelope<AddressFlowResponse>, SdkError> {
+        let address = sdk_typed_address(address, AddressKind::User, "address")?;
         self.get(
             &format!("addresses/{address}/flow"),
             &[("limit", limit.to_string())],
@@ -187,6 +319,7 @@ impl ApiClient {
         limit: u32,
         cursor: Option<&str>,
     ) -> Result<ApiEnvelope<ApiAddressActivityData>, SdkError> {
+        let address = sdk_typed_address(address, AddressKind::User, "address")?;
         let mut query = vec![("limit", limit.to_string())];
         if let Some(cursor) = cursor {
             query.push(("cursor", cursor.to_owned()));
@@ -200,8 +333,111 @@ impl ApiClient {
         &self,
         address: &str,
     ) -> Result<ApiEnvelope<ApiAddressActivityKindData>, SdkError> {
+        let address = sdk_typed_address(address, AddressKind::User, "address")?;
         self.get(&format!("addresses/{address}/activity-kind"), &[])
             .await
+    }
+
+    /// `/api/v1/addresses/{address}/pending-rewards`.
+    pub async fn address_pending_rewards(
+        &self,
+        address: &str,
+        block: Option<BlockSelector>,
+    ) -> Result<ApiEnvelope<PendingRewardsResponse>, SdkError> {
+        let address = sdk_typed_address(address, AddressKind::User, "address")?;
+        let query = block.map_or_else(Vec::new, |block| vec![("block", block_path(block))]);
+        self.get(&format!("addresses/{address}/pending-rewards"), &query)
+            .await
+    }
+
+    /// `/api/v1/addresses/{address}/redemption-queue`.
+    pub async fn address_redemption_queue(
+        &self,
+        address: &str,
+        block: Option<BlockSelector>,
+    ) -> Result<ApiEnvelope<RedemptionQueueResponse>, SdkError> {
+        let address = sdk_typed_address(address, AddressKind::User, "address")?;
+        let query = block.map_or_else(Vec::new, |block| vec![("block", block_path(block))]);
+        self.get(&format!("addresses/{address}/redemption-queue"), &query)
+            .await
+    }
+
+    /// `/api/v1/assets/{token_id}/metadata`.
+    pub async fn asset_mrc_metadata(
+        &self,
+        asset_id: &str,
+        mrc_token_id: Option<&str>,
+    ) -> Result<ApiEnvelope<MrcMetadataResponse>, SdkError> {
+        let query = mrc_token_id.map_or_else(Vec::new, |token_id| {
+            vec![("mrcTokenId", token_id.to_owned())]
+        });
+        self.get(&format!("assets/{asset_id}/metadata"), &query)
+            .await
+    }
+
+    /// `/api/v1/mrc/accounts/{account}`.
+    pub async fn mrc_account(
+        &self,
+        account: &str,
+        limit: Option<u32>,
+    ) -> Result<ApiEnvelope<MrcAccountResponse>, SdkError> {
+        let account = sdk_typed_address(account, AddressKind::SmartAccount, "account")?;
+        let query = limit.map_or_else(Vec::new, |limit| vec![("limit", limit.to_string())]);
+        self.get(&format!("mrc/accounts/{account}"), &query).await
+    }
+
+    /// `/api/v1/mrc/{standard}/{asset_id}/{token_id}/holders`.
+    pub async fn mrc_holders(
+        &self,
+        standard: &str,
+        asset_id: &str,
+        token_id: &str,
+        limit: Option<u32>,
+    ) -> Result<ApiEnvelope<MrcHoldersResponse>, SdkError> {
+        let query = limit.map_or_else(Vec::new, |limit| vec![("limit", limit.to_string())]);
+        self.get(
+            &format!("mrc/{standard}/{asset_id}/{token_id}/holders"),
+            &query,
+        )
+        .await
+    }
+
+    /// `/api/v1/mrc/{standard}/{asset_id}/holders`.
+    ///
+    /// This is the asset-scoped form used by MRC-4626 vault share balances.
+    pub async fn mrc_asset_holders(
+        &self,
+        standard: &str,
+        asset_id: &str,
+        limit: Option<u32>,
+    ) -> Result<ApiEnvelope<MrcHoldersResponse>, SdkError> {
+        let query = limit.map_or_else(Vec::new, |limit| vec![("limit", limit.to_string())]);
+        self.get(&format!("mrc/{standard}/{asset_id}/holders"), &query)
+            .await
+    }
+
+    /// `/api/v1/mrc/mrc4626/{vault_id}/holders`.
+    pub async fn mrc4626_holders(
+        &self,
+        vault_id: &str,
+        limit: Option<u32>,
+    ) -> Result<ApiEnvelope<MrcHoldersResponse>, SdkError> {
+        self.mrc_asset_holders("mrc4626", vault_id, limit).await
+    }
+
+    /// `/api/v1/bridge/routes`.
+    ///
+    /// The route is read-only `GET`, so the typed request is encoded as a
+    /// single JSON query value named `request`.
+    pub async fn bridge_routes(
+        &self,
+        request: &BridgeRoutesRequest,
+    ) -> Result<ApiEnvelope<BridgeRoutesResponse>, SdkError> {
+        self.get(
+            "bridge/routes",
+            &[("request", to_string(request).map_err(SdkError::Serde)?)],
+        )
+        .await
     }
 
     /// `/api/v1/clusters`.
@@ -330,7 +566,7 @@ impl ApiClient {
                 data,
             });
         }
-        if !status.is_success() && !(allow_unavailable_body && status.as_u16() == 503) {
+        if !(status.is_success() || allow_unavailable_body && status.as_u16() == 503) {
             return Err(SdkError::Malformed(format!(
                 "HTTP {status} with no API error envelope"
             )));
@@ -387,6 +623,22 @@ fn block_path(block: BlockSelector) -> String {
         Value::String(s) => s,
         other => other.to_string(),
     }
+}
+
+fn sdk_typed_address(raw: &str, kind: AddressKind, label: &str) -> Result<String, SdkError> {
+    if raw.starts_with("0x") || raw.starts_with("0X") {
+        return Err(SdkError::Malformed(format!(
+            "{label} raw 0x addresses are retired; use typed {} bech32m addresses",
+            kind.hrp()
+        )));
+    }
+    typed_bech32_to_address_kind(raw, kind).map_err(|err| {
+        SdkError::Malformed(format!(
+            "{label} must be typed {} bech32m address: {err}",
+            kind.hrp()
+        ))
+    })?;
+    Ok(raw.to_ascii_lowercase())
 }
 
 /// Shared success envelope for most `/api/v1` endpoints.
@@ -502,9 +754,9 @@ pub struct ApiBlockHeader {
     pub parent_hash: String,
     pub state_root: String,
     pub timestamp: u64,
-    pub gas_used: u64,
-    pub gas_limit: u64,
-    pub base_fee_per_gas: String,
+    pub execution_units_used: u64,
+    pub execution_unit_limit: u64,
+    pub base_price_per_cycle_lythoshi: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -525,10 +777,11 @@ pub struct ApiTransactionView {
     pub from: String,
     pub to: Option<String>,
     pub nonce: u64,
-    pub value: String,
-    pub max_fee_per_gas: String,
-    pub max_priority_fee_per_gas: String,
-    pub gas_limit: u64,
+    pub value_lythoshi: String,
+    pub max_execution_fee_lythoshi: String,
+    pub priority_tip_lythoshi: String,
+    pub execution_unit_limit: u64,
+    pub fee: NativeReceiptFee,
     pub input: String,
     pub signed_envelope: String,
 }
@@ -541,7 +794,7 @@ pub struct ApiTransactionReceipt {
     pub block_height: u64,
     pub tx_index: u32,
     pub status: u8,
-    pub gas_used: u64,
+    pub execution_units_used: u64,
     pub logs: Vec<ApiLogEntry>,
 }
 
@@ -732,7 +985,50 @@ pub struct ApiUpgradeStatusData {
 
 #[cfg(test)]
 mod tests {
-    use super::{api_endpoint_from_rpc_endpoint, build_url};
+    use super::{api_endpoint_from_rpc_endpoint, build_url, sdk_typed_address, ApiClient};
+    use crate::address::{address_to_typed_bech32, AddressKind};
+    use crate::types::{NativeAgentStateFilter, NativeEventsFilter, NativeMarketStateFilter};
+    use serde_json::{json, Value};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread::{self, JoinHandle};
+
+    fn spawn_api_server(body: Value) -> (String, JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/api/v1", listener.local_addr().unwrap());
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 8192];
+            let n = stream.read(&mut buf).unwrap();
+            let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let body = body.to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            request.lines().next().unwrap_or_default().to_owned()
+        });
+        (endpoint, handle)
+    }
+
+    fn typed_address(kind: AddressKind, byte: u8) -> String {
+        address_to_typed_bech32(kind, [byte; 20])
+    }
+
+    #[test]
+    fn sdk_typed_address_rejects_raw_hex_and_wrong_hrp() {
+        let raw = "0x123456789abcdef0112233445566778899aabbcc";
+        let err = sdk_typed_address(raw, AddressKind::User, "address").unwrap_err();
+        assert!(err.to_string().contains("raw 0x addresses are retired"));
+
+        let user = typed_address(AddressKind::User, 0x12);
+        let err = sdk_typed_address(&user, AddressKind::SmartAccount, "account").unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("must be typed monos bech32m address"));
+    }
 
     #[test]
     fn derives_api_endpoint_from_rpc_endpoint() {
@@ -765,6 +1061,659 @@ mod tests {
         assert_eq!(
             url.as_str(),
             "https://rpc.example/api/v1/markets/0xabc/ohlc?fromBlock=90&toBlock=100&bucketBlocks=10"
+        );
+    }
+
+    #[test]
+    fn build_url_encodes_pending_rewards_block_query() {
+        let url = build_url(
+            "https://rpc.example/api/v1",
+            "addresses/mono1wallet/pending-rewards",
+            &[("block", "0x63".to_owned())],
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://rpc.example/api/v1/addresses/mono1wallet/pending-rewards?block=0x63"
+        );
+    }
+
+    #[test]
+    fn build_url_encodes_redemption_queue_block_query() {
+        let url = build_url(
+            "https://rpc.example/api/v1",
+            "addresses/mono1wallet/redemption-queue",
+            &[("block", "0x63".to_owned())],
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://rpc.example/api/v1/addresses/mono1wallet/redemption-queue?block=0x63"
+        );
+    }
+
+    #[test]
+    fn build_url_encodes_mrc_metadata_token_query() {
+        let asset_id = format!("0x{}", "bb".repeat(32));
+        let token_id = format!("0x{}", "cc".repeat(32));
+        let url = build_url(
+            "https://rpc.example/api/v1",
+            &format!("assets/{asset_id}/metadata"),
+            &[("mrcTokenId", token_id.clone())],
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            format!("https://rpc.example/api/v1/assets/{asset_id}/metadata?mrcTokenId={token_id}")
+        );
+    }
+
+    #[test]
+    fn build_url_encodes_mrc_holders_limit_query() {
+        let asset_id = format!("0x{}", "bb".repeat(32));
+        let token_id = format!("0x{}", "cc".repeat(32));
+        let url = build_url(
+            "https://rpc.example/api/v1",
+            &format!("mrc/mrc1155/{asset_id}/{token_id}/holders"),
+            &[("limit", "5".to_owned())],
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            format!("https://rpc.example/api/v1/mrc/mrc1155/{asset_id}/{token_id}/holders?limit=5")
+        );
+
+        let vault_url = build_url(
+            "https://rpc.example/api/v1",
+            &format!("mrc/mrc4626/{asset_id}/holders"),
+            &[("limit", "10".to_owned())],
+        )
+        .unwrap();
+        assert_eq!(
+            vault_url.as_str(),
+            format!("https://rpc.example/api/v1/mrc/mrc4626/{asset_id}/holders?limit=10")
+        );
+    }
+
+    #[test]
+    fn build_url_encodes_mrc_account_limit_query() {
+        let account = typed_address(AddressKind::SmartAccount, 0x33);
+        let url = build_url(
+            "https://rpc.example/api/v1",
+            &format!("mrc/accounts/{account}"),
+            &[("limit", "2".to_owned())],
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            format!("https://rpc.example/api/v1/mrc/accounts/{account}?limit=2")
+        );
+    }
+
+    #[tokio::test]
+    async fn mrc_account_gets_rest_route_and_decodes_response() {
+        let account = typed_address(AddressKind::SmartAccount, 0x33);
+        let controller = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+        let recovery = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+        let asset_id = format!("0x{}", "bb".repeat(32));
+        let policy_hash = format!("0x{}", "44".repeat(32));
+        let (endpoint, server) = spawn_api_server(json!({
+            "schemaVersion": 1,
+            "chainId": 69420,
+            "genesisHash": format!("0x{}", "00".repeat(32)),
+            "latest": {
+                "available": true,
+                "height": 100,
+                "blockHash": format!("0x{}", "11".repeat(32)),
+                "stateRoot": format!("0x{}", "22".repeat(32)),
+                "timestamp": 123
+            },
+            "data": {
+                "schemaVersion": 1,
+                "account": account,
+                "spendLimit": 2,
+                "smartAccount": {
+                    "kind": "smart_account",
+                    "account": account,
+                    "controller": controller,
+                    "recovery": recovery,
+                    "policyHash": null,
+                    "nonce": "7",
+                    "updatedAtBlock": 91
+                },
+                "policyAccount": {
+                    "kind": "policy_account",
+                    "account": account,
+                    "controller": controller,
+                    "recovery": null,
+                    "policyHash": policy_hash,
+                    "policy": {
+                        "enabled": true,
+                        "perActionLimit": "20",
+                        "windowLimit": "100",
+                        "allowedAssets": [asset_id]
+                    },
+                    "nonce": null,
+                    "updatedAtBlock": 90
+                },
+                "policySpends": [
+                    {
+                        "account": account,
+                        "assetId": asset_id,
+                        "window": "3600",
+                        "amount": "1000",
+                        "spent": "250",
+                        "updatedAtBlock": 92
+                    }
+                ]
+            }
+        }));
+        let client = ApiClient::new(endpoint).unwrap();
+
+        let response = client.mrc_account(&account, Some(2)).await.unwrap();
+
+        assert_eq!(response.data.account, account);
+        assert_eq!(response.data.spend_limit, 2);
+        let smart = response.data.smart_account.as_ref().expect("smart account");
+        assert_eq!(smart.controller, controller);
+        assert_eq!(smart.recovery.as_deref(), Some(recovery));
+        assert_eq!(smart.policy_hash, None);
+        let policy = response
+            .data
+            .policy_account
+            .as_ref()
+            .expect("policy account");
+        assert_eq!(policy.policy_hash.as_deref(), Some(policy_hash.as_str()));
+        let policy_body = policy.policy.as_ref().expect("policy body");
+        assert_eq!(policy_body.per_action_limit, "20");
+        assert_eq!(policy_body.window_limit, "100");
+        assert_eq!(policy_body.allowed_assets, vec![asset_id.clone()]);
+        assert_eq!(response.data.policy_spends[0].spent, "250");
+        let request_line = server.join().unwrap();
+        assert_eq!(
+            request_line,
+            format!("GET /api/v1/mrc/accounts/{account}?limit=2 HTTP/1.1")
+        );
+    }
+
+    #[tokio::test]
+    async fn mrc_holders_gets_rest_route_and_decodes_response() {
+        let asset_id = format!("0x{}", "bb".repeat(32));
+        let token_id = format!("0x{}", "cc".repeat(32));
+        let address = "0x1111111111111111111111111111111111111111";
+        let (endpoint, server) = spawn_api_server(json!({
+            "schemaVersion": 1,
+            "chainId": 69420,
+            "genesisHash": format!("0x{}", "00".repeat(32)),
+            "latest": {
+                "available": true,
+                "height": 100,
+                "blockHash": format!("0x{}", "11".repeat(32)),
+                "stateRoot": format!("0x{}", "22".repeat(32)),
+                "timestamp": 123
+            },
+            "data": {
+                "schemaVersion": 1,
+                "standard": "mrc1155",
+                "assetId": asset_id,
+                "tokenId": token_id,
+                "limit": 5,
+                "holders": [
+                    {
+                        "rank": 1,
+                        "address": address,
+                        "balance": "42",
+                        "updatedAtBlock": 91
+                    }
+                ]
+            }
+        }));
+        let client = ApiClient::new(endpoint).unwrap();
+
+        let response = client
+            .mrc_holders("mrc1155", &asset_id, &token_id, Some(5))
+            .await
+            .unwrap();
+
+        assert_eq!(response.data.standard, "mrc1155");
+        assert_eq!(response.data.holders[0].balance, "42");
+        let request_line = server.join().unwrap();
+        assert_eq!(
+            request_line,
+            format!("GET /api/v1/mrc/mrc1155/{asset_id}/{token_id}/holders?limit=5 HTTP/1.1")
+        );
+    }
+
+    #[tokio::test]
+    async fn mrc4626_holders_gets_asset_scoped_rest_route() {
+        let vault_id = format!("0x{}", "bb".repeat(32));
+        let address = "0x1111111111111111111111111111111111111111";
+        let (endpoint, server) = spawn_api_server(json!({
+            "schemaVersion": 1,
+            "chainId": 69420,
+            "genesisHash": format!("0x{}", "00".repeat(32)),
+            "latest": {
+                "available": true,
+                "height": 100,
+                "blockHash": format!("0x{}", "11".repeat(32)),
+                "stateRoot": format!("0x{}", "22".repeat(32)),
+                "timestamp": 123
+            },
+            "data": {
+                "schemaVersion": 1,
+                "standard": "mrc4626",
+                "assetId": vault_id,
+                "tokenId": null,
+                "limit": 10,
+                "holders": [
+                    {
+                        "rank": 1,
+                        "address": address,
+                        "balance": "700",
+                        "updatedAtBlock": 92
+                    }
+                ]
+            }
+        }));
+        let client = ApiClient::new(endpoint).unwrap();
+
+        let response = client.mrc4626_holders(&vault_id, Some(10)).await.unwrap();
+
+        assert_eq!(response.data.standard, "mrc4626");
+        assert_eq!(response.data.token_id, None);
+        assert_eq!(response.data.holders[0].balance, "700");
+        let request_line = server.join().unwrap();
+        assert_eq!(
+            request_line,
+            format!("GET /api/v1/mrc/mrc4626/{vault_id}/holders?limit=10 HTTP/1.1")
+        );
+    }
+
+    #[test]
+    fn build_url_encodes_bridge_routes_request_query() {
+        let request = serde_json::json!({
+            "intent": {
+                "asset": "USDC",
+                "amountAtomic": "1000000",
+                "sourceChain": "Ethereum",
+                "destinationChain": "Mono",
+                "recipient": "mono1recipient"
+            },
+            "routeDisclosures": []
+        })
+        .to_string();
+        let url = build_url(
+            "https://rpc.example/api/v1",
+            "bridge/routes",
+            &[("request", request)],
+        )
+        .unwrap();
+
+        assert!(url
+            .as_str()
+            .starts_with("https://rpc.example/api/v1/bridge/routes?request="));
+        assert!(url.as_str().contains("%22routeDisclosures%22%3A%5B%5D"));
+    }
+
+    #[test]
+    fn build_url_encodes_native_events_query_filters() {
+        let event_topic = format!("0x{}", "11".repeat(32));
+        let primary_id = format!("0x{}", "77".repeat(32));
+        let url = build_url(
+            "https://rpc.example/api/v1",
+            "native-events",
+            &NativeEventsFilter::new(100, 105)
+                .limit(10)
+                .tx_index(0)
+                .log_index(1)
+                .address("monos1nativeeventemitter")
+                .event_topic(&event_topic)
+                .family("agent")
+                .event_name("agent.escrow.created")
+                .primary_id(&primary_id)
+                .account("mono1agentconsumer")
+                .counterparty("mono1agentcounterparty")
+                .to_query_pairs(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            format!(
+                "https://rpc.example/api/v1/native-events?fromBlock=100&toBlock=105&limit=10&txIndex=0&logIndex=1&address=monos1nativeeventemitter&eventTopic={event_topic}&family=agent&eventName=agent.escrow.created&primaryId={primary_id}&account=mono1agentconsumer&counterparty=mono1agentcounterparty"
+            )
+        );
+    }
+
+    #[test]
+    fn build_url_encodes_native_agent_state_query() {
+        let url = build_url(
+            "https://rpc.example/api/v1",
+            "native-agent-state",
+            &NativeAgentStateFilter::new()
+                .account("mono1agentconsumer")
+                .include_policy_spends(true)
+                .limit(5)
+                .to_query_pairs(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            format!(
+                "https://rpc.example/api/v1/native-agent-state?account=mono1agentconsumer&includePolicySpends=true&limit=5"
+            )
+        );
+    }
+
+    #[test]
+    fn build_url_encodes_native_market_state_query() {
+        let market_id = format!("0x{}", "aa".repeat(32));
+        let url = build_url(
+            "https://rpc.example/api/v1",
+            "native-market-state",
+            &NativeMarketStateFilter::new()
+                .market_id(&market_id)
+                .account("mono1agentconsumer")
+                .include_spot_orders(true)
+                .limit(5)
+                .to_query_pairs(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            format!(
+                "https://rpc.example/api/v1/native-market-state?marketId={market_id}&account=mono1agentconsumer&includeSpotOrders=true&limit=5"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn native_agent_state_gets_rest_route_and_decodes_rows() {
+        let policy_id = format!("0x{}", "aa".repeat(32));
+        let escrow_id = format!("0x{}", "bb".repeat(32));
+        let asset_id = format!("0x{}", "cc".repeat(32));
+        let terms_hash = format!("0x{}", "dd".repeat(32));
+        let issuer_id = format!("0x{}", "11".repeat(32));
+        let service_id = format!("0x{}", "14".repeat(32));
+        let review_id = format!("0x{}", "16".repeat(32));
+        let metadata_hash = format!("0x{}", "1b".repeat(32));
+        let owner = "mono1agentowner000000000000000000000000000000";
+        let controller = "mono1agentcontroller000000000000000000000000";
+        let provider = "mono1agentprovider0000000000000000000000000";
+        let arbiter = "mono1agentarbiter00000000000000000000000000";
+        let (endpoint, server) = spawn_api_server(json!({
+            "schemaVersion": 1,
+            "chainId": 69420,
+            "genesisHash": format!("0x{}", "00".repeat(32)),
+            "latest": {
+                "available": true,
+                "height": 100,
+                "blockHash": format!("0x{}", "11".repeat(32)),
+                "stateRoot": format!("0x{}", "22".repeat(32)),
+                "timestamp": 123
+            },
+            "data": {
+                "schemaVersion": 1,
+                "limit": 5,
+                "filters": {
+                    "policyId": null,
+                    "escrowId": null,
+                    "account": owner,
+                    "includePolicySpends": true
+                },
+                "issuers": [{
+                    "issuerId": issuer_id,
+                    "issuer": owner,
+                    "metadataHash": metadata_hash,
+                    "updatedAtBlock": 45
+                }],
+                "attestations": [],
+                "consents": [],
+                "services": [{
+                    "serviceId": service_id,
+                    "provider": provider,
+                    "categoryHash": format!("0x{}", "1a".repeat(32)),
+                    "metadataHash": metadata_hash,
+                    "active": true,
+                    "updatedAtBlock": 48
+                }],
+                "availability": [{
+                    "provider": provider,
+                    "maxConcurrent": 8,
+                    "openRequests": 2,
+                    "paused": false,
+                    "updatedAtBlock": 49
+                }],
+                "arbiters": [],
+                "reputationReviews": [{
+                    "reviewId": review_id,
+                    "reviewer": owner,
+                    "subject": provider,
+                    "categoryId": 7,
+                    "speedScore": 9,
+                    "qualityScore": 8,
+                    "communicationScore": 10,
+                    "accuracyScore": 9,
+                    "payloadHash": format!("0x{}", "18".repeat(32)),
+                    "updatedAtBlock": 51
+                }],
+                "spendingPolicies": [{
+                    "policyId": policy_id,
+                    "owner": owner,
+                    "controller": controller,
+                    "assetId": asset_id,
+                    "enabled": true,
+                    "perActionLimit": "100",
+                    "windowLimit": "500",
+                    "windowSecs": 60,
+                    "updatedAtBlock": 42
+                }],
+                "policySpends": [{
+                    "policyId": policy_id,
+                    "controller": controller,
+                    "assetId": asset_id,
+                    "window": 7,
+                    "amount": "25",
+                    "spent": "125",
+                    "updatedAtBlock": 43
+                }],
+                "escrows": [{
+                    "escrowId": escrow_id,
+                    "buyer": owner,
+                    "provider": provider,
+                    "arbiter": arbiter,
+                    "assetId": asset_id,
+                    "amount": "1000",
+                    "termsHash": terms_hash,
+                    "round": 2,
+                    "buyerAccepted": true,
+                    "providerAccepted": false,
+                    "submittedPayloadHash": null,
+                    "status": "accepted",
+                    "resolution": null,
+                    "lastActor": owner,
+                    "createdAtBlock": 40,
+                    "updatedAtBlock": 44
+                }],
+                "source": {
+                    "indexerProvider": "native_agent_state",
+                    "projection": "native_agent_state"
+                }
+            }
+        }));
+        let client = ApiClient::new(endpoint).unwrap();
+
+        let response = client
+            .native_agent_state(
+                NativeAgentStateFilter::new()
+                    .account(owner)
+                    .include_policy_spends(true)
+                    .limit(5),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.data.issuers[0].issuer_id, issuer_id);
+        assert_eq!(response.data.services[0].service_id, service_id);
+        assert_eq!(response.data.availability[0].open_requests, 2);
+        assert_eq!(response.data.reputation_reviews[0].review_id, review_id);
+        assert_eq!(response.data.spending_policies[0].controller, controller);
+        assert_eq!(response.data.policy_spends[0].amount, "25");
+        assert_eq!(response.data.escrows[0].status, "accepted");
+        assert_eq!(response.data.filters.account.as_deref(), Some(owner));
+        let request_line = server.join().unwrap();
+        assert_eq!(
+            request_line,
+            format!(
+                "GET /api/v1/native-agent-state?account={owner}&includePolicySpends=true&limit=5 HTTP/1.1"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn native_market_state_gets_rest_route_and_decodes_rows() {
+        let market_id = format!("0x{}", "aa".repeat(32));
+        let order_id = format!("0x{}", "bb".repeat(32));
+        let listing_id = format!("0x{}", "cc".repeat(32));
+        let legacy_listing_id = format!("0x{}", "cd".repeat(32));
+        let collection_id = format!("0x{}", "dd".repeat(32));
+        let owner = "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4";
+        let seller = "mono1seller0000000000000000000000000000000000";
+        let royalty_recipient = "mono1royalty00000000000000000000000000000000";
+        let (endpoint, server) = spawn_api_server(json!({
+            "schemaVersion": 1,
+            "chainId": 69420,
+            "genesisHash": format!("0x{}", "00".repeat(32)),
+            "latest": {
+                "available": true,
+                "height": 100,
+                "blockHash": format!("0x{}", "11".repeat(32)),
+                "stateRoot": format!("0x{}", "22".repeat(32)),
+                "timestamp": 123
+            },
+            "data": {
+                "schemaVersion": 1,
+                "limit": 5,
+                "filters": {
+                    "marketId": market_id,
+                    "orderId": null,
+                    "listingId": null,
+                    "collectionId": null,
+                    "account": owner,
+                    "includeSpotOrders": true
+                },
+                "spotMarkets": [{
+                    "marketId": market_id,
+                    "owner": owner,
+                    "baseAssetId": format!("0x{}", "33".repeat(32)),
+                    "quoteAssetId": format!("0x{}", "44".repeat(32)),
+                    "tickSize": "10",
+                    "lotSize": "5",
+                    "minQuantity": "25",
+                    "minNotional": "1000",
+                    "tradeCount": "2",
+                    "totalVolumeBase": "40",
+                    "lastPrice": null,
+                    "lastBlockHeight": null,
+                    "createdAtBlock": 40,
+                    "updatedAtBlock": 45
+                }],
+                "spotOrders": [{
+                    "orderId": order_id,
+                    "marketId": market_id,
+                    "owner": owner,
+                    "nonce": 9,
+                    "side": "ask",
+                    "price": "8",
+                    "quantity": "30",
+                    "remaining": "10",
+                    "status": "partially_filled",
+                    "expiresAtBlock": 99,
+                    "updatedAtBlock": 45
+                }],
+                "nftListings": [
+                    {
+                        "listingId": listing_id,
+                        "seller": seller,
+                        "nonce": 12,
+                        "standard": "mrc721",
+                        "collectionId": collection_id,
+                        "tokenId": format!("0x{}", "55".repeat(32)),
+                        "quantity": "1",
+                        "paymentAssetId": format!("0x{}", "66".repeat(32)),
+                        "price": "700",
+                        "listingKind": { "auction": { "reserve": "650" } },
+                        "status": "open",
+                        "expiresAtBlock": 120,
+                        "highestBidder": null,
+                        "highestBid": null,
+                        "updatedAtBlock": 46
+                    },
+                    {
+                        "listingId": legacy_listing_id,
+                        "seller": seller,
+                        "standard": "mrc721",
+                        "collectionId": collection_id,
+                        "tokenId": format!("0x{}", "56".repeat(32)),
+                        "quantity": "1",
+                        "paymentAssetId": format!("0x{}", "66".repeat(32)),
+                        "price": "701",
+                        "listingKind": { "auction": { "reserve": "651" } },
+                        "status": "open",
+                        "expiresAtBlock": 121,
+                        "highestBidder": null,
+                        "highestBid": null,
+                        "updatedAtBlock": 47
+                    }
+                ],
+                "collectionRoyalties": [{
+                    "collectionId": collection_id,
+                    "creator": owner,
+                    "recipient": royalty_recipient,
+                    "bps": 250,
+                    "updatedAtBlock": 47
+                }],
+                "source": {
+                    "indexerProvider": "native_market_state",
+                    "projection": "native_market_state"
+                }
+            }
+        }));
+        let client = ApiClient::new(endpoint).unwrap();
+
+        let response = client
+            .native_market_state(
+                NativeMarketStateFilter::new()
+                    .market_id(&market_id)
+                    .account(owner)
+                    .include_spot_orders(true)
+                    .limit(5),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.data.spot_markets[0].owner, owner);
+        assert_eq!(response.data.spot_orders[0].nonce, Some(9));
+        assert_eq!(response.data.spot_orders[0].side, "ask");
+        assert_eq!(response.data.nft_listings[0].nonce, Some(12));
+        assert_eq!(response.data.nft_listings[1].nonce, None);
+        assert_eq!(
+            response.data.nft_listings[0].listing_kind["auction"]["reserve"],
+            "650"
+        );
+        assert_eq!(
+            response.data.collection_royalties[0].recipient,
+            royalty_recipient
+        );
+        assert_eq!(response.data.filters.account.as_deref(), Some(owner));
+        let request_line = server.join().unwrap();
+        assert_eq!(
+            request_line,
+            format!(
+                "GET /api/v1/native-market-state?marketId={market_id}&account={owner}&includeSpotOrders=true&limit=5 HTTP/1.1"
+            )
         );
     }
 }

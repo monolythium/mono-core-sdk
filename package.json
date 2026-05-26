@@ -1,7 +1,7 @@
 {
   "name": "@monolythium/core-sdk",
   "version": "0.1.0",
-  "description": "Official TypeScript SDK for Monolythium v4.0 / LythiumDAG-BFT",
+  "description": "Official TypeScript SDK for Monolythium v4.1 / LythiumDAG-BFT",
   "license": "Apache-2.0",
   "private": false,
   "type": "module",
@@ -32,7 +32,9 @@
   "scripts": {
     "build": "npm --prefix packages/ts run build",
     "typecheck": "npm --prefix packages/ts run typecheck",
-    "test": "npm --prefix packages/ts run test"
+    "test": "npm --prefix packages/ts run test",
+    "devkit:test": "npm --prefix packages/mono-dev run test",
+    "devkit:pack:local": "npm --prefix packages/mono-dev run pack:local"
   },
   "engines": {
     "node": ">=22"
@@ -47,6 +49,7 @@
   },
   "dependencies": {
     "@noble/ciphers": "^2.2.0",
+    "@noble/curves": "^2.2.0",
     "@noble/hashes": "^2.2.0",
     "@noble/post-quantum": "^0.6.1",
     "@scure/bip39": "^2.2.0"
