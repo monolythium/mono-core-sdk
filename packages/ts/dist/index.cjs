@@ -7854,7 +7854,7 @@ var MONOLYTHIUM_TESTNET_CHAIN_ID = 69420n;
 var MONOLYTHIUM_TESTNET_NETWORK_NAME = "monolythium-testnet";
 
 // src/index.ts
-var version = "0.1.0";
+var version = "0.2.0";
 
 exports.ADDRESS_HRP = ADDRESS_HRP;
 exports.ADDRESS_KIND_HRPS = ADDRESS_KIND_HRPS;
