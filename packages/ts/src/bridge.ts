@@ -26,6 +26,8 @@ export const BRIDGE_QUOTE_API_BLOCKED_REASON =
 export const BRIDGE_SUBMIT_API_BLOCKED_REASON =
   "bridge submit requires a mono-core live submit API/runtime primitive";
 
+export const V1_BRIDGE_ALLOWED_FEE_TOKEN = "LINK";
+
 export type BridgeBytesInput = string | Uint8Array | readonly number[];
 
 export type BridgeAdminControl = "none" | "consensusOnly" | "operatorKey" | "unknown";
@@ -114,6 +116,7 @@ export interface BridgeRouteDisclosure {
   routeId: string;
   bridge: string;
   asset: string;
+  feeToken: string;
   sourceChain: string;
   destinationChain: string;
   verifier: BridgeVerifierDisclosure;
@@ -133,6 +136,7 @@ export interface BridgeRouteCatalogueRoute {
   wrappedAsset: string;
   bridge: string;
   asset: string;
+  feeToken: string;
   sourceChain: string;
   destinationChain: string;
   verifier: BridgeVerifierDisclosure;
@@ -264,10 +268,16 @@ export interface BridgeRoutesResponse {
 export function assessBridgeRoute(route: BridgeRouteDisclosure): BridgeRouteAssessment {
   const blockedReasons: string[] = [];
   const warnings: string[] = [];
+  const feeToken = String(route.feeToken ?? "").trim();
 
   if (route.routeId.trim() === "") blockedReasons.push("route id missing");
   if (route.bridge.trim() === "") blockedReasons.push("bridge name missing");
   if (route.asset.trim() === "") blockedReasons.push("asset disclosure missing");
+  if (feeToken === "") {
+    blockedReasons.push("route fee token missing");
+  } else if (feeToken.toUpperCase() !== V1_BRIDGE_ALLOWED_FEE_TOKEN) {
+    blockedReasons.push("CCIP route fee token must be LINK");
+  }
   if (route.verifier.model.trim() === "") blockedReasons.push("verifier model missing");
   if (route.verifier.threshold < 2 || route.verifier.participantCount < 2) {
     blockedReasons.push("verifier set must not be 1-of-1");
@@ -569,6 +579,15 @@ function validateBridgeRouteCatalogueRoute(
   );
   validateTextField(`${prefix}.bridge`, value.bridge, 64, blockedReasons);
   validateTextField(`${prefix}.asset`, value.asset, 64, blockedReasons);
+  const feeToken = validateTextField(
+    `${prefix}.feeToken`,
+    field(value, "feeToken", "fee_token"),
+    32,
+    blockedReasons,
+  );
+  if (feeToken != null && feeToken.toUpperCase() !== V1_BRIDGE_ALLOWED_FEE_TOKEN) {
+    blockedReasons.push(`${prefix}.feeToken must be LINK for CCIP routes`);
+  }
   validateTextField(
     `${prefix}.sourceChain`,
     field(value, "sourceChain", "source_chain"),
@@ -642,6 +661,7 @@ function coerceBridgeRouteCatalogueRoute(value: unknown): BridgeRouteCatalogueRo
     wrappedAsset: stringField(value, "wrappedAsset", "wrapped_asset"),
     bridge: stringField(value, "bridge").trim(),
     asset: stringField(value, "asset").trim(),
+    feeToken: stringField(value, "feeToken", "fee_token").trim(),
     sourceChain: stringField(value, "sourceChain", "source_chain").trim(),
     destinationChain: stringField(value, "destinationChain", "destination_chain").trim(),
     verifier: {

@@ -21,10 +21,12 @@ export const NO_EVM_RECEIPT_PROOF_SCHEMA = "mono.no_evm_receipt_proof.v1";
 export const NO_EVM_RECEIPT_PROOF_TYPE = "canonicalReceiptsTranscript";
 export const NO_EVM_RECEIPT_INCLUSION_PROOF_TYPE = "canonicalReceiptInclusion";
 export const NO_EVM_RECEIPT_ROOT_ALGORITHM =
+  "keccak256-binary-merkle(monolythium/v4.1/receipt_leaf/1, monolythium/v4.1/receipt_node/1, duplicate-last padding)";
+export const NO_EVM_LEGACY_BINARY_RECEIPT_ROOT_ALGORITHM =
   "keccak256(monolythium/v4.1/receipts_root_empty/1|receipt_leaf/1|receipt_node/1 binary Merkle)";
 export const NO_EVM_LEGACY_RECEIPT_ROOT_ALGORITHM =
   "keccak256(monolythium/v2/receipts_root/1 || len || indexed bincode receipts)";
-export const NO_EVM_RECEIPT_CODEC = "bincode(protocore_evm::Receipt)";
+export const NO_EVM_RECEIPT_CODEC = "bincode(protocore_execution_types::Receipt)";
 export const NO_EVM_RECEIPTS_ROOT_DOMAIN = "monolythium/v4.1/receipts_root_empty/1";
 export const NO_EVM_RECEIPT_LEAF_DOMAIN = "monolythium/v4.1/receipt_leaf/1";
 export const NO_EVM_RECEIPT_NODE_DOMAIN = "monolythium/v4.1/receipt_node/1";
@@ -1670,6 +1672,7 @@ function getOptionalHistorySource(proof: NoEvmReceiptProof): string | undefined 
 function assertSupportedRootAlgorithm(actual: string): void {
   if (
     actual !== NO_EVM_RECEIPT_ROOT_ALGORITHM &&
+    actual !== NO_EVM_LEGACY_BINARY_RECEIPT_ROOT_ALGORITHM &&
     actual !== NO_EVM_LEGACY_RECEIPT_ROOT_ALGORITHM &&
     actual !== NO_EVM_COMPACT_INCLUSION_TREE_ALGORITHM
   ) {

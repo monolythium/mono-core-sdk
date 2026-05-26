@@ -32,6 +32,10 @@ bridge: string,
  */
 asset: string,
 /**
+ * Fee token required by the route, e.g. `LINK` for CCIP.
+ */
+feeToken: string,
+/**
  * Source chain/user-facing origin label.
  */
 sourceChain: string,

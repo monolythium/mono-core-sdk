@@ -30,6 +30,9 @@ pub const BRIDGE_QUOTE_API_BLOCKED_REASON: &str =
 pub const BRIDGE_SUBMIT_API_BLOCKED_REASON: &str =
     "bridge submit requires a mono-core live submit API/runtime primitive";
 
+/// Fee token accepted for the current CCIP route scope.
+pub const V1_BRIDGE_ALLOWED_FEE_TOKEN: &str = "LINK";
+
 /// Bridge-config revert namespace byte.
 pub const BRIDGE_CONFIG_REVERT_NAMESPACE: u8 = 0xF8;
 
@@ -243,7 +246,7 @@ pub enum BridgeCircuitBreakerState {
     ts(export, export_to = "BridgeVerifierDisclosure.ts")
 )]
 pub struct BridgeVerifierDisclosure {
-    /// Human-readable verifier model, e.g. `CCIP DON`, `LayerZero DVN`.
+    /// Human-readable verifier model, e.g. `CCIP DON`.
     pub model: String,
     /// Number of independent verifier participants.
     #[serde(alias = "participant_count")]
@@ -267,6 +270,8 @@ pub struct BridgeRouteDisclosure {
     pub bridge: String,
     /// Asset symbol or canonical asset id shown to users.
     pub asset: String,
+    /// Fee token required by the route, e.g. `LINK` for CCIP.
+    pub fee_token: String,
     /// Source chain/user-facing origin label.
     pub source_chain: String,
     /// Destination chain/user-facing destination label.
@@ -331,6 +336,9 @@ pub struct BridgeRouteCatalogueRoute {
     pub bridge: String,
     /// Asset symbol or canonical asset id shown to users.
     pub asset: String,
+    /// Fee token required by the route, e.g. `LINK` for CCIP.
+    #[serde(alias = "fee_token")]
+    pub fee_token: String,
     /// Source chain/user-facing origin label.
     #[serde(alias = "source_chain")]
     pub source_chain: String,
@@ -779,6 +787,14 @@ pub fn assess_bridge_route(route: &BridgeRouteDisclosure) -> BridgeRouteAssessme
     if route.asset.trim().is_empty() {
         blocked_reasons.push("asset disclosure missing".to_owned());
     }
+    if route.fee_token.trim().is_empty() {
+        blocked_reasons.push("route fee token missing".to_owned());
+    } else if !route
+        .fee_token
+        .eq_ignore_ascii_case(V1_BRIDGE_ALLOWED_FEE_TOKEN)
+    {
+        blocked_reasons.push("CCIP route fee token must be LINK".to_owned());
+    }
     if route.verifier.model.trim().is_empty() {
         blocked_reasons.push("verifier model missing".to_owned());
     }
@@ -1107,6 +1123,18 @@ fn validate_bridge_route_catalogue_route(
         64,
         blocked_reasons,
     );
+    let fee_token = validate_text_field(
+        &format!("{prefix}.feeToken"),
+        &route.fee_token,
+        32,
+        blocked_reasons,
+    );
+    if fee_token
+        .as_deref()
+        .is_some_and(|value| !value.eq_ignore_ascii_case(V1_BRIDGE_ALLOWED_FEE_TOKEN))
+    {
+        blocked_reasons.push(format!("{prefix}.feeToken must be LINK for CCIP routes"));
+    }
     validate_text_field(
         &format!("{prefix}.sourceChain"),
         &route.source_chain,
@@ -1368,6 +1396,7 @@ mod tests {
             route_id: route_id.to_owned(),
             bridge: "CCIP".to_owned(),
             asset: "USDC".to_owned(),
+            fee_token: V1_BRIDGE_ALLOWED_FEE_TOKEN.to_owned(),
             source_chain: "Ethereum".to_owned(),
             destination_chain: "Mono".to_owned(),
             verifier: BridgeVerifierDisclosure {
@@ -1393,6 +1422,7 @@ mod tests {
             wrapped_asset: format!("0x{}", "a5".repeat(20)),
             bridge: "Chainlink CCIP".to_owned(),
             asset: "USDC".to_owned(),
+            fee_token: V1_BRIDGE_ALLOWED_FEE_TOKEN.to_owned(),
             source_chain: "Ethereum".to_owned(),
             destination_chain: "Mono".to_owned(),
             verifier: BridgeVerifierDisclosure {
@@ -1534,6 +1564,7 @@ mod tests {
             decoded["routes"][0]["routeId"].as_str(),
             Some("ccip-usdc-mainnet")
         );
+        assert_eq!(decoded["routes"][0]["feeToken"].as_str(), Some("LINK"));
         assert_eq!(decoded["routes"][0]["updatedAtBlock"].as_u64(), Some(7));
         assert!(decoded["routes"][0].get("lastIncidentDate").is_none());
 
@@ -1556,6 +1587,7 @@ mod tests {
             "wrapped_asset": format!("0x{}", "a5".repeat(20)),
             "bridge": "Chainlink CCIP",
             "asset": "USDC",
+            "fee_token": "LINK",
             "source_chain": "Ethereum",
             "destination_chain": "Mono",
             "verifier": {
@@ -1594,6 +1626,7 @@ mod tests {
         first.last_incident_date = Some("20260523".to_owned());
         let mut second = catalogue_route("duplicate");
         second.wrapped_asset = "0x1234".to_owned();
+        second.fee_token = "ETH".to_owned();
         let catalogue = build_bridge_route_catalogue(vec![first, second]);
 
         let validation = validate_bridge_route_catalogue(&catalogue);
@@ -1618,6 +1651,10 @@ mod tests {
             .blocked_reasons
             .iter()
             .any(|reason| reason.contains("wrappedAsset")));
+        assert!(validation
+            .blocked_reasons
+            .iter()
+            .any(|reason| reason.contains("feeToken")));
 
         let err = export_bridge_route_catalogue_json(&catalogue).unwrap_err();
         assert!(err.to_string().contains("drainCapAtomic"));
@@ -1633,11 +1670,12 @@ mod tests {
     }
 
     #[test]
-    fn bridge_route_assessment_blocks_kelp_class_route() {
-        let mut r = route("kelp-class");
+    fn bridge_route_assessment_blocks_single_verifier_route() {
+        let mut r = route("single-verifier");
         r.verifier.participant_count = 1;
         r.verifier.threshold = 1;
         r.drain_cap_atomic = "0".to_owned();
+        r.fee_token = "ETH".to_owned();
         r.admin_control = BridgeAdminControl::OperatorKey;
         r.circuit_breaker = BridgeCircuitBreakerState::Disabled;
         r.insurance_atomic = "0".to_owned();
@@ -1653,6 +1691,10 @@ mod tests {
             .blocked_reasons
             .iter()
             .any(|reason| reason.contains("drain cap")));
+        assert!(assessment
+            .blocked_reasons
+            .iter()
+            .any(|reason| reason.contains("fee token")));
         assert!(assessment
             .blocked_reasons
             .iter()

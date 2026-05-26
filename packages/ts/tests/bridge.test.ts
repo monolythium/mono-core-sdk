@@ -36,6 +36,7 @@ function route(routeId: string): BridgeRouteDisclosure {
     routeId,
     bridge: "CCIP",
     asset: "USDC",
+    feeToken: "LINK",
     sourceChain: "Ethereum",
     destinationChain: "Mono",
     verifier: {
@@ -61,6 +62,7 @@ function catalogueRoute(routeId: string): BridgeRouteCatalogueRoute {
     wrappedAsset: `0x${"a5".repeat(20)}`,
     bridge: "Chainlink CCIP",
     asset: "USDC",
+    feeToken: "LINK",
     sourceChain: "Ethereum",
     destinationChain: "Mono",
     verifier: {
@@ -136,6 +138,7 @@ describe("bridge route disclosure helpers", () => {
     expect(decoded.routes[0]).toMatchObject({
       tokenId: `0x${"10".repeat(32)}`,
       routeId: "ccip-usdc-mainnet",
+      feeToken: "LINK",
       updatedAtBlock: 7,
     });
     expect(decoded.routes[0].lastIncidentDate).toBeUndefined();
@@ -155,6 +158,7 @@ describe("bridge route disclosure helpers", () => {
         wrapped_asset: `0x${"a5".repeat(20)}`,
         bridge: "Chainlink CCIP",
         asset: "USDC",
+        fee_token: "LINK",
         source_chain: "Ethereum",
         destination_chain: "Mono",
         verifier: {
@@ -187,6 +191,7 @@ describe("bridge route disclosure helpers", () => {
       ...catalogueRoute("duplicate"),
       drainCapAtomic: "0",
       finalityBlocks: 0,
+      feeToken: "ETH",
       lastIncidentDate: "20260523",
     };
     const second = {
@@ -203,6 +208,7 @@ describe("bridge route disclosure helpers", () => {
     expect(validation.blockedReasons.some((reason) => reason.includes("finalityBlocks"))).toBe(
       true,
     );
+    expect(validation.blockedReasons.some((reason) => reason.includes("feeToken"))).toBe(true);
     expect(validation.blockedReasons.some((reason) => reason.includes("lastIncidentDate"))).toBe(
       true,
     );
@@ -309,11 +315,12 @@ describe("bridge route disclosure helpers", () => {
     expect(assessment.blockedReasons).toEqual([]);
   });
 
-  it("blocks Kelp-class 1-of-1 routes without drain caps or breakers", () => {
-    const disclosure = route("kelp-class");
+  it("blocks single-verifier routes without drain caps or breakers", () => {
+    const disclosure = route("single-verifier");
     disclosure.verifier.participantCount = 1;
     disclosure.verifier.threshold = 1;
     disclosure.drainCapAtomic = "0";
+    disclosure.feeToken = "ETH";
     disclosure.adminControl = "operatorKey";
     disclosure.circuitBreaker = "disabled";
     disclosure.insuranceAtomic = "0";
@@ -323,6 +330,7 @@ describe("bridge route disclosure helpers", () => {
     expect(assessment.riskTier).toBe("blocked");
     expect(assessment.blockedReasons.some((reason) => reason.includes("1-of-1"))).toBe(true);
     expect(assessment.blockedReasons.some((reason) => reason.includes("drain cap"))).toBe(true);
+    expect(assessment.blockedReasons.some((reason) => reason.includes("fee token"))).toBe(true);
     expect(assessment.blockedReasons.some((reason) => reason.includes("circuit breaker"))).toBe(true);
   });
 

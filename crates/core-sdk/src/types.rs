@@ -415,10 +415,18 @@ pub const NO_EVM_RECEIPT_PROOF_TYPE: &str = "canonicalReceiptsTranscript";
 
 /// Current no-EVM receipt transcript root algorithm label.
 pub const NO_EVM_RECEIPT_ROOT_ALGORITHM: &str =
+    "keccak256-binary-merkle(monolythium/v4.1/receipt_leaf/1, monolythium/v4.1/receipt_node/1, duplicate-last padding)";
+
+/// Legacy bounded transcript root algorithm accepted for historical proofs.
+pub const NO_EVM_LEGACY_RECEIPT_ROOT_ALGORITHM: &str =
     "keccak256(monolythium/v2/receipts_root/1 || len || indexed bincode receipts)";
 
+/// Earlier v4.1 SDK label accepted for binary-Merkle proofs.
+pub const NO_EVM_LEGACY_BINARY_RECEIPT_ROOT_ALGORITHM: &str =
+    "keccak256(monolythium/v4.1/receipts_root_empty/1|receipt_leaf/1|receipt_node/1 binary Merkle)";
+
 /// Current receipt byte codec label used inside no-EVM receipt transcripts.
-pub const NO_EVM_RECEIPT_CODEC: &str = "bincode(protocore_evm::Receipt)";
+pub const NO_EVM_RECEIPT_CODEC: &str = "bincode(protocore_execution_types::Receipt)";
 
 /// Current no-EVM archive binding proof schema.
 pub const NO_EVM_ARCHIVE_PROOF_SCHEMA: &str = "mono.no_evm_receipt_archive_binding.v1";
@@ -432,7 +440,10 @@ pub const NO_EVM_RECEIPT_FINALITY_EVIDENCE_SCHEMA: &str = "mono.no_evm_receipt_f
 /// Current no-EVM receipt finality evidence source.
 pub const NO_EVM_RECEIPT_FINALITY_EVIDENCE_SOURCE: &str = "blsRoundCertificate";
 
-const NO_EVM_RECEIPTS_ROOT_DOMAIN: &[u8] = b"monolythium/v2/receipts_root/1";
+const NO_EVM_LEGACY_RECEIPTS_ROOT_DOMAIN: &[u8] = b"monolythium/v2/receipts_root/1";
+const NO_EVM_RECEIPTS_ROOT_EMPTY_DOMAIN: &[u8] = b"monolythium/v4.1/receipts_root_empty/1";
+const NO_EVM_RECEIPT_LEAF_DOMAIN: &[u8] = b"monolythium/v4.1/receipt_leaf/1";
+const NO_EVM_RECEIPT_NODE_DOMAIN: &[u8] = b"monolythium/v4.1/receipt_node/1";
 const ML_DSA_65_ADDRESS_DERIVATION_DOMAIN: &[u8] = b"MONO_ADDRESS_BLAKE3_20_V1";
 const STANDARD_ALGO_NUMBER_ML_DSA_65: u16 = 1_001;
 
@@ -870,9 +881,8 @@ pub fn decode_no_evm_receipt_transcript(
 
 /// Compute the runtime no-EVM receipts root from decoded receipt bytes.
 ///
-/// The root is `keccak256("monolythium/v2/receipts_root/1" || len_le_u32 ||
-/// (index_le_u32 || receipt_len_le_u32 || receipt_bytes)*)`, returned as
-/// lower-case `0x` hex.
+/// The root is the v4.1 binary Merkle root over indexed receipt leaves,
+/// returned as lower-case `0x` hex.
 pub fn compute_no_evm_receipts_root<T>(receipts: &[T]) -> Result<Hash, NoEvmReceiptProofError>
 where
     T: AsRef<[u8]>,
@@ -928,7 +938,8 @@ pub fn verify_no_evm_receipt_proof(
                 receipt_count: receipts.len(),
             })?;
 
-    let actual_root_bytes = compute_no_evm_receipts_root_bytes(&receipts)?;
+    let actual_root_bytes =
+        compute_no_evm_receipts_root_bytes_for_algorithm(&proof.root_algorithm, &receipts)?;
     let actual_root = hex_encode_0x(&actual_root_bytes);
     let expected_root_bytes = decode_no_evm_hash("receiptsRoot", &proof.receipts_root)?;
     if expected_root_bytes != actual_root_bytes {
@@ -1647,7 +1658,7 @@ fn validate_no_evm_receipt_proof_metadata(
             actual: proof.proof_type.clone(),
         });
     }
-    if proof.root_algorithm != NO_EVM_RECEIPT_ROOT_ALGORITHM {
+    if !is_supported_no_evm_receipt_root_algorithm(&proof.root_algorithm) {
         return Err(NoEvmReceiptProofError::UnsupportedRootAlgorithm {
             actual: proof.root_algorithm.clone(),
         });
@@ -2071,6 +2082,24 @@ fn verify_no_evm_bls_fast_aggregate(public_keys: &[[u8; 48]], msg: &[u8], sig: &
     )
 }
 
+fn compute_no_evm_receipts_root_bytes_for_algorithm<T>(
+    algorithm: &str,
+    receipts: &[T],
+) -> Result<[u8; 32], NoEvmReceiptProofError>
+where
+    T: AsRef<[u8]>,
+{
+    match algorithm {
+        NO_EVM_RECEIPT_ROOT_ALGORITHM | NO_EVM_LEGACY_BINARY_RECEIPT_ROOT_ALGORITHM => {
+            compute_no_evm_receipts_root_bytes(receipts)
+        }
+        NO_EVM_LEGACY_RECEIPT_ROOT_ALGORITHM => compute_no_evm_legacy_receipts_root_bytes(receipts),
+        _ => Err(NoEvmReceiptProofError::UnsupportedRootAlgorithm {
+            actual: algorithm.to_owned(),
+        }),
+    }
+}
+
 fn compute_no_evm_receipts_root_bytes<T>(receipts: &[T]) -> Result<[u8; 32], NoEvmReceiptProofError>
 where
     T: AsRef<[u8]>,
@@ -2079,8 +2108,80 @@ where
         u32::try_from(receipts.len()).map_err(|_| NoEvmReceiptProofError::TooManyReceipts {
             actual: receipts.len(),
         })?;
+    if receipt_count == 0 {
+        let mut hasher = Keccak256::new();
+        hasher.update(NO_EVM_RECEIPTS_ROOT_EMPTY_DOMAIN);
+        hasher.update(0_u32.to_le_bytes());
+        let digest = hasher.finalize();
+        let mut out = [0_u8; 32];
+        out.copy_from_slice(digest.as_ref());
+        return Ok(out);
+    }
+
+    let mut level = receipts
+        .iter()
+        .enumerate()
+        .map(|(index, receipt)| compute_no_evm_receipt_leaf_hash(index, receipt.as_ref()))
+        .collect::<Result<Vec<_>, _>>()?;
+    while level.len() > 1 {
+        let mut next_level = Vec::with_capacity((level.len() + 1) / 2);
+        for pair in level.chunks(2) {
+            let left = pair[0];
+            let right = *pair.get(1).unwrap_or(&left);
+            next_level.push(compute_no_evm_receipt_node_hash(&left, &right));
+        }
+        level = next_level;
+    }
+
+    Ok(level[0])
+}
+
+fn compute_no_evm_receipt_leaf_hash(
+    index: usize,
+    receipt: &[u8],
+) -> Result<[u8; 32], NoEvmReceiptProofError> {
+    let index_u32 =
+        u32::try_from(index).expect("receipt index fits into u32 after receipt count conversion");
+    let len_u32 =
+        u32::try_from(receipt.len()).map_err(|_| NoEvmReceiptProofError::ReceiptTooLarge {
+            index,
+            actual: receipt.len(),
+        })?;
+
     let mut hasher = Keccak256::new();
-    hasher.update(NO_EVM_RECEIPTS_ROOT_DOMAIN);
+    hasher.update(NO_EVM_RECEIPT_LEAF_DOMAIN);
+    hasher.update(index_u32.to_le_bytes());
+    hasher.update(len_u32.to_le_bytes());
+    hasher.update(receipt);
+    let digest = hasher.finalize();
+    let mut out = [0_u8; 32];
+    out.copy_from_slice(digest.as_ref());
+    Ok(out)
+}
+
+fn compute_no_evm_receipt_node_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    let mut hasher = Keccak256::new();
+    hasher.update(NO_EVM_RECEIPT_NODE_DOMAIN);
+    hasher.update(left);
+    hasher.update(right);
+    let digest = hasher.finalize();
+    let mut out = [0_u8; 32];
+    out.copy_from_slice(digest.as_ref());
+    out
+}
+
+fn compute_no_evm_legacy_receipts_root_bytes<T>(
+    receipts: &[T],
+) -> Result<[u8; 32], NoEvmReceiptProofError>
+where
+    T: AsRef<[u8]>,
+{
+    let receipt_count =
+        u32::try_from(receipts.len()).map_err(|_| NoEvmReceiptProofError::TooManyReceipts {
+            actual: receipts.len(),
+        })?;
+    let mut hasher = Keccak256::new();
+    hasher.update(NO_EVM_LEGACY_RECEIPTS_ROOT_DOMAIN);
     hasher.update(receipt_count.to_le_bytes());
 
     for (index, receipt) in receipts.iter().enumerate() {
@@ -2101,6 +2202,12 @@ where
     let mut out = [0_u8; 32];
     out.copy_from_slice(digest.as_ref());
     Ok(out)
+}
+
+fn is_supported_no_evm_receipt_root_algorithm(actual: &str) -> bool {
+    actual == NO_EVM_RECEIPT_ROOT_ALGORITHM
+        || actual == NO_EVM_LEGACY_BINARY_RECEIPT_ROOT_ALGORITHM
+        || actual == NO_EVM_LEGACY_RECEIPT_ROOT_ALGORITHM
 }
 
 fn decode_no_evm_hash(field: &str, value: &str) -> Result<[u8; 32], NoEvmReceiptProofError> {
@@ -5854,6 +5961,7 @@ mod tests {
             route_id: route_id.to_owned(),
             bridge: "CCIP".to_owned(),
             asset: "USDC".to_owned(),
+            fee_token: "LINK".to_owned(),
             source_chain: "Ethereum".to_owned(),
             destination_chain: "Mono".to_owned(),
             verifier: BridgeVerifierDisclosure {
@@ -6691,8 +6799,8 @@ mod tests {
         let proof_wire = serde_json::json!({
             "schema": "mono.no_evm_receipt_proof.v1",
             "proofType": "canonicalReceiptsTranscript",
-            "rootAlgorithm": "keccak256(monolythium/v2/receipts_root/1 || len || indexed bincode receipts)",
-            "receiptCodec": "bincode(protocore_evm::Receipt)",
+            "rootAlgorithm": "keccak256-binary-merkle(monolythium/v4.1/receipt_leaf/1, monolythium/v4.1/receipt_node/1, duplicate-last padding)",
+            "receiptCodec": "bincode(protocore_execution_types::Receipt)",
             "blockHash": format!("0x{}", "22".repeat(32)),
             "txHash": format!("0x{}", "11".repeat(32)),
             "receiptsRoot": format!("0x{}", "33".repeat(32)),
@@ -6717,11 +6825,11 @@ mod tests {
         assert_eq!(parsed_proof.proof_type, "canonicalReceiptsTranscript");
         assert_eq!(
             parsed_proof.root_algorithm,
-            "keccak256(monolythium/v2/receipts_root/1 || len || indexed bincode receipts)"
+            "keccak256-binary-merkle(monolythium/v4.1/receipt_leaf/1, monolythium/v4.1/receipt_node/1, duplicate-last padding)"
         );
         assert_eq!(
             parsed_proof.receipt_codec,
-            "bincode(protocore_evm::Receipt)"
+            "bincode(protocore_execution_types::Receipt)"
         );
         assert_eq!(parsed_proof.block_hash, format!("0x{}", "22".repeat(32)));
         assert_eq!(parsed_proof.tx_hash, format!("0x{}", "11".repeat(32)));
@@ -6835,7 +6943,7 @@ mod tests {
 
         assert_eq!(
             proof.receipts_root,
-            "0xd889f488b3fe1ea852730deb17971b3618abd21e15a2b0824525151e8d14950a"
+            "0xe5b378f1eed08e15cf92dcd785c8af9db25c0668fe51086ce00687eba2c1984a"
         );
         assert_eq!(
             proof.target_receipt_hash,
@@ -6856,6 +6964,22 @@ mod tests {
         assert_eq!(verified.target_receipt_hash, proof.target_receipt_hash);
         assert_eq!(proof.verify_transcript().unwrap(), verified);
         assert_eq!(verify_no_evm_receipt_proof(None).unwrap(), None);
+    }
+
+    #[test]
+    fn no_evm_receipt_proof_accepts_legacy_root_algorithm() {
+        let receipt_bytes = vec![vec![0x01, 0x02, 0x03], vec![0x04, 0x05, 0x06, 0x07], vec![]];
+        let mut proof = test_no_evm_proof();
+        proof.root_algorithm = NO_EVM_LEGACY_RECEIPT_ROOT_ALGORITHM.to_owned();
+        proof.receipts_root =
+            hex_encode_0x(&compute_no_evm_legacy_receipts_root_bytes(&receipt_bytes).unwrap());
+
+        let verified = verify_no_evm_receipt_proof(Some(&proof))
+            .unwrap()
+            .expect("verified legacy proof");
+
+        assert_eq!(verified.receipt_count, 3);
+        assert_eq!(verified.receipts_root, proof.receipts_root);
     }
 
     #[test]

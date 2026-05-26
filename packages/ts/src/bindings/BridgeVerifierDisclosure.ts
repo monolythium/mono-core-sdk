@@ -5,7 +5,7 @@
  */
 export type BridgeVerifierDisclosure = {
 /**
- * Human-readable verifier model, e.g. `CCIP DON`, `LayerZero DVN`.
+ * Human-readable verifier model, e.g. `CCIP DON`.
  */
 model: string,
 /**
