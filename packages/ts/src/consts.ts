@@ -41,7 +41,7 @@ export const PRECOMPILE_ADDRESSES = {
   PRIVACY: "0x0000000000000000000000000000000000001004",
   /** Operator + RPC node registry — non-gateable consensus invariant. */
   NODE_REGISTRY: "0x0000000000000000000000000000000000001005",
-  /** Native zk-light-client bridge — gateable. */
+  /** Native bridge route-control surface — gateable. */
   BRIDGE: "0x0000000000000000000000000000000000001008",
   /** Decentralized multi-signer oracle — non-gateable. */
   ORACLE: "0x0000000000000000000000000000000000001009",

@@ -27,6 +27,7 @@ export const BRIDGE_SUBMIT_API_BLOCKED_REASON =
   "bridge submit requires a mono-core live submit API/runtime primitive";
 
 export const V1_BRIDGE_ALLOWED_FEE_TOKEN = "LINK";
+export const V1_BRIDGE_ALLOWED_PROTOCOL = "chainlink-ccip";
 
 export type BridgeBytesInput = string | Uint8Array | readonly number[];
 
@@ -115,6 +116,7 @@ export interface BridgeVerifierDisclosure {
 export interface BridgeRouteDisclosure {
   routeId: string;
   bridge: string;
+  protocol?: string | null;
   asset: string;
   feeToken: string;
   sourceChain: string;
@@ -135,6 +137,7 @@ export interface BridgeRouteCatalogueRoute {
   bridgeId: string;
   wrappedAsset: string;
   bridge: string;
+  protocol?: string | null;
   asset: string;
   feeToken: string;
   sourceChain: string;
@@ -272,6 +275,9 @@ export function assessBridgeRoute(route: BridgeRouteDisclosure): BridgeRouteAsse
 
   if (route.routeId.trim() === "") blockedReasons.push("route id missing");
   if (route.bridge.trim() === "") blockedReasons.push("bridge name missing");
+  if (!isChainlinkCcipRoute(route.protocol, route.bridge, route.verifier.model)) {
+    blockedReasons.push("bridge protocol must be Chainlink CCIP");
+  }
   if (route.asset.trim() === "") blockedReasons.push("asset disclosure missing");
   if (feeToken === "") {
     blockedReasons.push("route fee token missing");
@@ -577,7 +583,13 @@ function validateBridgeRouteCatalogueRoute(
     20,
     blockedReasons,
   );
-  validateTextField(`${prefix}.bridge`, value.bridge, 64, blockedReasons);
+  const bridge = validateTextField(`${prefix}.bridge`, value.bridge, 64, blockedReasons);
+  const protocol = validateOptionalTextField(
+    `${prefix}.protocol`,
+    field(value, "protocol", "routeProtocol", "route_protocol"),
+    64,
+    blockedReasons,
+  );
   validateTextField(`${prefix}.asset`, value.asset, 64, blockedReasons);
   const feeToken = validateTextField(
     `${prefix}.feeToken`,
@@ -602,10 +614,11 @@ function validateBridgeRouteCatalogueRoute(
   );
 
   const verifier = value.verifier;
+  let verifierModel: string | null = null;
   if (!isRecord(verifier)) {
     blockedReasons.push(`${prefix}.verifier must be an object`);
   } else {
-    validateTextField(`${prefix}.verifier.model`, verifier.model, 64, blockedReasons);
+    verifierModel = validateTextField(`${prefix}.verifier.model`, verifier.model, 64, blockedReasons);
     const participantCount = field(verifier, "participantCount", "participant_count");
     if (!isU16(participantCount) || participantCount === 0) {
       blockedReasons.push(`${prefix}.verifier.participantCount must be non-zero`);
@@ -615,6 +628,9 @@ function validateBridgeRouteCatalogueRoute(
     } else if (isU16(participantCount) && verifier.threshold > participantCount) {
       blockedReasons.push(`${prefix}.verifier.threshold must be in 1..=participantCount`);
     }
+  }
+  if (!isChainlinkCcipRoute(protocol, bridge ?? "", verifierModel ?? "")) {
+    blockedReasons.push(`${prefix}.protocol must be Chainlink CCIP`);
   }
 
   if (!decimalStringIsPositiveU256(field(value, "drainCapAtomic", "drain_cap_atomic"))) {
@@ -660,6 +676,7 @@ function coerceBridgeRouteCatalogueRoute(value: unknown): BridgeRouteCatalogueRo
     bridgeId: stringField(value, "bridgeId", "bridge_id"),
     wrappedAsset: stringField(value, "wrappedAsset", "wrapped_asset"),
     bridge: stringField(value, "bridge").trim(),
+    protocol: optionalStringField(value, "protocol", "routeProtocol", "route_protocol"),
     asset: stringField(value, "asset").trim(),
     feeToken: stringField(value, "feeToken", "fee_token").trim(),
     sourceChain: stringField(value, "sourceChain", "source_chain").trim(),
@@ -690,6 +707,26 @@ function cloneBridgeRouteCatalogueRoute(route: BridgeRouteCatalogueRoute): Bridg
     ...route,
     verifier: { ...route.verifier },
   };
+}
+
+function isChainlinkCcipRoute(
+  protocol: string | null | undefined,
+  bridge: string,
+  verifierModel: string,
+): boolean {
+  const normalizedProtocol = normalizeBridgeProtocol(protocol ?? "");
+  if (normalizedProtocol.length > 0) {
+    return normalizedProtocol === "chainlinkccip" || normalizedProtocol === "ccip";
+  }
+  return bridgeLabelLooksCcip(bridge) || bridgeLabelLooksCcip(verifierModel);
+}
+
+function bridgeLabelLooksCcip(value: string): boolean {
+  return normalizeBridgeProtocol(value).includes("ccip");
+}
+
+function normalizeBridgeProtocol(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 function bridgeRouteCandidate(
@@ -813,18 +850,31 @@ function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function field(record: JsonRecord, camel: string, snake?: string): unknown {
-  if (Object.prototype.hasOwnProperty.call(record, camel)) return record[camel];
-  if (snake != null && Object.prototype.hasOwnProperty.call(record, snake)) return record[snake];
+function field(record: JsonRecord, ...keys: string[]): unknown {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(record, key)) return record[key];
+  }
   return undefined;
 }
 
-function stringField(record: JsonRecord, camel: string, snake?: string): string {
-  return field(record, camel, snake) as string;
+function stringField(record: JsonRecord, ...keys: string[]): string {
+  return field(record, ...keys) as string;
 }
 
-function numberField(record: JsonRecord, camel: string, snake?: string): number {
-  return field(record, camel, snake) as number;
+function optionalStringField(record: JsonRecord, ...keys: string[]): string | null {
+  let raw: unknown;
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(record, key)) {
+      raw = record[key];
+      break;
+    }
+  }
+  if (raw === undefined || raw === null) return null;
+  return typeof raw === "string" ? raw.trim() : "";
+}
+
+function numberField(record: JsonRecord, ...keys: string[]): number {
+  return field(record, ...keys) as number;
 }
 
 function validateTextField(
@@ -843,6 +893,16 @@ function validateTextField(
     return null;
   }
   return trimmed;
+}
+
+function validateOptionalTextField(
+  name: string,
+  value: unknown,
+  maxLen: number,
+  blockedReasons: string[],
+): string | null {
+  if (value === undefined || value === null) return null;
+  return validateTextField(name, value, maxLen, blockedReasons);
 }
 
 function validateHexBytes(

@@ -64,13 +64,14 @@ function nativeMarketOrderBookDelta(
 function bridgeRoute(routeId: string): BridgeRouteDisclosure {
   return {
     routeId,
-    bridge: "CCIP",
+    bridge: "Chainlink CCIP",
+    protocol: "chainlink-ccip",
     asset: "USDC",
     feeToken: "LINK",
     sourceChain: "Ethereum",
     destinationChain: "Mono",
     verifier: {
-      model: "DON",
+      model: "CCIP DON",
       participantCount: 7,
       threshold: 5,
     },

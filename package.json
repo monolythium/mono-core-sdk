@@ -1,6 +1,6 @@
 {
   "name": "@monolythium/core-sdk",
-  "version": "0.1.0",
+  "version": "0.2.2",
   "description": "Official TypeScript SDK for Monolythium v4.1 / LythiumDAG-BFT",
   "license": "Apache-2.0",
   "private": false,
@@ -22,6 +22,11 @@
       "types": "./packages/ts/dist/crypto/index.d.ts",
       "import": "./packages/ts/dist/crypto/index.js",
       "require": "./packages/ts/dist/crypto/index.cjs"
+    },
+    "./ethers": {
+      "types": "./packages/ts/dist/ethers/index.d.ts",
+      "import": "./packages/ts/dist/ethers/index.js",
+      "require": "./packages/ts/dist/ethers/index.cjs"
     }
   },
   "files": [

@@ -56,7 +56,7 @@ pub mod precompile_addresses {
     pub const PRIVACY: [u8; 20] = address([0x10, 0x04]);
     /// Operator + RPC node registry — non-gateable consensus invariant.
     pub const NODE_REGISTRY: [u8; 20] = address([0x10, 0x05]);
-    /// Native zk-light-client bridge — gateable.
+    /// Native bridge route-control surface — gateable.
     pub const BRIDGE: [u8; 20] = address([0x10, 0x08]);
     /// Decentralized multi-signer oracle (OI-0036) — non-gateable.
     pub const ORACLE: [u8; 20] = address([0x10, 0x09]);

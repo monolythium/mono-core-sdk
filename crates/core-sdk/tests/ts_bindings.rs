@@ -35,9 +35,9 @@ use monolythium_core_sdk::types::{
     ClusterResignationsResponse, DagParent, DagParentsResponse, DagSyncStatus, DecodeTxExtension,
     DecodeTxLog, DecodeTxPqAttestation, DecodeTxResponse, DelegationCapResponse,
     DelegationHistoryRecord, DelegationRow, DelegationsResponse, EncryptionKeyResponse,
-    EntityRatchetResponse, FeeHistoryResponse, GapRange, GapRecord, GapRecordsResponse,
-    IndexerStatus, MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent,
-    MeshUnsignedTxResponse, MrcAccountRecord, MrcAccountRequest, MrcAccountResponse,
+    EntityRatchetResponse, ExecutionUnitPriceResponse, FeeHistoryResponse, GapRange, GapRecord,
+    GapRecordsResponse, IndexerStatus, MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse,
+    MeshTxIntent, MeshUnsignedTxResponse, MrcAccountRecord, MrcAccountRequest, MrcAccountResponse,
     MrcHoldersRequest, MrcHoldersResponse, MrcMetadataRecord, MrcMetadataResponse, MrcPolicyRecord,
     MrcPolicySpendRecord, NativeAgentArbiterStateRecord, NativeAgentAttestationStateRecord,
     NativeAgentAvailabilityStateRecord, NativeAgentConsentStateRecord,
@@ -117,6 +117,7 @@ fn export_bindings() {
     DelegationsResponse::export_all_to(&out).expect("DelegationsResponse");
     EncryptionKeyResponse::export_all_to(&out).expect("EncryptionKeyResponse");
     EntityRatchetResponse::export_all_to(&out).expect("EntityRatchetResponse");
+    ExecutionUnitPriceResponse::export_all_to(&out).expect("ExecutionUnitPriceResponse");
     FeeHistoryResponse::export_all_to(&out).expect("FeeHistoryResponse");
     GapRange::export_all_to(&out).expect("GapRange");
     GapRecord::export_all_to(&out).expect("GapRecord");

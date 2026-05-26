@@ -30,17 +30,17 @@ use crate::types::{
     ClusterDelegatorsResponse, ClusterEntityResponse, ClusterResignationsResponse,
     DagParentsResponse, DagSyncStatus, DecodeTxResponse, DelegationCapResponse,
     DelegationHistoryRecord, DelegationsResponse, EncryptionKeyResponse, EntityRatchetResponse,
-    FeeHistoryResponse, GapRecordsResponse, IndexerStatus, LythUpgradeStatusResponse,
-    MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent, MeshUnsignedTxResponse,
-    MetricsRangeResponse, MrcAccountRequest, MrcAccountResponse, MrcHoldersRequest,
-    MrcHoldersResponse, MrcMetadataResponse, NativeAgentStateFilter, NativeAgentStateResponse,
-    NativeEventFilter, NativeEventsFilter, NativeEventsResponse, NativeMarketStateFilter,
-    NativeMarketStateResponse, NativeReceiptResponse, OperatorCapabilitiesResponse, PeerSummary,
-    PeerSummaryAggregate, PendingRewardsResponse, PendingTxSummary, PrecompileDescriptor,
-    RedemptionQueueResponse, RegistryRecord, RichListResponse, RoundInfo, SearchResponse,
-    StorageProofBatch, SyncStatus, TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt,
-    TransactionView, TxFeedResponse, TxStatusResponse, TypedNativeEventsResponse,
-    TypedNativeReceiptEvent, VerticesAtRoundResponse,
+    ExecutionUnitPriceResponse, FeeHistoryResponse, GapRecordsResponse, IndexerStatus,
+    LythUpgradeStatusResponse, MempoolSnapshot, MeshDecodedTx, MeshSignedTxResponse, MeshTxIntent,
+    MeshUnsignedTxResponse, MetricsRangeResponse, MrcAccountRequest, MrcAccountResponse,
+    MrcHoldersRequest, MrcHoldersResponse, MrcMetadataResponse, NativeAgentStateFilter,
+    NativeAgentStateResponse, NativeEventFilter, NativeEventsFilter, NativeEventsResponse,
+    NativeMarketStateFilter, NativeMarketStateResponse, NativeReceiptResponse,
+    OperatorCapabilitiesResponse, PeerSummary, PeerSummaryAggregate, PendingRewardsResponse,
+    PendingTxSummary, PrecompileDescriptor, RedemptionQueueResponse, RegistryRecord,
+    RichListResponse, RoundInfo, SearchResponse, StorageProofBatch, SyncStatus, TokenBalanceRecord,
+    TpmAttestationResponse, TransactionReceipt, TransactionView, TxFeedResponse, TxStatusResponse,
+    TypedNativeEventsResponse, TypedNativeReceiptEvent, VerticesAtRoundResponse,
 };
 
 /// Result from building and submitting an encrypted MRV deploy envelope.
@@ -380,7 +380,7 @@ impl RpcClient {
         self.call("web3_sha3", json!([data])).await
     }
 
-    // ---- lyth_* (Law §13.2 native namespace) --------------------------
+    // ---- lyth_* native namespace --------------------------------------
 
     /// `lyth_listProviders` — paged registry enumeration.
     /// `cursor` is opaque; pass the previous page's last cursor
@@ -447,13 +447,29 @@ impl RpcClient {
         self.call("lyth_currentRound", json!([])).await
     }
 
+    /// `lyth_getTransactionCount` — native sender nonce.
+    pub async fn lyth_get_transaction_count(&self, address: &str) -> Result<u64, SdkError> {
+        let value: Value = self
+            .call(
+                "lyth_getTransactionCount",
+                json!([sdk_typed_address(address, AddressKind::User, "address")?]),
+            )
+            .await?;
+        parse_rpc_u64_value(&value, "lyth_getTransactionCount")
+    }
+
+    /// `lyth_executionUnitPrice` — native execution-unit price in lythoshi.
+    pub async fn lyth_execution_unit_price(&self) -> Result<ExecutionUnitPriceResponse, SdkError> {
+        self.call("lyth_executionUnitPrice", json!([])).await
+    }
+
     /// `lyth_peerSummary` — public-safe aggregate peer-network diagnostics.
     pub async fn lyth_peer_summary(&self) -> Result<PeerSummaryAggregate, SdkError> {
         self.call("lyth_peerSummary", json!([])).await
     }
 
-    /// `lyth_listActivePrecompiles` — milestone-gated precompile catalogue
-    /// (OI-0170 / ADR-0015 §5). `block` selects the height the gate snapshot
+    /// `lyth_listActivePrecompiles` — native precompile catalogue.
+    /// `block` selects the height the gate snapshot
     /// is read from; pass [`BlockSelector::LATEST`] for the live view.
     pub async fn lyth_list_active_precompiles(
         &self,
@@ -1400,6 +1416,23 @@ fn parse_quantity_u64(s: &str) -> Result<u64, SdkError> {
         .map_err(|e| SdkError::Malformed(format!("invalid quantity {s:?}: {e}")))
 }
 
+fn parse_rpc_u64_value(value: &Value, label: &str) -> Result<u64, SdkError> {
+    if let Some(n) = value.as_u64() {
+        return Ok(n);
+    }
+    if let Some(s) = value.as_str() {
+        if s.starts_with("0x") || s.starts_with("0X") {
+            return parse_quantity_u64(s);
+        }
+        return s
+            .parse::<u64>()
+            .map_err(|e| SdkError::Malformed(format!("invalid {label} quantity {s:?}: {e}")));
+    }
+    Err(SdkError::Malformed(format!(
+        "{label} result must be a non-negative integer quantity"
+    )))
+}
+
 fn agent_reputation_params(provider: &str, category_id: Option<u32>) -> Result<Value, SdkError> {
     let provider = sdk_typed_address(provider, AddressKind::User, "provider address")?;
     Ok(json!([provider, category_id.unwrap_or(0)]))
@@ -1610,13 +1643,14 @@ mod tests {
     async fn lyth_bridge_routes_sends_typed_request_and_decodes_readiness() {
         let route = crate::bridge::BridgeRouteDisclosure {
             route_id: "healthy".to_owned(),
-            bridge: "CCIP".to_owned(),
+            bridge: "Chainlink CCIP".to_owned(),
+            protocol: Some(crate::bridge::V1_BRIDGE_ALLOWED_PROTOCOL.to_owned()),
             asset: "USDC".to_owned(),
             fee_token: "LINK".to_owned(),
             source_chain: "Ethereum".to_owned(),
             destination_chain: "Mono".to_owned(),
             verifier: crate::bridge::BridgeVerifierDisclosure {
-                model: "DON".to_owned(),
+                model: "CCIP DON".to_owned(),
                 participant_count: 7,
                 threshold: 5,
             },
@@ -1664,13 +1698,14 @@ mod tests {
     async fn lyth_bridge_routes_decodes_discovery_only_catalogue() {
         let route = crate::bridge::BridgeRouteDisclosure {
             route_id: "healthy".to_owned(),
-            bridge: "CCIP".to_owned(),
+            bridge: "Chainlink CCIP".to_owned(),
+            protocol: Some(crate::bridge::V1_BRIDGE_ALLOWED_PROTOCOL.to_owned()),
             asset: "USDC".to_owned(),
             fee_token: "LINK".to_owned(),
             source_chain: "Ethereum".to_owned(),
             destination_chain: "Mono".to_owned(),
             verifier: crate::bridge::BridgeVerifierDisclosure {
-                model: "DON".to_owned(),
+                model: "CCIP DON".to_owned(),
                 participant_count: 7,
                 threshold: 5,
             },

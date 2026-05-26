@@ -3823,6 +3823,29 @@ pub struct RoundInfo {
     pub height: u64,
 }
 
+/// `lyth_executionUnitPrice` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "ExecutionUnitPriceResponse.ts")
+)]
+pub struct ExecutionUnitPriceResponse {
+    /// Total execution-unit price in lythoshi.
+    pub execution_unit_price_lythoshi: String,
+    /// Base price component in lythoshi.
+    pub base_price_per_execution_unit_lythoshi: String,
+    /// Priority tip component in lythoshi.
+    pub priority_tip_lythoshi: String,
+    /// Block height that produced the quote, or `null` for mempool-floor quotes.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-bindings", ts(type = "number | null"))]
+    pub block_number: Option<u64>,
+    /// Quote source label returned by the node.
+    pub source: String,
+}
+
 /// Native MRC identity attached to a token-balance row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -4640,7 +4663,7 @@ pub struct DagSyncStatus {
     pub lag: u64,
 }
 
-/// `lyth_listActivePrecompiles` entry — OI-0170 / ADR-0015 §5.
+/// `lyth_listActivePrecompiles` entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
 #[cfg_attr(
@@ -5959,13 +5982,14 @@ mod tests {
     fn bridge_route(route_id: &str) -> BridgeRouteDisclosure {
         BridgeRouteDisclosure {
             route_id: route_id.to_owned(),
-            bridge: "CCIP".to_owned(),
+            bridge: "Chainlink CCIP".to_owned(),
+            protocol: Some(crate::bridge::V1_BRIDGE_ALLOWED_PROTOCOL.to_owned()),
             asset: "USDC".to_owned(),
             fee_token: "LINK".to_owned(),
             source_chain: "Ethereum".to_owned(),
             destination_chain: "Mono".to_owned(),
             verifier: BridgeVerifierDisclosure {
-                model: "DON".to_owned(),
+                model: "CCIP DON".to_owned(),
                 participant_count: 7,
                 threshold: 5,
             },

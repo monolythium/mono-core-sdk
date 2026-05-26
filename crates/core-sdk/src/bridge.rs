@@ -33,6 +33,9 @@ pub const BRIDGE_SUBMIT_API_BLOCKED_REASON: &str =
 /// Fee token accepted for the current CCIP route scope.
 pub const V1_BRIDGE_ALLOWED_FEE_TOKEN: &str = "LINK";
 
+/// Bridge protocol accepted for the current route scope.
+pub const V1_BRIDGE_ALLOWED_PROTOCOL: &str = "chainlink-ccip";
+
 /// Bridge-config revert namespace byte.
 pub const BRIDGE_CONFIG_REVERT_NAMESPACE: u8 = 0xF8;
 
@@ -268,6 +271,15 @@ pub struct BridgeRouteDisclosure {
     pub route_id: String,
     /// Third-party bridge or bridge family name.
     pub bridge: String,
+    /// Route protocol. Omitted rows may still be accepted when bridge/verifier labels identify CCIP.
+    #[serde(
+        default,
+        alias = "routeProtocol",
+        alias = "route_protocol",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "ts-bindings", ts(optional = nullable))]
+    pub protocol: Option<String>,
     /// Asset symbol or canonical asset id shown to users.
     pub asset: String,
     /// Fee token required by the route, e.g. `LINK` for CCIP.
@@ -298,7 +310,7 @@ pub struct BridgeRouteDisclosure {
     pub last_incident_date: Option<String>,
 }
 
-/// Trusted bridge route catalogue payload accepted by `mono-core` CLI imports.
+/// Bridge route catalogue payload accepted by `mono-core` CLI imports.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
@@ -311,7 +323,7 @@ pub struct BridgeRouteCatalogue {
     pub routes: Vec<BridgeRouteCatalogueRoute>,
 }
 
-/// One trusted bridge route import row.
+/// One bridge route import row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
@@ -334,6 +346,15 @@ pub struct BridgeRouteCatalogueRoute {
     pub wrapped_asset: String,
     /// Third-party bridge or bridge family name.
     pub bridge: String,
+    /// Route protocol. Omitted rows may still be accepted when bridge/verifier labels identify CCIP.
+    #[serde(
+        default,
+        alias = "routeProtocol",
+        alias = "route_protocol",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "ts-bindings", ts(optional = nullable))]
+    pub protocol: Option<String>,
     /// Asset symbol or canonical asset id shown to users.
     pub asset: String,
     /// Fee token required by the route, e.g. `LINK` for CCIP.
@@ -784,6 +805,13 @@ pub fn assess_bridge_route(route: &BridgeRouteDisclosure) -> BridgeRouteAssessme
     if route.bridge.trim().is_empty() {
         blocked_reasons.push("bridge name missing".to_owned());
     }
+    if !is_chainlink_ccip_route(
+        route.protocol.as_deref(),
+        &route.bridge,
+        &route.verifier.model,
+    ) {
+        blocked_reasons.push("bridge protocol must be Chainlink CCIP".to_owned());
+    }
     if route.asset.trim().is_empty() {
         blocked_reasons.push("asset disclosure missing".to_owned());
     }
@@ -1111,9 +1139,15 @@ fn validate_bridge_route_catalogue_route(
         20,
         blocked_reasons,
     );
-    validate_text_field(
+    let bridge = validate_text_field(
         &format!("{prefix}.bridge"),
         &route.bridge,
+        64,
+        blocked_reasons,
+    );
+    let protocol = validate_optional_text_field(
+        &format!("{prefix}.protocol"),
+        route.protocol.as_deref(),
         64,
         blocked_reasons,
     );
@@ -1147,12 +1181,19 @@ fn validate_bridge_route_catalogue_route(
         64,
         blocked_reasons,
     );
-    validate_text_field(
+    let verifier_model = validate_text_field(
         &format!("{prefix}.verifier.model"),
         &route.verifier.model,
         64,
         blocked_reasons,
     );
+    if !is_chainlink_ccip_route(
+        protocol.as_deref(),
+        bridge.as_deref().unwrap_or(""),
+        verifier_model.as_deref().unwrap_or(""),
+    ) {
+        blocked_reasons.push(format!("{prefix}.protocol must be Chainlink CCIP"));
+    }
     if route.verifier.participant_count == 0 {
         blocked_reasons.push(format!(
             "{prefix}.verifier.participantCount must be non-zero"
@@ -1204,6 +1245,15 @@ fn validate_text_field(
     }
 }
 
+fn validate_optional_text_field(
+    field: &str,
+    value: Option<&str>,
+    max_len: usize,
+    blocked_reasons: &mut Vec<String>,
+) -> Option<String> {
+    value.and_then(|value| validate_text_field(field, value, max_len, blocked_reasons))
+}
+
 fn validate_hex_bytes(
     field: &str,
     value: &str,
@@ -1219,6 +1269,26 @@ fn validate_hex_bytes(
     } else {
         Some(body.to_ascii_lowercase())
     }
+}
+
+fn is_chainlink_ccip_route(protocol: Option<&str>, bridge: &str, verifier_model: &str) -> bool {
+    let normalized_protocol = normalize_bridge_protocol(protocol.unwrap_or(""));
+    if !normalized_protocol.is_empty() {
+        return matches!(normalized_protocol.as_str(), "chainlinkccip" | "ccip");
+    }
+    bridge_label_looks_ccip(bridge) || bridge_label_looks_ccip(verifier_model)
+}
+
+fn bridge_label_looks_ccip(value: &str) -> bool {
+    normalize_bridge_protocol(value).contains("ccip")
+}
+
+fn normalize_bridge_protocol(value: &str) -> String {
+    value
+        .bytes()
+        .filter(|b| b.is_ascii_alphanumeric())
+        .map(|b| (b as char).to_ascii_lowercase())
+        .collect()
 }
 
 fn decimal_string_is_positive_u256(value: &str) -> bool {
@@ -1394,13 +1464,14 @@ mod tests {
     fn route(route_id: &str) -> BridgeRouteDisclosure {
         BridgeRouteDisclosure {
             route_id: route_id.to_owned(),
-            bridge: "CCIP".to_owned(),
+            bridge: "Chainlink CCIP".to_owned(),
+            protocol: Some(V1_BRIDGE_ALLOWED_PROTOCOL.to_owned()),
             asset: "USDC".to_owned(),
             fee_token: V1_BRIDGE_ALLOWED_FEE_TOKEN.to_owned(),
             source_chain: "Ethereum".to_owned(),
             destination_chain: "Mono".to_owned(),
             verifier: BridgeVerifierDisclosure {
-                model: "DON".to_owned(),
+                model: "CCIP DON".to_owned(),
                 participant_count: 7,
                 threshold: 5,
             },
@@ -1421,6 +1492,7 @@ mod tests {
             bridge_id: format!("0x{}", "b1".repeat(32)),
             wrapped_asset: format!("0x{}", "a5".repeat(20)),
             bridge: "Chainlink CCIP".to_owned(),
+            protocol: Some(V1_BRIDGE_ALLOWED_PROTOCOL.to_owned()),
             asset: "USDC".to_owned(),
             fee_token: V1_BRIDGE_ALLOWED_FEE_TOKEN.to_owned(),
             source_chain: "Ethereum".to_owned(),
@@ -1564,6 +1636,10 @@ mod tests {
             decoded["routes"][0]["routeId"].as_str(),
             Some("ccip-usdc-mainnet")
         );
+        assert_eq!(
+            decoded["routes"][0]["protocol"].as_str(),
+            Some(V1_BRIDGE_ALLOWED_PROTOCOL)
+        );
         assert_eq!(decoded["routes"][0]["feeToken"].as_str(), Some("LINK"));
         assert_eq!(decoded["routes"][0]["updatedAtBlock"].as_u64(), Some(7));
         assert!(decoded["routes"][0].get("lastIncidentDate").is_none());
@@ -1586,6 +1662,7 @@ mod tests {
             "bridge_id": format!("0x{}", "b1".repeat(32)),
             "wrapped_asset": format!("0x{}", "a5".repeat(20)),
             "bridge": "Chainlink CCIP",
+            "route_protocol": "chainlink-ccip",
             "asset": "USDC",
             "fee_token": "LINK",
             "source_chain": "Ethereum",
@@ -1627,6 +1704,7 @@ mod tests {
         let mut second = catalogue_route("duplicate");
         second.wrapped_asset = "0x1234".to_owned();
         second.fee_token = "ETH".to_owned();
+        second.protocol = Some("relay".to_owned());
         let catalogue = build_bridge_route_catalogue(vec![first, second]);
 
         let validation = validate_bridge_route_catalogue(&catalogue);
@@ -1655,6 +1733,10 @@ mod tests {
             .blocked_reasons
             .iter()
             .any(|reason| reason.contains("feeToken")));
+        assert!(validation
+            .blocked_reasons
+            .iter()
+            .any(|reason| reason.contains("protocol")));
 
         let err = export_bridge_route_catalogue_json(&catalogue).unwrap_err();
         assert!(err.to_string().contains("drainCapAtomic"));
@@ -1667,6 +1749,21 @@ mod tests {
         assert_eq!(assessment.score, 100);
         assert_eq!(assessment.risk_tier, BridgeRiskTier::Low);
         assert!(assessment.blocked_reasons.is_empty());
+    }
+
+    #[test]
+    fn bridge_route_assessment_blocks_non_ccip_protocol_even_with_link_fee() {
+        let mut r = route("relay-usdc");
+        r.bridge = "Generic Relay".to_owned();
+        r.protocol = Some("relay".to_owned());
+        r.verifier.model = "light-client".to_owned();
+
+        let assessment = assess_bridge_route(&r);
+        assert!(!assessment.accepted);
+        assert!(assessment
+            .blocked_reasons
+            .iter()
+            .any(|reason| reason.contains("Chainlink CCIP")));
     }
 
     #[test]

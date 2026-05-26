@@ -2,7 +2,7 @@
 import type { BridgeRouteCatalogueRoute } from "./BridgeRouteCatalogueRoute.js";
 
 /**
- * Trusted bridge route catalogue payload accepted by `mono-core` CLI imports.
+ * Bridge route catalogue payload accepted by `mono-core` CLI imports.
  */
 export type BridgeRouteCatalogue = {
 /**
