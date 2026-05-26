@@ -27,9 +27,12 @@ export const BURN_ADDR = "0x0000000000000000000000000000000000000000" as const;
  * so surfaces can render precompile traffic by name without
  * re-defining low-band address literals.
  *
- * `0x1002` and `0x1006` are intentionally absent from the SDK surface
- * because the current v4.1 launch surface does not define those application
- * modules.
+ * `0x1002`, `0x1006`, `0x1007`, and `0x1103` are intentionally absent —
+ * `0x1002` and `0x1006` are reserved slots the current v4.1 surface does
+ * not bind, and `0x1007` (former IBC) and `0x1103` (former simple
+ * name-registry) were retired in mono-core; the chain returns a typed
+ * revert on either slot. The hierarchical name-registry lives at `0x110E`
+ * (whitepaper §22.8 + Law §5.10).
  */
 export const PRECOMPILE_ADDRESSES = {
   /** Native fungible-token factory — non-gateable, foundational. */
@@ -42,8 +45,6 @@ export const PRECOMPILE_ADDRESSES = {
   PRIVACY: "0x0000000000000000000000000000000000001004",
   /** Operator + RPC node registry — non-gateable consensus invariant. */
   NODE_REGISTRY: "0x0000000000000000000000000000000000001005",
-  /** IBC light-client + packet routing — gateable. */
-  IBC: "0x0000000000000000000000000000000000001007",
   /** Native zk-light-client bridge — gateable. */
   BRIDGE: "0x0000000000000000000000000000000000001008",
   /** Decentralized multi-signer oracle (OI-0036) — non-gateable. */
@@ -56,8 +57,6 @@ export const PRECOMPILE_ADDRESSES = {
   VRF: "0x0000000000000000000000000000000000001101",
   /** Streaming-payments primitive (Law §5.4 / §5.7) — gateable. */
   STREAMING_PAYMENTS: "0x0000000000000000000000000000000000001102",
-  /** Human-readable name registry (Law §5.4 / §5.8) — gateable. */
-  NAME_REGISTRY: "0x0000000000000000000000000000000000001103",
   /** Cluster-name registry. */
   CLUSTER_NAME_REGISTRY: "0x0000000000000000000000000000000000001104",
   /** Agent-commerce attestation precompile. */
@@ -78,6 +77,8 @@ export const PRECOMPILE_ADDRESSES = {
   SPENDING_POLICY: "0x000000000000000000000000000000000000110C",
   /** Primary ML-DSA-65 pubkey registry — gateable, ADR-0034. */
   PUBKEY_REGISTRY: "0x000000000000000000000000000000000000110D",
+  /** Hierarchical name registry (Law §5.10, whitepaper §22.8) — gateable. */
+  NAME_REGISTRY: "0x000000000000000000000000000000000000110E",
 } as const;
 
 /** Precompile address-key type — useful for typed maps over the surface. */

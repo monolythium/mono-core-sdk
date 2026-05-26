@@ -82,9 +82,6 @@ describe("PRECOMPILE_ADDRESSES", () => {
     expect(PRECOMPILE_ADDRESSES.NODE_REGISTRY).toBe(
       "0x0000000000000000000000000000000000001005",
     );
-    expect(PRECOMPILE_ADDRESSES.IBC).toBe(
-      "0x0000000000000000000000000000000000001007",
-    );
     expect(PRECOMPILE_ADDRESSES.BRIDGE).toBe(
       "0x0000000000000000000000000000000000001008",
     );
@@ -102,9 +99,6 @@ describe("PRECOMPILE_ADDRESSES", () => {
     );
     expect(PRECOMPILE_ADDRESSES.STREAMING_PAYMENTS).toBe(
       "0x0000000000000000000000000000000000001102",
-    );
-    expect(PRECOMPILE_ADDRESSES.NAME_REGISTRY).toBe(
-      "0x0000000000000000000000000000000000001103",
     );
     expect(PRECOMPILE_ADDRESSES.CLUSTER_NAME_REGISTRY).toBe(
       "0x0000000000000000000000000000000000001104",
@@ -136,12 +130,22 @@ describe("PRECOMPILE_ADDRESSES", () => {
     expect(PRECOMPILE_ADDRESSES.PUBKEY_REGISTRY).toBe(
       "0x000000000000000000000000000000000000110D",
     );
+    expect(PRECOMPILE_ADDRESSES.NAME_REGISTRY).toBe(
+      "0x000000000000000000000000000000000000110E",
+    );
   });
 
-  it("does not expose application surfaces outside whitepaper v4.0", () => {
+  it("does not expose retired or reserved slots", () => {
     const values = Object.values(PRECOMPILE_ADDRESSES) as string[];
+    // Derivatives slot — retired pre-v4.0.
     expect(values).not.toContain("0x0000000000000000000000000000000000001002");
+    // Reserved slot 0x1006.
     expect(values).not.toContain("0x0000000000000000000000000000000000001006");
+    // Slot 0x1007 — retired; chain returns a typed revert.
+    expect(values).not.toContain("0x0000000000000000000000000000000000001007");
+    // Simple name registry at 0x1103 — retired 2026-05-04; superseded by
+    // the hierarchical registry at 0x110E (whitepaper §22.8).
+    expect(values).not.toContain("0x0000000000000000000000000000000000001103");
   });
 
   it("typed name + address narrowing flows through the public API", () => {
