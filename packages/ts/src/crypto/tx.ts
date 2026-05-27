@@ -60,11 +60,22 @@ export function bincodeSignedTransaction(
   const w = new BincodeWriter();
   w.u64(n.chainId);
   w.u64(n.nonce);
-  w.rawBytes(uint256Le(n.maxPriorityFeePerGas, "maxPriorityFeePerGas"));
-  w.rawBytes(uint256Le(n.maxFeePerGas, "maxFeePerGas"));
+  // Amount(U256) goes through alloy's ruint serde, which emits
+  // `serialize_bytes(&to_be_bytes_vec())` for non-human-readable
+  // serializers. bincode 1.x renders that as `u64(len) || 32 bytes BE`.
+  // Address inside Option<Address> takes the same `serialize_bytes`
+  // path via alloy's FixedBytes impl, so admin-tag(1) is followed by a
+  // length-prefixed 20-byte payload, not a raw 20-byte run.
+  w.bytes(uint256Be(n.maxPriorityFeePerGas, "maxPriorityFeePerGas"));
+  w.bytes(uint256Be(n.maxFeePerGas, "maxFeePerGas"));
   w.u64(n.gasLimit);
-  w.optionBytes(n.to);
-  w.rawBytes(uint256Le(n.value, "value"));
+  if (n.to === null) {
+    w.u8(0);
+  } else {
+    w.u8(1);
+    w.bytes(n.to);
+  }
+  w.bytes(uint256Be(n.value, "value"));
   w.bytes(n.input);
   w.u64(0n); // access_list length
   w.u64(BigInt(n.extensions.length));
@@ -142,11 +153,11 @@ function encodeExtensionsForHash(extensions: readonly NormalizedNativeTxExtensio
   return concatBytes(...chunks);
 }
 
-function uint256Le(value: bigint, label: string): Uint8Array {
+function uint256Be(value: bigint, label: string): Uint8Array {
   if (value < 0n || value >= 1n << 256n) throw new Error(`${label} out of u256 range`);
   const out = new Uint8Array(32);
   let v = value;
-  for (let i = 0; i < 32; i++) {
+  for (let i = 31; i >= 0; i--) {
     out[i] = Number(v & 0xffn);
     v >>= 8n;
   }
