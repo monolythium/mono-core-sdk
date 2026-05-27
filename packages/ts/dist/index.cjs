@@ -2333,23 +2333,9 @@ var RpcClient = class _RpcClient {
   async ethGetTransactionReceipt(txHash) {
     return normalizeTransactionReceipt(await this.call("eth_getTransactionReceipt", [txHash]));
   }
-  /** `eth_sendRawTransaction` — submit a signed raw tx. */
-  async ethSendRawTransaction(rawTx) {
-    return this.call("eth_sendRawTransaction", [rawTx]);
-  }
-  /** `eth_call` — dry-run a transaction. */
-  async ethCall(request, block = "latest") {
-    return this.call("eth_call", [request, encodeBlockSelector(block)]);
-  }
-  /** `eth_estimateGas` — gas estimate for a dry-run. */
-  async ethEstimateGas(request, block = "latest") {
-    return parseQuantityBig(
-      await this.call("eth_estimateGas", [request, encodeBlockSelector(block)])
-    );
-  }
   /**
-   * `eth_gasPrice` — legacy compatibility fee quote for ethers/viem shims.
-   * Native v4.1 surfaces should use execution-unit and lythoshi fee fields.
+   * `eth_gasPrice` — passive compatibility fee quote for EVM-shaped read
+   * tooling. Native callers should prefer `lythExecutionUnitPrice`.
    */
   async ethGasPrice() {
     return parseQuantityBig(await this.call("eth_gasPrice", []));
@@ -2866,14 +2852,6 @@ var RpcClient = class _RpcClient {
   /** `debug_traceTransaction` — legacy compatibility trace for a confirmed tx. */
   async debugTraceTransaction(txHash) {
     return this.call("debug_traceTransaction", [txHash]);
-  }
-  /** `debug_traceCall` — legacy compatibility trace for a dry-run. */
-  async debugTraceCall(request, block = "latest") {
-    return this.call("debug_traceCall", [request, encodeBlockSelector(block)]);
-  }
-  /** `debug_traceBlockByNumber` — legacy compatibility traces for an entire block. */
-  async debugTraceBlockByNumber(block) {
-    return this.call("debug_traceBlockByNumber", [encodeBlockSelector(block)]);
   }
   /** `debug_mempoolDump` — full mempool snapshot. */
   async debugMempoolDump() {
@@ -7997,9 +7975,15 @@ function normalizeNativeAgentAddressString(address, expectedKind, name) {
   }
 }
 
-// src/ethers/network.ts
+// src/network.ts
 var MONOLYTHIUM_TESTNET_CHAIN_ID = 69420n;
 var MONOLYTHIUM_TESTNET_NETWORK_NAME = "monolythium-testnet";
+var MONOLYTHIUM_NETWORKS = {
+  testnet: {
+    chainId: MONOLYTHIUM_TESTNET_CHAIN_ID,
+    name: MONOLYTHIUM_TESTNET_NETWORK_NAME
+  }
+};
 
 // src/index.ts
 var version = "0.2.2";
@@ -8030,6 +8014,7 @@ exports.MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES = MAX_NATIVE_CALL_FORWARDER_REQU
 exports.MAX_NATIVE_RECEIPT_EVENTS = MAX_NATIVE_RECEIPT_EVENTS;
 exports.ML_DSA_65_PUBLIC_KEY_LEN = ML_DSA_65_PUBLIC_KEY_LEN2;
 exports.ML_DSA_65_SIGNATURE_LEN = ML_DSA_65_SIGNATURE_LEN2;
+exports.MONOLYTHIUM_NETWORKS = MONOLYTHIUM_NETWORKS;
 exports.MONOLYTHIUM_TESTNET_CHAIN_ID = MONOLYTHIUM_TESTNET_CHAIN_ID;
 exports.MONOLYTHIUM_TESTNET_NETWORK_NAME = MONOLYTHIUM_TESTNET_NETWORK_NAME;
 exports.MRV_DEPLOY_PAYLOAD_VERSION = MRV_DEPLOY_PAYLOAD_VERSION;
