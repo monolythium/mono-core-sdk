@@ -25,7 +25,7 @@ use crate::types::{
     typed_native_events_from_response, AccountPolicy, AccountProofResponse, AddressActivityEntry,
     AddressActivityKindResponse, AddressFlowResponse, AddressLabelRecord, AddressProfileResponse,
     AgentReputationResponse, AssetPolicy, BlockHeader, BlockSelector, BlsCertificateResponse,
-    CallRequest, CapabilitiesResponse, ChainStatsResponse, CheckpointRecord, ClobMarketResponse,
+    CapabilitiesResponse, ChainStatsResponse, CheckpointRecord, ClobMarketResponse,
     ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse, ClobTradesResponse,
     ClusterDelegatorsResponse, ClusterEntityResponse, ClusterResignationsResponse,
     DagParentsResponse, DagSyncStatus, DecodeTxResponse, DelegationCapResponse,
@@ -286,40 +286,9 @@ impl RpcClient {
             .await
     }
 
-    /// `eth_sendRawTransaction` — submits a signed raw tx (RLP /
-    /// envelope hex). Returns the tx hash on admission.
-    pub async fn eth_send_raw_transaction(&self, raw_tx: &str) -> Result<String, SdkError> {
-        self.call("eth_sendRawTransaction", json!([raw_tx])).await
-    }
-
-    /// `eth_call` — legacy compatibility dry-run. No-EVM v4.1 profiles may
-    /// reject this method server-side; prefer native `lyth_*` previews or the
-    /// local MRV harness for current app flows.
-    pub async fn eth_call(
-        &self,
-        request: &CallRequest,
-        block: BlockSelector,
-    ) -> Result<String, SdkError> {
-        self.call("eth_call", json!([request, block.to_param()]))
-            .await
-    }
-
-    /// `eth_estimateGas` — legacy compatibility estimate. No-EVM v4.1 profiles
-    /// may reject this method server-side; prefer native execution-unit
-    /// estimates.
-    pub async fn eth_estimate_gas(
-        &self,
-        request: &CallRequest,
-        block: BlockSelector,
-    ) -> Result<u64, SdkError> {
-        let hex: String = self
-            .call("eth_estimateGas", json!([request, block.to_param()]))
-            .await?;
-        parse_quantity_u64(&hex)
-    }
-
-    /// `eth_gasPrice` — legacy compatibility fee quote. New v4.1 surfaces
-    /// should use native execution-unit price terminology.
+    /// `eth_gasPrice` — passive compatibility fee quote for EVM-shaped
+    /// read tooling. Native callers should prefer
+    /// `lyth_executionUnitPrice`.
     pub async fn eth_gas_price(&self) -> Result<u64, SdkError> {
         let hex: String = self.call("eth_gasPrice", json!([])).await?;
         parse_quantity_u64(&hex)
@@ -1307,33 +1276,6 @@ impl RpcClient {
     // The debug namespace is gated server-side by `RpcConfig::debug_enabled`.
     // When the namespace is disabled, every call surfaces as
     // [`SdkError::Rpc`] with the server's `MethodDisabled` code.
-
-    /// `debug_traceTransaction` — legacy compatibility trace for a confirmed
-    /// tx (server-side gated; unavailable on no-EVM profiles).
-    pub async fn debug_trace_transaction(&self, tx_hash: &str) -> Result<Value, SdkError> {
-        self.call("debug_traceTransaction", json!([tx_hash])).await
-    }
-
-    /// `debug_traceCall` — legacy compatibility trace for a dry-run call
-    /// (server-side gated; unavailable on no-EVM profiles).
-    pub async fn debug_trace_call(
-        &self,
-        request: &CallRequest,
-        block: BlockSelector,
-    ) -> Result<Value, SdkError> {
-        self.call("debug_traceCall", json!([request, block.to_param()]))
-            .await
-    }
-
-    /// `debug_traceBlockByNumber` — legacy compatibility traces for an entire
-    /// block (server-side gated; unavailable on no-EVM profiles).
-    pub async fn debug_trace_block_by_number(
-        &self,
-        block: BlockSelector,
-    ) -> Result<Value, SdkError> {
-        self.call("debug_traceBlockByNumber", json!([block.to_param()]))
-            .await
-    }
 
     /// `debug_mempoolDump` — full mempool snapshot (server-side
     /// gated). Returns the same shape as `lyth_mempoolStatus` in

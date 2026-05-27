@@ -34,7 +34,6 @@ import type {
   AssetPolicy,
   BlsCertificateResponse,
   BlockHeader,
-  CallRequest,
   CapabilitiesResponse,
   CheckpointRecord,
   ClobMarketResponse,
@@ -1306,29 +1305,9 @@ export class RpcClient {
     return normalizeTransactionReceipt(await this.call("eth_getTransactionReceipt", [txHash]));
   }
 
-  /** `eth_sendRawTransaction` — submit a signed raw tx. */
-  async ethSendRawTransaction(rawTx: string): Promise<string> {
-    return this.call("eth_sendRawTransaction", [rawTx]);
-  }
-
-  /** `eth_call` — dry-run a transaction. */
-  async ethCall(request: CallRequest, block: BlockSelector = "latest"): Promise<string> {
-    return this.call("eth_call", [request, encodeBlockSelector(block)]);
-  }
-
-  /** `eth_estimateGas` — gas estimate for a dry-run. */
-  async ethEstimateGas(
-    request: CallRequest,
-    block: BlockSelector = "latest",
-  ): Promise<bigint> {
-    return parseQuantityBig(
-      await this.call<string>("eth_estimateGas", [request, encodeBlockSelector(block)]),
-    );
-  }
-
   /**
-   * `eth_gasPrice` — legacy compatibility fee quote for ethers/viem shims.
-   * Native v4.1 surfaces should use execution-unit and lythoshi fee fields.
+   * `eth_gasPrice` — passive compatibility fee quote for EVM-shaped read
+   * tooling. Native callers should prefer `lythExecutionUnitPrice`.
    */
   async ethGasPrice(): Promise<bigint> {
     return parseQuantityBig(await this.call<string>("eth_gasPrice", []));
@@ -2102,19 +2081,6 @@ export class RpcClient {
   /** `debug_traceTransaction` — legacy compatibility trace for a confirmed tx. */
   async debugTraceTransaction(txHash: string): Promise<unknown> {
     return this.call("debug_traceTransaction", [txHash]);
-  }
-
-  /** `debug_traceCall` — legacy compatibility trace for a dry-run. */
-  async debugTraceCall(
-    request: CallRequest,
-    block: BlockSelector = "latest",
-  ): Promise<unknown> {
-    return this.call("debug_traceCall", [request, encodeBlockSelector(block)]);
-  }
-
-  /** `debug_traceBlockByNumber` — legacy compatibility traces for an entire block. */
-  async debugTraceBlockByNumber(block: BlockSelector): Promise<unknown> {
-    return this.call("debug_traceBlockByNumber", [encodeBlockSelector(block)]);
   }
 
   /** `debug_mempoolDump` — full mempool snapshot. */

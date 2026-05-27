@@ -240,32 +240,18 @@ const backend = pqm1MnemonicToMlDsa65Backend(mnemonic);
 const signature = backend.sign(new Uint8Array([1, 2, 3]));
 ```
 
-### Legacy ethers.js v6 compat
+### ethers / viem compatibility
 
-The package still ships an ethers v6 compat shim for legacy migration tooling:
-a `MonolythiumProvider` and `MonolythiumSigner` that drop in wherever ethers'
-`Provider` and `Signer` are expected. It is not the v4.1 no-EVM deployment path;
-new app work should use the MRV/RISC-V builders and `lyth_*` read surfaces.
-`ethers` is a peer dependency for this compatibility path.
-
-```ts
-import { Wallet } from "ethers";
-import {
-  MonolythiumProvider,
-  MonolythiumSigner,
-} from "@monolythium/core-sdk/ethers";
-
-const provider = new MonolythiumProvider("https://rpc.testnet.monolythium.com");
-const wallet = new Wallet(process.env.PRIVATE_KEY!);
-const signer = MonolythiumSigner.fromEthersWallet(wallet, provider);
-
-// Legacy-only adapter setup. Do not use this path for new v4.1 MRV deployments.
-console.log(await signer.getAddress());
-```
-
-For non-secp256k1 signing sources (OS keychain, hardware wallet, future
-ML-DSA-65 backends), implement `MonolythiumSignerBackend` and pass it to
-`new MonolythiumSigner(backend, provider)`.
+The SDK does not ship an ethers-style provider or signer. The chain
+does not accept Ethereum-style ECDSA signatures at transaction
+admission, and there is no `eth_call` / `eth_estimateGas` /
+`eth_sendRawTransaction` on the dispatcher to translate to. Tooling
+that wants to read EVM-shaped block, balance, receipt, or log fields
+can keep using the curated `eth_*` read methods exposed by `RpcClient`
+directly (`ethBlockNumber`, `ethGetBalance`, `ethGetBlockByNumber`,
+`ethGetTransactionReceipt`, `ethGetLogs`, …). Submitting and signing
+transactions go through the native builders (`mesh_buildUnsignedTx` +
+ML-DSA-65 signer + `mesh_submitTx`, or `lyth_submitEncrypted`).
 
 ## Development
 

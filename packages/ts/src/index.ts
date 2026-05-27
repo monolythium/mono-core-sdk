@@ -573,7 +573,8 @@ export type {
   NativeAgentReputationScores,
 } from "./agent-actions.js";
 export {
+  MONOLYTHIUM_NETWORKS,
   MONOLYTHIUM_TESTNET_CHAIN_ID,
   MONOLYTHIUM_TESTNET_NETWORK_NAME,
-} from "./ethers/network.js";
-export type { MonolythiumNetworkConfig } from "./ethers/network.js";
+} from "./network.js";
+export type { MonolythiumNetworkConfig } from "./network.js";
