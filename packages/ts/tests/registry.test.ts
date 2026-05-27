@@ -34,9 +34,9 @@ describe("chain registry snapshot", () => {
   it("vendors the public testnet RPC endpoint", () => {
     expect(TESTNET_69420.chain_id).toBe(69420);
     expect(TESTNET_69420.genesis_hash).toBe(
-      "0x92dc29b2ae8bae3ea1357ea43f7e597375ebcce888f42c47560f68b917a093d6",
+      "0xad64b785debc17aef3fb4a8d944c2c7c9156394bb08d5ab576ec85782732f897",
     );
-    expect(TESTNET_69420.binary_sha).toBe("200c7cf");
+    expect(TESTNET_69420.binary_sha).toBe("058c883");
     expect(getRpcEndpoints("testnet-69420").map((r) => r.url)).toEqual([
       "https://rpc.monolythium.com",
     ]);
