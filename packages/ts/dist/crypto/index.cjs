@@ -156,11 +156,16 @@ function bincodeSignedTransaction(fields, signature, publicKey) {
   const w = new BincodeWriter();
   w.u64(n.chainId);
   w.u64(n.nonce);
-  w.rawBytes(uint256Le(n.maxPriorityFeePerGas, "maxPriorityFeePerGas"));
-  w.rawBytes(uint256Le(n.maxFeePerGas, "maxFeePerGas"));
+  w.bytes(uint256Be(n.maxPriorityFeePerGas, "maxPriorityFeePerGas"));
+  w.bytes(uint256Be(n.maxFeePerGas, "maxFeePerGas"));
   w.u64(n.gasLimit);
-  w.optionBytes(n.to);
-  w.rawBytes(uint256Le(n.value, "value"));
+  if (n.to === null) {
+    w.u8(0);
+  } else {
+    w.u8(1);
+    w.bytes(n.to);
+  }
+  w.bytes(uint256Be(n.value, "value"));
   w.bytes(n.input);
   w.u64(0n);
   w.u64(BigInt(n.extensions.length));
@@ -215,11 +220,11 @@ function encodeExtensionsForHash(extensions) {
   }
   return concatBytes(...chunks);
 }
-function uint256Le(value, label) {
+function uint256Be(value, label) {
   if (value < 0n || value >= 1n << 256n) throw new Error(`${label} out of u256 range`);
   const out = new Uint8Array(32);
   let v = value;
-  for (let i = 0; i < 32; i++) {
+  for (let i = 31; i >= 0; i--) {
     out[i] = Number(v & 0xffn);
     v >>= 8n;
   }
