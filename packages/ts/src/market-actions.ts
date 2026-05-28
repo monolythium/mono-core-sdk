@@ -50,6 +50,12 @@ export const CLOB_SELECTORS = {
   placeMarketOrderEx: "0xa6f092f0",
   /** `cancelOrder(bytes32)` */
   cancelOrder: "0x7489ec23",
+  /** `setMinNotional(bytes32,bytes32,uint256)` — foundation-authorized. */
+  setMinNotional: "0x395dc48f",
+  /** `setTickSize(bytes32,bytes32,uint256)` — foundation-authorized per-market grid tune. */
+  setTickSize: "0x10666f0b",
+  /** `setLotSize(bytes32,bytes32,uint256)` — foundation-authorized per-market grid tune. */
+  setLotSize: "0x9909be80",
 } as const;
 
 export type SpotLimitOrderSide = "buy" | "sell";
@@ -397,6 +403,39 @@ export function encodeCancelOrderCalldata(args: CancelSpotOrderArgs): string {
       bytes32FromHex(args.orderId, "orderId"),
     ),
   );
+}
+
+/** Three foundation-authorized per-market grid tuners share the
+ *  same `(bytes32,bytes32,uint256)` shape: minNotional, tickSize,
+ *  lotSize. They auto-create the market record if absent. */
+export interface MarketGridTuneArgs {
+  baseTokenId: string;
+  quoteTokenId: string;
+  /** Decimal string of quote atoms (minNotional) or atoms-per-unit (tick/lot). */
+  newValue: string;
+}
+
+function encodeMarketGridTuneCalldata(selector: string, label: string, args: MarketGridTuneArgs): string {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(selector, `${label} selector`),
+      bytes32FromHex(args.baseTokenId, "baseTokenId"),
+      bytes32FromHex(args.quoteTokenId, "quoteTokenId"),
+      uint256Word(BigInt(args.newValue), "newValue"),
+    ),
+  );
+}
+
+export function encodeSetMinNotionalCalldata(args: MarketGridTuneArgs): string {
+  return encodeMarketGridTuneCalldata(CLOB_SELECTORS.setMinNotional, "setMinNotional", args);
+}
+
+export function encodeSetTickSizeCalldata(args: MarketGridTuneArgs): string {
+  return encodeMarketGridTuneCalldata(CLOB_SELECTORS.setTickSize, "setTickSize", args);
+}
+
+export function encodeSetLotSizeCalldata(args: MarketGridTuneArgs): string {
+  return encodeMarketGridTuneCalldata(CLOB_SELECTORS.setLotSize, "setLotSize", args);
 }
 
 export function encodeNativeSpotLimitOrderCall(args: EncodeNativeSpotLimitOrderArgs): string {
