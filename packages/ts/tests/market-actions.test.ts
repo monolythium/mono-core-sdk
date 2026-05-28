@@ -145,6 +145,9 @@ describe("native market action builders", () => {
       placeMarketOrder: "0xb9b1fa86",
       placeMarketOrderEx: "0xa6f092f0",
       cancelOrder: "0x7489ec23",
+      setMinNotional: "0x395dc48f",
+      setTickSize: "0x10666f0b",
+      setLotSize: "0x9909be80",
     });
     expect(PRECOMPILE_ADDRESSES.CLOB).toBe("0x0000000000000000000000000000000000001001");
     expect(clobAddressHex()).toBe("0x0000000000000000000000000000000000001001");
