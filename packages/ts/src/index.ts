@@ -381,7 +381,12 @@ export {
   DELEGATION_SELECTORS,
   DelegationPrecompileError,
   delegationAddressHex,
+  encodeClaimCalldata,
   encodeCompleteRedemptionCalldata,
+  encodeDelegateCalldata,
+  encodeRedelegateCalldata,
+  encodeSetAutoCompoundCalldata,
+  encodeUndelegateCalldata,
   isRedemptionPrincipalUnavailableRevert,
 } from "./delegation.js";
 export {

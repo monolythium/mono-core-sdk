@@ -5,15 +5,58 @@ import {
   DelegationPrecompileError,
   PRECOMPILE_ADDRESSES,
   delegationAddressHex,
+  encodeClaimCalldata,
   encodeCompleteRedemptionCalldata,
+  encodeDelegateCalldata,
+  encodeRedelegateCalldata,
+  encodeSetAutoCompoundCalldata,
+  encodeUndelegateCalldata,
   isRedemptionPrincipalUnavailableRevert,
 } from "../src/index.js";
 
 describe("delegation precompile ABI helpers", () => {
   it("exports selectors pinned to mono-core", () => {
     expect(DELEGATION_SELECTORS).toEqual({
+      delegate: "0x662337de",
+      undelegate: "0x914f3ca8",
+      redelegate: "0xa06ac18f",
+      claim: "0x4e71d92d",
+      setAutoCompound: "0x86593454",
       completeRedemption: "0x26169d0a",
     });
+  });
+
+  it("encodes delegate / undelegate / redelegate / claim calldata", () => {
+    expect(encodeDelegateCalldata(0, 10_000)).toBe(
+      "0x662337de" +
+        "0000000000000000000000000000000000000000000000000000000000000000" +
+        "0000000000000000000000000000000000000000000000000000000000002710",
+    );
+    expect(encodeUndelegateCalldata(1)).toBe(
+      "0x914f3ca8" +
+        "0000000000000000000000000000000000000000000000000000000000000001",
+    );
+    expect(encodeRedelegateCalldata(0, 1, 5_000)).toBe(
+      "0xa06ac18f" +
+        "0000000000000000000000000000000000000000000000000000000000000000" +
+        "0000000000000000000000000000000000000000000000000000000000000001" +
+        "0000000000000000000000000000000000000000000000000000000000001388",
+    );
+    expect(encodeClaimCalldata()).toBe("0x4e71d92d");
+    expect(encodeSetAutoCompoundCalldata(true)).toBe(
+      "0x86593454" +
+        "0000000000000000000000000000000000000000000000000000000000000001",
+    );
+    expect(encodeSetAutoCompoundCalldata(false)).toBe(
+      "0x86593454" +
+        "0000000000000000000000000000000000000000000000000000000000000000",
+    );
+  });
+
+  it("rejects out-of-range cluster + weight inputs", () => {
+    expect(() => encodeDelegateCalldata(-1, 100)).toThrow(DelegationPrecompileError);
+    expect(() => encodeDelegateCalldata(0, 10_001)).not.toThrow();
+    expect(() => encodeDelegateCalldata(0xffff_ffff_ffffn, 100)).toThrow(DelegationPrecompileError);
   });
 
   it("exports redemption revert tags pinned to mono-core", () => {
