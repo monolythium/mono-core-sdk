@@ -65,41 +65,65 @@ export interface SpendingPolicyArgs {
 }
 
 /**
- * Decoded `lyth_getSpendingPolicy` view (the `setPolicy*` storage
- * surface, including the WP §18.8 dimensions).
+ * Decoded `lyth_getSpendingPolicy` time-of-day window. `enabled` is
+ * always `true` when present (the chain omits the object as `null` when
+ * no window is configured). `[startHour, endHour]` are `0..=23`,
+ * inclusive, and may wrap past midnight.
+ */
+export interface SpendingPolicyTimeWindow {
+  /** Always `true` when the window object is present. */
+  enabled: boolean;
+  /** Window start hour (`0..=23`). */
+  startHour: number;
+  /** Window end hour (`0..=23`). */
+  endHour: number;
+}
+
+/**
+ * `lyth_getSpendingPolicy` response — the §18.8 spending-policy view for
+ * a sub-account, read directly from the spending-policy precompile slots
+ * (`0x110C`).
  *
- * Caps and the expiry are decimal strings of their on-chain integer
- * value; roots / the time window are `0x`-prefixed 32-byte words. A
- * `null` time window means no window is configured; otherwise
- * `[startHour, endHour]` (0..=23, inclusive, may wrap past midnight).
+ * Mirrors the chain JSON exactly (camelCase keys). Caps are `0x`-hex
+ * `uint256` strings; roots are `0x`-hex 32-byte words. `timeOfDayWindow`
+ * is `null` when no window is configured; `expiryUnixSeconds` is `null`
+ * when the policy never auto-expires. Note: the chain surfaces the policy
+ * keyed by the controlled sub-account (`address`); the managing principal
+ * is NOT part of this read shape.
  */
 export interface SpendingPolicyView {
-  /** Typed `mono` bech32m sub-account the policy controls. */
-  subAccount: string;
-  /** Typed `mono` bech32m principal allowed to manage the policy. */
-  principal: string;
+  /** Response schema version (`1`). */
+  schemaVersion: number;
+  /** Data source — `"native_state_storage"`. */
+  source: string;
+  /** Spending-policy precompile address (`0x110C`). */
+  precompile: string;
+  /** Sub-account the policy controls (`mono` bech32m). */
+  address: string;
+  /** `true` when a policy is written for this sub-account. */
+  exists: boolean;
+  /** `true` when the policy exists and is not disabled. */
+  enabled: boolean;
   /** Monotonic policy version; `0` means no policy is written. */
-  policyVersion: string;
-  /** `true` when the principal disabled the sub-account. */
-  disabled: boolean;
-  /** Daily spend cap (lythoshi); `"0"` = no cap. */
-  dailyCapLythoshi: string;
-  /** Per-transaction cap (lythoshi); `"0"` = no cap. */
-  perTxCapLythoshi: string;
-  /** Allow-list Merkle root (`0x` 32 bytes). */
-  allowRoot: string;
-  /** Deny-list Merkle root (`0x` 32 bytes). */
-  denyRoot: string;
-  /** WP §18.8 per-week cap (lythoshi); `"0"` = no weekly cap. */
-  weeklyCapLythoshi: string;
-  /** WP §18.8 per-month cap (lythoshi); `"0"` = no monthly cap. */
-  monthlyCapLythoshi: string;
-  /** WP §18.8 category allow-list root (`0x` 32 bytes). */
+  version: number;
+  /** Per-transaction cap (`0x`-hex `uint256`); `0x0` = no cap. */
+  perTxCap: string;
+  /** Daily spend cap (`0x`-hex `uint256`); `0x0` = no cap. */
+  dailyCap: string;
+  /** §18.8 per-week cap (`0x`-hex `uint256`); `0x0` = no weekly cap. */
+  weeklyCap: string;
+  /** §18.8 per-month cap (`0x`-hex `uint256`); `0x0` = no monthly cap. */
+  monthlyCap: string;
+  /** §18.8 category allow-list root (`0x` 32 bytes). */
   categoryAllowRoot: string;
-  /** WP §18.8 decoded `[startHour, endHour]`, or `null` if unset. */
-  timeWindow: [number, number] | null;
-  /** WP §18.8 policy-expiry unix seconds; `"0"` = never expires. */
-  policyExpiry: string;
+  /** Destination allow-list Merkle root (`0x` 32 bytes). */
+  destinationAllowRoot: string;
+  /** Destination deny-list Merkle root (`0x` 32 bytes). */
+  destinationDenyRoot: string;
+  /** §18.8 decoded time-of-day window, or `null` if unset. */
+  timeOfDayWindow: SpendingPolicyTimeWindow | null;
+  /** §18.8 policy-expiry unix seconds; `null` = never expires. */
+  expiryUnixSeconds: number | null;
 }
 
 export class SpendingPolicyError extends Error {

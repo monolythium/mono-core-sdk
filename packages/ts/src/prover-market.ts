@@ -13,13 +13,21 @@
  */
 
 import { keccak_256 } from "@noble/hashes/sha3.js";
+import { PRECOMPILE_ADDRESSES } from "./consts.js";
 
-// TODO(monolythium-vision): prover-market precompile address (tentative
-// 0x1110) confirmed at chain wiring. The precompile is NOT yet registered
-// (registration deferred), so the address is not pinned in consts.ts and no
-// live plan builder hardcodes it.
-export const PROVER_MARKET_TENTATIVE_ADDRESS =
-  "0x0000000000000000000000000000000000001110" as const;
+/**
+ * GPU prover-market precompile address (`0x100C`).
+ *
+ * Final, registered slot. (The earlier first-pass guess of `0x1110`
+ * assumed MB-5 took `0x1110` for a new precompile; MB-5 instead shipped
+ * `attestDkgReshare` as a selector inside node-registry `0x1005`, so the
+ * platform extension band's lowest free slot — `0x100C`, after the
+ * operator router at `0x100B` — is where the prover market binds.) The
+ * precompile is gateable + genesis-disabled per ADR-0015 §3; activation
+ * is a foundation milestone flip, but the `lyth_*` read surfaces work
+ * regardless.
+ */
+export const PROVER_MARKET_ADDRESS = PRECOMPILE_ADDRESSES.PROVER_MARKET;
 
 /** `SERVES_GPU_PROVE` capability bit (MB-4) — bit 9 of the node-registry field. */
 export const SERVES_GPU_PROVE = 0x0000_0200 as const;
@@ -77,40 +85,172 @@ export function proverMarketStateFromByte(b: number): ProverMarketState | null {
   }
 }
 
-/** `lyth_getProofRequest` view of one proof-request record. */
+/**
+ * `lyth_getProofRequest` response — one proof-request record read
+ * directly from the prover-market state tree (`0x100C`).
+ *
+ * Mirrors the chain JSON exactly (camelCase keys). Fee amounts are
+ * `0x`-hex `uint256` strings; addresses are `mono` bech32m (null while
+ * unset); hashes are `0x`-hex words. This is the exact-lookup shape; the
+ * indexer-backed list rows ({@link ProofRequestRow}) carry a different
+ * field set.
+ */
 export interface ProofRequestView {
+  /** Response schema version (`1`). */
+  schemaVersion: number;
+  /** Data source — `"native_state_storage"`. */
+  source: string;
+  /** Prover-market precompile address (`0x100C`). */
+  precompile: string;
   /** Canonical request id (`0x` 32 bytes). */
-  id: string;
-  /** Buyer address (`0x` 20 bytes). */
-  buyer: string;
+  requestId: string;
+  /** Lifecycle state name. */
+  state: ProverMarketState | string;
+  /** Lifecycle state wire byte (`0`..=`4`). */
+  stateCode: number;
+  /** Buyer (`mono` bech32m); `null` when unset. */
+  buyer: string | null;
   /** Verification-key hash the proof must satisfy (`0x` 32 bytes). */
   vkeyHash: string;
   /** Public-inputs commitment (`0x` 32 bytes). */
   inputsHash: string;
-  /** Maximum fee escrowed (lythoshi decimal string). */
+  /** Maximum fee escrowed (`0x`-hex `uint256`). */
   maxFee: string;
   /** Deterministic Unix-seconds deadline. */
-  deadline: bigint;
-  /** Buyer-supplied uniqueness nonce. */
-  nonce: bigint;
-  /** Current state-machine state. */
-  state: ProverMarketState;
-  /** Assigned prover (`0x` 20 bytes); zero-address while Open/Expired. */
-  assignedProver: string;
-  /** Winning fee bid (lythoshi decimal string); `"0"` while Open. */
+  deadlineUnixSeconds: number;
+  /** Assigned prover (`mono` bech32m); `null` while Open/Expired. */
+  assignedProver: string | null;
+  /** Winning fee bid (`0x`-hex `uint256`); `0x0` while Open. */
   winningFee: string;
+  /** Unix seconds of the last state transition. */
+  stateAtUnixSeconds: number;
   /** Delivered proof hash (`0x` 32 bytes); zero until `submitProof`. */
   proofHash: string;
+  /** Number of bids recorded against the request. */
+  bidCount: number;
 }
 
-/** `lyth_getProverBids` view of one prover fee bid. */
-export interface ProverBidView {
-  /** Request this bid targets (`0x` 32 bytes). */
+/**
+ * `lyth_listProofRequests` row — one indexer-projection proof-request
+ * record. Distinct from {@link ProofRequestView}: fee amounts here are
+ * decimal atomic-unit strings (the indexer projection's wire form), and
+ * the row carries `feePaid` + `createdAtBlock` instead of the
+ * state-tree-only `inputsHash` / `stateCode` / `proofHash` fields.
+ */
+export interface ProofRequestRow {
+  /** Content-addressed request id (`0x` 32 bytes). */
   requestId: string;
-  /** Bidding prover (`0x` 20 bytes); must hold `SERVES_GPU_PROVE`. */
+  /** Requesting buyer (`mono` bech32m). */
+  buyer: string;
+  /** Verification-key hash bound to the request (`0x` 32 bytes). */
+  vkeyHash: string;
+  /** Maximum fee escrowed (decimal atomic-unit string). */
+  maxFee: string;
+  /** Deadline (unix seconds). */
+  deadlineUnixSeconds: number;
+  /** Lifecycle state name. */
+  state: ProverMarketState | string;
+  /** Assigned prover (`mono` bech32m); `null` until a winner is selected. */
+  assignedProver: string | null;
+  /** Winning fee (decimal atomic-unit string); `null` until assigned. */
+  winningFee: string | null;
+  /** Number of bids recorded against the request. */
+  bidCount: number;
+  /** Fee paid out on settlement (decimal atomic-unit string); `null` otherwise. */
+  feePaid: string | null;
+  /** Block height the request was first observed at. */
+  createdAtBlock: number;
+}
+
+/**
+ * `lyth_listProofRequests` response envelope.
+ *
+ * When the node runs without the prover-market indexer projection it
+ * returns the graceful fallback `{ status: "indexer_unavailable", … }`
+ * with an empty `requests` array — `requests` is always present so
+ * callers can iterate unconditionally.
+ */
+export interface ListProofRequestsResponse {
+  /** Response schema version (`1`). */
+  schemaVersion: number;
+  /** `"indexer_unavailable"` on the graceful-fallback path; absent when served. */
+  status?: "indexer_unavailable";
+  /** Data source — `"prover_market_indexer_projection"`. */
+  source: string;
+  /** Prover-market precompile address (`0x100C`). */
+  precompile: string;
+  /** Echo of the lifecycle-state filter, when one was supplied. */
+  stateFilter?: ProverMarketState | string | null;
+  /** Echo of the page cap, when served. */
+  limit?: number;
+  /** Matching rows, newest-first. Empty on the fallback path. */
+  requests: ProofRequestRow[];
+  /** Human-readable reason on the fallback path. */
+  reason?: string;
+}
+
+/**
+ * `lyth_getProverBids` response — every recorded bid against one request,
+ * read from the prover-market bid slots (`0x100C`).
+ */
+export interface ProverBidsResponse {
+  /** Response schema version (`1`). */
+  schemaVersion: number;
+  /** Data source — `"native_state_storage"`. */
+  source: string;
+  /** Prover-market precompile address (`0x100C`). */
+  precompile: string;
+  /** Request the bids target (`0x` 32 bytes). */
+  requestId: string;
+  /** Number of bids recorded. */
+  bidCount: number;
+  /** Recorded fee bids. */
+  bids: ProverBidView[];
+}
+
+/** One prover fee bid in a {@link ProverBidsResponse}. */
+export interface ProverBidView {
+  /** Slot index of this bid within the request's bid list. */
+  index: number;
+  /** Bidding prover (`mono` bech32m); must hold `SERVES_GPU_PROVE`. */
   prover: string;
-  /** Fee bid (lythoshi decimal string); must be `<= maxFee`. */
+  /** Fee bid (`0x`-hex `uint256`); must be `<= maxFee`. */
   fee: string;
+}
+
+/**
+ * `lyth_proverMarketStatus` response — market-wide prover-market stats.
+ *
+ * `feeFloor` is the on-chain genesis singleton (always present, read
+ * directly from `0x100C`). The aggregate counts come from the indexer
+ * projection; when the node runs without it the response carries
+ * `status: "indexer_unavailable"` and the count fields are `null`.
+ */
+export interface ProverMarketStatusResponse {
+  /** Response schema version (`1`). */
+  schemaVersion: number;
+  /** `"indexer_unavailable"` on the graceful-fallback path; absent when served. */
+  status?: "indexer_unavailable";
+  /** Data source — `"prover_market_indexer_projection"`. */
+  source: string;
+  /** Prover-market precompile address (`0x100C`). */
+  precompile: string;
+  /** Genesis-configured minimum prover fee (`0x`-hex `uint256`). */
+  feeFloor: string;
+  /** Requests in the `open` state; `null` on the fallback path. */
+  openRequests: number | null;
+  /** Requests in the `assigned` state; `null` on the fallback path. */
+  assignedRequests: number | null;
+  /** Requests in the `settled` state; `null` on the fallback path. */
+  settledRequests: number | null;
+  /** Requests in the `slashed` state; absent on the fallback path. */
+  slashedRequests?: number | null;
+  /** Requests in the `expired` state; absent on the fallback path. */
+  expiredRequests?: number | null;
+  /** Total requests observed; absent on the fallback path. */
+  totalRequests?: number | null;
+  /** Human-readable reason on the fallback path. */
+  reason?: string;
 }
 
 export class ProverMarketError extends Error {

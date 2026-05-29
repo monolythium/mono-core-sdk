@@ -316,6 +316,109 @@ export interface BridgeBreakerState {
 }
 
 /**
+ * Latest light-client anchor metadata on a {@link BridgeHealthRecord}.
+ */
+export interface BridgeAnchorState {
+  /** Latest verified foreign-chain header root (`0x` 32 bytes). */
+  headerRoot: string;
+  /** Latest verified foreign-chain block number. */
+  headerBlock: number;
+  /** Protocore block at which the latest anchor was recorded. */
+  updatedAtProtocoreBlock: number;
+}
+
+/**
+ * MB-2 — bridge-level circuit-breaker + pause posture on a
+ * {@link BridgeHealthRecord}. Amounts are `0x`-hex `uint256` strings;
+ * block counts are numbers.
+ */
+export interface BridgeCircuitBreakerFields {
+  /** Bridge-default drain cap per rolling window (`0x`-hex `uint256`); `0x0` disables it. */
+  defaultDrainCapPerWindow: string;
+  /** Bridge-default drain-window length in Protocore blocks. */
+  defaultDrainWindowBlocks: number;
+  /** `true` when the route is currently in a recorded pause window. */
+  paused: boolean;
+  /** Protocore block the current pause was committed at; `null` when not paused. */
+  pausedAtBlock: number | null;
+  /** Cooldown (blocks) that must elapse after a pause before resume. */
+  resumeCooldownBlocks: number;
+}
+
+/** One bridge-health row in a {@link BridgeHealthResponse}. */
+export interface BridgeHealthRecord {
+  /** 32-byte bridge id (`0x` hex). */
+  bridgeId: string;
+  /** Stable bridge lifecycle status label. */
+  status: string;
+  /** Raw bridge lifecycle status byte. */
+  statusCode: number;
+  /** Latest light-client anchor metadata. */
+  latestAnchor: BridgeAnchorState;
+  /** MB-2 bridge-level circuit-breaker / pause posture. */
+  circuitBreaker: BridgeCircuitBreakerFields;
+}
+
+/**
+ * `lyth_bridgeHealth` response — a page of bridge-record health envelopes
+ * (MB-2). The chain pages the **global** bridge set keyed by `cursor` +
+ * `limit`; there is no single-bridge form. Each record's `circuitBreaker`
+ * answers "is this route paused / rate-limited" in one round-trip; the
+ * per-route live drain bucket is `lyth_bridgeDrainStatus`.
+ */
+export interface BridgeHealthResponse {
+  /** Response schema version (`1`). */
+  schemaVersion: number;
+  /** Data source — `"native_state_storage"`. */
+  source: string;
+  /** Bridge precompile address (`0x1008`). */
+  precompile: string;
+  /** Bridge-health rows in this page. */
+  records: BridgeHealthRecord[];
+  /** Opaque cursor for the next page (`0x` hex), or `null` at the end. */
+  nextCursor: string | null;
+}
+
+/**
+ * `lyth_bridgeDrainStatus` response — the live per-route circuit-breaker
+ * drain bucket for one `(bridgeId, wrappedAsset)` route (MB-2).
+ *
+ * `remaining` is `capPerWindow - drainedThisBucket` (clamped at `0x0`)
+ * when a per-asset cap is set; `0x0` when no per-asset cap exists (no
+ * per-asset rate limit — the `bridgeDefault` applies). Amounts are
+ * `0x`-hex `uint256` strings; block counts are numbers.
+ */
+export interface BridgeDrainStatus {
+  /** Response schema version (`1`). */
+  schemaVersion: number;
+  /** Data source — `"native_state_storage"`. */
+  source: string;
+  /** Bridge precompile address (`0x1008`). */
+  precompile: string;
+  /** Bridge id the bucket belongs to (`0x` 32 bytes). */
+  bridgeId: string;
+  /** Wrapped (Protocore-side) asset (`mono` bech32m). */
+  wrappedAsset: string;
+  /** Per-asset drain cap per window (`0x`-hex `uint256`); `0x0` = no per-asset cap. */
+  capPerWindow: string;
+  /** Per-asset window length in Protocore blocks. */
+  windowBlocks: number;
+  /** `block_number / window_blocks` at the last drain. */
+  currentBucket: number;
+  /** Running drained total for the active window (`0x`-hex `uint256`). */
+  drainedThisBucket: string;
+  /** `capPerWindow - drainedThisBucket` clamped at `0x0` (`0x0` when no per-asset cap). */
+  remaining: string;
+  /** Bridge-default fallback fields, surfaced when no per-asset cap is configured. */
+  bridgeDefault: {
+    /** Bridge-default drain cap per window (`0x`-hex `uint256`). */
+    drainCapPerWindow: string;
+    /** Bridge-default drain-window length in Protocore blocks. */
+    drainWindowBlocks: number;
+  };
+}
+
+/**
  * Compute the `remaining` field for a {@link BridgeDrainCap} from its
  * `capPerWindow` and `drained` decimal strings, floored at `0`. Returns
  * `null` when the cap is disabled (`capPerWindow === "0"`).

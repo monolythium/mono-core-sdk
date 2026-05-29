@@ -31,6 +31,7 @@ pub mod error;
 pub mod mrv;
 pub mod native_dev;
 pub mod node_registry;
+pub mod operator_router;
 pub mod oracle;
 pub mod prover_market;
 pub mod pubkey_registry;
@@ -116,14 +117,25 @@ pub use node_registry::{
     SERVES_ARCHIVE, SERVES_BRIDGE_RELAY, SERVES_BROADCASTER, SERVES_GPU_PROVE, SERVES_INDEXER,
     SERVES_LIGHT_CLIENT, SERVES_ORACLE_WRITER, SERVES_PUBLIC_API, SERVES_RPC, SERVES_WEBSOCKET,
 };
+pub use operator_router::{
+    decode_operator_fee_charged_event, encode_place_limit_order_via_calldata,
+    encode_place_limit_order_via_calldata_hex, operator_router_address_hex, quote_operator_fee,
+    selector_disable_operator, selector_place_limit_order_via, selector_register_operator,
+    selector_update_operator, topic_operator_fee_charged, LimitOrderSide, OperatorEventDecodeError,
+    OperatorFeeChargedEvent, OperatorFeeConfig, OperatorFeeQuote, OperatorRouterConfig,
+    OperatorRouterError, PlaceLimitOrderViaArgs, EVENT_SIG_OPERATOR_FEE_CHARGED,
+    OPERATOR_ROUTER_ADDRESS, SIG_PLACE_LIMIT_ORDER_VIA,
+};
 pub use oracle::{
     decode_oracle_event, oracle_address_hex, OracleEvent, OracleEventDecodeError, ORACLE_EVENT_SIGS,
 };
 pub use prover_market::{
     bid_sighash as prover_market_bid_sighash, encode_create_request_calldata,
     encode_create_request_canonical, prover_market_event_sigs, request_sighash,
-    submit_sighash as prover_market_submit_sighash, ProofRequestView, ProverBidView,
-    ProverMarketState, PROVER_MARKET_SELECTORS, SERVES_GPU_PROVE_BIT,
+    submit_sighash as prover_market_submit_sighash, ListProofRequestsResponse, ProofRequestRow,
+    ProofRequestView, ProverBidView, ProverBidsResponse, ProverMarketState,
+    ProverMarketStatusResponse, PROVER_MARKET_ADDRESS, PROVER_MARKET_SELECTORS,
+    SERVES_GPU_PROVE_BIT,
 };
 pub use types::{
     compute_no_evm_dac_finality_message, compute_no_evm_leader_finality_message,

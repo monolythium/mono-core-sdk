@@ -47,6 +47,10 @@ export const PRECOMPILE_ADDRESSES = {
   ORACLE: "0x0000000000000000000000000000000000001009",
   /** Distributed delegation primitive — gateable. */
   DELEGATION: "0x000000000000000000000000000000000000100A",
+  /** Operator-fee router — skims an operator surcharge on routed CLOB ops; gateable. */
+  OPERATOR_ROUTER: "0x000000000000000000000000000000000000100B",
+  /** GPU prover market — gateable, genesis-disabled (foundation milestone flip). */
+  PROVER_MARKET: "0x000000000000000000000000000000000000100C",
   /** One-time emergency-key registry — non-gateable. */
   EMERGENCY_KEY: "0x0000000000000000000000000000000000001100",
   /** VRF precompile. */
@@ -82,3 +86,23 @@ export type PrecompileName = keyof typeof PRECOMPILE_ADDRESSES;
 
 /** Precompile address value type. */
 export type PrecompileAddress = (typeof PRECOMPILE_ADDRESSES)[PrecompileName];
+
+/**
+ * Operator-router precompile address (`0x100B`).
+ *
+ * Convenience alias for {@link PRECOMPILE_ADDRESSES}`.OPERATOR_ROUTER`.
+ * Sourced from `mono-core` `operator-router::storage::OPERATOR_ROUTER_ADDRESS`.
+ */
+export const OPERATOR_ROUTER_ADDRESS = PRECOMPILE_ADDRESSES.OPERATOR_ROUTER;
+
+/**
+ * Protocol ceiling on the operator surcharge, in basis points
+ * (`100 = 1.00%`).
+ *
+ * Enforced on-chain at both write time (operator registration / update)
+ * and read time (the `placeLimitOrderVia` op); this constant is the
+ * advisory UX mirror so wallets can validate / display a fee before
+ * submitting. Sourced from `mono-core`
+ * `operator-router::storage::PROTOCOL_MAX_OPERATOR_FEE_BPS`.
+ */
+export const PROTOCOL_MAX_OPERATOR_FEE_BPS = 100 as const;

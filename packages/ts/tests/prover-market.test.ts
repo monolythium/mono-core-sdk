@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  PRECOMPILE_ADDRESSES,
+  PROVER_MARKET_ADDRESS,
   PROVER_MARKET_SELECTORS,
-  PROVER_MARKET_TENTATIVE_ADDRESS,
   SERVES_GPU_PROVE,
   bidSighash,
   encodeCreateRequestCalldata,
@@ -19,11 +20,13 @@ describe("prover-market helpers (MB-4)", () => {
     expect(SERVES_GPU_PROVE).toBe(1 << 9);
   });
 
-  it("does not pin the tentative address into a live plan", () => {
-    // It is exported for reference but flagged as not-yet-wired.
-    expect(PROVER_MARKET_TENTATIVE_ADDRESS).toBe(
-      "0x0000000000000000000000000000000000001110",
+  it("pins the final registered prover-market address (0x100C)", () => {
+    // The earlier first-pass tentative 0x1110 guess is retired; the
+    // prover market binds at the platform extension band's 0x100C slot.
+    expect(PROVER_MARKET_ADDRESS).toBe(
+      "0x000000000000000000000000000000000000100C",
     );
+    expect(PROVER_MARKET_ADDRESS).toBe(PRECOMPILE_ADDRESSES.PROVER_MARKET);
   });
 
   it("derives distinct selectors for the six ops", () => {

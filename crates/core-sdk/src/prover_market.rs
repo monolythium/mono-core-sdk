@@ -10,15 +10,28 @@
 //! bodies land at the deferred runtime-wiring wave, so their calldata
 //! encoders carry a `TODO(monolythium-vision)`.
 //!
-//! NOTE: the prover-market precompile address is NOT yet wired
-//! (registration deferred). The tentative slot is `0x1110`; surfaces
-//! MUST confirm it at chain wiring before building a live plan.
+//! The prover-market precompile is registered at
+//! [`crate::consts::precompile_addresses::PROVER_MARKET`] (`0x100C`). It
+//! is gateable + genesis-disabled per ADR-0015 §3 (activation is a
+//! foundation milestone flip), but the `lyth_*` read surfaces below work
+//! regardless of activation posture.
 
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 
+use crate::consts::precompile_addresses::PROVER_MARKET;
+
 #[cfg(feature = "ts-bindings")]
 use ts_rs::TS;
+
+/// GPU prover-market precompile address (`0x100C`).
+///
+/// Final, registered slot. (The earlier first-pass guess of `0x1110`
+/// assumed MB-5 took a new precompile address; MB-5 instead shipped
+/// `attestDkgReshare` as a selector inside node-registry `0x1005`, so
+/// the platform extension band's lowest free slot — `0x100C`, after the
+/// operator router at `0x100B` — is where the prover market binds.)
+pub const PROVER_MARKET_ADDRESS: [u8; 20] = PROVER_MARKET;
 
 /// `SERVES_GPU_PROVE` capability bit (MB-4) — bit 9 of the node-registry
 /// capability field. Re-exported here so a prover-market consumer can
@@ -157,53 +170,204 @@ impl ProverMarketState {
     }
 }
 
-/// `lyth_getProofRequest` view of one [`ProofRequest`] record.
+/// `lyth_getProofRequest` response — one proof-request record read
+/// directly from the prover-market state tree (`0x100C`).
 ///
-/// `max_fee` / `winning_fee` are decimal strings; hashes + addresses
-/// are `0x`-prefixed hex.
+/// Mirrors the chain JSON exactly (camelCase keys). Fee amounts are
+/// `0x`-hex `uint256` strings; addresses are `mono` bech32m (`None` when
+/// unset); hashes are `0x`-hex words. This is the exact-lookup shape; the
+/// indexer-backed list rows ([`ProofRequestRow`]) carry a different field
+/// set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
 #[cfg_attr(feature = "ts-bindings", ts(export, export_to = "ProofRequestView.ts"))]
 pub struct ProofRequestView {
+    /// Response schema version (`1`).
+    pub schema_version: u32,
+    /// Data source — `"native_state_storage"`.
+    pub source: String,
+    /// Prover-market precompile address (`0x100C`).
+    pub precompile: String,
     /// Canonical request id (`0x` 32 bytes).
-    pub id: String,
-    /// Buyer address (`0x` 20 bytes).
-    pub buyer: String,
+    pub request_id: String,
+    /// Lifecycle state name.
+    pub state: String,
+    /// Lifecycle state wire byte (`0`..=`4`).
+    pub state_code: u8,
+    /// Buyer (`mono` bech32m); `None` when unset.
+    pub buyer: Option<String>,
     /// Verification-key hash the proof must satisfy (`0x` 32 bytes).
     pub vkey_hash: String,
     /// Public-inputs commitment (`0x` 32 bytes).
     pub inputs_hash: String,
-    /// Maximum fee escrowed (lythoshi decimal string).
+    /// Maximum fee escrowed (`0x`-hex `uint256`).
     pub max_fee: String,
     /// Deterministic Unix-seconds deadline.
-    #[cfg_attr(feature = "ts-bindings", ts(type = "string"))]
-    pub deadline: u64,
-    /// Buyer-supplied uniqueness nonce.
-    #[cfg_attr(feature = "ts-bindings", ts(type = "string"))]
-    pub nonce: u64,
-    /// Current state-machine state.
-    pub state: ProverMarketState,
-    /// Assigned prover (`0x` 20 bytes); zero-address while Open/Expired.
-    pub assigned_prover: String,
-    /// Winning fee bid (lythoshi decimal string); `"0"` while Open.
+    pub deadline_unix_seconds: u64,
+    /// Assigned prover (`mono` bech32m); `None` while Open/Expired.
+    pub assigned_prover: Option<String>,
+    /// Winning fee bid (`0x`-hex `uint256`); `0x0` while Open.
     pub winning_fee: String,
+    /// Unix seconds of the last state transition.
+    pub state_at_unix_seconds: u64,
     /// Delivered proof hash (`0x` 32 bytes); zero until `submitProof`.
     pub proof_hash: String,
+    /// Number of bids recorded against the request.
+    pub bid_count: u32,
 }
 
-/// `lyth_getProverBids` view of one prover fee bid.
+/// `lyth_listProofRequests` row — one indexer-projection proof-request
+/// record. Distinct from [`ProofRequestView`]: fee amounts here are
+/// decimal atomic-unit strings (the indexer projection's wire form), and
+/// the row carries `fee_paid` + `created_at_block` instead of the
+/// state-tree-only `inputs_hash` / `state_code` / `proof_hash` fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "ProofRequestRow.ts"))]
+pub struct ProofRequestRow {
+    /// Content-addressed request id (`0x` 32 bytes).
+    pub request_id: String,
+    /// Requesting buyer (`mono` bech32m).
+    pub buyer: String,
+    /// Verification-key hash bound to the request (`0x` 32 bytes).
+    pub vkey_hash: String,
+    /// Maximum fee escrowed (decimal atomic-unit string).
+    pub max_fee: String,
+    /// Deadline (unix seconds).
+    pub deadline_unix_seconds: u64,
+    /// Lifecycle state name.
+    pub state: String,
+    /// Assigned prover (`mono` bech32m); `None` until a winner is selected.
+    pub assigned_prover: Option<String>,
+    /// Winning fee (decimal atomic-unit string); `None` until assigned.
+    pub winning_fee: Option<String>,
+    /// Number of bids recorded against the request.
+    pub bid_count: u32,
+    /// Fee paid out on settlement (decimal atomic-unit string); `None` otherwise.
+    pub fee_paid: Option<String>,
+    /// Block height the request was first observed at.
+    pub created_at_block: u64,
+}
+
+/// `lyth_listProofRequests` response envelope.
+///
+/// When the node runs without the prover-market indexer projection it
+/// returns the graceful fallback `{ status: "indexer_unavailable", … }`
+/// with an empty `requests` array — `requests` is always present so
+/// callers can iterate unconditionally.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "ListProofRequestsResponse.ts")
+)]
+pub struct ListProofRequestsResponse {
+    /// Response schema version (`1`).
+    pub schema_version: u32,
+    /// `"indexer_unavailable"` on the graceful-fallback path; absent when served.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Data source — `"prover_market_indexer_projection"`.
+    pub source: String,
+    /// Prover-market precompile address (`0x100C`).
+    pub precompile: String,
+    /// Echo of the lifecycle-state filter, when one was supplied.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_filter: Option<String>,
+    /// Echo of the page cap, when served.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// Matching rows, newest-first. Empty on the fallback path.
+    pub requests: Vec<ProofRequestRow>,
+    /// Human-readable reason on the fallback path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// `lyth_getProverBids` response — every recorded bid against one
+/// request, read from the prover-market bid slots (`0x100C`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "ProverBidsResponse.ts")
+)]
+pub struct ProverBidsResponse {
+    /// Response schema version (`1`).
+    pub schema_version: u32,
+    /// Data source — `"native_state_storage"`.
+    pub source: String,
+    /// Prover-market precompile address (`0x100C`).
+    pub precompile: String,
+    /// Request the bids target (`0x` 32 bytes).
+    pub request_id: String,
+    /// Number of bids recorded.
+    pub bid_count: u32,
+    /// Recorded fee bids.
+    pub bids: Vec<ProverBidView>,
+}
+
+/// One prover fee bid in a [`ProverBidsResponse`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
 #[cfg_attr(feature = "ts-bindings", ts(export, export_to = "ProverBidView.ts"))]
 pub struct ProverBidView {
-    /// Request this bid targets (`0x` 32 bytes).
-    pub request_id: String,
-    /// Bidding prover (`0x` 20 bytes); must hold `SERVES_GPU_PROVE`.
+    /// Slot index of this bid within the request's bid list.
+    pub index: u32,
+    /// Bidding prover (`mono` bech32m); must hold `SERVES_GPU_PROVE`.
     pub prover: String,
-    /// Fee bid (lythoshi decimal string); must be `<= max_fee`.
+    /// Fee bid (`0x`-hex `uint256`); must be `<= max_fee`.
     pub fee: String,
+}
+
+/// `lyth_proverMarketStatus` response — market-wide prover-market stats.
+///
+/// `fee_floor` is the on-chain genesis singleton (always present, read
+/// directly from `0x100C`). The aggregate counts come from the indexer
+/// projection; when the node runs without it the response carries
+/// `status: "indexer_unavailable"` and the count fields are `None`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "ProverMarketStatusResponse.ts")
+)]
+pub struct ProverMarketStatusResponse {
+    /// Response schema version (`1`).
+    pub schema_version: u32,
+    /// `"indexer_unavailable"` on the graceful-fallback path; absent when served.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Data source — `"prover_market_indexer_projection"`.
+    pub source: String,
+    /// Prover-market precompile address (`0x100C`).
+    pub precompile: String,
+    /// Genesis-configured minimum prover fee (`0x`-hex `uint256`).
+    pub fee_floor: String,
+    /// Requests in the `open` state; `None` on the fallback path.
+    pub open_requests: Option<u64>,
+    /// Requests in the `assigned` state; `None` on the fallback path.
+    pub assigned_requests: Option<u64>,
+    /// Requests in the `settled` state; `None` on the fallback path.
+    pub settled_requests: Option<u64>,
+    /// Requests in the `slashed` state; absent on the fallback path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slashed_requests: Option<u64>,
+    /// Requests in the `expired` state; absent on the fallback path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expired_requests: Option<u64>,
+    /// Total requests observed; absent on the fallback path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_requests: Option<u64>,
+    /// Human-readable reason on the fallback path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// Compute the buyer's binding `request` sighash
@@ -322,6 +486,19 @@ mod tests {
     fn gpu_prove_bit_matches_node_registry() {
         assert_eq!(SERVES_GPU_PROVE_BIT, crate::node_registry::SERVES_GPU_PROVE);
         assert_eq!(SERVES_GPU_PROVE_BIT, 0x0000_0200);
+    }
+
+    #[test]
+    fn prover_market_address_is_100c() {
+        // The final registered slot; NOT the first-pass tentative 0x1110.
+        let mut expected = [0u8; 20];
+        expected[18] = 0x10;
+        expected[19] = 0x0C;
+        assert_eq!(PROVER_MARKET_ADDRESS, expected);
+        assert_eq!(
+            PROVER_MARKET_ADDRESS,
+            crate::consts::precompile_addresses::PROVER_MARKET
+        );
     }
 
     #[test]

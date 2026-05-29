@@ -201,6 +201,60 @@ export interface ClusterDiversity {
 }
 
 /**
+ * `lyth_getClusterDiversity` RPC response (PF-6).
+ *
+ * Distinct from {@link ClusterDiversity} (which decodes the
+ * `getClusterDiversity(uint32)` ABI return tuple from an `eth_call`):
+ * this is the JSON the `lyth_getClusterDiversity` method returns,
+ * serialized from the chain's `ClusterDiversity` struct with camelCase
+ * keys. It carries the `clusterId` echo that the ABI tuple omits. Every
+ * value is in `0..=10000` basis points.
+ */
+export interface ClusterDiversityView {
+  /** Cluster id whose roster was scored. */
+  clusterId: number;
+  /** Headline diversity score (`0..=10000`). */
+  score: number;
+  /** Normalised ASN-distribution entropy (`0..=10000`). */
+  asnVariance: number;
+  /** Normalised country-distribution entropy (`0..=10000`). */
+  geoVariance: number;
+  /** Normalised hosting-class-distribution entropy (`0..=10000`). */
+  hostingSpread: number;
+}
+
+/**
+ * `lyth_getOperatorNetworkMetadata` RPC response (PF-6).
+ *
+ * Distinct from {@link OperatorNetworkMetadata} (the ABI-decode tuple):
+ * this is the JSON the `lyth_getOperatorNetworkMetadata` method returns,
+ * read from the node-registry registration record (`0x1005`). `geoRegion`
+ * here is the decoded ISO-3166-1 alpha-3 region **string** (or `null`);
+ * `hostingClass` is the snake_case wire string (`bare_metal` /
+ * `co_location` / `cloud`); `asn` is `null` when not declared.
+ */
+export interface OperatorNetworkMetadataView {
+  /** Response schema version (`1`). */
+  schemaVersion: number;
+  /** Data source — `"native_state_storage"`. */
+  source: string;
+  /** Node-registry precompile address (`0x1005`). */
+  precompile: string;
+  /** Operator/peer id (`0x` 32-byte hex). */
+  operatorId: string;
+  /** Autonomous-system number; `null` when not declared. */
+  asn: number | null;
+  /** Decoded ISO-3166-1 alpha-3 region string; `null` when not declared. */
+  geoRegion: string | null;
+  /** Declared hosting class as the wire string. */
+  hostingClass: "bare_metal" | "co_location" | "cloud";
+  /** `keccak256` of the operator's public IP (`0x` 32 bytes). */
+  ipAddressHash: string;
+  /** `keccak256` of the TPM PCR digest (`0x` 32 bytes). */
+  pcrDigest: string;
+}
+
+/**
  * Decoded `ClusterFormed(uint32,uint64,address,bytes)` event (MB-5).
  * Mirrors `node-registry::events::CLUSTER_FORMED`.
  */

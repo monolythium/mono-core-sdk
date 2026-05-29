@@ -45,10 +45,15 @@ export {
 } from "./bridge.js";
 export type {
   BridgeAdminControl,
+  BridgeAnchorState,
   BridgeBreakerState,
   BridgeBytesInput,
+  BridgeCircuitBreakerFields,
   BridgeCircuitBreakerState,
   BridgeDrainCap,
+  BridgeDrainStatus,
+  BridgeHealthRecord,
+  BridgeHealthResponse,
   BridgeQuoteSubmitReadiness,
   BridgeRiskTier,
   BridgeRouteAssessment,
@@ -343,7 +348,12 @@ export type {
 } from "./registry.js";
 export { SdkError } from "./error.js";
 export * from "./types.js";
-export { BURN_ADDR, PRECOMPILE_ADDRESSES } from "./consts.js";
+export {
+  BURN_ADDR,
+  OPERATOR_ROUTER_ADDRESS,
+  PROTOCOL_MAX_OPERATOR_FEE_BPS,
+  PRECOMPILE_ADDRESSES,
+} from "./consts.js";
 export type { PrecompileName, PrecompileAddress } from "./consts.js";
 export {
   CLUSTER_FORMED_EVENT_SIG,
@@ -371,9 +381,11 @@ export {
 } from "./node-registry.js";
 export type {
   ClusterDiversity,
+  ClusterDiversityView,
   ClusterFormedEvent,
   NodeHostingClass,
   OperatorNetworkMetadata,
+  OperatorNetworkMetadataView,
   ReportServiceProbeCalldataArgs,
 } from "./node-registry.js";
 export {
@@ -382,14 +394,21 @@ export {
   decodeOracleEvent,
   oracleAddressHex,
 } from "./oracle.js";
-export type { OracleEvent } from "./oracle.js";
+export type {
+  OracleEvent,
+  OracleFeedConfig,
+  OracleLatestPrice,
+  OracleSignerRow,
+  OracleSignersResponse,
+  OracleWriters,
+} from "./oracle.js";
 export {
+  PROVER_MARKET_ADDRESS,
   PROVER_MARKET_BID_DOMAIN,
   PROVER_MARKET_EVENT_SIGS,
   PROVER_MARKET_REQUEST_DOMAIN,
   PROVER_MARKET_SELECTORS,
   PROVER_MARKET_SUBMIT_DOMAIN,
-  PROVER_MARKET_TENTATIVE_ADDRESS,
   PROVER_SLASH_REASON_BAD_PROOF,
   PROVER_SLASH_REASON_NON_DELIVERY,
   ProverMarketError,
@@ -403,9 +422,13 @@ export {
 } from "./prover-market.js";
 export type {
   CreateRequestCanonicalArgs,
+  ListProofRequestsResponse,
+  ProofRequestRow,
   ProofRequestView,
+  ProverBidsResponse,
   ProverBidView,
   ProverMarketState,
+  ProverMarketStatusResponse,
 } from "./prover-market.js";
 export {
   ADDRESS_KIND_HRPS,
@@ -454,7 +477,11 @@ export {
   packTimeWindow,
   spendingPolicyAddressHex,
 } from "./spending-policy.js";
-export type { SpendingPolicyArgs, SpendingPolicyView } from "./spending-policy.js";
+export type {
+  SpendingPolicyArgs,
+  SpendingPolicyTimeWindow,
+  SpendingPolicyView,
+} from "./spending-policy.js";
 export {
   PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN,
   PUBKEY_REGISTRY_SELECTORS,
@@ -470,6 +497,9 @@ export type { PubkeyLookup } from "./pubkey-registry.js";
 export {
   CLOB_MARKET_ID_DOMAIN_TAG,
   CLOB_SELECTORS,
+  OPERATOR_ROUTER_EVENT_SIGS,
+  OPERATOR_ROUTER_SELECTORS,
+  OPERATOR_ROUTER_SIGS,
   MarketActionError,
   MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES,
   NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE,
@@ -502,10 +532,12 @@ export {
   buildNativeSpotSettleRoutedLimitOrderModuleCall,
   buildNativeSpotSettleRoutedLimitOrderForwarderInput,
   buildCancelSpotOrderPlan,
+  buildPlaceLimitOrderViaPlan,
   buildPlaceSpotLimitOrderPlan,
   buildPlaceSpotMarketOrderExPlan,
   buildPlaceSpotMarketOrderPlan,
   clobAddressHex,
+  decodeOperatorFeeChargedEvent,
   deriveClobMarketId,
   deriveNativeSpotMarketId,
   deriveNativeSpotOrderId,
@@ -526,8 +558,10 @@ export {
   encodeNativeSpotSettleLimitOrderCall,
   encodeNativeSpotSettleRoutedLimitOrderCall,
   encodePlaceLimitOrderCalldata,
+  encodePlaceLimitOrderViaCalldata,
   encodePlaceMarketOrderCalldata,
   encodePlaceMarketOrderExCalldata,
+  quoteOperatorFee,
 } from "./market-actions.js";
 export type {
   CancelSpotOrderArgs,
@@ -552,6 +586,12 @@ export type {
   NativeMarketModuleContractCall,
   NativeNftAssetStandard,
   NativeNftListingKind,
+  OperatorFeeChargedEvent,
+  OperatorFeeConfig,
+  OperatorFeeQuote,
+  OperatorRouterConfig,
+  PlaceLimitOrderViaArgs,
+  PlaceLimitOrderViaPlan,
   PlaceSpotLimitOrderArgs,
   PlaceSpotMarketOrderArgs,
   PlaceSpotMarketOrderExArgs,
