@@ -1,19 +1,18 @@
 # mono-core-sdk
 
-Official Rust and TypeScript SDK for Monolythium v4.1 / LythiumDAG-BFT.
+Official Rust and TypeScript SDK for Monolythium v5 / LythiumDAG-BFT.
 
 This repository is the application boundary for code that should not have to
 know `mono-core` internals. It provides typed JSON-RPC clients, canonical chain
-constants, address-display helpers, native MRV/RISC-V helpers, precompile
-calldata builders, and a legacy ethers.js v6 compatibility shim for migration
-tooling.
+constants, address-display helpers, native MRV/RISC-V helpers, and precompile
+calldata builders.
 
 ## Packages
 
 | Package | Path | Status |
 | --- | --- | --- |
 | `monolythium-core-sdk` | `crates/core-sdk` | Rust RPC client, constants, address helpers, precompile ABI helpers |
-| `@monolythium/core-sdk` | `packages/ts` | TypeScript RPC client, generated wire types, address/precompile helpers, ethers v6 shim |
+| `@monolythium/core-sdk` | `packages/ts` | TypeScript RPC client, generated wire types, address/precompile helpers |
 
 The SDK tracks the live `mono-core` RPC and precompile surface. Wire types under
 `packages/ts/src/bindings/` are generated from the Rust SDK with `ts-rs`.
@@ -28,10 +27,11 @@ The SDK tracks the live `mono-core` RPC and precompile surface. Wire types under
 - Typed `ApiClient` wrappers for the explorer-facing `/api/v1` HTTP surface:
   health, capabilities, blocks, block transactions, transactions, receipts,
   address activity, clusters, operators, and upgrade status.
-- Canonical precompile address constants, including recent Stage 7 additions:
-  `SPENDING_POLICY` at `0x110C` and `PUBKEY_REGISTRY` at `0x110D`.
+- Canonical precompile address constants, including `OPERATOR_ROUTER` at
+  `0x100B`, `PROVER_MARKET` at `0x100C`, `SPENDING_POLICY` at `0x110C`, and
+  `PUBKEY_REGISTRY` at `0x110D`.
 - `mono1...` bech32m display helpers for 20-byte wire addresses.
-- Additive v4.1 MRV/RISC-V helpers for typed bech32m HRPs, artifact metadata
+- Additive v5 MRV/RISC-V helpers for typed bech32m HRPs, artifact metadata
   validation, MRV v1 transaction extension descriptors, and native deploy/call
   request and receipt models using lythoshi and execution-unit terminology.
 - Spending-policy calldata helpers for `claimPolicyByAddress`,
@@ -41,8 +41,6 @@ The SDK tracks the live `mono-core` RPC and precompile surface. Wire types under
 - Bridge route disclosure helpers for deterministic route selection plus an
   explicit quote/submit readiness boundary. Live bridge quote and submit remain
   blocked until `mono-core` exposes API/runtime primitives for them.
-- Legacy TypeScript ethers v6 provider/signer adapters for migration tooling;
-  v4.1 app paths should prefer the native MRV/RISC-V and `lyth_*` helpers.
 - TypeScript PQM-1 + ML-DSA-65 helpers for mnemonic payloads, deterministic
   seed derivation, address derivation, and signing backends.
 
@@ -58,12 +56,6 @@ TypeScript:
 
 ```bash
 pnpm add @monolythium/core-sdk
-```
-
-For legacy ethers compatibility:
-
-```bash
-pnpm add @monolythium/core-sdk ethers
 ```
 
 ## JSON-RPC Client
@@ -217,13 +209,13 @@ let display = address_to_bech32([0x42; 20]);
 let bytes = bech32_to_address(&display).expect("valid mono1 address");
 ```
 
-Typed v4.1 surfaces use distinct bech32m HRPs for each address role:
+Typed v5 surfaces use distinct bech32m HRPs for each address role:
 `mono` user accounts, `monos` smart accounts, `monoc` contracts, `monok`
 clusters, `monom` multisigs, and `monox` system modules.
 
 ## MRV / RISC-V Helpers
 
-The first v4.1 SDK slice exposes MRV artifact metadata validation, the MRV v1
+The first v5 SDK slice exposes MRV artifact metadata validation, the MRV v1
 transaction extension descriptor, typed contract addresses, and native
 deploy/call request builders. It does not encode mono-core's bincode artifact
 body yet; pass artifact bytes as raw bytes or `0x` hex and validate metadata
@@ -386,28 +378,14 @@ when the sub-account pubkey has not been registered yet.
 The spending-policy precompile is also milestone-gated and typed-reverts before
 activation.
 
-## Legacy Ethers.js Compatibility
-
-The TypeScript package still ships an ethers v6 shim for legacy migration
-tooling. It is not the v4.1 no-EVM deployment path; current app work should use
-native MRV/RISC-V builders and `lyth_*` read surfaces. The shim is SDK-level
-compatibility only, and production no-EVM profiles may reject legacy simulation
-or deployment RPC methods server-side.
-
-```ts
-import { Wallet } from "ethers";
-import { MonolythiumProvider, MonolythiumSigner } from "@monolythium/core-sdk";
-
-const provider = new MonolythiumProvider("https://rpc.testnet.monolythium.com");
-const wallet = new Wallet(process.env.PRIVATE_KEY!);
-const signer = MonolythiumSigner.fromEthersWallet(wallet, provider);
-
-// Legacy-only adapter setup. Do not use this path for new v4.1 MRV deployments.
-console.log(await signer.getAddress());
-```
-
-For non-secp256k1 signing sources, implement `MonolythiumSignerBackend` and pass
-it to `new MonolythiumSigner(backend, provider)`.
+> **Ethers.js compatibility (legacy/migration only).** The SDK does not ship an
+> ethers-style provider or signer. The chain does not accept Ethereum-style ECDSA
+> signatures at transaction admission, and the native wallets have dropped the
+> ethers path. Tooling that only needs to read EVM-shaped block, balance, receipt,
+> or log fields can keep using the curated `eth_*` read methods on `RpcClient`
+> (`ethBlockNumber`, `ethGetBalance`, `ethGetBlockByNumber`,
+> `ethGetTransactionReceipt`, `ethGetLogs`, …). Signing and submission go through
+> the native MRV/RISC-V builders and `lyth_*` surfaces.
 
 ## Development
 

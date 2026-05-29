@@ -1,6 +1,6 @@
 # @monolythium/core-sdk
 
-Official TypeScript SDK for [Monolythium v4.1](https://monolythium.com) (LythiumDAG-BFT).
+Official TypeScript SDK for [Monolythium v5](https://monolythium.com) (LythiumDAG-BFT).
 
 ## Install
 
@@ -31,7 +31,7 @@ console.log(decoded.status, holders.holders.length, txs.transactions.length, mar
 
 The client wraps the Monolythium node JSON-RPC surface: current chain-native
 `lyth_*` methods, passive compatibility `eth_*` / `net_*` / `web3_*` reads, and
-server-gated debug methods. The no-EVM v4.1 path should use native helpers such
+server-gated debug methods. The no-EVM v5 path should use native helpers such
 as
 `lyth_decodeTx`, `lyth_gapRecords`, `lyth_dagParents`, `lyth_richList`,
 `lyth_txFeed`, `lyth_addressProfile`, `lyth_addressFlow`, `lyth_search`,
@@ -101,7 +101,7 @@ the first one that answers with the expected chain id.
 
 ### Address helpers
 
-Public v4.1 SDK, JSON-RPC, REST, wallet, and explorer surfaces use ADR-0038
+Public v5 SDK, JSON-RPC, REST, wallet, and explorer surfaces use ADR-0038
 typed bech32m addresses. User accounts use `mono1...`; smart-account MRC
 lookups use `monos1...`; RISC-V contracts use `monoc1...`. Raw `0x` strings
 remain only for low-level byte conversion helpers and compatibility adapters.
@@ -113,7 +113,7 @@ const display = addressToBech32("0x123456789abcdef0112233445566778899aabbcc");
 const hex = bech32ToAddress(display);
 ```
 
-V4.1 typed address helpers also encode role-specific HRPs such as `monoc` for
+V5 typed address helpers also encode role-specific HRPs such as `monoc` for
 RISC-V contracts:
 
 ```ts
@@ -125,7 +125,7 @@ const decoded = typedBech32ToAddress(contract, "contract");
 
 ### MRV / RISC-V helpers
 
-The package includes the first v4.1 MRV SDK slice: artifact metadata
+The package includes the first v5 MRV SDK slice: artifact metadata
 validation, MRV v1 transaction extension descriptors, typed contract address
 helpers, and native deploy/call request builders with lythoshi and
 execution-unit fields.
