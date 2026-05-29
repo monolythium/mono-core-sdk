@@ -30,6 +30,9 @@ pub mod delegation;
 pub mod error;
 pub mod mrv;
 pub mod native_dev;
+pub mod node_registry;
+pub mod oracle;
+pub mod prover_market;
 pub mod pubkey_registry;
 pub mod spending_policy;
 pub mod types;
@@ -51,11 +54,11 @@ pub use bridge::{
     is_bridge_resume_cooldown_active_revert, parse_bridge_route_catalogue_json, rank_bridge_routes,
     select_bridge_transfer_route, selector_lock_bridge_config, selector_set_bridge_resume_cooldown,
     selector_set_bridge_route_finality, validate_bridge_route_catalogue, BridgeAdminControl,
-    BridgeCircuitBreakerState, BridgeQuoteSubmitReadiness, BridgeRiskTier, BridgeRouteAssessment,
-    BridgeRouteCandidate, BridgeRouteCatalogue, BridgeRouteCatalogueJsonError,
-    BridgeRouteCatalogueRoute, BridgeRouteCatalogueValidation, BridgeRouteDisclosure,
-    BridgeRouteSelection, BridgeRoutesRequest, BridgeRoutesResponse, BridgeRoutesSource,
-    BridgeTransferIntent, BridgeTransferRequest, BridgeVerifierDisclosure,
+    BridgeBreakerState, BridgeCircuitBreakerState, BridgeDrainCap, BridgeQuoteSubmitReadiness,
+    BridgeRiskTier, BridgeRouteAssessment, BridgeRouteCandidate, BridgeRouteCatalogue,
+    BridgeRouteCatalogueJsonError, BridgeRouteCatalogueRoute, BridgeRouteCatalogueValidation,
+    BridgeRouteDisclosure, BridgeRouteSelection, BridgeRoutesRequest, BridgeRoutesResponse,
+    BridgeRoutesSource, BridgeTransferIntent, BridgeTransferRequest, BridgeVerifierDisclosure,
     BRIDGE_CALLDATA_REVERT_NAMESPACE, BRIDGE_CONFIG_REVERT_NAMESPACE,
     BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_SUBMIT_API_BLOCKED_REASON, REVERT_BRIDGE_ADMIN_LOCKED,
     REVERT_BRIDGE_COOLDOWN_ZERO, REVERT_BRIDGE_FINALITY_ZERO, REVERT_BRIDGE_RESUME_COOLDOWN_ACTIVE,
@@ -105,6 +108,22 @@ pub use native_dev::{
     NativeDevkitSidecarManifest, NativeDevkitSidecarStatus, NativeDevkitStatus, StudioHostState,
     StudioHostStatus, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION,
     NATIVE_DEV_MANIFEST_SCHEMA_VERSION,
+};
+pub use node_registry::{
+    derive_cluster_anchor_address, is_valid_capabilities as is_valid_node_registry_capabilities,
+    ClusterDiversity, ClusterFormedEvent, NodeHostingClass, OperatorNetworkMetadata,
+    DIVERSITY_SCORE_MAX, MULTISIG_ADDRESS_DERIVATION_DOMAIN, NODE_REGISTRY_CAPABILITY_MASK,
+    SERVES_ARCHIVE, SERVES_BRIDGE_RELAY, SERVES_BROADCASTER, SERVES_GPU_PROVE, SERVES_INDEXER,
+    SERVES_LIGHT_CLIENT, SERVES_ORACLE_WRITER, SERVES_PUBLIC_API, SERVES_RPC, SERVES_WEBSOCKET,
+};
+pub use oracle::{
+    decode_oracle_event, oracle_address_hex, OracleEvent, OracleEventDecodeError, ORACLE_EVENT_SIGS,
+};
+pub use prover_market::{
+    bid_sighash as prover_market_bid_sighash, encode_create_request_calldata,
+    encode_create_request_canonical, prover_market_event_sigs, request_sighash,
+    submit_sighash as prover_market_submit_sighash, ProofRequestView, ProverBidView,
+    ProverMarketState, PROVER_MARKET_SELECTORS, SERVES_GPU_PROVE_BIT,
 };
 pub use types::{
     compute_no_evm_dac_finality_message, compute_no_evm_leader_finality_message,

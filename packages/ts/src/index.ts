@@ -24,6 +24,7 @@ export {
   BridgeRouteCatalogueError,
   assessBridgeRoute,
   bridgeAddressHex,
+  bridgeDrainRemaining,
   bridgeQuoteSubmitReadiness,
   bridgeRoutesReadiness,
   bridgeTransferCandidates,
@@ -44,8 +45,10 @@ export {
 } from "./bridge.js";
 export type {
   BridgeAdminControl,
+  BridgeBreakerState,
   BridgeBytesInput,
   BridgeCircuitBreakerState,
+  BridgeDrainCap,
   BridgeQuoteSubmitReadiness,
   BridgeRiskTier,
   BridgeRouteAssessment,
@@ -343,21 +346,67 @@ export * from "./types.js";
 export { BURN_ADDR, PRECOMPILE_ADDRESSES } from "./consts.js";
 export type { PrecompileName, PrecompileAddress } from "./consts.js";
 export {
+  CLUSTER_FORMED_EVENT_SIG,
+  DIVERSITY_SCORE_MAX,
+  MULTISIG_ADDRESS_DERIVATION_DOMAIN,
   NODE_REGISTRY_CAPABILITIES,
   NODE_REGISTRY_CAPABILITY_MASK,
   NODE_REGISTRY_PUBLIC_SERVICE_MASK,
   NODE_REGISTRY_SELECTORS,
   NodeRegistryError,
   SERVICE_PROBE_STATUS,
+  decodeClusterDiversity,
+  decodeClusterFormedEvent,
+  decodeOperatorNetworkMetadata,
+  deriveClusterAnchorAddress,
   encodeReportServiceProbeCalldata,
   isConcreteServiceProbeStatus,
   isSinglePublicServiceProbeMask,
   isValidNodeRegistryCapabilities,
   isValidPublicServiceProbeMask,
+  nodeHostingClassFromByte,
+  nodeHostingClassToByte,
   nodeRegistryAddressHex,
   serviceProbeStatusLabel,
 } from "./node-registry.js";
-export type { ReportServiceProbeCalldataArgs } from "./node-registry.js";
+export type {
+  ClusterDiversity,
+  ClusterFormedEvent,
+  NodeHostingClass,
+  OperatorNetworkMetadata,
+  ReportServiceProbeCalldataArgs,
+} from "./node-registry.js";
+export {
+  ORACLE_EVENT_SIGS,
+  OracleEventError,
+  decodeOracleEvent,
+  oracleAddressHex,
+} from "./oracle.js";
+export type { OracleEvent } from "./oracle.js";
+export {
+  PROVER_MARKET_BID_DOMAIN,
+  PROVER_MARKET_EVENT_SIGS,
+  PROVER_MARKET_REQUEST_DOMAIN,
+  PROVER_MARKET_SELECTORS,
+  PROVER_MARKET_SUBMIT_DOMAIN,
+  PROVER_MARKET_TENTATIVE_ADDRESS,
+  PROVER_SLASH_REASON_BAD_PROOF,
+  PROVER_SLASH_REASON_NON_DELIVERY,
+  ProverMarketError,
+  SERVES_GPU_PROVE,
+  bidSighash,
+  encodeCreateRequestCalldata,
+  encodeCreateRequestCanonical,
+  proverMarketStateFromByte,
+  requestSighash,
+  submitSighash,
+} from "./prover-market.js";
+export type {
+  CreateRequestCanonicalArgs,
+  ProofRequestView,
+  ProverBidView,
+  ProverMarketState,
+} from "./prover-market.js";
 export {
   ADDRESS_KIND_HRPS,
   ADDRESS_HRP,
@@ -396,14 +445,16 @@ export {
   SPENDING_POLICY_SELECTORS,
   SpendingPolicyError,
   composeClaimBoundMessage,
+  decodeTimeWindow,
   encodeClaimPolicyByAddressCalldata,
   encodeDisableCalldata,
   encodeEnableCalldata,
   encodeSetPolicyCalldata,
   encodeSetPolicyClaimCalldata,
+  packTimeWindow,
   spendingPolicyAddressHex,
 } from "./spending-policy.js";
-export type { SpendingPolicyArgs } from "./spending-policy.js";
+export type { SpendingPolicyArgs, SpendingPolicyView } from "./spending-policy.js";
 export {
   PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN,
   PUBKEY_REGISTRY_SELECTORS,

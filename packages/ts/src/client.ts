@@ -11,7 +11,15 @@ import {
   type AddressKind,
 } from "./address.js";
 import { SdkError } from "./error.js";
-import type { BridgeRouteDisclosure, BridgeRoutesRequest, BridgeRoutesResponse } from "./bridge.js";
+import type {
+  BridgeBreakerState,
+  BridgeRouteDisclosure,
+  BridgeRoutesRequest,
+  BridgeRoutesResponse,
+} from "./bridge.js";
+import type { ClusterDiversity, OperatorNetworkMetadata } from "./node-registry.js";
+import type { ProofRequestView, ProverBidView } from "./prover-market.js";
+import type { SpendingPolicyView } from "./spending-policy.js";
 import {
   nativeEventsFromHistory,
   nativeEventsFromReceipt,
@@ -1913,6 +1921,85 @@ export class RpcClient {
   /** `lyth_clusters` — alias for `lyth_clusterDirectory`. */
   async lythClusters(page = 0, limit = 25): Promise<ClusterDirectoryPageResponse> {
     return normalizeClusterDirectoryPage(await this.call("lyth_clusters", [page, limit]));
+  }
+
+  // --- PF-4 / PF-6 / MB-6 / MB-4 / MB-2 read wrappers ---------------------
+  //
+  // Encoders + response types for these six pillars are final on mono-core
+  // master; the `lyth_*` read methods land in a later chain-wiring wave, so
+  // each wrapper carries a confirm-at-wiring TODO on the method name/shape.
+
+  /** PF-4 — `lyth_getSpendingPolicy`: the §18.8 spending-policy view for a sub-account. */
+  async lythGetSpendingPolicy(subAccount: string): Promise<SpendingPolicyView> {
+    // TODO(monolythium-vision): confirm lyth_getSpendingPolicy method name/shape at chain wiring.
+    return this.call("lyth_getSpendingPolicy", [sdkTypedAddress(subAccount, "user", "subAccount")]);
+  }
+
+  /** PF-6 — `lyth_getClusterDiversity`: diversity score + asn/geo/hosting breakdown. */
+  async lythGetClusterDiversity(clusterId: number): Promise<ClusterDiversity> {
+    // TODO(monolythium-vision): confirm lyth_getClusterDiversity method name/shape at chain wiring.
+    return this.call("lyth_getClusterDiversity", [clusterId]);
+  }
+
+  /** PF-6 — `lyth_getOperatorNetworkMetadata`: ASN/geo/hosting-class/IP/PCR for a peer. */
+  async lythGetOperatorNetworkMetadata(peerId: string): Promise<OperatorNetworkMetadata> {
+    // TODO(monolythium-vision): confirm lyth_getOperatorNetworkMetadata method name/shape at chain wiring.
+    return this.call("lyth_getOperatorNetworkMetadata", [peerId]);
+  }
+
+  /** MB-6 — `lyth_oracleSigners`: the on-chain oracle writer/admin roster. */
+  async lythOracleSigners(): Promise<unknown> {
+    // TODO(monolythium-vision): confirm lyth_oracleSigners method name/shape at chain wiring.
+    return this.call("lyth_oracleSigners", []);
+  }
+
+  /** MB-6 — `lyth_oracleWriters`: the allowed writer set for a feed. */
+  async lythOracleWriters(feedId: string): Promise<unknown> {
+    // TODO(monolythium-vision): confirm lyth_oracleWriters method name/shape at chain wiring.
+    return this.call("lyth_oracleWriters", [feedId]);
+  }
+
+  /** MB-6 — `lyth_oracleLatestPrice`: the latest finalized median for a feed. */
+  async lythOracleLatestPrice(feedId: string): Promise<unknown> {
+    // TODO(monolythium-vision): confirm lyth_oracleLatestPrice method name/shape at chain wiring.
+    return this.call("lyth_oracleLatestPrice", [feedId]);
+  }
+
+  /** MB-6 — `lyth_oracleFeedConfig`: a feed's decimals / min-signers / circuit-breaker config. */
+  async lythOracleFeedConfig(feedId: string): Promise<unknown> {
+    // TODO(monolythium-vision): confirm lyth_oracleFeedConfig method name/shape at chain wiring.
+    return this.call("lyth_oracleFeedConfig", [feedId]);
+  }
+
+  /** MB-4 — `lyth_getProofRequest`: a single GPU prover-market proof request. */
+  async lythGetProofRequest(requestId: string): Promise<ProofRequestView> {
+    // TODO(monolythium-vision): confirm lyth_getProofRequest method name/shape at chain wiring.
+    return this.call("lyth_getProofRequest", [requestId]);
+  }
+
+  /** MB-4 — `lyth_listProofRequests`: open/recent prover-market proof requests. */
+  async lythListProofRequests(limit = 50, cursor?: string | null): Promise<ProofRequestView[]> {
+    // TODO(monolythium-vision): confirm lyth_listProofRequests method name/shape at chain wiring.
+    const params = cursor == null ? [limit] : [limit, cursor];
+    return this.call("lyth_listProofRequests", params);
+  }
+
+  /** MB-4 — `lyth_getProverBids`: the fee bids placed on one proof request. */
+  async lythGetProverBids(requestId: string): Promise<ProverBidView[]> {
+    // TODO(monolythium-vision): confirm lyth_getProverBids method name/shape at chain wiring.
+    return this.call("lyth_getProverBids", [requestId]);
+  }
+
+  /** MB-4 — `lyth_proverMarketStatus`: prover-market summary / health. */
+  async lythProverMarketStatus(): Promise<unknown> {
+    // TODO(monolythium-vision): confirm lyth_proverMarketStatus method name/shape at chain wiring.
+    return this.call("lyth_proverMarketStatus", []);
+  }
+
+  /** MB-2 — `lyth_bridgeHealth`: bridge route breaker state (drain cap, pause, cooldown). */
+  async lythBridgeHealth(bridgeId: string): Promise<BridgeBreakerState> {
+    // `lyth_bridgeHealth` exists; the MB-2 breaker fields are additive.
+    return this.call("lyth_bridgeHealth", [bridgeId]);
   }
 
   /**

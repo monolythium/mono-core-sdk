@@ -11,11 +11,11 @@
 #![cfg(feature = "ts-bindings")]
 
 use monolythium_core_sdk::bridge::{
-    BridgeAdminControl, BridgeCircuitBreakerState, BridgeQuoteSubmitReadiness, BridgeRiskTier,
-    BridgeRouteAssessment, BridgeRouteCandidate, BridgeRouteCatalogue, BridgeRouteCatalogueRoute,
-    BridgeRouteCatalogueValidation, BridgeRouteDisclosure, BridgeRouteSelection,
-    BridgeRoutesRequest, BridgeRoutesResponse, BridgeRoutesSource, BridgeTransferIntent,
-    BridgeTransferRequest, BridgeVerifierDisclosure,
+    BridgeAdminControl, BridgeBreakerState, BridgeCircuitBreakerState, BridgeDrainCap,
+    BridgeQuoteSubmitReadiness, BridgeRiskTier, BridgeRouteAssessment, BridgeRouteCandidate,
+    BridgeRouteCatalogue, BridgeRouteCatalogueRoute, BridgeRouteCatalogueValidation,
+    BridgeRouteDisclosure, BridgeRouteSelection, BridgeRoutesRequest, BridgeRoutesResponse,
+    BridgeRoutesSource, BridgeTransferIntent, BridgeTransferRequest, BridgeVerifierDisclosure,
 };
 use monolythium_core_sdk::mrv::{
     MrvAbiManifest, MrvAbiParam, MrvAbiSymbol, MrvAbiSymbolKind, MrvAbiType, MrvAddressKind,
@@ -25,6 +25,11 @@ use monolythium_core_sdk::mrv::{
     MrvRiscvProfile, MrvStorageNamespace, MrvSyscallImport, MrvTransactionExtension,
     MrvTypedAddress, MrvValidatedArtifactMetadata,
 };
+use monolythium_core_sdk::node_registry::{
+    ClusterDiversity, ClusterFormedEvent, NodeHostingClass, OperatorNetworkMetadata,
+};
+use monolythium_core_sdk::oracle::OracleEvent;
+use monolythium_core_sdk::prover_market::{ProofRequestView, ProverBidView, ProverMarketState};
 use monolythium_core_sdk::types::{
     AccountPolicy, AccountProofResponse, AddressActivityArchiveRedirect, AddressActivityEntry,
     AddressActivityKindResponse, AddressActivityKindRetention, AddressLabelRecord,
@@ -91,6 +96,19 @@ fn export_bindings() {
     BridgeTransferIntent::export_all_to(&out).expect("BridgeTransferIntent");
     BridgeTransferRequest::export_all_to(&out).expect("BridgeTransferRequest");
     BridgeVerifierDisclosure::export_all_to(&out).expect("BridgeVerifierDisclosure");
+    BridgeBreakerState::export_all_to(&out).expect("BridgeBreakerState");
+    BridgeDrainCap::export_all_to(&out).expect("BridgeDrainCap");
+    // PF-6 / MB-5 node-registry read + event types.
+    NodeHostingClass::export_all_to(&out).expect("NodeHostingClass");
+    OperatorNetworkMetadata::export_all_to(&out).expect("OperatorNetworkMetadata");
+    ClusterDiversity::export_all_to(&out).expect("ClusterDiversity");
+    ClusterFormedEvent::export_all_to(&out).expect("ClusterFormedEvent");
+    // MB-6 oracle event decode type.
+    OracleEvent::export_all_to(&out).expect("OracleEvent");
+    // MB-4 prover-market read + state types.
+    ProverMarketState::export_all_to(&out).expect("ProverMarketState");
+    ProofRequestView::export_all_to(&out).expect("ProofRequestView");
+    ProverBidView::export_all_to(&out).expect("ProverBidView");
     BlsCertificateResponse::export_all_to(&out).expect("BlsCertificateResponse");
     BlockHeader::export_all_to(&out).expect("BlockHeader");
     BlockTag::export_all_to(&out).expect("BlockTag");

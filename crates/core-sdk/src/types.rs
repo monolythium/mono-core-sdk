@@ -2124,7 +2124,7 @@ where
         .map(|(index, receipt)| compute_no_evm_receipt_leaf_hash(index, receipt.as_ref()))
         .collect::<Result<Vec<_>, _>>()?;
     while level.len() > 1 {
-        let mut next_level = Vec::with_capacity((level.len() + 1) / 2);
+        let mut next_level = Vec::with_capacity(level.len().div_ceil(2));
         for pair in level.chunks(2) {
             let left = pair[0];
             let right = *pair.get(1).unwrap_or(&left);
