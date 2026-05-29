@@ -16,9 +16,11 @@ export const ML_DSA_65_PUBLIC_KEY_LEN = 1952;
 export const ML_DSA_65_SIGNATURE_LEN = 3309;
 
 export const SPENDING_POLICY_SELECTORS = {
-  setPolicy: "0xd6a518b2",
-  setPolicyClaim: "0x08d78f9c",
-  claimPolicyByAddress: "0xc2397fe9",
+  // WP §18.8 widened the setPolicy* sighash strings to 11 words, so their
+  // selectors changed; enable/disable/recordSpend are unchanged.
+  setPolicy: "0x8da1a765",
+  setPolicyClaim: "0x35531f6c",
+  claimPolicyByAddress: "0x0c21376c",
   enable: "0x5bfa1b68",
   disable: "0xe6c09edf",
   recordSpend: "0xdca04292",
@@ -33,6 +35,71 @@ export interface SpendingPolicyArgs {
   perTxCapLythoshi: bigint | number | string;
   allowRoot: string | Uint8Array | readonly number[];
   denyRoot: string | Uint8Array | readonly number[];
+  /**
+   * WP §18.8 per-week rolling cap in lythoshi (wire code `0x07`).
+   * Omit or `0` for "no weekly cap".
+   */
+  weeklyCapLythoshi?: bigint | number | string;
+  /**
+   * WP §18.8 per-month rolling cap in lythoshi (wire code `0x08`).
+   * Omit or `0` for "no monthly cap".
+   */
+  monthlyCapLythoshi?: bigint | number | string;
+  /**
+   * WP §18.8 per-category allow-list Merkle root (wire code `0x09`).
+   * Omit or the zero hash for "no category constraint".
+   */
+  categoryAllowRoot?: string | Uint8Array | readonly number[];
+  /**
+   * WP §18.8 packed time-of-day window (wire code `0x0A`), a 32-byte
+   * `uint256` word. Build it with {@link packTimeWindow}; omit or the
+   * zero word for "no time-of-day window".
+   */
+  timeWindow?: string | Uint8Array | readonly number[];
+  /**
+   * WP §18.8 explicit policy-expiry timestamp in unix seconds (wire
+   * code `0x0B`), encoded as a `uint256`. Omit or `0` for "never
+   * auto-expires".
+   */
+  policyExpiry?: bigint | number | string;
+}
+
+/**
+ * Decoded `lyth_getSpendingPolicy` view (the `setPolicy*` storage
+ * surface, including the WP §18.8 dimensions).
+ *
+ * Caps and the expiry are decimal strings of their on-chain integer
+ * value; roots / the time window are `0x`-prefixed 32-byte words. A
+ * `null` time window means no window is configured; otherwise
+ * `[startHour, endHour]` (0..=23, inclusive, may wrap past midnight).
+ */
+export interface SpendingPolicyView {
+  /** Typed `mono` bech32m sub-account the policy controls. */
+  subAccount: string;
+  /** Typed `mono` bech32m principal allowed to manage the policy. */
+  principal: string;
+  /** Monotonic policy version; `0` means no policy is written. */
+  policyVersion: string;
+  /** `true` when the principal disabled the sub-account. */
+  disabled: boolean;
+  /** Daily spend cap (lythoshi); `"0"` = no cap. */
+  dailyCapLythoshi: string;
+  /** Per-transaction cap (lythoshi); `"0"` = no cap. */
+  perTxCapLythoshi: string;
+  /** Allow-list Merkle root (`0x` 32 bytes). */
+  allowRoot: string;
+  /** Deny-list Merkle root (`0x` 32 bytes). */
+  denyRoot: string;
+  /** WP §18.8 per-week cap (lythoshi); `"0"` = no weekly cap. */
+  weeklyCapLythoshi: string;
+  /** WP §18.8 per-month cap (lythoshi); `"0"` = no monthly cap. */
+  monthlyCapLythoshi: string;
+  /** WP §18.8 category allow-list root (`0x` 32 bytes). */
+  categoryAllowRoot: string;
+  /** WP §18.8 decoded `[startHour, endHour]`, or `null` if unset. */
+  timeWindow: [number, number] | null;
+  /** WP §18.8 policy-expiry unix seconds; `"0"` = never expires. */
+  policyExpiry: string;
 }
 
 export class SpendingPolicyError extends Error {
@@ -63,6 +130,14 @@ export function composeClaimBoundMessage(
     uint128Bytes(normalized.perTxCapLythoshi, "perTxCapLythoshi"),
     normalized.allowRoot,
     normalized.denyRoot,
+    // WP §18.8 dimensions, in wire order: weekly cap (be16), monthly cap
+    // (be16), category allow-root (32), packed time window (32),
+    // policy expiry (be8). These slot in before the expected-version word.
+    uint128Bytes(normalized.weeklyCapLythoshi, "weeklyCapLythoshi"),
+    uint128Bytes(normalized.monthlyCapLythoshi, "monthlyCapLythoshi"),
+    normalized.categoryAllowRoot,
+    normalized.timeWindow,
+    uint64Bytes(normalized.policyExpiry, "policyExpiry"),
     uint64Bytes(opts?.expectedPolicyVersion ?? 0n, "expectedPolicyVersion"),
   );
 }
@@ -140,7 +215,14 @@ interface NormalizedSpendingPolicyArgs {
   perTxCapLythoshi: bigint;
   allowRoot: Uint8Array;
   denyRoot: Uint8Array;
+  weeklyCapLythoshi: bigint;
+  monthlyCapLythoshi: bigint;
+  categoryAllowRoot: Uint8Array;
+  timeWindow: Uint8Array;
+  policyExpiry: bigint;
 }
+
+const ZERO_WORD = new Uint8Array(32);
 
 function normalizeArgs(args: SpendingPolicyArgs): NormalizedSpendingPolicyArgs {
   return {
@@ -150,6 +232,17 @@ function normalizeArgs(args: SpendingPolicyArgs): NormalizedSpendingPolicyArgs {
     perTxCapLythoshi: toBigint(args.perTxCapLythoshi, "perTxCapLythoshi"),
     allowRoot: expectLength(toBytes(args.allowRoot), 32, "allowRoot"),
     denyRoot: expectLength(toBytes(args.denyRoot), 32, "denyRoot"),
+    weeklyCapLythoshi: toBigint(args.weeklyCapLythoshi ?? 0n, "weeklyCapLythoshi"),
+    monthlyCapLythoshi: toBigint(args.monthlyCapLythoshi ?? 0n, "monthlyCapLythoshi"),
+    categoryAllowRoot:
+      args.categoryAllowRoot == null
+        ? ZERO_WORD
+        : expectLength(toBytes(args.categoryAllowRoot), 32, "categoryAllowRoot"),
+    timeWindow:
+      args.timeWindow == null
+        ? ZERO_WORD
+        : expectLength(toBytes(args.timeWindow), 32, "timeWindow"),
+    policyExpiry: toBigint(args.policyExpiry ?? 0n, "policyExpiry"),
   };
 }
 
@@ -161,7 +254,55 @@ function encodePolicyWords(args: NormalizedSpendingPolicyArgs): Uint8Array {
     encodeUint128Word(args.perTxCapLythoshi),
     args.allowRoot,
     args.denyRoot,
+    // WP §18.8 trailing 5 words: weekly cap, monthly cap, category
+    // allow-root, packed time window, policy expiry.
+    encodeUint128Word(args.weeklyCapLythoshi),
+    encodeUint128Word(args.monthlyCapLythoshi),
+    args.categoryAllowRoot,
+    args.timeWindow,
+    encodeUint64Word(args.policyExpiry),
   );
+}
+
+/**
+ * Pack a time-of-day window into the 32-byte `timeWindow` word used by
+ * the WP §18.8 spending-policy dimensions.
+ *
+ * Mirrors `spending-policy::storage::pack_time_window`: hours clamp to
+ * `0..=23`; when `enabled` is `false` the word is all-zero (the "no
+ * window configured" sentinel). Layout (low 3 bytes of the big-endian
+ * word): byte 29 = enabled sentinel (`0x01`), byte 30 = `startHour`,
+ * byte 31 = `endHour`.
+ */
+export function packTimeWindow(enabled: boolean, startHour: number, endHour: number): Uint8Array {
+  const out = new Uint8Array(32);
+  if (!enabled) return out;
+  out[29] = 0x01;
+  out[30] = clampHour(startHour);
+  out[31] = clampHour(endHour);
+  return out;
+}
+
+/**
+ * Decode a packed `timeWindow` word into `[startHour, endHour]`, or
+ * `null` when no window is configured. Inverse of {@link packTimeWindow}.
+ */
+export function decodeTimeWindow(word: string | Uint8Array | readonly number[]): [number, number] | null {
+  const bytes = expectLength(toBytes(word), 32, "timeWindow");
+  if (bytes.every((b) => b === 0)) return null;
+  if (bytes[29] === 0) return null;
+  return [Math.min(bytes[30], 23), Math.min(bytes[31], 23)];
+}
+
+function clampHour(hour: number): number {
+  if (!Number.isInteger(hour) || hour < 0) {
+    throw new SpendingPolicyError("time-window hour must be a non-negative integer");
+  }
+  return Math.min(hour, 23);
+}
+
+function encodeUint64Word(value: bigint): Uint8Array {
+  return concatBytes(new Uint8Array(24), uint64Bytes(value, "policyExpiry"));
 }
 
 function encodeSingleAddressCall(selector: string, address: string, name: string): string {

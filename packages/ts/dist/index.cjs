@@ -1,9 +1,9 @@
 'use strict';
 
 var blake3_js = require('@noble/hashes/blake3.js');
+var sha3_js = require('@noble/hashes/sha3.js');
 var mlKem_js = require('@noble/post-quantum/ml-kem.js');
 var chacha_js = require('@noble/ciphers/chacha.js');
-var sha3_js = require('@noble/hashes/sha3.js');
 var utils_js = require('@noble/hashes/utils.js');
 var mlDsa_js = require('@noble/post-quantum/ml-dsa.js');
 var bls12381_js = require('@noble/curves/bls12-381.js');
@@ -401,8 +401,12 @@ var NODE_REGISTRY_CAPABILITIES = {
   SERVES_LIGHT_CLIENT: 32,
   SERVES_ORACLE_WRITER: 64,
   SERVES_BRIDGE_RELAY: 128,
-  SERVES_PUBLIC_API: 256
+  SERVES_PUBLIC_API: 256,
+  /** GPU prover — may bid on + serve the GPU prover market (MB-4, bit 9). */
+  SERVES_GPU_PROVE: 512
 };
+var DIVERSITY_SCORE_MAX = 1e4;
+var MULTISIG_ADDRESS_DERIVATION_DOMAIN = "MONO_MULTISIG_BLAKE3_20_V1";
 var NODE_REGISTRY_CAPABILITY_MASK = 65535;
 var NODE_REGISTRY_PUBLIC_SERVICE_MASK = NODE_REGISTRY_CAPABILITIES.SERVES_RPC | NODE_REGISTRY_CAPABILITIES.SERVES_INDEXER | NODE_REGISTRY_CAPABILITIES.SERVES_ARCHIVE | NODE_REGISTRY_CAPABILITIES.SERVES_WEBSOCKET | NODE_REGISTRY_CAPABILITIES.SERVES_PUBLIC_API;
 var SERVICE_PROBE_STATUS = {
@@ -413,8 +417,15 @@ var SERVICE_PROBE_STATUS = {
 };
 var NODE_REGISTRY_SELECTORS = {
   reportServiceProbe: "0xeee31bba",
-  getServiceProbe: "0x1fcbfbce"
+  getServiceProbe: "0x1fcbfbce",
+  /** `setNetworkMetadata(bytes32,uint16,bytes3,bytes)` — owner-callable (PF-6). */
+  setNetworkMetadata: "0x" + selectorHex("setNetworkMetadata(bytes32,uint16,bytes3,bytes)"),
+  /** `getOperatorNetworkMetadata(bytes32)` view (PF-6). */
+  getOperatorNetworkMetadata: "0x" + selectorHex("getOperatorNetworkMetadata(bytes32)"),
+  /** `getClusterDiversity(uint32)` view (PF-6). */
+  getClusterDiversity: "0x" + selectorHex("getClusterDiversity(uint32)")
 };
+var CLUSTER_FORMED_EVENT_SIG = "ClusterFormed(uint32,uint64,address,bytes)";
 var NodeRegistryError = class extends Error {
   constructor(message) {
     super(message);
@@ -468,6 +479,112 @@ function encodeReportServiceProbeCalldata(args) {
       expectLength2(toBytes(args.probeDigest), 32, "probeDigest")
     )
   );
+}
+function nodeHostingClassFromByte(b) {
+  if (b === 0) return "bareMetal";
+  if (b === 1) return "coLocation";
+  return "cloud";
+}
+function nodeHostingClassToByte(c) {
+  switch (c) {
+    case "bareMetal":
+      return 0;
+    case "coLocation":
+      return 1;
+    default:
+      return 2;
+  }
+}
+function decodeOperatorNetworkMetadata(returnData) {
+  const bytes = expectLength2(toBytes(returnData), 5 * 32, "operatorNetworkMetadata");
+  return {
+    asn: bytes[30] << 8 | bytes[31],
+    // bytes3 is left-aligned in the head word.
+    geoRegion: bytesToHex(bytes.slice(64, 67)),
+    hostingClass: nodeHostingClassFromByte(bytes[95]),
+    ipAddressHash: bytesToHex(bytes.slice(96, 128)),
+    pcrDigest: bytesToHex(bytes.slice(128, 160))
+  };
+}
+function decodeClusterDiversity(returnData) {
+  const bytes = expectLength2(toBytes(returnData), 4 * 32, "clusterDiversity");
+  const word = (i) => bytes[i * 32 + 30] << 8 | bytes[i * 32 + 31];
+  return {
+    score: word(0),
+    asnVariance: word(1),
+    geoVariance: word(2),
+    hostingSpread: word(3)
+  };
+}
+function decodeClusterFormedEvent(topics, data) {
+  if (topics.length !== 3) {
+    throw new NodeRegistryError(`ClusterFormed expects 3 topics, got ${topics.length}`);
+  }
+  const body = toBytes(data);
+  if (body.length < 96) {
+    throw new NodeRegistryError("ClusterFormed data shorter than head + roster length");
+  }
+  const clusterIdTopic = expectLength2(toBytes(topics[1]), 32, "clusterId topic");
+  const epochTopic = expectLength2(toBytes(topics[2]), 32, "effectiveEpoch topic");
+  const clusterId = u32FromWord(clusterIdTopic);
+  const effectiveEpoch = u64FromWord(epochTopic);
+  const anchorAddress = bytesToHex(body.slice(12, 32));
+  const rosterLen = Number(u64FromWord(body.slice(64, 96)));
+  const rosterEnd = 96 + rosterLen;
+  if (body.length < rosterEnd) {
+    throw new NodeRegistryError("ClusterFormed roster payload truncated");
+  }
+  return {
+    clusterId,
+    effectiveEpoch,
+    anchorAddress,
+    operatorRoster: bytesToHex(body.slice(96, rosterEnd))
+  };
+}
+function deriveClusterAnchorAddress(roster, threshold) {
+  if (!Number.isInteger(threshold) || threshold < 0 || threshold > 65535) {
+    throw new NodeRegistryError("threshold must be a uint16");
+  }
+  const members = roster.map((m, i) => expectLength2(toBytes(m), 48, `roster[${i}]`));
+  members.sort(compareBytes);
+  const parts = [
+    new TextEncoder().encode(MULTISIG_ADDRESS_DERIVATION_DOMAIN),
+    Uint8Array.from([threshold >> 8 & 255, threshold & 255])
+  ];
+  for (const member of members) {
+    parts.push(u64BeBytes(BigInt(member.length)));
+    parts.push(member);
+  }
+  return bytesToHex(blake3_js.blake3(concatBytes(...parts)).slice(0, 20));
+}
+function selectorHex(sig) {
+  return [...sha3_js.keccak_256(new TextEncoder().encode(sig)).slice(0, 4)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+function u32FromWord(word) {
+  return (word[28] << 24 | word[29] << 16 | word[30] << 8 | word[31]) >>> 0;
+}
+function u64FromWord(word) {
+  let v = 0n;
+  for (let i = 24; i < 32; i++) {
+    v = v << 8n | BigInt(word[i]);
+  }
+  return v;
+}
+function u64BeBytes(value) {
+  const out = new Uint8Array(8);
+  let n = value;
+  for (let i = 7; i >= 0; i--) {
+    out[i] = Number(n & 0xffn);
+    n >>= 8n;
+  }
+  return out;
+}
+function compareBytes(a, b) {
+  const len = Math.min(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  return a.length - b.length;
 }
 function bitCount(value) {
   let n = value >>> 0;
@@ -2744,6 +2861,60 @@ var RpcClient = class _RpcClient {
   async lythClusters(page = 0, limit = 25) {
     return normalizeClusterDirectoryPage(await this.call("lyth_clusters", [page, limit]));
   }
+  // --- PF-4 / PF-6 / MB-6 / MB-4 / MB-2 read wrappers ---------------------
+  //
+  // Encoders + response types for these six pillars are final on mono-core
+  // master; the `lyth_*` read methods land in a later chain-wiring wave, so
+  // each wrapper carries a confirm-at-wiring TODO on the method name/shape.
+  /** PF-4 — `lyth_getSpendingPolicy`: the §18.8 spending-policy view for a sub-account. */
+  async lythGetSpendingPolicy(subAccount) {
+    return this.call("lyth_getSpendingPolicy", [sdkTypedAddress(subAccount, "user", "subAccount")]);
+  }
+  /** PF-6 — `lyth_getClusterDiversity`: diversity score + asn/geo/hosting breakdown. */
+  async lythGetClusterDiversity(clusterId) {
+    return this.call("lyth_getClusterDiversity", [clusterId]);
+  }
+  /** PF-6 — `lyth_getOperatorNetworkMetadata`: ASN/geo/hosting-class/IP/PCR for a peer. */
+  async lythGetOperatorNetworkMetadata(peerId) {
+    return this.call("lyth_getOperatorNetworkMetadata", [peerId]);
+  }
+  /** MB-6 — `lyth_oracleSigners`: the on-chain oracle writer/admin roster. */
+  async lythOracleSigners() {
+    return this.call("lyth_oracleSigners", []);
+  }
+  /** MB-6 — `lyth_oracleWriters`: the allowed writer set for a feed. */
+  async lythOracleWriters(feedId) {
+    return this.call("lyth_oracleWriters", [feedId]);
+  }
+  /** MB-6 — `lyth_oracleLatestPrice`: the latest finalized median for a feed. */
+  async lythOracleLatestPrice(feedId) {
+    return this.call("lyth_oracleLatestPrice", [feedId]);
+  }
+  /** MB-6 — `lyth_oracleFeedConfig`: a feed's decimals / min-signers / circuit-breaker config. */
+  async lythOracleFeedConfig(feedId) {
+    return this.call("lyth_oracleFeedConfig", [feedId]);
+  }
+  /** MB-4 — `lyth_getProofRequest`: a single GPU prover-market proof request. */
+  async lythGetProofRequest(requestId) {
+    return this.call("lyth_getProofRequest", [requestId]);
+  }
+  /** MB-4 — `lyth_listProofRequests`: open/recent prover-market proof requests. */
+  async lythListProofRequests(limit = 50, cursor) {
+    const params = cursor == null ? [limit] : [limit, cursor];
+    return this.call("lyth_listProofRequests", params);
+  }
+  /** MB-4 — `lyth_getProverBids`: the fee bids placed on one proof request. */
+  async lythGetProverBids(requestId) {
+    return this.call("lyth_getProverBids", [requestId]);
+  }
+  /** MB-4 — `lyth_proverMarketStatus`: prover-market summary / health. */
+  async lythProverMarketStatus() {
+    return this.call("lyth_proverMarketStatus", []);
+  }
+  /** MB-2 — `lyth_bridgeHealth`: bridge route breaker state (drain cap, pause, cooldown). */
+  async lythBridgeHealth(bridgeId) {
+    return this.call("lyth_bridgeHealth", [bridgeId]);
+  }
   /**
    * `lyth_submitPendingChange` — operator-onboarding transport for the
    * pending-change ledger. Server validates the envelope shape.
@@ -4159,6 +4330,13 @@ function isBridgeCooldownZeroRevert(data) {
 }
 function isBridgeFinalityZeroRevert(data) {
   return bytesToHex4(toBytes2(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeFinalityZero;
+}
+function bridgeDrainRemaining(capPerWindow, drained) {
+  const cap = BigInt(capPerWindow);
+  if (cap === 0n) return null;
+  const used = BigInt(drained);
+  const left = cap > used ? cap - used : 0n;
+  return left.toString(10);
 }
 function assessBridgeRoute(route) {
   const blockedReasons = [];
@@ -6386,9 +6564,366 @@ function assertWholeNumber(field2, value) {
     throw new Error(`${field2} must be a whole number`);
   }
 }
+var ORACLE_EVENT_SIGS = {
+  oracleRoundFinalized: "OracleRoundFinalized(bytes32,uint64,uint256,uint64,uint32)",
+  observationSubmitted: "ObservationSubmitted(bytes32,uint64,address,uint256,uint64)",
+  feedAdded: "FeedAdded(bytes32,uint8,uint16,uint32,uint32)",
+  feedUpdated: "FeedUpdated(bytes32,uint8,uint16,uint32,uint32)",
+  oracleFraudSlashed: "OracleFraudSlashed(bytes32,uint64,address,bytes32)",
+  oracleAdminUpdated: "OracleAdminUpdated(address)",
+  oracleWriterAdded: "OracleWriterAdded(address,address)",
+  oracleWriterRemoved: "OracleWriterRemoved(address,address)"
+};
+var OracleEventError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "OracleEventError";
+  }
+};
+function oracleAddressHex() {
+  return PRECOMPILE_ADDRESSES.ORACLE.toLowerCase();
+}
+function decodeOracleEvent(topics, data) {
+  if (topics.length === 0) {
+    throw new OracleEventError("event record has no topics");
+  }
+  const topic0 = bytesToHex6(expectLength4(toBytes3(topics[0]), 32, "topic0"));
+  const body = toBytes3(data);
+  if (topic0 === topicHex(ORACLE_EVENT_SIGS.oracleRoundFinalized)) {
+    checkArity("OracleRoundFinalized", 3, topics.length);
+    checkData("OracleRoundFinalized", 3 * 32, body.length);
+    return {
+      kind: "roundFinalized",
+      feedId: hex32(topics[1]),
+      roundId: u64FromTopic(topics[2]),
+      computedMedian: u256Decimal(body.subarray(0, 32)),
+      finalizedAtBlock: u64FromWord2(body.subarray(32, 64)),
+      observationsLen: u32FromWord2(body.subarray(64, 96))
+    };
+  }
+  if (topic0 === topicHex(ORACLE_EVENT_SIGS.observationSubmitted)) {
+    checkArity("ObservationSubmitted", 4, topics.length);
+    checkData("ObservationSubmitted", 2 * 32, body.length);
+    return {
+      kind: "observationSubmitted",
+      feedId: hex32(topics[1]),
+      roundId: u64FromTopic(topics[2]),
+      writer: addressFromTopic(topics[3]),
+      value: u256Decimal(body.subarray(0, 32)),
+      observedAt: u64FromWord2(body.subarray(32, 64))
+    };
+  }
+  if (topic0 === topicHex(ORACLE_EVENT_SIGS.oracleFraudSlashed)) {
+    checkArity("OracleFraudSlashed", 4, topics.length);
+    checkData("OracleFraudSlashed", 32, body.length);
+    return {
+      kind: "fraudSlashed",
+      feedId: hex32(topics[1]),
+      roundId: u64FromTopic(topics[2]),
+      writer: addressFromTopic(topics[3]),
+      evidenceHash: bytesToHex6(body.subarray(0, 32))
+    };
+  }
+  if (topic0 === topicHex(ORACLE_EVENT_SIGS.feedAdded)) {
+    checkArity("FeedAdded", 2, topics.length);
+    checkData("FeedAdded", 4 * 32, body.length);
+    return { kind: "feedAdded", ...decodeFeedFields(topics[1], body) };
+  }
+  if (topic0 === topicHex(ORACLE_EVENT_SIGS.feedUpdated)) {
+    checkArity("FeedUpdated", 2, topics.length);
+    checkData("FeedUpdated", 4 * 32, body.length);
+    return { kind: "feedUpdated", ...decodeFeedFields(topics[1], body) };
+  }
+  if (topic0 === topicHex(ORACLE_EVENT_SIGS.oracleAdminUpdated)) {
+    checkArity("OracleAdminUpdated", 2, topics.length);
+    checkData("OracleAdminUpdated", 0, body.length);
+    return { kind: "adminUpdated", admin: addressFromTopic(topics[1]) };
+  }
+  if (topic0 === topicHex(ORACLE_EVENT_SIGS.oracleWriterAdded)) {
+    checkArity("OracleWriterAdded", 3, topics.length);
+    checkData("OracleWriterAdded", 0, body.length);
+    return {
+      kind: "writerAdded",
+      admin: addressFromTopic(topics[1]),
+      writer: addressFromTopic(topics[2])
+    };
+  }
+  if (topic0 === topicHex(ORACLE_EVENT_SIGS.oracleWriterRemoved)) {
+    checkArity("OracleWriterRemoved", 3, topics.length);
+    checkData("OracleWriterRemoved", 0, body.length);
+    return {
+      kind: "writerRemoved",
+      admin: addressFromTopic(topics[1]),
+      writer: addressFromTopic(topics[2])
+    };
+  }
+  throw new OracleEventError("unknown oracle event topic0");
+}
+function decodeFeedFields(feedTopic, body) {
+  return {
+    feedId: hex32(feedTopic),
+    decimals: body[31],
+    minSigners: body[62] << 8 | body[63],
+    circuitBreakerBps: u32FromWord2(body.subarray(64, 96)),
+    allowedWritersLen: u32FromWord2(body.subarray(96, 128))
+  };
+}
+function topicHex(sig) {
+  return bytesToHex6(sha3_js.keccak_256(new TextEncoder().encode(sig)));
+}
+function checkArity(event, expected, found) {
+  if (found !== expected) {
+    throw new OracleEventError(`${event} expected ${expected} topics, found ${found}`);
+  }
+}
+function checkData(event, expected, found) {
+  if (found !== expected) {
+    throw new OracleEventError(`${event} expected ${expected} data bytes, found ${found}`);
+  }
+}
+function hex32(topic) {
+  return bytesToHex6(expectLength4(toBytes3(topic), 32, "feedId topic"));
+}
+function addressFromTopic(topic) {
+  return bytesToHex6(expectLength4(toBytes3(topic), 32, "address topic").subarray(12, 32));
+}
+function u64FromTopic(topic) {
+  return u64FromWord2(expectLength4(toBytes3(topic), 32, "u64 topic"));
+}
+function u64FromWord2(word) {
+  let v = 0n;
+  for (let i = 24; i < 32; i++) v = v << 8n | BigInt(word[i]);
+  return v;
+}
+function u32FromWord2(word) {
+  return (word[28] << 24 | word[29] << 16 | word[30] << 8 | word[31]) >>> 0;
+}
+function u256Decimal(word) {
+  let v = 0n;
+  for (const b of word) v = v << 8n | BigInt(b);
+  return v.toString(10);
+}
+function toBytes3(value) {
+  if (typeof value === "string") return hexToBytes5(value);
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+function hexToBytes5(hex) {
+  const b = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
+  if (b.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(b)) {
+    throw new OracleEventError("invalid hex bytes");
+  }
+  const out = new Uint8Array(b.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = Number.parseInt(b.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}
+function bytesToHex6(bytes) {
+  return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+function expectLength4(value, len, name) {
+  if (value.length !== len) {
+    throw new OracleEventError(`${name} must be ${len} bytes, got ${value.length}`);
+  }
+  return value;
+}
+var PROVER_MARKET_TENTATIVE_ADDRESS = "0x0000000000000000000000000000000000001110";
+var SERVES_GPU_PROVE = 512;
+var PROVER_MARKET_SELECTORS = {
+  createRequest: "0x" + selectorHex2("createRequest(bytes)"),
+  submitBid: "0x" + selectorHex2("submitBid(bytes)"),
+  closeRequest: "0x" + selectorHex2("closeRequest(bytes)"),
+  submitProof: "0x" + selectorHex2("submitProof(bytes)"),
+  settle: "0x" + selectorHex2("settle(bytes)"),
+  slash: "0x" + selectorHex2("slash(bytes)")
+};
+var PROVER_MARKET_EVENT_SIGS = {
+  proofRequested: "ProofRequested(bytes32,address,bytes32,uint128,uint64)",
+  bidSubmitted: "BidSubmitted(bytes32,address,uint128)",
+  requestAssigned: "RequestAssigned(bytes32,address,uint128)",
+  proofSettled: "ProofSettled(bytes32,address,uint128,uint128)",
+  proverSlashed: "ProverSlashed(bytes32,address,uint16,bytes32)",
+  requestExpired: "RequestExpired(bytes32,address,uint128)"
+};
+var PROVER_SLASH_REASON_NON_DELIVERY = 1024;
+var PROVER_SLASH_REASON_BAD_PROOF = 1025;
+var PROVER_MARKET_REQUEST_DOMAIN = "prover_market.request.v1";
+var PROVER_MARKET_BID_DOMAIN = "prover_market.bid.v1";
+var PROVER_MARKET_SUBMIT_DOMAIN = "prover_market.submit.v1";
+function proverMarketStateFromByte(b) {
+  switch (b) {
+    case 0:
+      return "open";
+    case 1:
+      return "assigned";
+    case 2:
+      return "settled";
+    case 3:
+      return "slashed";
+    case 4:
+      return "expired";
+    default:
+      return null;
+  }
+}
+var ProverMarketError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ProverMarketError";
+  }
+};
+function requestSighash(vkeyHash, inputsHash, maxFee, deadline, nonce) {
+  return bytesToHex7(
+    sha3_js.keccak_256(
+      concatBytes5(
+        new TextEncoder().encode(PROVER_MARKET_REQUEST_DOMAIN),
+        expectLength5(toBytes4(vkeyHash), 32, "vkeyHash"),
+        expectLength5(toBytes4(inputsHash), 32, "inputsHash"),
+        u128Bytes(maxFee, "maxFee"),
+        u64Bytes(deadline, "deadline"),
+        u64Bytes(nonce, "nonce")
+      )
+    )
+  );
+}
+function bidSighash(requestId, fee) {
+  return bytesToHex7(
+    sha3_js.keccak_256(
+      concatBytes5(
+        new TextEncoder().encode(PROVER_MARKET_BID_DOMAIN),
+        expectLength5(toBytes4(requestId), 32, "requestId"),
+        u128Bytes(fee, "fee")
+      )
+    )
+  );
+}
+function submitSighash(requestId, proofHash) {
+  return bytesToHex7(
+    sha3_js.keccak_256(
+      concatBytes5(
+        new TextEncoder().encode(PROVER_MARKET_SUBMIT_DOMAIN),
+        expectLength5(toBytes4(requestId), 32, "requestId"),
+        expectLength5(toBytes4(proofHash), 32, "proofHash")
+      )
+    )
+  );
+}
+function encodeCreateRequestCanonical(args) {
+  const buyer = expectLength5(toBytes4(args.buyer), 20, "buyer");
+  const buyerPubkey = toBytes4(args.buyerPubkey);
+  const sig = toBytes4(args.sig);
+  if (buyerPubkey.length === 0 || buyerPubkey.length > 65535) {
+    throw new ProverMarketError("buyerPubkey length out of range (1..=65535)");
+  }
+  if (sig.length === 0 || sig.length > 65535) {
+    throw new ProverMarketError("sig length out of range (1..=65535)");
+  }
+  return bytesToHex7(
+    concatBytes5(
+      buyer,
+      u16Bytes(buyerPubkey.length),
+      buyerPubkey,
+      expectLength5(toBytes4(args.vkeyHash), 32, "vkeyHash"),
+      expectLength5(toBytes4(args.inputsHash), 32, "inputsHash"),
+      u128Bytes(args.maxFee, "maxFee"),
+      u64Bytes(args.deadline, "deadline"),
+      u64Bytes(args.nonce, "nonce"),
+      u16Bytes(sig.length),
+      sig
+    )
+  );
+}
+function encodeCreateRequestCalldata(args) {
+  const canonical = toBytes4(encodeCreateRequestCanonical(args));
+  const offset = new Uint8Array(32);
+  offset[31] = 32;
+  const lenWord = new Uint8Array(32);
+  const len = canonical.length;
+  lenWord[28] = len >>> 24 & 255;
+  lenWord[29] = len >>> 16 & 255;
+  lenWord[30] = len >>> 8 & 255;
+  lenWord[31] = len & 255;
+  const pad = (32 - len % 32) % 32;
+  return bytesToHex7(
+    concatBytes5(hexToBytes6(PROVER_MARKET_SELECTORS.createRequest), offset, lenWord, canonical, new Uint8Array(pad))
+  );
+}
+function selectorHex2(sig) {
+  return [...sha3_js.keccak_256(new TextEncoder().encode(sig)).slice(0, 4)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+function toBytes4(value) {
+  if (typeof value === "string") return hexToBytes6(value);
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+function hexToBytes6(hex) {
+  const b = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
+  if (b.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(b)) {
+    throw new ProverMarketError("invalid hex bytes");
+  }
+  const out = new Uint8Array(b.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = Number.parseInt(b.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}
+function bytesToHex7(bytes) {
+  return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+function concatBytes5(...parts) {
+  const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+function expectLength5(value, len, name) {
+  if (value.length !== len) {
+    throw new ProverMarketError(`${name} must be ${len} bytes, got ${value.length}`);
+  }
+  return value;
+}
+function toBigint2(value, name) {
+  let n;
+  if (typeof value === "bigint") n = value;
+  else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) throw new ProverMarketError(`${name} must be a safe integer`);
+    n = BigInt(value);
+  } else if (/^(0|[1-9][0-9]*|0x[0-9a-fA-F]+)$/.test(value)) n = BigInt(value);
+  else throw new ProverMarketError(`${name} must be a non-negative integer`);
+  if (n < 0n) throw new ProverMarketError(`${name} must be non-negative`);
+  return n;
+}
+function u16Bytes(value) {
+  if (!Number.isInteger(value) || value < 0 || value > 65535) {
+    throw new ProverMarketError("u16 value out of range");
+  }
+  return Uint8Array.from([value >> 8 & 255, value & 255]);
+}
+function u64Bytes(value, name) {
+  const n = toBigint2(value, name);
+  if (n > 0xffffffffffffffffn) throw new ProverMarketError(`${name} exceeds uint64`);
+  return bigintBytes(n, 8);
+}
+function u128Bytes(value, name) {
+  const n = toBigint2(value, name);
+  if (n > (1n << 128n) - 1n) throw new ProverMarketError(`${name} exceeds uint128`);
+  return bigintBytes(n, 16);
+}
+function bigintBytes(value, len) {
+  const out = new Uint8Array(len);
+  let n = value;
+  for (let i = len - 1; i >= 0; i--) {
+    out[i] = Number(n & 0xffn);
+    n >>= 8n;
+  }
+  return out;
+}
 
 // src/delegation.ts
 var DELEGATION_SELECTORS = {
+  delegate: "0x662337de",
+  undelegate: "0x914f3ca8",
+  redelegate: "0xa06ac18f",
+  claim: "0x4e71d92d",
+  setAutoCompound: "0x86593454",
   completeRedemption: "0x26169d0a"
 };
 var DELEGATION_REVERT_TAGS = {
@@ -6407,18 +6942,55 @@ function delegationAddressHex() {
   return PRECOMPILE_ADDRESSES.DELEGATION.toLowerCase();
 }
 function encodeCompleteRedemptionCalldata(index) {
-  return bytesToHex6(
-    concatBytes5(
-      hexToBytes5(DELEGATION_SELECTORS.completeRedemption),
+  return bytesToHex8(
+    concatBytes6(
+      hexToBytes7(DELEGATION_SELECTORS.completeRedemption),
       uint64Word2(index, "index")
     )
   );
 }
+function encodeDelegateCalldata(cluster, weightBps) {
+  return bytesToHex8(
+    concatBytes6(
+      hexToBytes7(DELEGATION_SELECTORS.delegate),
+      uint32Word2(cluster, "cluster"),
+      uint16Word(weightBps, "weightBps")
+    )
+  );
+}
+function encodeUndelegateCalldata(cluster) {
+  return bytesToHex8(
+    concatBytes6(
+      hexToBytes7(DELEGATION_SELECTORS.undelegate),
+      uint32Word2(cluster, "cluster")
+    )
+  );
+}
+function encodeRedelegateCalldata(fromCluster, toCluster, weightBps) {
+  return bytesToHex8(
+    concatBytes6(
+      hexToBytes7(DELEGATION_SELECTORS.redelegate),
+      uint32Word2(fromCluster, "fromCluster"),
+      uint32Word2(toCluster, "toCluster"),
+      uint16Word(weightBps, "weightBps")
+    )
+  );
+}
+function encodeClaimCalldata() {
+  return DELEGATION_SELECTORS.claim;
+}
+function encodeSetAutoCompoundCalldata(enabled) {
+  const flag = new Uint8Array(32);
+  flag[31] = enabled ? 1 : 0;
+  return bytesToHex8(
+    concatBytes6(hexToBytes7(DELEGATION_SELECTORS.setAutoCompound), flag)
+  );
+}
 function isRedemptionPrincipalUnavailableRevert(data) {
-  return bytesToHex6(toBytes3(data)).toLowerCase() === DELEGATION_REVERT_TAGS.redemptionPrincipalUnavailable;
+  return bytesToHex8(toBytes5(data)).toLowerCase() === DELEGATION_REVERT_TAGS.redemptionPrincipalUnavailable;
 }
 function uint64Word2(value, name) {
-  const n = toBigint2(value, name);
+  const n = toBigint3(value, name);
   if (n < 0n || n > 0xffffffffffffffffn) {
     throw new DelegationPrecompileError(`${name} must fit uint64`);
   }
@@ -6430,7 +7002,33 @@ function uint64Word2(value, name) {
   }
   return out;
 }
-function toBigint2(value, name) {
+function uint32Word2(value, name) {
+  const n = toBigint3(value, name);
+  if (n < 0n || n > 0xffffffffn) {
+    throw new DelegationPrecompileError(`${name} must fit uint32`);
+  }
+  const out = new Uint8Array(32);
+  let rest = n;
+  for (let i = 31; i >= 28; i--) {
+    out[i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  return out;
+}
+function uint16Word(value, name) {
+  const n = toBigint3(value, name);
+  if (n < 0n || n > 0xffffn) {
+    throw new DelegationPrecompileError(`${name} must fit uint16`);
+  }
+  const out = new Uint8Array(32);
+  let rest = n;
+  for (let i = 31; i >= 30; i--) {
+    out[i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  return out;
+}
+function toBigint3(value, name) {
   if (typeof value === "bigint") return value;
   if (typeof value === "number") {
     if (!Number.isInteger(value) || !Number.isSafeInteger(value)) {
@@ -6443,13 +7041,13 @@ function toBigint2(value, name) {
   }
   return BigInt(value);
 }
-function toBytes3(value) {
+function toBytes5(value) {
   if (typeof value === "string") {
-    return hexToBytes5(value);
+    return hexToBytes7(value);
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes5(hex) {
+function hexToBytes7(hex) {
   const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
   if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
     throw new DelegationPrecompileError("invalid hex bytes");
@@ -6460,10 +7058,10 @@ function hexToBytes5(hex) {
   }
   return out;
 }
-function bytesToHex6(bytes) {
+function bytesToHex8(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function concatBytes5(...parts) {
+function concatBytes6(...parts) {
   const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
   let offset = 0;
   for (const part of parts) {
@@ -6478,9 +7076,11 @@ var SET_POLICY_CLAIM_DOMAIN_TAG = "lyth.spending-policy.claim.v1";
 var ML_DSA_65_PUBLIC_KEY_LEN2 = 1952;
 var ML_DSA_65_SIGNATURE_LEN2 = 3309;
 var SPENDING_POLICY_SELECTORS = {
-  setPolicy: "0xd6a518b2",
-  setPolicyClaim: "0x08d78f9c",
-  claimPolicyByAddress: "0xc2397fe9",
+  // WP §18.8 widened the setPolicy* sighash strings to 11 words, so their
+  // selectors changed; enable/disable/recordSpend are unchanged.
+  setPolicy: "0x8da1a765",
+  setPolicyClaim: "0x35531f6c",
+  claimPolicyByAddress: "0x0c21376c",
   enable: "0x5bfa1b68",
   disable: "0xe6c09edf",
   recordSpend: "0xdca04292"
@@ -6497,7 +7097,7 @@ function spendingPolicyAddressHex() {
 function composeClaimBoundMessage(chainId, args, opts) {
   const precompileAddress = toRawAddressBytes(opts?.precompileAddress ?? PRECOMPILE_ADDRESSES.SPENDING_POLICY);
   const normalized = normalizeArgs(args);
-  return concatBytes6(
+  return concatBytes7(
     new TextEncoder().encode(SET_POLICY_CLAIM_DOMAIN_TAG),
     uint64Bytes(chainId, "chainId"),
     precompileAddress,
@@ -6507,22 +7107,30 @@ function composeClaimBoundMessage(chainId, args, opts) {
     uint128Bytes(normalized.perTxCapLythoshi, "perTxCapLythoshi"),
     normalized.allowRoot,
     normalized.denyRoot,
+    // WP §18.8 dimensions, in wire order: weekly cap (be16), monthly cap
+    // (be16), category allow-root (32), packed time window (32),
+    // policy expiry (be8). These slot in before the expected-version word.
+    uint128Bytes(normalized.weeklyCapLythoshi, "weeklyCapLythoshi"),
+    uint128Bytes(normalized.monthlyCapLythoshi, "monthlyCapLythoshi"),
+    normalized.categoryAllowRoot,
+    normalized.timeWindow,
+    uint64Bytes(normalized.policyExpiry, "policyExpiry"),
     uint64Bytes(opts?.expectedPolicyVersion ?? 0n, "expectedPolicyVersion")
   );
 }
 function encodeSetPolicyCalldata(args) {
   const normalized = normalizeArgs(args);
-  return bytesToHex7(
-    concatBytes6(
-      hexToBytes6(SPENDING_POLICY_SELECTORS.setPolicy),
+  return bytesToHex9(
+    concatBytes7(
+      hexToBytes8(SPENDING_POLICY_SELECTORS.setPolicy),
       encodePolicyWords(normalized)
     )
   );
 }
 function encodeSetPolicyClaimCalldata(args, subAccountPubkey, subAccountSig) {
   const normalized = normalizeArgs(args);
-  const pubkey = toBytes4(subAccountPubkey);
-  const sig = toBytes4(subAccountSig);
+  const pubkey = toBytes6(subAccountPubkey);
+  const sig = toBytes6(subAccountSig);
   if (pubkey.length !== ML_DSA_65_PUBLIC_KEY_LEN2) {
     throw new SpendingPolicyError(
       `subAccountPubkey must be ${ML_DSA_65_PUBLIC_KEY_LEN2} bytes, got ${pubkey.length}`
@@ -6533,9 +7141,9 @@ function encodeSetPolicyClaimCalldata(args, subAccountPubkey, subAccountSig) {
       `subAccountSig must be ${ML_DSA_65_SIGNATURE_LEN2} bytes, got ${sig.length}`
     );
   }
-  return bytesToHex7(
-    concatBytes6(
-      hexToBytes6(SPENDING_POLICY_SELECTORS.setPolicyClaim),
+  return bytesToHex9(
+    concatBytes7(
+      hexToBytes8(SPENDING_POLICY_SELECTORS.setPolicyClaim),
       encodePolicyWords(normalized),
       pubkey,
       sig
@@ -6544,15 +7152,15 @@ function encodeSetPolicyClaimCalldata(args, subAccountPubkey, subAccountSig) {
 }
 function encodeClaimPolicyByAddressCalldata(args, subAccountSig) {
   const normalized = normalizeArgs(args);
-  const sig = toBytes4(subAccountSig);
+  const sig = toBytes6(subAccountSig);
   if (sig.length !== ML_DSA_65_SIGNATURE_LEN2) {
     throw new SpendingPolicyError(
       `subAccountSig must be ${ML_DSA_65_SIGNATURE_LEN2} bytes, got ${sig.length}`
     );
   }
-  return bytesToHex7(
-    concatBytes6(
-      hexToBytes6(SPENDING_POLICY_SELECTORS.claimPolicyByAddress),
+  return bytesToHex9(
+    concatBytes7(
+      hexToBytes8(SPENDING_POLICY_SELECTORS.claimPolicyByAddress),
       encodePolicyWords(normalized),
       sig
     )
@@ -6564,34 +7172,70 @@ function encodeEnableCalldata(subAccount) {
 function encodeDisableCalldata(subAccount) {
   return encodeSingleAddressCall(SPENDING_POLICY_SELECTORS.disable, subAccount, "subAccount");
 }
+var ZERO_WORD = new Uint8Array(32);
 function normalizeArgs(args) {
   return {
     subAccount: toUserAddressBytes(args.subAccount, "subAccount"),
     principal: toUserAddressBytes(args.principal, "principal"),
-    dailyCapLythoshi: toBigint3(args.dailyCapLythoshi, "dailyCapLythoshi"),
-    perTxCapLythoshi: toBigint3(args.perTxCapLythoshi, "perTxCapLythoshi"),
-    allowRoot: expectLength4(toBytes4(args.allowRoot), 32, "allowRoot"),
-    denyRoot: expectLength4(toBytes4(args.denyRoot), 32, "denyRoot")
+    dailyCapLythoshi: toBigint4(args.dailyCapLythoshi, "dailyCapLythoshi"),
+    perTxCapLythoshi: toBigint4(args.perTxCapLythoshi, "perTxCapLythoshi"),
+    allowRoot: expectLength6(toBytes6(args.allowRoot), 32, "allowRoot"),
+    denyRoot: expectLength6(toBytes6(args.denyRoot), 32, "denyRoot"),
+    weeklyCapLythoshi: toBigint4(args.weeklyCapLythoshi ?? 0n, "weeklyCapLythoshi"),
+    monthlyCapLythoshi: toBigint4(args.monthlyCapLythoshi ?? 0n, "monthlyCapLythoshi"),
+    categoryAllowRoot: args.categoryAllowRoot == null ? ZERO_WORD : expectLength6(toBytes6(args.categoryAllowRoot), 32, "categoryAllowRoot"),
+    timeWindow: args.timeWindow == null ? ZERO_WORD : expectLength6(toBytes6(args.timeWindow), 32, "timeWindow"),
+    policyExpiry: toBigint4(args.policyExpiry ?? 0n, "policyExpiry")
   };
 }
 function encodePolicyWords(args) {
-  return concatBytes6(
+  return concatBytes7(
     encodeAddressWord(args.subAccount),
     encodeAddressWord(args.principal),
     encodeUint128Word(args.dailyCapLythoshi),
     encodeUint128Word(args.perTxCapLythoshi),
     args.allowRoot,
-    args.denyRoot
+    args.denyRoot,
+    // WP §18.8 trailing 5 words: weekly cap, monthly cap, category
+    // allow-root, packed time window, policy expiry.
+    encodeUint128Word(args.weeklyCapLythoshi),
+    encodeUint128Word(args.monthlyCapLythoshi),
+    args.categoryAllowRoot,
+    args.timeWindow,
+    encodeUint64Word(args.policyExpiry)
   );
 }
+function packTimeWindow(enabled, startHour, endHour) {
+  const out = new Uint8Array(32);
+  if (!enabled) return out;
+  out[29] = 1;
+  out[30] = clampHour(startHour);
+  out[31] = clampHour(endHour);
+  return out;
+}
+function decodeTimeWindow(word) {
+  const bytes = expectLength6(toBytes6(word), 32, "timeWindow");
+  if (bytes.every((b) => b === 0)) return null;
+  if (bytes[29] === 0) return null;
+  return [Math.min(bytes[30], 23), Math.min(bytes[31], 23)];
+}
+function clampHour(hour) {
+  if (!Number.isInteger(hour) || hour < 0) {
+    throw new SpendingPolicyError("time-window hour must be a non-negative integer");
+  }
+  return Math.min(hour, 23);
+}
+function encodeUint64Word(value) {
+  return concatBytes7(new Uint8Array(24), uint64Bytes(value, "policyExpiry"));
+}
 function encodeSingleAddressCall(selector, address, name) {
-  return bytesToHex7(concatBytes6(hexToBytes6(selector), encodeAddressWord(toUserAddressBytes(address, name))));
+  return bytesToHex9(concatBytes7(hexToBytes8(selector), encodeAddressWord(toUserAddressBytes(address, name))));
 }
 function encodeAddressWord(address) {
-  return concatBytes6(new Uint8Array(12), address);
+  return concatBytes7(new Uint8Array(12), address);
 }
 function encodeUint128Word(value) {
-  return concatBytes6(new Uint8Array(16), uint128Bytes(value, "uint128"));
+  return concatBytes7(new Uint8Array(16), uint128Bytes(value, "uint128"));
 }
 function toUserAddressBytes(value, name) {
   if (typeof value !== "string") {
@@ -6611,15 +7255,15 @@ function toRawAddressBytes(value) {
   if (typeof value === "string") {
     return hexToAddressBytes(value);
   }
-  return expectLength4(value instanceof Uint8Array ? value : Uint8Array.from(value), 20, "address");
+  return expectLength6(value instanceof Uint8Array ? value : Uint8Array.from(value), 20, "address");
 }
-function toBytes4(value) {
+function toBytes6(value) {
   if (typeof value === "string") {
-    return hexToBytes6(value);
+    return hexToBytes8(value);
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes6(hex) {
+function hexToBytes8(hex) {
   const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
   if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
     throw new SpendingPolicyError("invalid hex bytes");
@@ -6630,10 +7274,10 @@ function hexToBytes6(hex) {
   }
   return out;
 }
-function bytesToHex7(bytes) {
+function bytesToHex9(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function concatBytes6(...parts) {
+function concatBytes7(...parts) {
   const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
   let offset = 0;
   for (const part of parts) {
@@ -6642,13 +7286,13 @@ function concatBytes6(...parts) {
   }
   return out;
 }
-function expectLength4(value, len, name) {
+function expectLength6(value, len, name) {
   if (value.length !== len) {
     throw new SpendingPolicyError(`${name} must be ${len} bytes`);
   }
   return value;
 }
-function toBigint3(value, name) {
+function toBigint4(value, name) {
   const n = typeof value === "bigint" ? value : BigInt(value);
   if (n < 0n) {
     throw new SpendingPolicyError(`${name} must be non-negative`);
@@ -6656,19 +7300,19 @@ function toBigint3(value, name) {
   return n;
 }
 function uint64Bytes(value, name) {
-  const n = toBigint3(value, name);
+  const n = toBigint4(value, name);
   if (n > 0xffffffffffffffffn) {
     throw new SpendingPolicyError(`${name} exceeds uint64`);
   }
-  return bigintBytes(n, 8);
+  return bigintBytes2(n, 8);
 }
 function uint128Bytes(value, name) {
   if (value > 0xffffffffffffffffffffffffffffffffn) {
     throw new SpendingPolicyError(`${name} exceeds uint128`);
   }
-  return bigintBytes(value, 16);
+  return bigintBytes2(value, 16);
 }
-function bigintBytes(value, len) {
+function bigintBytes2(value, len) {
   const out = new Uint8Array(len);
   let n = value;
   for (let i = len - 1; i >= 0; i--) {
@@ -6695,15 +7339,15 @@ function pubkeyRegistryAddressHex() {
   return PRECOMPILE_ADDRESSES.PUBKEY_REGISTRY.toLowerCase();
 }
 function encodeRegisterPubkeyCalldata(pubkey) {
-  const bytes = toBytes5(pubkey);
+  const bytes = toBytes7(pubkey);
   if (bytes.length !== PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN) {
     throw new PubkeyRegistryError(
       `pubkey must be ${PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN} bytes, got ${bytes.length}`
     );
   }
-  return bytesToHex8(
-    concatBytes7(
-      hexToBytes7(PUBKEY_REGISTRY_SELECTORS.registerPubkey),
+  return bytesToHex10(
+    concatBytes8(
+      hexToBytes9(PUBKEY_REGISTRY_SELECTORS.registerPubkey),
       uint256Word(32n),
       uint256Word(BigInt(bytes.length)),
       bytes
@@ -6717,7 +7361,7 @@ function encodeHasPubkeyCalldata(address) {
   return encodeSingleAddressCall2(PUBKEY_REGISTRY_SELECTORS.hasPubkey, address);
 }
 function decodeLookupPubkeyReturn(data) {
-  const bytes = toBytes5(data);
+  const bytes = toBytes7(data);
   if (bytes.length < 96) {
     throw new PubkeyRegistryError("lookup return must be at least 96 bytes");
   }
@@ -6742,7 +7386,7 @@ function decodeLookupPubkeyReturn(data) {
   };
 }
 function decodeHasPubkeyReturn(data) {
-  const bytes = toBytes5(data);
+  const bytes = toBytes7(data);
   if (bytes.length !== 32) {
     throw new PubkeyRegistryError("hasPubkey return must be 32 bytes");
   }
@@ -6756,10 +7400,10 @@ function decodeHasPubkeyReturn(data) {
   throw new PubkeyRegistryError("hasPubkey bool must be 0 or 1");
 }
 function encodeSingleAddressCall2(selector, address) {
-  return bytesToHex8(concatBytes7(hexToBytes7(selector), addressWord(toAddressBytes(address))));
+  return bytesToHex10(concatBytes8(hexToBytes9(selector), addressWord(toAddressBytes(address))));
 }
 function addressWord(address) {
-  return concatBytes7(new Uint8Array(12), address);
+  return concatBytes8(new Uint8Array(12), address);
 }
 function toAddressBytes(value) {
   if (typeof value !== "string") {
@@ -6775,13 +7419,13 @@ function toAddressBytes(value) {
     throw new PubkeyRegistryError(`address must be a typed mono bech32m address${detail}`);
   }
 }
-function toBytes5(value) {
+function toBytes7(value) {
   if (typeof value === "string") {
-    return hexToBytes7(value);
+    return hexToBytes9(value);
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes7(hex) {
+function hexToBytes9(hex) {
   const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
   if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
     throw new PubkeyRegistryError("invalid hex bytes");
@@ -6792,10 +7436,10 @@ function hexToBytes7(hex) {
   }
   return out;
 }
-function bytesToHex8(bytes) {
+function bytesToHex10(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function concatBytes7(...parts) {
+function concatBytes8(...parts) {
   const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
   let offset = 0;
   for (const part of parts) {
@@ -6856,7 +7500,13 @@ var CLOB_SELECTORS = {
    */
   placeMarketOrderEx: "0xa6f092f0",
   /** `cancelOrder(bytes32)` */
-  cancelOrder: "0x7489ec23"
+  cancelOrder: "0x7489ec23",
+  /** `setMinNotional(bytes32,bytes32,uint256)` — foundation-authorized. */
+  setMinNotional: "0x395dc48f",
+  /** `setTickSize(bytes32,bytes32,uint256)` — foundation-authorized per-market grid tune. */
+  setTickSize: "0x10666f0b",
+  /** `setLotSize(bytes32,bytes32,uint256)` — foundation-authorized per-market grid tune. */
+  setLotSize: "0x9909be80"
 };
 var MarketActionError = class extends Error {
   constructor(message) {
@@ -6928,7 +7578,7 @@ function encodePlaceMarketOrderCalldata(args) {
       normalized.quoteTokenId,
       uint8Word2(normalized.side),
       uint256Word2(normalized.quantity, "quantity"),
-      uint16Word(normalized.maxSlippageBps, "maxSlippageBps")
+      uint16Word2(normalized.maxSlippageBps, "maxSlippageBps")
     )
   );
 }
@@ -6941,7 +7591,7 @@ function encodePlaceMarketOrderExCalldata(args) {
       normalized.quoteTokenId,
       uint8Word2(normalized.side),
       uint256Word2(normalized.quantity, "quantity"),
-      uint16Word(normalized.maxSlippageBps, "maxSlippageBps"),
+      uint16Word2(normalized.maxSlippageBps, "maxSlippageBps"),
       uint8Word2(normalized.mode)
     )
   );
@@ -6953,6 +7603,25 @@ function encodeCancelOrderCalldata(args) {
       bytes32FromHex(args.orderId, "orderId")
     )
   );
+}
+function encodeMarketGridTuneCalldata(selector, label, args) {
+  return bytesToHex2(
+    concatBytes2(
+      hexToBytes2(selector, `${label} selector`),
+      bytes32FromHex(args.baseTokenId, "baseTokenId"),
+      bytes32FromHex(args.quoteTokenId, "quoteTokenId"),
+      uint256Word2(BigInt(args.newValue), "newValue")
+    )
+  );
+}
+function encodeSetMinNotionalCalldata(args) {
+  return encodeMarketGridTuneCalldata(CLOB_SELECTORS.setMinNotional, "setMinNotional", args);
+}
+function encodeSetTickSizeCalldata(args) {
+  return encodeMarketGridTuneCalldata(CLOB_SELECTORS.setTickSize, "setTickSize", args);
+}
+function encodeSetLotSizeCalldata(args) {
+  return encodeMarketGridTuneCalldata(CLOB_SELECTORS.setLotSize, "setLotSize", args);
 }
 function encodeNativeSpotLimitOrderCall(args) {
   const w = new BincodeWriter();
@@ -7451,7 +8120,7 @@ function uint64Word3(value, name) {
   }
   return out;
 }
-function uint16Word(value, name) {
+function uint16Word2(value, name) {
   if (value < 0n || value > 0xffffn) {
     throw new MarketActionError(`${name} must fit uint16`);
   }
@@ -8005,8 +8674,10 @@ exports.CHAIN_REGISTRY = CHAIN_REGISTRY;
 exports.CHAIN_REGISTRY_RAW_BASE = CHAIN_REGISTRY_RAW_BASE;
 exports.CLOB_MARKET_ID_DOMAIN_TAG = CLOB_MARKET_ID_DOMAIN_TAG;
 exports.CLOB_SELECTORS = CLOB_SELECTORS;
+exports.CLUSTER_FORMED_EVENT_SIG = CLUSTER_FORMED_EVENT_SIG;
 exports.DELEGATION_REVERT_TAGS = DELEGATION_REVERT_TAGS;
 exports.DELEGATION_SELECTORS = DELEGATION_SELECTORS;
+exports.DIVERSITY_SCORE_MAX = DIVERSITY_SCORE_MAX;
 exports.DelegationPrecompileError = DelegationPrecompileError;
 exports.LYTHOSHI_PER_LYTH = LYTHOSHI_PER_LYTH;
 exports.LYTH_DECIMALS = LYTH_DECIMALS;
@@ -8029,6 +8700,7 @@ exports.MRV_PROFILE_MONO_RV32IM_V1 = MRV_PROFILE_MONO_RV32IM_V1;
 exports.MRV_STRUCTURED_FEE_FIELDS = MRV_STRUCTURED_FEE_FIELDS;
 exports.MRV_TX_EXTENSION_KIND = MRV_TX_EXTENSION_KIND;
 exports.MRV_TX_EXTENSION_V1 = MRV_TX_EXTENSION_V1;
+exports.MULTISIG_ADDRESS_DERIVATION_DOMAIN = MULTISIG_ADDRESS_DERIVATION_DOMAIN;
 exports.MarketActionError = MarketActionError;
 exports.MrvValidationError = MrvValidationError;
 exports.NATIVE_AGENT_MODULE_ADDRESS = NATIVE_AGENT_MODULE_ADDRESS;
@@ -8059,12 +8731,24 @@ exports.NO_EVM_RECEIPT_PROOF_TYPE = NO_EVM_RECEIPT_PROOF_TYPE;
 exports.NO_EVM_RECEIPT_ROOT_ALGORITHM = NO_EVM_RECEIPT_ROOT_ALGORITHM;
 exports.NoEvmReceiptProofError = NoEvmReceiptProofError;
 exports.NodeRegistryError = NodeRegistryError;
+exports.ORACLE_EVENT_SIGS = ORACLE_EVENT_SIGS;
+exports.OracleEventError = OracleEventError;
 exports.PRECOMPILE_ADDRESSES = PRECOMPILE_ADDRESSES;
+exports.PROVER_MARKET_BID_DOMAIN = PROVER_MARKET_BID_DOMAIN;
+exports.PROVER_MARKET_EVENT_SIGS = PROVER_MARKET_EVENT_SIGS;
+exports.PROVER_MARKET_REQUEST_DOMAIN = PROVER_MARKET_REQUEST_DOMAIN;
+exports.PROVER_MARKET_SELECTORS = PROVER_MARKET_SELECTORS;
+exports.PROVER_MARKET_SUBMIT_DOMAIN = PROVER_MARKET_SUBMIT_DOMAIN;
+exports.PROVER_MARKET_TENTATIVE_ADDRESS = PROVER_MARKET_TENTATIVE_ADDRESS;
+exports.PROVER_SLASH_REASON_BAD_PROOF = PROVER_SLASH_REASON_BAD_PROOF;
+exports.PROVER_SLASH_REASON_NON_DELIVERY = PROVER_SLASH_REASON_NON_DELIVERY;
 exports.PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN = PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN;
 exports.PUBKEY_REGISTRY_SELECTORS = PUBKEY_REGISTRY_SELECTORS;
+exports.ProverMarketError = ProverMarketError;
 exports.PubkeyRegistryError = PubkeyRegistryError;
 exports.RESERVED_ADDRESS_HRPS = RESERVED_ADDRESS_HRPS;
 exports.RpcClient = RpcClient;
+exports.SERVES_GPU_PROVE = SERVES_GPU_PROVE;
 exports.SERVICE_PROBE_STATUS = SERVICE_PROBE_STATUS;
 exports.SET_POLICY_CLAIM_DOMAIN_TAG = SET_POLICY_CLAIM_DOMAIN_TAG;
 exports.SPENDING_POLICY_SELECTORS = SPENDING_POLICY_SELECTORS;
@@ -8088,7 +8772,9 @@ exports.assertNativeMarketOrderBookStreamPayload = assertNativeMarketOrderBookSt
 exports.assessBridgeRoute = assessBridgeRoute;
 exports.bech32ToAddress = bech32ToAddress;
 exports.bech32ToAddressBytes = bech32ToAddressBytes;
+exports.bidSighash = bidSighash;
 exports.bridgeAddressHex = bridgeAddressHex;
+exports.bridgeDrainRemaining = bridgeDrainRemaining;
 exports.bridgeQuoteSubmitReadiness = bridgeQuoteSubmitReadiness;
 exports.bridgeRoutesReadiness = bridgeRoutesReadiness;
 exports.bridgeTransferCandidates = bridgeTransferCandidates;
@@ -8149,22 +8835,32 @@ exports.computeNoEvmReceiptsRoot = computeNoEvmReceiptsRoot;
 exports.computeNoEvmRoundFinalityMessage = computeNoEvmRoundFinalityMessage;
 exports.computeNoEvmTargetReceiptHash = computeNoEvmTargetReceiptHash;
 exports.consumeNativeEvents = consumeNativeEvents;
+exports.decodeClusterDiversity = decodeClusterDiversity;
+exports.decodeClusterFormedEvent = decodeClusterFormedEvent;
 exports.decodeHasPubkeyReturn = decodeHasPubkeyReturn;
 exports.decodeLookupPubkeyReturn = decodeLookupPubkeyReturn;
 exports.decodeNativeAgentStateResponse = decodeNativeAgentStateResponse;
 exports.decodeNativeMarketOrderBookDeltasResponse = decodeNativeMarketOrderBookDeltasResponse;
 exports.decodeNativeReceiptResponse = decodeNativeReceiptResponse;
 exports.decodeNoEvmReceiptTranscript = decodeNoEvmReceiptTranscript;
+exports.decodeOperatorNetworkMetadata = decodeOperatorNetworkMetadata;
+exports.decodeOracleEvent = decodeOracleEvent;
+exports.decodeTimeWindow = decodeTimeWindow;
 exports.decodeTxFeedResponse = decodeTxFeedResponse;
 exports.delegationAddressHex = delegationAddressHex;
 exports.deriveClobMarketId = deriveClobMarketId;
+exports.deriveClusterAnchorAddress = deriveClusterAnchorAddress;
 exports.deriveMrvContractAddress = deriveMrvContractAddress;
 exports.deriveNativeSpotMarketId = deriveNativeSpotMarketId;
 exports.deriveNativeSpotOrderId = deriveNativeSpotOrderId;
 exports.encodeBlockSelector = encodeBlockSelector;
 exports.encodeCancelOrderCalldata = encodeCancelOrderCalldata;
+exports.encodeClaimCalldata = encodeClaimCalldata;
 exports.encodeClaimPolicyByAddressCalldata = encodeClaimPolicyByAddressCalldata;
 exports.encodeCompleteRedemptionCalldata = encodeCompleteRedemptionCalldata;
+exports.encodeCreateRequestCalldata = encodeCreateRequestCalldata;
+exports.encodeCreateRequestCanonical = encodeCreateRequestCanonical;
+exports.encodeDelegateCalldata = encodeDelegateCalldata;
 exports.encodeDisableCalldata = encodeDisableCalldata;
 exports.encodeEnableCalldata = encodeEnableCalldata;
 exports.encodeHasPubkeyCalldata = encodeHasPubkeyCalldata;
@@ -8219,12 +8915,18 @@ exports.encodeNativeSpotSettleRoutedLimitOrderCall = encodeNativeSpotSettleRoute
 exports.encodePlaceLimitOrderCalldata = encodePlaceLimitOrderCalldata;
 exports.encodePlaceMarketOrderCalldata = encodePlaceMarketOrderCalldata;
 exports.encodePlaceMarketOrderExCalldata = encodePlaceMarketOrderExCalldata;
+exports.encodeRedelegateCalldata = encodeRedelegateCalldata;
 exports.encodeRegisterPubkeyCalldata = encodeRegisterPubkeyCalldata;
 exports.encodeReportServiceProbeCalldata = encodeReportServiceProbeCalldata;
+exports.encodeSetAutoCompoundCalldata = encodeSetAutoCompoundCalldata;
 exports.encodeSetBridgeResumeCooldownCalldata = encodeSetBridgeResumeCooldownCalldata;
 exports.encodeSetBridgeRouteFinalityCalldata = encodeSetBridgeRouteFinalityCalldata;
+exports.encodeSetLotSizeCalldata = encodeSetLotSizeCalldata;
+exports.encodeSetMinNotionalCalldata = encodeSetMinNotionalCalldata;
 exports.encodeSetPolicyCalldata = encodeSetPolicyCalldata;
 exports.encodeSetPolicyClaimCalldata = encodeSetPolicyClaimCalldata;
+exports.encodeSetTickSizeCalldata = encodeSetTickSizeCalldata;
+exports.encodeUndelegateCalldata = encodeUndelegateCalldata;
 exports.exportBridgeRouteCatalogueJson = exportBridgeRouteCatalogueJson;
 exports.fetchChainInfoLatest = fetchChainInfoLatest;
 exports.fetchChainRegistryLatest = fetchChainRegistryLatest;
@@ -8263,9 +8965,13 @@ exports.nativeMarketEventsFromHistory = nativeMarketEventsFromHistory;
 exports.nativeMarketEventsFromReceipt = nativeMarketEventsFromReceipt;
 exports.nativeMarketStateFilterParams = nativeMarketStateFilterParams;
 exports.noEvmReceiptTrustPolicyFromChainInfo = noEvmReceiptTrustPolicyFromChainInfo;
+exports.nodeHostingClassFromByte = nodeHostingClassFromByte;
+exports.nodeHostingClassToByte = nodeHostingClassToByte;
 exports.nodeRegistryAddressHex = nodeRegistryAddressHex;
 exports.normalizeAddressHex = normalizeAddressHex;
 exports.normalizeBridgeRouteCatalogue = normalizeBridgeRouteCatalogue;
+exports.oracleAddressHex = oracleAddressHex;
+exports.packTimeWindow = packTimeWindow;
 exports.parseAddress = parseAddress;
 exports.parseBridgeRouteCatalogueJson = parseBridgeRouteCatalogueJson;
 exports.parseChainRegistryToml = parseChainRegistryToml;
@@ -8273,8 +8979,10 @@ exports.parseLythToLythoshi = parseLythToLythoshi;
 exports.parseNativeDecodedEvent = parseNativeDecodedEvent;
 exports.parseQuantity = parseQuantity;
 exports.parseQuantityBig = parseQuantityBig;
+exports.proverMarketStateFromByte = proverMarketStateFromByte;
 exports.pubkeyRegistryAddressHex = pubkeyRegistryAddressHex;
 exports.rankBridgeRoutes = rankBridgeRoutes;
+exports.requestSighash = requestSighash;
 exports.requireTypedAddress = requireTypedAddress;
 exports.resolveStudioHostStatus = resolveStudioHostStatus;
 exports.selectBridgeTransferRoute = selectBridgeTransferRoute;
@@ -8283,6 +8991,7 @@ exports.spendingPolicyAddressHex = spendingPolicyAddressHex;
 exports.submitMrvCallNativeTx = submitMrvCallNativeTx;
 exports.submitMrvDeployNativeTx = submitMrvDeployNativeTx;
 exports.submitMrvDeployPayloadNativeTx = submitMrvDeployPayloadNativeTx;
+exports.submitSighash = submitSighash;
 exports.typedBech32ToAddress = typedBech32ToAddress;
 exports.validateAddress = validateAddress;
 exports.validateBridgeRouteCatalogue = validateBridgeRouteCatalogue;

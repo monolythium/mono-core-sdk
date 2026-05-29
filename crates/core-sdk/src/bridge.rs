@@ -698,6 +698,76 @@ pub struct BridgeRoutesResponse {
     pub source: Option<BridgeRoutesSource>,
 }
 
+/// Per-asset drain rate-limit + circuit-breaker state (MB-2).
+///
+/// Mirrors the `TAG_DRAIN_CAP` (`0x26`) family in the chain bridge
+/// storage. `cap_per_window == "0"` disables the breaker for the
+/// `(bridge, asset)` pair. `drained` is the running total for the
+/// active window; `remaining` is the SDK-computed `cap - drained`
+/// floored at zero.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export, export_to = "BridgeDrainCap.ts"))]
+pub struct BridgeDrainCap {
+    /// Maximum aggregate drain per rolling window (`uint256` decimal
+    /// string); `"0"` disables the breaker.
+    pub cap_per_window: String,
+    /// Window length in Protocore blocks.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "string"))]
+    pub window_blocks: u64,
+    /// `block_number / window_blocks` recorded at the last drain.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "string"))]
+    pub current_bucket: u64,
+    /// Running drained total for the active window (`uint256` decimal
+    /// string).
+    pub drained: String,
+    /// SDK-computed `cap_per_window - drained`, floored at `0`
+    /// (`uint256` decimal string). `null` when the cap is disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional = nullable))]
+    pub remaining: Option<String>,
+}
+
+/// Bridge route circuit-breaker + resume-cooldown health (MB-2).
+///
+/// Mirrors the bridge-record fields `PAUSED_AT_BLOCK` (`0x13`),
+/// `RESUME_COOLDOWN_BLOCKS` (`0x12`), `ROUTE_FINALITY_BLOCKS` (`0x14`),
+/// and `ADMIN_LOCKED_AT_BLOCK` (`0x11`) plus the per-asset drain cap.
+/// `paused` is derived from `paused_at != 0`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "BridgeBreakerState.ts")
+)]
+pub struct BridgeBreakerState {
+    /// Bridge id the breaker state belongs to (`0x` 32 bytes).
+    pub bridge_id: String,
+    /// `true` when the route is in a recorded pause window
+    /// (`paused_at != 0`).
+    pub paused: bool,
+    /// Protocore block at which the current pause was committed; `0`
+    /// when not paused.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "string"))]
+    pub paused_at: u64,
+    /// Cooldown blocks that must elapse after a pause before
+    /// `unpauseBridge` can resume value-moving paths.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "string"))]
+    pub resume_cooldown_blocks: u64,
+    /// Route-specific foreign-chain finality depth.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "string"))]
+    pub route_finality_blocks: u64,
+    /// Block at which mutable route config was frozen; `0` = unlocked.
+    #[cfg_attr(feature = "ts-bindings", ts(type = "string"))]
+    pub admin_locked_at_block: u64,
+    /// Per-asset drain rate-limit + breaker counters, when a cap is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional = nullable))]
+    pub drain_cap: Option<BridgeDrainCap>,
+}
+
 impl From<BridgeQuoteSubmitReadiness> for BridgeRoutesResponse {
     fn from(value: BridgeQuoteSubmitReadiness) -> Self {
         Self {

@@ -268,6 +268,66 @@ export interface BridgeRoutesResponse {
   source?: BridgeRoutesSource | null;
 }
 
+/**
+ * Per-asset drain rate-limit + circuit-breaker state (MB-2).
+ *
+ * Mirrors the `TAG_DRAIN_CAP` (`0x26`) family in the chain bridge
+ * storage. `capPerWindow === "0"` disables the breaker for the
+ * `(bridge, asset)` pair. `drained` is the running total for the active
+ * window; `remaining` is the SDK-computed `cap - drained` floored at
+ * zero (decimal string), or `null` when the cap is disabled.
+ */
+export interface BridgeDrainCap {
+  /** Maximum aggregate drain per rolling window (`uint256` decimal). */
+  capPerWindow: string;
+  /** Window length in Protocore blocks. */
+  windowBlocks: string;
+  /** `block_number / window_blocks` at the last drain. */
+  currentBucket: string;
+  /** Running drained total for the active window (`uint256` decimal). */
+  drained: string;
+  /** SDK-computed `capPerWindow - drained` floored at `0`; `null` if disabled. */
+  remaining?: string | null;
+}
+
+/**
+ * Bridge route circuit-breaker + resume-cooldown health (MB-2).
+ *
+ * Mirrors the bridge-record fields `PAUSED_AT_BLOCK` (`0x13`),
+ * `RESUME_COOLDOWN_BLOCKS` (`0x12`), `ROUTE_FINALITY_BLOCKS` (`0x14`),
+ * and `ADMIN_LOCKED_AT_BLOCK` (`0x11`) plus the per-asset drain cap.
+ * `paused` is derived from `pausedAt !== "0"`.
+ */
+export interface BridgeBreakerState {
+  /** Bridge id the breaker state belongs to (`0x` 32 bytes). */
+  bridgeId: string;
+  /** `true` when the route is in a recorded pause window. */
+  paused: boolean;
+  /** Block at which the current pause was committed; `"0"` when not paused. */
+  pausedAt: string;
+  /** Cooldown blocks that must elapse after a pause before resume. */
+  resumeCooldownBlocks: string;
+  /** Route-specific foreign-chain finality depth. */
+  routeFinalityBlocks: string;
+  /** Block at which mutable route config was frozen; `"0"` = unlocked. */
+  adminLockedAtBlock: string;
+  /** Per-asset drain rate-limit + breaker counters, when a cap is set. */
+  drainCap?: BridgeDrainCap | null;
+}
+
+/**
+ * Compute the `remaining` field for a {@link BridgeDrainCap} from its
+ * `capPerWindow` and `drained` decimal strings, floored at `0`. Returns
+ * `null` when the cap is disabled (`capPerWindow === "0"`).
+ */
+export function bridgeDrainRemaining(capPerWindow: string, drained: string): string | null {
+  const cap = BigInt(capPerWindow);
+  if (cap === 0n) return null;
+  const used = BigInt(drained);
+  const left = cap > used ? cap - used : 0n;
+  return left.toString(10);
+}
+
 export function assessBridgeRoute(route: BridgeRouteDisclosure): BridgeRouteAssessment {
   const blockedReasons: string[] = [];
   const warnings: string[] = [];
