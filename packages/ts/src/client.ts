@@ -12,13 +12,32 @@ import {
 } from "./address.js";
 import { SdkError } from "./error.js";
 import type {
-  BridgeBreakerState,
+  BridgeDrainStatus,
+  BridgeHealthResponse,
   BridgeRouteDisclosure,
   BridgeRoutesRequest,
   BridgeRoutesResponse,
 } from "./bridge.js";
-import type { ClusterDiversity, OperatorNetworkMetadata } from "./node-registry.js";
-import type { ProofRequestView, ProverBidView } from "./prover-market.js";
+import type {
+  ClusterDiversityView,
+  OperatorNetworkMetadataView,
+} from "./node-registry.js";
+import type {
+  OperatorFeeConfig,
+  OperatorRouterConfig,
+} from "./market-actions.js";
+import type {
+  OracleFeedConfig,
+  OracleLatestPrice,
+  OracleSignersResponse,
+  OracleWriters,
+} from "./oracle.js";
+import type {
+  ListProofRequestsResponse,
+  ProofRequestView,
+  ProverBidsResponse,
+  ProverMarketStatusResponse,
+} from "./prover-market.js";
 import type { SpendingPolicyView } from "./spending-policy.js";
 import {
   nativeEventsFromHistory,
@@ -1923,83 +1942,138 @@ export class RpcClient {
     return normalizeClusterDirectoryPage(await this.call("lyth_clusters", [page, limit]));
   }
 
-  // --- PF-4 / PF-6 / MB-6 / MB-4 / MB-2 read wrappers ---------------------
+  // --- PF-4 / PF-6 / MB-6 / MB-4 / MB-2 + operator-router read wrappers ----
   //
-  // Encoders + response types for these six pillars are final on mono-core
-  // master; the `lyth_*` read methods land in a later chain-wiring wave, so
-  // each wrapper carries a confirm-at-wiring TODO on the method name/shape.
+  // Reconciled against the FINAL mono-core RPC surface (master 2eff9fed):
+  // every method name + response shape below matches the chain's `lyth_*`
+  // dispatch + impls exactly (camelCase keys, 0x-hex uint256 amounts,
+  // bech32m addresses). The three indexer-backed methods —
+  // `lyth_oracleSigners`, `lyth_listProofRequests`, `lyth_proverMarketStatus`
+  // — return a graceful `{ status: "indexer_unavailable", … }` envelope
+  // when the node runs without its indexer projection.
 
   /** PF-4 — `lyth_getSpendingPolicy`: the §18.8 spending-policy view for a sub-account. */
   async lythGetSpendingPolicy(subAccount: string): Promise<SpendingPolicyView> {
-    // TODO(monolythium-vision): confirm lyth_getSpendingPolicy method name/shape at chain wiring.
     return this.call("lyth_getSpendingPolicy", [sdkTypedAddress(subAccount, "user", "subAccount")]);
   }
 
   /** PF-6 — `lyth_getClusterDiversity`: diversity score + asn/geo/hosting breakdown. */
-  async lythGetClusterDiversity(clusterId: number): Promise<ClusterDiversity> {
-    // TODO(monolythium-vision): confirm lyth_getClusterDiversity method name/shape at chain wiring.
+  async lythGetClusterDiversity(clusterId: number): Promise<ClusterDiversityView> {
     return this.call("lyth_getClusterDiversity", [clusterId]);
   }
 
-  /** PF-6 — `lyth_getOperatorNetworkMetadata`: ASN/geo/hosting-class/IP/PCR for a peer. */
-  async lythGetOperatorNetworkMetadata(peerId: string): Promise<OperatorNetworkMetadata> {
-    // TODO(monolythium-vision): confirm lyth_getOperatorNetworkMetadata method name/shape at chain wiring.
-    return this.call("lyth_getOperatorNetworkMetadata", [peerId]);
+  /**
+   * PF-6 — `lyth_getOperatorNetworkMetadata`: ASN/geo/hosting-class/IP/PCR
+   * for a peer. `operatorId` is the 32-byte operator/peer id as `0x…` hex
+   * (the form `lyth_operatorInfo` returns).
+   */
+  async lythGetOperatorNetworkMetadata(operatorId: string): Promise<OperatorNetworkMetadataView> {
+    return this.call("lyth_getOperatorNetworkMetadata", [operatorId]);
   }
 
-  /** MB-6 — `lyth_oracleSigners`: the on-chain oracle writer/admin roster. */
-  async lythOracleSigners(): Promise<unknown> {
-    // TODO(monolythium-vision): confirm lyth_oracleSigners method name/shape at chain wiring.
+  /**
+   * MB-6 — `lyth_oracleSigners`: the global oracle writer roster (folded
+   * from `OracleWriterAdded` / `OracleWriterRemoved`). Returns the
+   * `{ status: "indexer_unavailable", writers: [] }` fallback when the
+   * node runs without the oracle writer-roster indexer projection.
+   */
+  async lythOracleSigners(): Promise<OracleSignersResponse> {
     return this.call("lyth_oracleSigners", []);
   }
 
   /** MB-6 — `lyth_oracleWriters`: the allowed writer set for a feed. */
-  async lythOracleWriters(feedId: string): Promise<unknown> {
-    // TODO(monolythium-vision): confirm lyth_oracleWriters method name/shape at chain wiring.
+  async lythOracleWriters(feedId: string): Promise<OracleWriters> {
     return this.call("lyth_oracleWriters", [feedId]);
   }
 
   /** MB-6 — `lyth_oracleLatestPrice`: the latest finalized median for a feed. */
-  async lythOracleLatestPrice(feedId: string): Promise<unknown> {
-    // TODO(monolythium-vision): confirm lyth_oracleLatestPrice method name/shape at chain wiring.
+  async lythOracleLatestPrice(feedId: string): Promise<OracleLatestPrice> {
     return this.call("lyth_oracleLatestPrice", [feedId]);
   }
 
   /** MB-6 — `lyth_oracleFeedConfig`: a feed's decimals / min-signers / circuit-breaker config. */
-  async lythOracleFeedConfig(feedId: string): Promise<unknown> {
-    // TODO(monolythium-vision): confirm lyth_oracleFeedConfig method name/shape at chain wiring.
+  async lythOracleFeedConfig(feedId: string): Promise<OracleFeedConfig> {
     return this.call("lyth_oracleFeedConfig", [feedId]);
   }
 
   /** MB-4 — `lyth_getProofRequest`: a single GPU prover-market proof request. */
   async lythGetProofRequest(requestId: string): Promise<ProofRequestView> {
-    // TODO(monolythium-vision): confirm lyth_getProofRequest method name/shape at chain wiring.
     return this.call("lyth_getProofRequest", [requestId]);
   }
 
-  /** MB-4 — `lyth_listProofRequests`: open/recent prover-market proof requests. */
-  async lythListProofRequests(limit = 50, cursor?: string | null): Promise<ProofRequestView[]> {
-    // TODO(monolythium-vision): confirm lyth_listProofRequests method name/shape at chain wiring.
-    const params = cursor == null ? [limit] : [limit, cursor];
+  /**
+   * MB-4 — `lyth_listProofRequests`: open/recent prover-market proof
+   * requests. Params are `[stateFilter?, limit?]` (the chain's order),
+   * where `stateFilter` is one of `open|assigned|settled|slashed|expired`.
+   * Returns the `{ status: "indexer_unavailable", requests: [] }` fallback
+   * when the node runs without the prover-market indexer projection.
+   */
+  async lythListProofRequests(
+    stateFilter?: string | null,
+    limit?: number,
+  ): Promise<ListProofRequestsResponse> {
+    const params: unknown[] = [];
+    if (stateFilter != null || limit != null) params.push(stateFilter ?? null);
+    if (limit != null) params.push(limit);
     return this.call("lyth_listProofRequests", params);
   }
 
   /** MB-4 — `lyth_getProverBids`: the fee bids placed on one proof request. */
-  async lythGetProverBids(requestId: string): Promise<ProverBidView[]> {
-    // TODO(monolythium-vision): confirm lyth_getProverBids method name/shape at chain wiring.
+  async lythGetProverBids(requestId: string): Promise<ProverBidsResponse> {
     return this.call("lyth_getProverBids", [requestId]);
   }
 
-  /** MB-4 — `lyth_proverMarketStatus`: prover-market summary / health. */
-  async lythProverMarketStatus(): Promise<unknown> {
-    // TODO(monolythium-vision): confirm lyth_proverMarketStatus method name/shape at chain wiring.
+  /**
+   * MB-4 — `lyth_proverMarketStatus`: prover-market summary. `feeFloor` is
+   * always present (on-chain genesis singleton); the aggregate counts are
+   * `null` on the `{ status: "indexer_unavailable" }` fallback path.
+   */
+  async lythProverMarketStatus(): Promise<ProverMarketStatusResponse> {
     return this.call("lyth_proverMarketStatus", []);
   }
 
-  /** MB-2 — `lyth_bridgeHealth`: bridge route breaker state (drain cap, pause, cooldown). */
-  async lythBridgeHealth(bridgeId: string): Promise<BridgeBreakerState> {
-    // `lyth_bridgeHealth` exists; the MB-2 breaker fields are additive.
-    return this.call("lyth_bridgeHealth", [bridgeId]);
+  /**
+   * Operator-router — `lyth_operatorRouterConfig`: the router's static
+   * posture (`0x100B` address, the protocol fee ceiling, and whether the
+   * gateable router precompile is currently milestone-activated).
+   */
+  async lythOperatorRouterConfig(): Promise<OperatorRouterConfig> {
+    return this.call("lyth_operatorRouterConfig", []);
+  }
+
+  /**
+   * Operator-router — `lyth_operatorFeeConfig`: one operator's fee
+   * registration (recipient, fee bps, enabled flag, registered-at block).
+   * `operator` is a `mono` bech32m user address.
+   */
+  async lythOperatorFeeConfig(operator: string): Promise<OperatorFeeConfig> {
+    return this.call("lyth_operatorFeeConfig", [sdkTypedAddress(operator, "user", "operator")]);
+  }
+
+  /**
+   * MB-2 — `lyth_bridgeHealth`: a paged set of bridge-record health
+   * envelopes. Each record carries the circuit-breaker posture
+   * (`defaultDrainCapPerWindow`, `defaultDrainWindowBlocks`, `paused`,
+   * `pausedAtBlock`, `resumeCooldownBlocks`). Params are `[cursor?, limit?]`
+   * (the chain pages the global bridge set; there is no single-bridge form).
+   */
+  async lythBridgeHealth(cursor?: string | null, limit?: number): Promise<BridgeHealthResponse> {
+    const params: unknown[] = [];
+    if (cursor != null || limit != null) params.push(cursor ?? null);
+    if (limit != null) params.push(limit);
+    return this.call("lyth_bridgeHealth", params);
+  }
+
+  /**
+   * MB-2 — `lyth_bridgeDrainStatus`: the live per-route circuit-breaker
+   * drain bucket for one `(bridgeId, wrappedAsset)` route. `bridgeId` is a
+   * 32-byte `0x…` hex id; `wrappedAsset` is a `mono` bech32m user address.
+   */
+  async lythBridgeDrainStatus(bridgeId: string, wrappedAsset: string): Promise<BridgeDrainStatus> {
+    return this.call("lyth_bridgeDrainStatus", [
+      bridgeId,
+      sdkTypedAddress(wrappedAsset, "user", "wrappedAsset"),
+    ]);
   }
 
   /**

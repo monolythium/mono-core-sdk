@@ -44,7 +44,8 @@ pub fn burn_addr_hex() -> String {
 ///
 /// `0x1002` and `0x1006` are intentionally absent from the SDK surface
 /// because the current v4.1 launch surface does not define those application
-/// modules.
+/// modules. The operator-fee router (`0x100B`) and GPU prover market
+/// (`0x100C`) ARE exposed — both are now registered on-chain.
 pub mod precompile_addresses {
     /// Native fungible-token factory — non-gateable, foundational.
     pub const TOKEN_FACTORY: [u8; 20] = address([0x10, 0x00]);
@@ -62,6 +63,12 @@ pub mod precompile_addresses {
     pub const ORACLE: [u8; 20] = address([0x10, 0x09]);
     /// Distributed delegation primitive — gateable.
     pub const DELEGATION: [u8; 20] = address([0x10, 0x0A]);
+    /// Operator-fee router — skims an operator surcharge on routed CLOB
+    /// ops; gateable.
+    pub const OPERATOR_ROUTER: [u8; 20] = address([0x10, 0x0B]);
+    /// GPU prover market — gateable, genesis-disabled (foundation
+    /// milestone flip).
+    pub const PROVER_MARKET: [u8; 20] = address([0x10, 0x0C]);
     /// One-time emergency-key registry — non-gateable.
     pub const EMERGENCY_KEY: [u8; 20] = address([0x11, 0x00]);
     /// VRF precompile.
@@ -91,6 +98,16 @@ pub mod precompile_addresses {
     /// Primary ML-DSA-65 pubkey registry — gateable.
     pub const PUBKEY_REGISTRY: [u8; 20] = address([0x11, 0x0D]);
 
+    /// Protocol ceiling on the operator surcharge, in basis points
+    /// (`100 = 1.00%`).
+    ///
+    /// Enforced on-chain at both write time (operator registration /
+    /// update) and read time (the `placeLimitOrderVia` op); this constant
+    /// is the advisory UX mirror so wallets can validate / display a fee
+    /// before submitting. Sourced from `mono-core`
+    /// `operator-router::storage::PROTOCOL_MAX_OPERATOR_FEE_BPS`.
+    pub const PROTOCOL_MAX_OPERATOR_FEE_BPS: u16 = 100;
+
     /// Build a precompile address from its trailing two bytes. The first
     /// 18 bytes are zero — the runtime address layout always pins
     /// precompiles into the low band.
@@ -112,6 +129,8 @@ pub mod precompile_addresses {
         ("BRIDGE", BRIDGE),
         ("ORACLE", ORACLE),
         ("DELEGATION", DELEGATION),
+        ("OPERATOR_ROUTER", OPERATOR_ROUTER),
+        ("PROVER_MARKET", PROVER_MARKET),
         ("EMERGENCY_KEY", EMERGENCY_KEY),
         ("VRF", VRF),
         ("STREAMING_PAYMENTS", STREAMING_PAYMENTS),
@@ -168,6 +187,8 @@ mod tests {
             ("BRIDGE", expected_addr(0x1008)),
             ("ORACLE", expected_addr(0x1009)),
             ("DELEGATION", expected_addr(0x100A)),
+            ("OPERATOR_ROUTER", expected_addr(0x100B)),
+            ("PROVER_MARKET", expected_addr(0x100C)),
             ("EMERGENCY_KEY", expected_addr(0x1100)),
             ("VRF", expected_addr(0x1101)),
             ("STREAMING_PAYMENTS", expected_addr(0x1102)),
@@ -193,13 +214,25 @@ mod tests {
         assert_eq!(NODE_REGISTRY, expected_addr(0x1005));
         assert_eq!(BRIDGE, expected_addr(0x1008));
         assert_eq!(PRIVACY, expected_addr(0x1004));
+        // The prover market binds at 0x100C (the platform extension
+        // band's lowest free slot after the operator router at 0x100B),
+        // NOT the earlier tentative 0x1110 guess.
+        assert_eq!(OPERATOR_ROUTER, expected_addr(0x100B));
+        assert_eq!(PROVER_MARKET, expected_addr(0x100C));
+    }
+
+    #[test]
+    fn protocol_max_operator_fee_bps_matches_runtime() {
+        // Mirrors mono-core
+        // operator-router::storage::PROTOCOL_MAX_OPERATOR_FEE_BPS.
+        assert_eq!(precompile_addresses::PROTOCOL_MAX_OPERATOR_FEE_BPS, 100);
     }
 
     #[test]
     fn precompile_address_map_size_tracks_sdk_exposed_surface() {
         // Adding a new SDK-exposed precompile address should update
         // the explicit assertions above and the TypeScript constants.
-        assert_eq!(precompile_addresses::ALL.len(), 22);
+        assert_eq!(precompile_addresses::ALL.len(), 24);
     }
 
     #[test]

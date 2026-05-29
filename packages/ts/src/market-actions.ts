@@ -13,7 +13,10 @@ import {
   typedBech32ToAddress,
   type AddressKind,
 } from "./address.js";
-import { PRECOMPILE_ADDRESSES } from "./consts.js";
+import {
+  PRECOMPILE_ADDRESSES,
+  PROTOCOL_MAX_OPERATOR_FEE_BPS,
+} from "./consts.js";
 import { BincodeWriter } from "./crypto/bincode.js";
 import { bytesToHex, concatBytes, hexToBytes } from "./crypto/bytes.js";
 import { MempoolClass } from "./crypto/envelope.js";
@@ -58,6 +61,63 @@ export const CLOB_SELECTORS = {
   setLotSize: "0x9909be80",
 } as const;
 
+/**
+ * Canonical operator-fee router selector signatures (`0x100B`).
+ *
+ * Mirrors `mono-core/crates/precompiles/platform/operator-router/src/abi.rs`
+ * (`sig::*`). Selectors are `keccak256(signature)[0..4]`.
+ */
+export const OPERATOR_ROUTER_SIGS = {
+  /** `registerOperator(address recipient, uint16 feeBps)`. */
+  registerOperator: "registerOperator(address,uint16)",
+  /** `updateOperator(address recipient, uint16 feeBps)`. */
+  updateOperator: "updateOperator(address,uint16)",
+  /** `disableOperator(address operator)` — foundation-authorized. */
+  disableOperator: "disableOperator(address)",
+  /**
+   * `placeLimitOrderVia(address operator, bytes32 base, bytes32 quote,
+   *  uint8 side, uint256 price, uint256 amount, uint64 expiresAtBlock)`
+   *  → `bytes32 orderId`.
+   *
+   * Skims the operator fee (quote token, `user -> recipient`) then
+   * re-enters the CLOB `placeLimitOrder` op with `caller = user`, so the
+   * resting order is owned + escrowed + cancellable by the user,
+   * identical to a direct CLOB placement.
+   */
+  placeLimitOrderVia:
+    "placeLimitOrderVia(address,bytes32,bytes32,uint8,uint256,uint256,uint64)",
+} as const;
+
+/** Operator-router selectors as `0x`-prefixed 4-byte hex. */
+export const OPERATOR_ROUTER_SELECTORS = {
+  registerOperator: operatorRouterSelectorHex(OPERATOR_ROUTER_SIGS.registerOperator),
+  updateOperator: operatorRouterSelectorHex(OPERATOR_ROUTER_SIGS.updateOperator),
+  disableOperator: operatorRouterSelectorHex(OPERATOR_ROUTER_SIGS.disableOperator),
+  placeLimitOrderVia: operatorRouterSelectorHex(OPERATOR_ROUTER_SIGS.placeLimitOrderVia),
+} as const;
+
+/**
+ * Canonical operator-router event declaration strings (`0x100B`).
+ *
+ * Mirrors `operator-router/src/events.rs::sig`. Indexed args are
+ * `operator`, `user`, `marketId` (for `OperatorFeeCharged`).
+ */
+export const OPERATOR_ROUTER_EVENT_SIGS = {
+  operatorFeeCharged:
+    "OperatorFeeCharged(address,address,bytes32,address,bytes32,uint256,bytes32)",
+  operatorRegistered: "OperatorRegistered(address,address,uint16)",
+  operatorUpdated: "OperatorUpdated(address,address,uint16,bool)",
+} as const;
+
+function operatorRouterSelectorHex(sig: string): string {
+  return (
+    "0x" +
+    [...keccak_256(new TextEncoder().encode(sig)).slice(0, 4)]
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("")
+  );
+}
+
 export type SpotLimitOrderSide = "buy" | "sell";
 export type SpotMarketOrderMode = "fill-or-refund" | "fill-or-rest-at-cap";
 export type NativeMarketAddressKind = AddressKind;
@@ -86,6 +146,122 @@ export interface PlaceSpotLimitOrderArgs {
   quantity: string;
   /** Optional uint64 block height; omitted means `0` / no explicit expiry. */
   expiryBlock?: string | number | bigint;
+}
+
+export interface PlaceLimitOrderViaArgs {
+  /**
+   * Operator the order routes through (`mono` bech32m user address). Its
+   * fee registration (`lyth_operatorFeeConfig`) sets the surcharge skimmed
+   * from the quote escrow.
+   */
+  operator: string;
+  /** 32-byte base token id accepted by the CLOB precompile. */
+  base: string;
+  /** 32-byte quote token id accepted by the CLOB precompile. */
+  quote: string;
+  /** `buy` maps to side byte `0`; `sell` maps to side byte `1`. */
+  side: SpotLimitOrderSide;
+  /** Positive integer decimal string encoded as uint256 price. */
+  price: string;
+  /** Positive integer decimal string encoded as uint256 amount. */
+  amount: string;
+  /** Optional uint64 block height; omitted means `0` / no explicit expiry. */
+  expiresAtBlock?: string | number | bigint;
+}
+
+/**
+ * Wallet-display projection of the declared operator fee for a
+ * {@link PlaceLimitOrderViaArgs} order, computed off-chain as
+ * `quoteBasis * feeBps / 10_000` where `quoteBasis = price * amount`.
+ *
+ * Advisory only — the binding fee is skimmed on-chain at execution time
+ * from the same `quoteBasis`. The fee is denominated in the quote token.
+ */
+export interface OperatorFeeQuote {
+  /** Operator the order routes through (`mono` bech32m). */
+  operator: string;
+  /** Declared operator fee in basis points (from `lyth_operatorFeeConfig`). */
+  feeBps: number;
+  /** `price * amount` (the quote-token basis the fee is skimmed from), decimal string. */
+  quoteBasis: string;
+  /** `quoteBasis * feeBps / 10_000`, floored, decimal string of quote-token atoms. */
+  feeAmount: string;
+}
+
+/** A {@link MarketTransactionPlan} that also carries the declared operator fee. */
+export interface PlaceLimitOrderViaPlan extends MarketTransactionPlan {
+  /** Off-chain operator-fee projection for wallet display. */
+  operatorFee: OperatorFeeQuote;
+}
+
+/**
+ * Decoded `OperatorFeeCharged` log (`0x100B`). Mirrors
+ * `operator-router/src/events.rs::emit_operator_fee_charged_to_host`:
+ * indexed `operator` / `user` / `marketId`; body `recipient`,
+ * `quoteToken`, `feeAmount`, `clobOrderId`. `clobOrderId` joins the
+ * router fee to the CLOB `OrderPlaced` / `OrderMatched` rows.
+ */
+export interface OperatorFeeChargedEvent {
+  /** Operator that charged the fee (`0x` 20-byte hex, indexed). */
+  operator: string;
+  /** User that paid the fee (`0x` 20-byte hex, indexed). */
+  user: string;
+  /** CLOB market id the order targets (`0x` 32 bytes, indexed). */
+  marketId: string;
+  /** Fee recipient configured by the operator (`0x` 20-byte hex). */
+  recipient: string;
+  /** Quote token the fee was skimmed in (`0x` 32 bytes). */
+  quoteToken: string;
+  /** Fee amount skimmed (quote-token atoms, decimal string). */
+  feeAmount: string;
+  /** CLOB order id the routed placement produced (`0x` 32 bytes). */
+  clobOrderId: string;
+}
+
+/**
+ * `lyth_operatorRouterConfig` response — the router's static posture.
+ *
+ * Mirrors the chain JSON exactly (camelCase). `enabled` reflects whether
+ * the gateable router precompile is currently milestone-activated; the
+ * read surfaces work regardless.
+ */
+export interface OperatorRouterConfig {
+  /** Response schema version (`1`). */
+  schemaVersion: number;
+  /** Data source — `"native_state_storage"`. */
+  source: string;
+  /** Router precompile address (`0x100B`). */
+  routerAddress: string;
+  /** On-chain protocol fee ceiling in bps (`100` = 1.00%). */
+  protocolMaxOperatorFeeBps: number;
+  /** `true` when the router precompile is milestone-activated. */
+  enabled: boolean;
+}
+
+/**
+ * `lyth_operatorFeeConfig` response — one operator's fee registration.
+ *
+ * Mirrors the chain JSON exactly (camelCase). A zero recipient is the
+ * "operator not registered" sentinel on-chain, so the chain returns a
+ * not-found error rather than this shape in that case.
+ */
+export interface OperatorFeeConfig {
+  /** Response schema version (`1`). */
+  schemaVersion: number;
+  /** Data source — `"native_state_storage"`. */
+  source: string;
+  /** Router precompile address (`0x100B`). */
+  precompile: string;
+  /** Operator the registration belongs to (`mono` bech32m). */
+  operator: string;
+  /** Configured fee recipient (`mono` bech32m). */
+  recipient: string;
+  /** Operator surcharge in basis points. */
+  feeBps: number;
+  /** `true` when the operator's surcharge is active. */
+  enabled: boolean;
+  /** Block height the operator was first registered at. */
+  registeredAtBlock: number;
 }
 
 export interface PlaceSpotMarketOrderArgs {
@@ -813,6 +989,139 @@ export function buildCancelSpotOrderPlan(args: CancelSpotOrderArgs): MarketTrans
   };
 }
 
+/**
+ * Encode `placeLimitOrderVia(address,bytes32,bytes32,uint8,uint256,
+ * uint256,uint64)` calldata for the operator-fee router (`0x100B`).
+ *
+ * The argument layout mirrors the direct CLOB `placeLimitOrder` encoder
+ * exactly, prefixed with the left-padded `operator` address word. The
+ * router strips that leading word and forwards the remaining six fields
+ * to the CLOB unchanged.
+ */
+export function encodePlaceLimitOrderViaCalldata(args: PlaceLimitOrderViaArgs): string {
+  const operator = normalizeNativeMarketAddress(args.operator, "operator");
+  if (operator.kind !== "user") {
+    throw new MarketActionError("operator must be a 'mono' user address");
+  }
+  const side = normalizeSide(args.side);
+  const price = positiveDecimal(args.price, "price");
+  const amount = positiveDecimal(args.amount, "amount");
+  const expiresAtBlock = uint64(args.expiresAtBlock ?? 0n, "expiresAtBlock");
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(OPERATOR_ROUTER_SELECTORS.placeLimitOrderVia, "placeLimitOrderVia selector"),
+      addressWord(operator.bytes),
+      bytes32FromHex(args.base, "base"),
+      bytes32FromHex(args.quote, "quote"),
+      uint8Word(side),
+      uint256Word(price, "price"),
+      uint256Word(amount, "amount"),
+      uint64Word(expiresAtBlock, "expiresAtBlock"),
+    ),
+  );
+}
+
+/**
+ * Compute the off-chain declared operator fee for wallet display:
+ * `quoteBasis * feeBps / 10_000` (floored) where `quoteBasis =
+ * price * amount`. `feeBps` is the operator's registered fee
+ * (`lyth_operatorFeeConfig`). Rejects a `feeBps` above the protocol
+ * ceiling so a stale / hostile registration can't be displayed as valid.
+ */
+export function quoteOperatorFee(
+  args: Pick<PlaceLimitOrderViaArgs, "operator" | "price" | "amount">,
+  feeBps: number,
+): OperatorFeeQuote {
+  if (!Number.isInteger(feeBps) || feeBps < 0 || feeBps > PROTOCOL_MAX_OPERATOR_FEE_BPS) {
+    throw new MarketActionError(
+      `feeBps must be an integer in 0..=${PROTOCOL_MAX_OPERATOR_FEE_BPS}`,
+    );
+  }
+  const operator = normalizeNativeMarketAddress(args.operator, "operator");
+  if (operator.kind !== "user") {
+    throw new MarketActionError("operator must be a 'mono' user address");
+  }
+  const price = positiveDecimal(args.price, "price");
+  const amount = positiveDecimal(args.amount, "amount");
+  const quoteBasis = price * amount;
+  const feeAmount = (quoteBasis * BigInt(feeBps)) / 10_000n;
+  return {
+    operator: args.operator,
+    feeBps,
+    quoteBasis: quoteBasis.toString(10),
+    feeAmount: feeAmount.toString(10),
+  };
+}
+
+/**
+ * Build a routed limit-order plan (`placeLimitOrderVia` against the
+ * operator router at `0x100B`) plus the declared operator-fee projection
+ * for wallet display.
+ *
+ * Two-spender approval model: the user must approve **two** spenders for
+ * this order to succeed — the CLOB (`0x1001`) for the order's quote/base
+ * escrow, AND the operator router (`0x100B`) for the fee skim. A wallet
+ * surfacing this plan should prompt both approvals (or one combined
+ * approval covering `quoteBasis + feeAmount`).
+ */
+export function buildPlaceLimitOrderViaPlan(
+  args: PlaceLimitOrderViaArgs,
+  feeBps: number,
+): PlaceLimitOrderViaPlan {
+  return {
+    method: "eth_sendTransaction",
+    params: [
+      {
+        to: PRECOMPILE_ADDRESSES.OPERATOR_ROUTER,
+        value: "0x0",
+        data: encodePlaceLimitOrderViaCalldata(args),
+      },
+    ],
+    mempoolClass: MempoolClass.CLOBOp,
+    operatorFee: quoteOperatorFee(args, feeBps),
+  };
+}
+
+/**
+ * Decode an `OperatorFeeCharged` log (`0x100B`) into a typed
+ * {@link OperatorFeeChargedEvent}. `topics` is the log topic vector
+ * (`topic0`, indexed `operator`, indexed `user`, indexed `marketId`);
+ * `data` is the non-indexed ABI body
+ * `(address recipient, bytes32 quoteToken, uint256 feeAmount, bytes32 clobOrderId)`.
+ */
+export function decodeOperatorFeeChargedEvent(
+  topics: readonly (string | Uint8Array | readonly number[])[],
+  data: string | Uint8Array | readonly number[],
+): OperatorFeeChargedEvent {
+  if (topics.length !== 4) {
+    throw new MarketActionError(
+      `OperatorFeeCharged expects 4 topics, got ${topics.length}`,
+    );
+  }
+  const topic0 = bytesToHex(expectWordLen(toEventBytes(topics[0]), "topic0"));
+  const expected = bytesToHex(
+    keccak_256(new TextEncoder().encode(OPERATOR_ROUTER_EVENT_SIGS.operatorFeeCharged)),
+  );
+  if (topic0 !== expected) {
+    throw new MarketActionError("topic0 is not OperatorFeeCharged");
+  }
+  const body = toEventBytes(data);
+  if (body.length !== 4 * 32) {
+    throw new MarketActionError(
+      `OperatorFeeCharged expects 128 data bytes, got ${body.length}`,
+    );
+  }
+  return {
+    operator: addressFromEventTopic(topics[1]),
+    user: addressFromEventTopic(topics[2]),
+    marketId: bytesToHex(expectWordLen(toEventBytes(topics[3]), "marketId")),
+    recipient: bytesToHex(body.subarray(12, 32)),
+    quoteToken: bytesToHex(body.subarray(32, 64)),
+    feeAmount: u256DecimalWord(body.subarray(64, 96)),
+    clobOrderId: bytesToHex(body.subarray(96, 128)),
+  };
+}
+
 export function buildNativeCallForwarderArtifact(requestBytes: string | number | bigint): NativeCallForwarderArtifact {
   const size = uint64(requestBytes, "requestBytes");
   if (size === 0n) {
@@ -1131,6 +1440,41 @@ function uint256Word(value: bigint, name: string): Uint8Array {
     rest >>= 8n;
   }
   return out;
+}
+
+/** Left-pad a 20-byte address into a 32-byte ABI head word. */
+function addressWord(addr: Uint8Array): Uint8Array {
+  if (addr.length !== 20) {
+    throw new MarketActionError("address must be 20 bytes");
+  }
+  const out = new Uint8Array(32);
+  out.set(addr, 12);
+  return out;
+}
+
+/** Coerce a hex/byte input to bytes for event decoding. */
+function toEventBytes(value: string | Uint8Array | readonly number[]): Uint8Array {
+  if (typeof value === "string") return hexToBytes(value, "event word");
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+
+function expectWordLen(value: Uint8Array, name: string): Uint8Array {
+  if (value.length !== 32) {
+    throw new MarketActionError(`${name} must be 32 bytes, got ${value.length}`);
+  }
+  return value;
+}
+
+/** Decode a left-padded address from a 32-byte indexed topic. */
+function addressFromEventTopic(topic: string | Uint8Array | readonly number[]): string {
+  return bytesToHex(expectWordLen(toEventBytes(topic), "address topic").subarray(12, 32));
+}
+
+/** Decode a `uint256` word to a decimal string. */
+function u256DecimalWord(word: Uint8Array): string {
+  let v = 0n;
+  for (const b of word) v = (v << 8n) | BigInt(b);
+  return v.toString(10);
 }
 
 function spotLimitOrderInto(w: BincodeWriter, args: EncodeNativeSpotLimitOrderArgs, prefix: string): void {

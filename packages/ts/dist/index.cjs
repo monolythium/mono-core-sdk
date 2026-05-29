@@ -361,6 +361,10 @@ var PRECOMPILE_ADDRESSES = {
   ORACLE: "0x0000000000000000000000000000000000001009",
   /** Distributed delegation primitive — gateable. */
   DELEGATION: "0x000000000000000000000000000000000000100A",
+  /** Operator-fee router — skims an operator surcharge on routed CLOB ops; gateable. */
+  OPERATOR_ROUTER: "0x000000000000000000000000000000000000100B",
+  /** GPU prover market — gateable, genesis-disabled (foundation milestone flip). */
+  PROVER_MARKET: "0x000000000000000000000000000000000000100C",
   /** One-time emergency-key registry — non-gateable. */
   EMERGENCY_KEY: "0x0000000000000000000000000000000000001100",
   /** VRF precompile. */
@@ -390,6 +394,8 @@ var PRECOMPILE_ADDRESSES = {
   /** Hierarchical name registry — gateable. */
   NAME_REGISTRY: "0x000000000000000000000000000000000000110E"
 };
+var OPERATOR_ROUTER_ADDRESS = PRECOMPILE_ADDRESSES.OPERATOR_ROUTER;
+var PROTOCOL_MAX_OPERATOR_FEE_BPS = 100;
 
 // src/node-registry.ts
 var NODE_REGISTRY_CAPABILITIES = {
@@ -2861,11 +2867,15 @@ var RpcClient = class _RpcClient {
   async lythClusters(page = 0, limit = 25) {
     return normalizeClusterDirectoryPage(await this.call("lyth_clusters", [page, limit]));
   }
-  // --- PF-4 / PF-6 / MB-6 / MB-4 / MB-2 read wrappers ---------------------
+  // --- PF-4 / PF-6 / MB-6 / MB-4 / MB-2 + operator-router read wrappers ----
   //
-  // Encoders + response types for these six pillars are final on mono-core
-  // master; the `lyth_*` read methods land in a later chain-wiring wave, so
-  // each wrapper carries a confirm-at-wiring TODO on the method name/shape.
+  // Reconciled against the FINAL mono-core RPC surface (master 2eff9fed):
+  // every method name + response shape below matches the chain's `lyth_*`
+  // dispatch + impls exactly (camelCase keys, 0x-hex uint256 amounts,
+  // bech32m addresses). The three indexer-backed methods —
+  // `lyth_oracleSigners`, `lyth_listProofRequests`, `lyth_proverMarketStatus`
+  // — return a graceful `{ status: "indexer_unavailable", … }` envelope
+  // when the node runs without its indexer projection.
   /** PF-4 — `lyth_getSpendingPolicy`: the §18.8 spending-policy view for a sub-account. */
   async lythGetSpendingPolicy(subAccount) {
     return this.call("lyth_getSpendingPolicy", [sdkTypedAddress(subAccount, "user", "subAccount")]);
@@ -2874,11 +2884,20 @@ var RpcClient = class _RpcClient {
   async lythGetClusterDiversity(clusterId) {
     return this.call("lyth_getClusterDiversity", [clusterId]);
   }
-  /** PF-6 — `lyth_getOperatorNetworkMetadata`: ASN/geo/hosting-class/IP/PCR for a peer. */
-  async lythGetOperatorNetworkMetadata(peerId) {
-    return this.call("lyth_getOperatorNetworkMetadata", [peerId]);
+  /**
+   * PF-6 — `lyth_getOperatorNetworkMetadata`: ASN/geo/hosting-class/IP/PCR
+   * for a peer. `operatorId` is the 32-byte operator/peer id as `0x…` hex
+   * (the form `lyth_operatorInfo` returns).
+   */
+  async lythGetOperatorNetworkMetadata(operatorId) {
+    return this.call("lyth_getOperatorNetworkMetadata", [operatorId]);
   }
-  /** MB-6 — `lyth_oracleSigners`: the on-chain oracle writer/admin roster. */
+  /**
+   * MB-6 — `lyth_oracleSigners`: the global oracle writer roster (folded
+   * from `OracleWriterAdded` / `OracleWriterRemoved`). Returns the
+   * `{ status: "indexer_unavailable", writers: [] }` fallback when the
+   * node runs without the oracle writer-roster indexer projection.
+   */
   async lythOracleSigners() {
     return this.call("lyth_oracleSigners", []);
   }
@@ -2898,22 +2917,70 @@ var RpcClient = class _RpcClient {
   async lythGetProofRequest(requestId) {
     return this.call("lyth_getProofRequest", [requestId]);
   }
-  /** MB-4 — `lyth_listProofRequests`: open/recent prover-market proof requests. */
-  async lythListProofRequests(limit = 50, cursor) {
-    const params = cursor == null ? [limit] : [limit, cursor];
+  /**
+   * MB-4 — `lyth_listProofRequests`: open/recent prover-market proof
+   * requests. Params are `[stateFilter?, limit?]` (the chain's order),
+   * where `stateFilter` is one of `open|assigned|settled|slashed|expired`.
+   * Returns the `{ status: "indexer_unavailable", requests: [] }` fallback
+   * when the node runs without the prover-market indexer projection.
+   */
+  async lythListProofRequests(stateFilter, limit) {
+    const params = [];
+    if (stateFilter != null || limit != null) params.push(stateFilter ?? null);
+    if (limit != null) params.push(limit);
     return this.call("lyth_listProofRequests", params);
   }
   /** MB-4 — `lyth_getProverBids`: the fee bids placed on one proof request. */
   async lythGetProverBids(requestId) {
     return this.call("lyth_getProverBids", [requestId]);
   }
-  /** MB-4 — `lyth_proverMarketStatus`: prover-market summary / health. */
+  /**
+   * MB-4 — `lyth_proverMarketStatus`: prover-market summary. `feeFloor` is
+   * always present (on-chain genesis singleton); the aggregate counts are
+   * `null` on the `{ status: "indexer_unavailable" }` fallback path.
+   */
   async lythProverMarketStatus() {
     return this.call("lyth_proverMarketStatus", []);
   }
-  /** MB-2 — `lyth_bridgeHealth`: bridge route breaker state (drain cap, pause, cooldown). */
-  async lythBridgeHealth(bridgeId) {
-    return this.call("lyth_bridgeHealth", [bridgeId]);
+  /**
+   * Operator-router — `lyth_operatorRouterConfig`: the router's static
+   * posture (`0x100B` address, the protocol fee ceiling, and whether the
+   * gateable router precompile is currently milestone-activated).
+   */
+  async lythOperatorRouterConfig() {
+    return this.call("lyth_operatorRouterConfig", []);
+  }
+  /**
+   * Operator-router — `lyth_operatorFeeConfig`: one operator's fee
+   * registration (recipient, fee bps, enabled flag, registered-at block).
+   * `operator` is a `mono` bech32m user address.
+   */
+  async lythOperatorFeeConfig(operator) {
+    return this.call("lyth_operatorFeeConfig", [sdkTypedAddress(operator, "user", "operator")]);
+  }
+  /**
+   * MB-2 — `lyth_bridgeHealth`: a paged set of bridge-record health
+   * envelopes. Each record carries the circuit-breaker posture
+   * (`defaultDrainCapPerWindow`, `defaultDrainWindowBlocks`, `paused`,
+   * `pausedAtBlock`, `resumeCooldownBlocks`). Params are `[cursor?, limit?]`
+   * (the chain pages the global bridge set; there is no single-bridge form).
+   */
+  async lythBridgeHealth(cursor, limit) {
+    const params = [];
+    if (cursor != null || limit != null) params.push(cursor ?? null);
+    if (limit != null) params.push(limit);
+    return this.call("lyth_bridgeHealth", params);
+  }
+  /**
+   * MB-2 — `lyth_bridgeDrainStatus`: the live per-route circuit-breaker
+   * drain bucket for one `(bridgeId, wrappedAsset)` route. `bridgeId` is a
+   * 32-byte `0x…` hex id; `wrappedAsset` is a `mono` bech32m user address.
+   */
+  async lythBridgeDrainStatus(bridgeId, wrappedAsset) {
+    return this.call("lyth_bridgeDrainStatus", [
+      bridgeId,
+      sdkTypedAddress(wrappedAsset, "user", "wrappedAsset")
+    ]);
   }
   /**
    * `lyth_submitPendingChange` — operator-onboarding transport for the
@@ -6725,7 +6792,7 @@ function expectLength4(value, len, name) {
   }
   return value;
 }
-var PROVER_MARKET_TENTATIVE_ADDRESS = "0x0000000000000000000000000000000000001110";
+var PROVER_MARKET_ADDRESS = PRECOMPILE_ADDRESSES.PROVER_MARKET;
 var SERVES_GPU_PROVE = 512;
 var PROVER_MARKET_SELECTORS = {
   createRequest: "0x" + selectorHex2("createRequest(bytes)"),
@@ -7508,6 +7575,39 @@ var CLOB_SELECTORS = {
   /** `setLotSize(bytes32,bytes32,uint256)` — foundation-authorized per-market grid tune. */
   setLotSize: "0x9909be80"
 };
+var OPERATOR_ROUTER_SIGS = {
+  /** `registerOperator(address recipient, uint16 feeBps)`. */
+  registerOperator: "registerOperator(address,uint16)",
+  /** `updateOperator(address recipient, uint16 feeBps)`. */
+  updateOperator: "updateOperator(address,uint16)",
+  /** `disableOperator(address operator)` — foundation-authorized. */
+  disableOperator: "disableOperator(address)",
+  /**
+   * `placeLimitOrderVia(address operator, bytes32 base, bytes32 quote,
+   *  uint8 side, uint256 price, uint256 amount, uint64 expiresAtBlock)`
+   *  → `bytes32 orderId`.
+   *
+   * Skims the operator fee (quote token, `user -> recipient`) then
+   * re-enters the CLOB `placeLimitOrder` op with `caller = user`, so the
+   * resting order is owned + escrowed + cancellable by the user,
+   * identical to a direct CLOB placement.
+   */
+  placeLimitOrderVia: "placeLimitOrderVia(address,bytes32,bytes32,uint8,uint256,uint256,uint64)"
+};
+var OPERATOR_ROUTER_SELECTORS = {
+  registerOperator: operatorRouterSelectorHex(OPERATOR_ROUTER_SIGS.registerOperator),
+  updateOperator: operatorRouterSelectorHex(OPERATOR_ROUTER_SIGS.updateOperator),
+  disableOperator: operatorRouterSelectorHex(OPERATOR_ROUTER_SIGS.disableOperator),
+  placeLimitOrderVia: operatorRouterSelectorHex(OPERATOR_ROUTER_SIGS.placeLimitOrderVia)
+};
+var OPERATOR_ROUTER_EVENT_SIGS = {
+  operatorFeeCharged: "OperatorFeeCharged(address,address,bytes32,address,bytes32,uint256,bytes32)",
+  operatorRegistered: "OperatorRegistered(address,address,uint16)",
+  operatorUpdated: "OperatorUpdated(address,address,uint16,bool)"
+};
+function operatorRouterSelectorHex(sig) {
+  return "0x" + [...sha3_js.keccak_256(new TextEncoder().encode(sig)).slice(0, 4)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 var MarketActionError = class extends Error {
   constructor(message) {
     super(message);
@@ -7886,6 +7986,92 @@ function buildCancelSpotOrderPlan(args) {
     mempoolClass: MempoolClass.CLOBOp
   };
 }
+function encodePlaceLimitOrderViaCalldata(args) {
+  const operator = normalizeNativeMarketAddress(args.operator, "operator");
+  if (operator.kind !== "user") {
+    throw new MarketActionError("operator must be a 'mono' user address");
+  }
+  const side = normalizeSide(args.side);
+  const price = positiveDecimal(args.price, "price");
+  const amount = positiveDecimal(args.amount, "amount");
+  const expiresAtBlock = uint64(args.expiresAtBlock ?? 0n, "expiresAtBlock");
+  return bytesToHex2(
+    concatBytes2(
+      hexToBytes2(OPERATOR_ROUTER_SELECTORS.placeLimitOrderVia, "placeLimitOrderVia selector"),
+      addressWord2(operator.bytes),
+      bytes32FromHex(args.base, "base"),
+      bytes32FromHex(args.quote, "quote"),
+      uint8Word2(side),
+      uint256Word2(price, "price"),
+      uint256Word2(amount, "amount"),
+      uint64Word3(expiresAtBlock, "expiresAtBlock")
+    )
+  );
+}
+function quoteOperatorFee(args, feeBps) {
+  if (!Number.isInteger(feeBps) || feeBps < 0 || feeBps > PROTOCOL_MAX_OPERATOR_FEE_BPS) {
+    throw new MarketActionError(
+      `feeBps must be an integer in 0..=${PROTOCOL_MAX_OPERATOR_FEE_BPS}`
+    );
+  }
+  const operator = normalizeNativeMarketAddress(args.operator, "operator");
+  if (operator.kind !== "user") {
+    throw new MarketActionError("operator must be a 'mono' user address");
+  }
+  const price = positiveDecimal(args.price, "price");
+  const amount = positiveDecimal(args.amount, "amount");
+  const quoteBasis = price * amount;
+  const feeAmount = quoteBasis * BigInt(feeBps) / 10000n;
+  return {
+    operator: args.operator,
+    feeBps,
+    quoteBasis: quoteBasis.toString(10),
+    feeAmount: feeAmount.toString(10)
+  };
+}
+function buildPlaceLimitOrderViaPlan(args, feeBps) {
+  return {
+    method: "eth_sendTransaction",
+    params: [
+      {
+        to: PRECOMPILE_ADDRESSES.OPERATOR_ROUTER,
+        value: "0x0",
+        data: encodePlaceLimitOrderViaCalldata(args)
+      }
+    ],
+    mempoolClass: MempoolClass.CLOBOp,
+    operatorFee: quoteOperatorFee(args, feeBps)
+  };
+}
+function decodeOperatorFeeChargedEvent(topics, data) {
+  if (topics.length !== 4) {
+    throw new MarketActionError(
+      `OperatorFeeCharged expects 4 topics, got ${topics.length}`
+    );
+  }
+  const topic0 = bytesToHex2(expectWordLen(toEventBytes(topics[0]), "topic0"));
+  const expected = bytesToHex2(
+    sha3_js.keccak_256(new TextEncoder().encode(OPERATOR_ROUTER_EVENT_SIGS.operatorFeeCharged))
+  );
+  if (topic0 !== expected) {
+    throw new MarketActionError("topic0 is not OperatorFeeCharged");
+  }
+  const body = toEventBytes(data);
+  if (body.length !== 4 * 32) {
+    throw new MarketActionError(
+      `OperatorFeeCharged expects 128 data bytes, got ${body.length}`
+    );
+  }
+  return {
+    operator: addressFromEventTopic(topics[1]),
+    user: addressFromEventTopic(topics[2]),
+    marketId: bytesToHex2(expectWordLen(toEventBytes(topics[3]), "marketId")),
+    recipient: bytesToHex2(body.subarray(12, 32)),
+    quoteToken: bytesToHex2(body.subarray(32, 64)),
+    feeAmount: u256DecimalWord(body.subarray(64, 96)),
+    clobOrderId: bytesToHex2(body.subarray(96, 128))
+  };
+}
 function buildNativeCallForwarderArtifact(requestBytes) {
   const size = uint64(requestBytes, "requestBytes");
   if (size === 0n) {
@@ -8140,6 +8326,32 @@ function uint256Word2(value, name) {
     rest >>= 8n;
   }
   return out;
+}
+function addressWord2(addr) {
+  if (addr.length !== 20) {
+    throw new MarketActionError("address must be 20 bytes");
+  }
+  const out = new Uint8Array(32);
+  out.set(addr, 12);
+  return out;
+}
+function toEventBytes(value) {
+  if (typeof value === "string") return hexToBytes2(value, "event word");
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+function expectWordLen(value, name) {
+  if (value.length !== 32) {
+    throw new MarketActionError(`${name} must be 32 bytes, got ${value.length}`);
+  }
+  return value;
+}
+function addressFromEventTopic(topic) {
+  return bytesToHex2(expectWordLen(toEventBytes(topic), "address topic").subarray(12, 32));
+}
+function u256DecimalWord(word) {
+  let v = 0n;
+  for (const b of word) v = v << 8n | BigInt(b);
+  return v.toString(10);
 }
 function spotLimitOrderInto(w, args, prefix) {
   w.rawBytes(bytes32FromHex(args.marketId, `${prefix}marketId`));
@@ -8731,15 +8943,20 @@ exports.NO_EVM_RECEIPT_PROOF_TYPE = NO_EVM_RECEIPT_PROOF_TYPE;
 exports.NO_EVM_RECEIPT_ROOT_ALGORITHM = NO_EVM_RECEIPT_ROOT_ALGORITHM;
 exports.NoEvmReceiptProofError = NoEvmReceiptProofError;
 exports.NodeRegistryError = NodeRegistryError;
+exports.OPERATOR_ROUTER_ADDRESS = OPERATOR_ROUTER_ADDRESS;
+exports.OPERATOR_ROUTER_EVENT_SIGS = OPERATOR_ROUTER_EVENT_SIGS;
+exports.OPERATOR_ROUTER_SELECTORS = OPERATOR_ROUTER_SELECTORS;
+exports.OPERATOR_ROUTER_SIGS = OPERATOR_ROUTER_SIGS;
 exports.ORACLE_EVENT_SIGS = ORACLE_EVENT_SIGS;
 exports.OracleEventError = OracleEventError;
 exports.PRECOMPILE_ADDRESSES = PRECOMPILE_ADDRESSES;
+exports.PROTOCOL_MAX_OPERATOR_FEE_BPS = PROTOCOL_MAX_OPERATOR_FEE_BPS;
+exports.PROVER_MARKET_ADDRESS = PROVER_MARKET_ADDRESS;
 exports.PROVER_MARKET_BID_DOMAIN = PROVER_MARKET_BID_DOMAIN;
 exports.PROVER_MARKET_EVENT_SIGS = PROVER_MARKET_EVENT_SIGS;
 exports.PROVER_MARKET_REQUEST_DOMAIN = PROVER_MARKET_REQUEST_DOMAIN;
 exports.PROVER_MARKET_SELECTORS = PROVER_MARKET_SELECTORS;
 exports.PROVER_MARKET_SUBMIT_DOMAIN = PROVER_MARKET_SUBMIT_DOMAIN;
-exports.PROVER_MARKET_TENTATIVE_ADDRESS = PROVER_MARKET_TENTATIVE_ADDRESS;
 exports.PROVER_SLASH_REASON_BAD_PROOF = PROVER_SLASH_REASON_BAD_PROOF;
 exports.PROVER_SLASH_REASON_NON_DELIVERY = PROVER_SLASH_REASON_NON_DELIVERY;
 exports.PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN = PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN;
@@ -8820,6 +9037,7 @@ exports.buildNativeSpotSettleLimitOrderForwarderInput = buildNativeSpotSettleLim
 exports.buildNativeSpotSettleLimitOrderModuleCall = buildNativeSpotSettleLimitOrderModuleCall;
 exports.buildNativeSpotSettleRoutedLimitOrderForwarderInput = buildNativeSpotSettleRoutedLimitOrderForwarderInput;
 exports.buildNativeSpotSettleRoutedLimitOrderModuleCall = buildNativeSpotSettleRoutedLimitOrderModuleCall;
+exports.buildPlaceLimitOrderViaPlan = buildPlaceLimitOrderViaPlan;
 exports.buildPlaceSpotLimitOrderPlan = buildPlaceSpotLimitOrderPlan;
 exports.buildPlaceSpotMarketOrderExPlan = buildPlaceSpotMarketOrderExPlan;
 exports.buildPlaceSpotMarketOrderPlan = buildPlaceSpotMarketOrderPlan;
@@ -8843,6 +9061,7 @@ exports.decodeNativeAgentStateResponse = decodeNativeAgentStateResponse;
 exports.decodeNativeMarketOrderBookDeltasResponse = decodeNativeMarketOrderBookDeltasResponse;
 exports.decodeNativeReceiptResponse = decodeNativeReceiptResponse;
 exports.decodeNoEvmReceiptTranscript = decodeNoEvmReceiptTranscript;
+exports.decodeOperatorFeeChargedEvent = decodeOperatorFeeChargedEvent;
 exports.decodeOperatorNetworkMetadata = decodeOperatorNetworkMetadata;
 exports.decodeOracleEvent = decodeOracleEvent;
 exports.decodeTimeWindow = decodeTimeWindow;
@@ -8913,6 +9132,7 @@ exports.encodeNativeSpotLimitOrderCall = encodeNativeSpotLimitOrderCall;
 exports.encodeNativeSpotSettleLimitOrderCall = encodeNativeSpotSettleLimitOrderCall;
 exports.encodeNativeSpotSettleRoutedLimitOrderCall = encodeNativeSpotSettleRoutedLimitOrderCall;
 exports.encodePlaceLimitOrderCalldata = encodePlaceLimitOrderCalldata;
+exports.encodePlaceLimitOrderViaCalldata = encodePlaceLimitOrderViaCalldata;
 exports.encodePlaceMarketOrderCalldata = encodePlaceMarketOrderCalldata;
 exports.encodePlaceMarketOrderExCalldata = encodePlaceMarketOrderExCalldata;
 exports.encodeRedelegateCalldata = encodeRedelegateCalldata;
@@ -8981,6 +9201,7 @@ exports.parseQuantity = parseQuantity;
 exports.parseQuantityBig = parseQuantityBig;
 exports.proverMarketStateFromByte = proverMarketStateFromByte;
 exports.pubkeyRegistryAddressHex = pubkeyRegistryAddressHex;
+exports.quoteOperatorFee = quoteOperatorFee;
 exports.rankBridgeRoutes = rankBridgeRoutes;
 exports.requestSighash = requestSighash;
 exports.requireTypedAddress = requireTypedAddress;

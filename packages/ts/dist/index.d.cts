@@ -1,5 +1,5 @@
-import { N as NativeReceiptFee, O as OperatorCapabilitiesResponse, R as RuntimeBuildProvenance, a as RuntimeUpgradeStatus, S as SearchResponse, C as ChainStatsResponse, B as BlockSelector, A as ApiStreamsIndexResponse, T as TxFeedResponse, b as NativeReceiptResponse, c as NativeDecodedEvent, d as NativeEventFilter, e as TypedNativeReceiptEvent, f as NativeEventsFilter, g as NativeEventsResponse, h as NativeAgentStateFilter, i as NativeAgentStateResponse, j as NativeMarketStateFilter, k as NativeMarketStateResponse, l as NativeMarketOrderBookDeltasRequest, m as NativeMarketOrderBookDeltasResponse, n as AddressProfileResponse, o as AddressFlowResponse, P as PendingRewardsResponse, p as RedemptionQueueResponse, M as MrcMetadataResponse, q as MrcAccountResponse, r as MrcHoldersResponse, s as BridgeRoutesRequest, t as BridgeRoutesResponse, u as ServiceProbeResponse, v as ClobMarketsResponse, w as ClobMarketResponse, x as ClobTradesResponse, y as ClobOhlcResponse, z as ClobOrderBookResponse, D as NativeEvmTxFields, E as EncryptionKey, F as MempoolClass, G as RpcClient, H as MlDsa65Backend } from './submission-CRQmEwOY.cjs';
-export { I as API_STREAM_TOPICS, J as AccountPolicy, K as AccountProofResponse, L as Address, Q as AddressActivityArchiveRedirect, U as AddressActivityEntry, V as AddressActivityKind, W as AddressActivityKindResponse, X as AddressActivityKindRetention, Y as AddressLabelRecord, Z as AgentReputationCategoryScope, _ as AgentReputationRecord, $ as AgentReputationResponse, a0 as ApiStreamTopic, a1 as ApiStreamTopicMetadata, a2 as ApiStreamTopicRetention, a3 as AssetPolicy, a4 as AttestationWindow, a5 as BRIDGE_QUOTE_API_BLOCKED_REASON, a6 as BRIDGE_REVERT_TAGS, a7 as BRIDGE_SELECTORS, a8 as BRIDGE_SUBMIT_API_BLOCKED_REASON, a9 as BlockHeader, aa as BlockTag, ab as BlsCertificateResponse, ac as BridgeAdminControl, ad as BridgeBreakerState, ae as BridgeBytesInput, af as BridgeCircuitBreakerState, ag as BridgeDrainCap, ah as BridgePrecompileError, ai as BridgeQuoteSubmitReadiness, aj as BridgeRiskTier, ak as BridgeRouteAssessment, al as BridgeRouteCandidate, am as BridgeRouteCatalogue, an as BridgeRouteCatalogueError, ao as BridgeRouteCatalogueJsonOptions, ap as BridgeRouteCataloguePayload, aq as BridgeRouteCatalogueRoute, ar as BridgeRouteCatalogueValidation, as as BridgeRouteDisclosure, at as BridgeRouteSelection, au as BridgeRoutesSource, av as BridgeTransferIntent, aw as BridgeTransferRequest, ax as BridgeVerifierDisclosure, ay as CHAIN_REGISTRY, az as CHAIN_REGISTRY_RAW_BASE, aA as CLUSTER_FORMED_EVENT_SIG, aB as CapabilitiesResponse, aC as CapabilityDescriptor, aD as ChainInfo, aE as ChainRegistry, aF as CheckpointRecord, aG as ClobMarketRecord, aH as ClobMarketSummary, aI as ClobTrade, aJ as ClusterDelegatorsResponse, aK as ClusterDirectoryEntryResponse, aL as ClusterDirectoryPageResponse, aM as ClusterDiversity, aN as ClusterEntityResponse, aO as ClusterFormedEvent, aP as ClusterMemberResponse, aQ as ClusterResignationRow, aR as ClusterResignationsResponse, aS as ClusterStatusResponse, aT as CreateRequestCanonicalArgs, aU as DIVERSITY_SCORE_MAX, aV as DagParent, aW as DagParentsResponse, aX as DagSyncStatus, aY as DecodeTxExtension, aZ as DecodeTxLog, a_ as DecodeTxPqAttestation, a$ as DecodeTxResponse, b0 as DelegationCapResponse, b1 as DelegationHistoryRecord, b2 as DelegationRow, b3 as DelegationsResponse, b4 as DutyAbsence, b5 as EncryptionKeyResponse, b6 as EntityRatchetResponse, b7 as ExecutionUnitPriceResponse, b8 as ExplorerEndpoint, b9 as FeeHistoryResponse, ba as GapRange, bb as GapRecord, bc as GapRecordsResponse, bd as Hash, be as Hex, bf as IndexerStatus, bg as JailStatusWindow, bh as KeyRotationWindow, bi as LythUpgradePlanStatus, bj as LythUpgradeStatusResponse, bk as MAX_NATIVE_RECEIPT_EVENTS, bl as ML_DSA_65_PUBLIC_KEY_LEN, bm as ML_DSA_65_SIGNATURE_LEN, bn as MULTISIG_ADDRESS_DERIVATION_DOMAIN, bo as MempoolSnapshot, bp as MeshDecodedTx, bq as MeshSignedTxResponse, br as MeshTxIntent, bs as MeshUnsignedTxResponse, bt as MetricsRangeResponse, bu as MetricsRangeSample, bv as MetricsRangeSeries, bw as MetricsRangeStatus, bx as MrcAccountRecord, by as MrcMetadataRecord, bz as MrcPolicyRecord, bA as MrcPolicySpendRecord, bB as NATIVE_MARKET_EVENT_FAMILY, bC as NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, bD as NODE_REGISTRY_CAPABILITIES, bE as NODE_REGISTRY_CAPABILITY_MASK, bF as NODE_REGISTRY_PUBLIC_SERVICE_MASK, bG as NODE_REGISTRY_SELECTORS, bH as NO_EVM_ARCHIVE_PROOF_SCHEMA, bI as NO_EVM_ARCHIVE_SIGNATURE_SCHEME, bJ as NO_EVM_FINALITY_EVIDENCE_SCHEMA, bK as NO_EVM_FINALITY_EVIDENCE_SOURCE, bL as NO_EVM_RECEIPTS_ROOT_DOMAIN, bM as NO_EVM_RECEIPT_CODEC, bN as NO_EVM_RECEIPT_PROOF_SCHEMA, bO as NO_EVM_RECEIPT_PROOF_TYPE, bP as NO_EVM_RECEIPT_ROOT_ALGORITHM, bQ as NativeAgentArbiterStateRecord, bR as NativeAgentAttestationStateRecord, bS as NativeAgentAvailabilityStateRecord, bT as NativeAgentConsentStateRecord, bU as NativeAgentEscrowStateRecord, bV as NativeAgentIssuerStateRecord, bW as NativeAgentPolicySpendStateRecord, bX as NativeAgentPolicyStateRecord, bY as NativeAgentReputationReviewStateRecord, bZ as NativeAgentServiceStateRecord, b_ as NativeAgentStateFilterParamValue, b$ as NativeAgentStateResponseFilters, c0 as NativeAgentStateSource, c1 as NativeCollectionRoyaltyStateRecord, c2 as NativeEventConsumer, c3 as NativeEventProjection, c4 as NativeEventsResponseFilters, c5 as NativeEventsSource, c6 as NativeMarketOrderBookDelta, c7 as NativeMarketOrderBookDeltasResponseFilters, c8 as NativeMarketOrderBookDeltasSource, c9 as NativeMarketOrderBookStreamAction, ca as NativeMarketOrderBookStreamPayload, cb as NativeMarketStateFilterParamValue, cc as NativeMarketStateResponseFilters, cd as NativeMarketStateSource, ce as NativeModuleForwarderDescriptor, cf as NativeMrcPolicyProjection, cg as NativeNftListingStateRecord, ch as NativeReceiptCounters, ci as NativeReceiptEvent, cj as NativeReceiptSource, ck as NativeSpotMarketStateRecord, cl as NativeSpotOrderStateRecord, cm as NetworkClientOptions, cn as NetworkSlug, co as NoEvmArchiveCoveringSnapshot, cp as NoEvmArchiveProof, cq as NoEvmArchiveSignatureVerification, cr as NoEvmArchiveSignatureVerificationIssue, cs as NoEvmArchiveSignatureVerificationIssueCode, ct as NoEvmArchiveTrustedSigner, cu as NoEvmBlockBlsFinalityVerification, cv as NoEvmBlsFinalityVerification, cw as NoEvmFinalityBlockReference, cx as NoEvmFinalityCertificate, cy as NoEvmFinalityEvidence, cz as NoEvmReceiptFinalityTrustPolicy, cA as NoEvmReceiptProof, cB as NoEvmReceiptProofError, cC as NoEvmReceiptProofErrorCode, cD as NoEvmReceiptProofVerification, cE as NoEvmReceiptTrustIssue, cF as NoEvmReceiptTrustIssueCode, cG as NoEvmReceiptTrustPolicy, cH as NoEvmReceiptTrustVerification, cI as NoEvmReceiptTrustedBlsSigner, cJ as NodeHostingClass, cK as NodeRegistryError, cL as OperatorAuthorityResponse, cM as OperatorInfoResponse, cN as OperatorNetworkMetadata, cO as OperatorRiskResponse, cP as OperatorSigningActivityResponse, cQ as OperatorSigningEntry, cR as OperatorSurfaceCapability, cS as OperatorSurfaceStatus, cT as P2pSeed, cU as PROVER_MARKET_BID_DOMAIN, cV as PROVER_MARKET_EVENT_SIGS, cW as PROVER_MARKET_REQUEST_DOMAIN, cX as PROVER_MARKET_SELECTORS, cY as PROVER_MARKET_SUBMIT_DOMAIN, cZ as PROVER_MARKET_TENTATIVE_ADDRESS, c_ as PROVER_SLASH_REASON_BAD_PROOF, c$ as PROVER_SLASH_REASON_NON_DELIVERY, d0 as PeerSummary, d1 as PeerSummaryAggregate, d2 as PendingRewardsRow, d3 as PendingTxSummary, d4 as PrecompileCatalogueResponse, d5 as PrecompileDescriptor, d6 as ProofRequestView, d7 as ProverBidView, d8 as ProverMarketError, d9 as ProverMarketState, da as Quantity, db as RankedBridgeRoute, dc as ReceiptProofTrustArchivePolicy, dd as ReceiptProofTrustArchiveSigner, de as ReceiptProofTrustFinalityPolicy, df as ReceiptProofTrustFinalitySigner, dg as ReceiptProofTrustPolicy, dh as RedemptionQueueTicket, di as RegistryRecord, dj as ReportServiceProbeCalldataArgs, dk as ReportServiceProbeRequest, dl as ReportServiceProbeResponse, dm as RichListHolder, dn as RichListResponse, dp as RoundInfo, dq as RpcClientOptions, dr as RpcEndpoint, ds as RuntimeProvenanceResponse, dt as SERVES_GPU_PROVE, du as SERVICE_PROBE_STATUS, dv as SET_POLICY_CLAIM_DOMAIN_TAG, dw as SPENDING_POLICY_SELECTORS, dx as SearchHit, dy as ServiceProbeStatusLabel, dz as SigningEntryStatus, dA as SpendingPolicyArgs, dB as SpendingPolicyError, dC as SpendingPolicyView, dD as StorageProofBatch, dE as SyncStatus, dF as TESTNET_69420, dG as TokenBalanceMrcIdentity, dH as TokenBalanceRecord, dI as TpmAttestationResponse, dJ as TransactionReceipt, dK as TransactionView, dL as TxFeedReceipt, dM as TxFeedTransaction, dN as TxStatusFoundResponse, dO as TxStatusNotFoundResponse, dP as TxStatusResponse, dQ as UpcomingDutiesResponse, dR as UpcomingDutyMap, dS as UserAddressInput, dT as V1_BRIDGE_ALLOWED_FEE_TOKEN, dU as V1_BRIDGE_ALLOWED_PROTOCOL, dV as VertexAtRound, dW as VerticesAtRoundResponse, dX as assertNativeMarketOrderBookStreamPayload, dY as assessBridgeRoute, dZ as bidSighash, d_ as bridgeAddressHex, d$ as bridgeDrainRemaining, e0 as bridgeQuoteSubmitReadiness, e1 as bridgeRoutesReadiness, e2 as bridgeTransferCandidates, e3 as buildBridgeRouteCatalogue, e4 as composeClaimBoundMessage, e5 as computeNoEvmDacFinalityMessage, e6 as computeNoEvmLeaderFinalityMessage, e7 as computeNoEvmReceiptsRoot, e8 as computeNoEvmRoundFinalityMessage, e9 as computeNoEvmTargetReceiptHash, ea as consumeNativeEvents, eb as decodeClusterDiversity, ec as decodeClusterFormedEvent, ed as decodeNativeAgentStateResponse, ee as decodeNativeMarketOrderBookDeltasResponse, ef as decodeNativeReceiptResponse, eg as decodeNoEvmReceiptTranscript, eh as decodeOperatorNetworkMetadata, ei as decodeTimeWindow, ej as decodeTxFeedResponse, ek as deriveClusterAnchorAddress, el as encodeBlockSelector, em as encodeClaimPolicyByAddressCalldata, en as encodeCreateRequestCalldata, eo as encodeCreateRequestCanonical, ep as encodeDisableCalldata, eq as encodeEnableCalldata, er as encodeLockBridgeConfigCalldata, es as encodeReportServiceProbeCalldata, et as encodeSetBridgeResumeCooldownCalldata, eu as encodeSetBridgeRouteFinalityCalldata, ev as encodeSetPolicyCalldata, ew as encodeSetPolicyClaimCalldata, ex as exportBridgeRouteCatalogueJson, ey as fetchChainInfoLatest, ez as fetchChainRegistryLatest, eA as getChainInfo, eB as getNoEvmReceiptTrustPolicy, eC as getP2pSeeds, eD as getRpcEndpoints, eE as isBridgeAdminLockedRevert, eF as isBridgeCooldownZeroRevert, eG as isBridgeFinalityZeroRevert, eH as isBridgeResumeCooldownActiveRevert, eI as isConcreteServiceProbeStatus, eJ as isNativeDecodedEvent, eK as isNativeMarketOrderBookStreamPayload, eL as isSinglePublicServiceProbeMask, eM as isValidNodeRegistryCapabilities, eN as isValidPublicServiceProbeMask, eO as nativeAgentStateFilterParams, eP as nativeEventMatches, eQ as nativeEventsFilterParams, eR as nativeEventsFromHistory, eS as nativeEventsFromReceipt, eT as nativeMarketEventFilter, eU as nativeMarketEventsFromHistory, eV as nativeMarketEventsFromReceipt, eW as nativeMarketStateFilterParams, eX as noEvmReceiptTrustPolicyFromChainInfo, eY as nodeHostingClassFromByte, eZ as nodeHostingClassToByte, e_ as nodeRegistryAddressHex, e$ as normalizeBridgeRouteCatalogue, f0 as packTimeWindow, f1 as parseBridgeRouteCatalogueJson, f2 as parseChainRegistryToml, f3 as parseNativeDecodedEvent, f4 as parseQuantity, f5 as parseQuantityBig, f6 as proverMarketStateFromByte, f7 as rankBridgeRoutes, f8 as requestSighash, f9 as selectBridgeTransferRoute, fa as serviceProbeStatusLabel, fb as spendingPolicyAddressHex, fc as submitSighash, fd as validateBridgeRouteCatalogue, fe as verifyNoEvmArchiveProofSignatures, ff as verifyNoEvmBlockFinalityEvidenceMultisig, fg as verifyNoEvmBlockFinalityEvidenceThreshold, fh as verifyNoEvmFinalityEvidenceMultisig, fi as verifyNoEvmFinalityEvidenceThreshold, fj as verifyNoEvmReceiptProof, fk as verifyNoEvmReceiptProofTrust } from './submission-CRQmEwOY.cjs';
+import { N as NativeReceiptFee, O as OperatorCapabilitiesResponse, R as RuntimeBuildProvenance, a as RuntimeUpgradeStatus, S as SearchResponse, C as ChainStatsResponse, B as BlockSelector, A as ApiStreamsIndexResponse, T as TxFeedResponse, b as NativeReceiptResponse, c as NativeDecodedEvent, d as NativeEventFilter, e as TypedNativeReceiptEvent, f as NativeEventsFilter, g as NativeEventsResponse, h as NativeAgentStateFilter, i as NativeAgentStateResponse, j as NativeMarketStateFilter, k as NativeMarketStateResponse, l as NativeMarketOrderBookDeltasRequest, m as NativeMarketOrderBookDeltasResponse, n as AddressProfileResponse, o as AddressFlowResponse, P as PendingRewardsResponse, p as RedemptionQueueResponse, M as MrcMetadataResponse, q as MrcAccountResponse, r as MrcHoldersResponse, s as BridgeRoutesRequest, t as BridgeRoutesResponse, u as ServiceProbeResponse, v as ClobMarketsResponse, w as ClobMarketResponse, x as ClobTradesResponse, y as ClobOhlcResponse, z as ClobOrderBookResponse, D as NativeEvmTxFields, E as EncryptionKey, F as MempoolClass, G as TypedAddress, H as RpcClient, I as MlDsa65Backend, J as AddressKind } from './submission-C19l5ilj.cjs';
+export { K as ADDRESS_HRP, L as ADDRESS_KIND_HRPS, Q as API_STREAM_TOPICS, U as AccountPolicy, V as AccountProofResponse, W as Address, X as AddressActivityArchiveRedirect, Y as AddressActivityEntry, Z as AddressActivityKind, _ as AddressActivityKindResponse, $ as AddressActivityKindRetention, a0 as AddressError, a1 as AddressLabelRecord, a2 as AddressValidation, a3 as AgentReputationCategoryScope, a4 as AgentReputationRecord, a5 as AgentReputationResponse, a6 as ApiStreamTopic, a7 as ApiStreamTopicMetadata, a8 as ApiStreamTopicRetention, a9 as AssetPolicy, aa as AttestationWindow, ab as BRIDGE_QUOTE_API_BLOCKED_REASON, ac as BRIDGE_REVERT_TAGS, ad as BRIDGE_SELECTORS, ae as BRIDGE_SUBMIT_API_BLOCKED_REASON, af as BlockHeader, ag as BlockTag, ah as BlsCertificateResponse, ai as BridgeAdminControl, aj as BridgeAnchorState, ak as BridgeBreakerState, al as BridgeBytesInput, am as BridgeCircuitBreakerFields, an as BridgeCircuitBreakerState, ao as BridgeDrainCap, ap as BridgeDrainStatus, aq as BridgeHealthRecord, ar as BridgeHealthResponse, as as BridgePrecompileError, at as BridgeQuoteSubmitReadiness, au as BridgeRiskTier, av as BridgeRouteAssessment, aw as BridgeRouteCandidate, ax as BridgeRouteCatalogue, ay as BridgeRouteCatalogueError, az as BridgeRouteCatalogueJsonOptions, aA as BridgeRouteCataloguePayload, aB as BridgeRouteCatalogueRoute, aC as BridgeRouteCatalogueValidation, aD as BridgeRouteDisclosure, aE as BridgeRouteSelection, aF as BridgeRoutesSource, aG as BridgeTransferIntent, aH as BridgeTransferRequest, aI as BridgeVerifierDisclosure, aJ as CHAIN_REGISTRY, aK as CHAIN_REGISTRY_RAW_BASE, aL as CLOB_MARKET_ID_DOMAIN_TAG, aM as CLOB_SELECTORS, aN as CLUSTER_FORMED_EVENT_SIG, aO as CancelSpotOrderArgs, aP as CapabilitiesResponse, aQ as CapabilityDescriptor, aR as ChainInfo, aS as ChainRegistry, aT as CheckpointRecord, aU as ClobMarketRecord, aV as ClobMarketSummary, aW as ClobTrade, aX as ClusterDelegatorsResponse, aY as ClusterDirectoryEntryResponse, aZ as ClusterDirectoryPageResponse, a_ as ClusterDiversity, a$ as ClusterDiversityView, b0 as ClusterEntityResponse, b1 as ClusterFormedEvent, b2 as ClusterMemberResponse, b3 as ClusterResignationRow, b4 as ClusterResignationsResponse, b5 as ClusterStatusResponse, b6 as CreateRequestCanonicalArgs, b7 as DIVERSITY_SCORE_MAX, b8 as DagParent, b9 as DagParentsResponse, ba as DagSyncStatus, bb as DecodeTxExtension, bc as DecodeTxLog, bd as DecodeTxPqAttestation, be as DecodeTxResponse, bf as DelegationCapResponse, bg as DelegationHistoryRecord, bh as DelegationRow, bi as DelegationsResponse, bj as DutyAbsence, bk as EncodeNativeNftBuyListingArgs, bl as EncodeNativeNftCancelListingArgs, bm as EncodeNativeNftCreateListingArgs, bn as EncodeNativeNftPlaceAuctionBidArgs, bo as EncodeNativeNftSettleAuctionArgs, bp as EncodeNativeNftSweepExpiredListingsArgs, bq as EncodeNativeSpotCancelOrderArgs, br as EncodeNativeSpotCreateMarketArgs, bs as EncodeNativeSpotLimitOrderArgs, bt as EncodeNativeSpotSettleLimitOrderArgs, bu as EncodeNativeSpotSettleRoutedLimitOrderArgs, bv as EncryptionKeyResponse, bw as EntityRatchetResponse, bx as EthSendTransactionRequest, by as ExecutionUnitPriceResponse, bz as ExplorerEndpoint, bA as FeeHistoryResponse, bB as GapRange, bC as GapRecord, bD as GapRecordsResponse, bE as Hash, bF as Hex, bG as IndexerStatus, bH as JailStatusWindow, bI as KeyRotationWindow, bJ as ListProofRequestsResponse, bK as LythUpgradePlanStatus, bL as LythUpgradeStatusResponse, bM as MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES, bN as MAX_NATIVE_RECEIPT_EVENTS, bO as ML_DSA_65_PUBLIC_KEY_LEN, bP as ML_DSA_65_SIGNATURE_LEN, bQ as MULTISIG_ADDRESS_DERIVATION_DOMAIN, bR as MarketActionError, bS as MarketTransactionPlan, bT as MempoolSnapshot, bU as MeshDecodedTx, bV as MeshSignedTxResponse, bW as MeshTxIntent, bX as MeshUnsignedTxResponse, bY as MetricsRangeResponse, bZ as MetricsRangeSample, b_ as MetricsRangeSeries, b$ as MetricsRangeStatus, c0 as MrcAccountRecord, c1 as MrcMetadataRecord, c2 as MrcPolicyRecord, c3 as MrcPolicySpendRecord, c4 as NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE, c5 as NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY, c6 as NATIVE_CALL_FORWARDER_RESPONSE_OFFSET, c7 as NATIVE_MARKET_EVENT_FAMILY, c8 as NATIVE_MARKET_MODULE_ADDRESS, c9 as NATIVE_MARKET_MODULE_ADDRESS_BYTES, ca as NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, cb as NODE_REGISTRY_CAPABILITIES, cc as NODE_REGISTRY_CAPABILITY_MASK, cd as NODE_REGISTRY_PUBLIC_SERVICE_MASK, ce as NODE_REGISTRY_SELECTORS, cf as NO_EVM_ARCHIVE_PROOF_SCHEMA, cg as NO_EVM_ARCHIVE_SIGNATURE_SCHEME, ch as NO_EVM_FINALITY_EVIDENCE_SCHEMA, ci as NO_EVM_FINALITY_EVIDENCE_SOURCE, cj as NO_EVM_RECEIPTS_ROOT_DOMAIN, ck as NO_EVM_RECEIPT_CODEC, cl as NO_EVM_RECEIPT_PROOF_SCHEMA, cm as NO_EVM_RECEIPT_PROOF_TYPE, cn as NO_EVM_RECEIPT_ROOT_ALGORITHM, co as NativeAgentArbiterStateRecord, cp as NativeAgentAttestationStateRecord, cq as NativeAgentAvailabilityStateRecord, cr as NativeAgentConsentStateRecord, cs as NativeAgentEscrowStateRecord, ct as NativeAgentIssuerStateRecord, cu as NativeAgentPolicySpendStateRecord, cv as NativeAgentPolicyStateRecord, cw as NativeAgentReputationReviewStateRecord, cx as NativeAgentServiceStateRecord, cy as NativeAgentStateFilterParamValue, cz as NativeAgentStateResponseFilters, cA as NativeAgentStateSource, cB as NativeCallForwarderArtifact, cC as NativeCollectionRoyaltyStateRecord, cD as NativeEventConsumer, cE as NativeEventProjection, cF as NativeEventsResponseFilters, cG as NativeEventsSource, cH as NativeMarketAddressInput, cI as NativeMarketAddressKind, cJ as NativeMarketForwarderInput, cK as NativeMarketModuleCallEnvelope, cL as NativeMarketModuleContractCall, cM as NativeMarketOrderBookDelta, cN as NativeMarketOrderBookDeltasResponseFilters, cO as NativeMarketOrderBookDeltasSource, cP as NativeMarketOrderBookStreamAction, cQ as NativeMarketOrderBookStreamPayload, cR as NativeMarketStateFilterParamValue, cS as NativeMarketStateResponseFilters, cT as NativeMarketStateSource, cU as NativeModuleForwarderDescriptor, cV as NativeMrcPolicyProjection, cW as NativeNftAssetStandard, cX as NativeNftListingKind, cY as NativeNftListingStateRecord, cZ as NativeReceiptCounters, c_ as NativeReceiptEvent, c$ as NativeReceiptSource, d0 as NativeSpotMarketStateRecord, d1 as NativeSpotOrderStateRecord, d2 as NetworkClientOptions, d3 as NetworkSlug, d4 as NoEvmArchiveCoveringSnapshot, d5 as NoEvmArchiveProof, d6 as NoEvmArchiveSignatureVerification, d7 as NoEvmArchiveSignatureVerificationIssue, d8 as NoEvmArchiveSignatureVerificationIssueCode, d9 as NoEvmArchiveTrustedSigner, da as NoEvmBlockBlsFinalityVerification, db as NoEvmBlsFinalityVerification, dc as NoEvmFinalityBlockReference, dd as NoEvmFinalityCertificate, de as NoEvmFinalityEvidence, df as NoEvmReceiptFinalityTrustPolicy, dg as NoEvmReceiptProof, dh as NoEvmReceiptProofError, di as NoEvmReceiptProofErrorCode, dj as NoEvmReceiptProofVerification, dk as NoEvmReceiptTrustIssue, dl as NoEvmReceiptTrustIssueCode, dm as NoEvmReceiptTrustPolicy, dn as NoEvmReceiptTrustVerification, dp as NoEvmReceiptTrustedBlsSigner, dq as NodeHostingClass, dr as NodeRegistryError, ds as OPERATOR_ROUTER_EVENT_SIGS, dt as OPERATOR_ROUTER_SELECTORS, du as OPERATOR_ROUTER_SIGS, dv as ORACLE_EVENT_SIGS, dw as OperatorAuthorityResponse, dx as OperatorFeeChargedEvent, dy as OperatorFeeConfig, dz as OperatorFeeQuote, dA as OperatorInfoResponse, dB as OperatorNetworkMetadata, dC as OperatorNetworkMetadataView, dD as OperatorRiskResponse, dE as OperatorRouterConfig, dF as OperatorSigningActivityResponse, dG as OperatorSigningEntry, dH as OperatorSurfaceCapability, dI as OperatorSurfaceStatus, dJ as OracleEvent, dK as OracleEventError, dL as OracleFeedConfig, dM as OracleLatestPrice, dN as OracleSignerRow, dO as OracleSignersResponse, dP as OracleWriters, dQ as P2pSeed, dR as PROVER_MARKET_ADDRESS, dS as PROVER_MARKET_BID_DOMAIN, dT as PROVER_MARKET_EVENT_SIGS, dU as PROVER_MARKET_REQUEST_DOMAIN, dV as PROVER_MARKET_SELECTORS, dW as PROVER_MARKET_SUBMIT_DOMAIN, dX as PROVER_SLASH_REASON_BAD_PROOF, dY as PROVER_SLASH_REASON_NON_DELIVERY, dZ as PeerSummary, d_ as PeerSummaryAggregate, d$ as PendingRewardsRow, e0 as PendingTxSummary, e1 as PlaceLimitOrderViaArgs, e2 as PlaceLimitOrderViaPlan, e3 as PlaceSpotLimitOrderArgs, e4 as PlaceSpotMarketOrderArgs, e5 as PlaceSpotMarketOrderExArgs, e6 as PrecompileCatalogueResponse, e7 as PrecompileDescriptor, e8 as ProofRequestRow, e9 as ProofRequestView, ea as ProverBidView, eb as ProverBidsResponse, ec as ProverMarketError, ed as ProverMarketState, ee as ProverMarketStatusResponse, ef as Quantity, eg as RESERVED_ADDRESS_HRPS, eh as RankedBridgeRoute, ei as ReceiptProofTrustArchivePolicy, ej as ReceiptProofTrustArchiveSigner, ek as ReceiptProofTrustFinalityPolicy, el as ReceiptProofTrustFinalitySigner, em as ReceiptProofTrustPolicy, en as RedemptionQueueTicket, eo as RegistryRecord, ep as ReportServiceProbeCalldataArgs, eq as ReportServiceProbeRequest, er as ReportServiceProbeResponse, es as RichListHolder, et as RichListResponse, eu as RoundInfo, ev as RpcClientOptions, ew as RpcEndpoint, ex as RuntimeProvenanceResponse, ey as SERVES_GPU_PROVE, ez as SERVICE_PROBE_STATUS, eA as SET_POLICY_CLAIM_DOMAIN_TAG, eB as SPENDING_POLICY_SELECTORS, eC as SearchHit, eD as ServiceProbeStatusLabel, eE as SigningEntryStatus, eF as SpendingPolicyArgs, eG as SpendingPolicyError, eH as SpendingPolicyTimeWindow, eI as SpendingPolicyView, eJ as SpotLimitOrderSide, eK as SpotMarketOrderMode, eL as StorageProofBatch, eM as SyncStatus, eN as TESTNET_69420, eO as TokenBalanceMrcIdentity, eP as TokenBalanceRecord, eQ as TpmAttestationResponse, eR as TransactionReceipt, eS as TransactionView, eT as TxFeedReceipt, eU as TxFeedTransaction, eV as TxStatusFoundResponse, eW as TxStatusNotFoundResponse, eX as TxStatusResponse, eY as UpcomingDutiesResponse, eZ as UpcomingDutyMap, e_ as UserAddressInput, e$ as V1_BRIDGE_ALLOWED_FEE_TOKEN, f0 as V1_BRIDGE_ALLOWED_PROTOCOL, f1 as VertexAtRound, f2 as VerticesAtRoundResponse, f3 as addressBytesToHex, f4 as addressToBech32, f5 as addressToTypedBech32, f6 as assertNativeMarketOrderBookStreamPayload, f7 as assessBridgeRoute, f8 as bech32ToAddress, f9 as bech32ToAddressBytes, fa as bidSighash, fb as bridgeAddressHex, fc as bridgeDrainRemaining, fd as bridgeQuoteSubmitReadiness, fe as bridgeRoutesReadiness, ff as bridgeTransferCandidates, fg as buildBridgeRouteCatalogue, fh as buildCancelSpotOrderPlan, fi as buildNativeCallForwarderArtifact, fj as buildNativeMarketModuleCallEnvelope, fk as buildNativeNftBuyListingForwarderInput, fl as buildNativeNftBuyListingModuleCall, fm as buildNativeNftCancelListingForwarderInput, fn as buildNativeNftCancelListingModuleCall, fo as buildNativeNftCreateListingForwarderInput, fp as buildNativeNftCreateListingModuleCall, fq as buildNativeNftPlaceAuctionBidForwarderInput, fr as buildNativeNftPlaceAuctionBidModuleCall, fs as buildNativeNftSettleAuctionForwarderInput, ft as buildNativeNftSettleAuctionModuleCall, fu as buildNativeNftSweepExpiredListingsForwarderInput, fv as buildNativeNftSweepExpiredListingsModuleCall, fw as buildNativeSpotCancelOrderForwarderInput, fx as buildNativeSpotCancelOrderModuleCall, fy as buildNativeSpotCreateMarketForwarderInput, fz as buildNativeSpotCreateMarketModuleCall, fA as buildNativeSpotLimitOrderForwarderInput, fB as buildNativeSpotLimitOrderModuleCall, fC as buildNativeSpotSettleLimitOrderForwarderInput, fD as buildNativeSpotSettleLimitOrderModuleCall, fE as buildNativeSpotSettleRoutedLimitOrderForwarderInput, fF as buildNativeSpotSettleRoutedLimitOrderModuleCall, fG as buildPlaceLimitOrderViaPlan, fH as buildPlaceSpotLimitOrderPlan, fI as buildPlaceSpotMarketOrderExPlan, fJ as buildPlaceSpotMarketOrderPlan, fK as clobAddressHex, fL as composeClaimBoundMessage, fM as computeNoEvmDacFinalityMessage, fN as computeNoEvmLeaderFinalityMessage, fO as computeNoEvmReceiptsRoot, fP as computeNoEvmRoundFinalityMessage, fQ as computeNoEvmTargetReceiptHash, fR as consumeNativeEvents, fS as decodeClusterDiversity, fT as decodeClusterFormedEvent, fU as decodeNativeAgentStateResponse, fV as decodeNativeMarketOrderBookDeltasResponse, fW as decodeNativeReceiptResponse, fX as decodeNoEvmReceiptTranscript, fY as decodeOperatorFeeChargedEvent, fZ as decodeOperatorNetworkMetadata, f_ as decodeOracleEvent, f$ as decodeTimeWindow, g0 as decodeTxFeedResponse, g1 as deriveClobMarketId, g2 as deriveClusterAnchorAddress, g3 as deriveNativeSpotMarketId, g4 as deriveNativeSpotOrderId, g5 as encodeBlockSelector, g6 as encodeCancelOrderCalldata, g7 as encodeClaimPolicyByAddressCalldata, g8 as encodeCreateRequestCalldata, g9 as encodeCreateRequestCanonical, ga as encodeDisableCalldata, gb as encodeEnableCalldata, gc as encodeLockBridgeConfigCalldata, gd as encodeNativeMarketModuleForwarderInput, ge as encodeNativeNftBuyListingCall, gf as encodeNativeNftCancelListingCall, gg as encodeNativeNftCreateListingCall, gh as encodeNativeNftPlaceAuctionBidCall, gi as encodeNativeNftSettleAuctionCall, gj as encodeNativeNftSweepExpiredListingsCall, gk as encodeNativeSpotCancelOrderCall, gl as encodeNativeSpotCreateMarketCall, gm as encodeNativeSpotLimitOrderCall, gn as encodeNativeSpotSettleLimitOrderCall, go as encodeNativeSpotSettleRoutedLimitOrderCall, gp as encodePlaceLimitOrderCalldata, gq as encodePlaceLimitOrderViaCalldata, gr as encodePlaceMarketOrderCalldata, gs as encodePlaceMarketOrderExCalldata, gt as encodeReportServiceProbeCalldata, gu as encodeSetBridgeResumeCooldownCalldata, gv as encodeSetBridgeRouteFinalityCalldata, gw as encodeSetLotSizeCalldata, gx as encodeSetMinNotionalCalldata, gy as encodeSetPolicyCalldata, gz as encodeSetPolicyClaimCalldata, gA as encodeSetTickSizeCalldata, gB as exportBridgeRouteCatalogueJson, gC as fetchChainInfoLatest, gD as fetchChainRegistryLatest, gE as getChainInfo, gF as getNoEvmReceiptTrustPolicy, gG as getP2pSeeds, gH as getRpcEndpoints, gI as hexToAddressBytes, gJ as isBridgeAdminLockedRevert, gK as isBridgeCooldownZeroRevert, gL as isBridgeFinalityZeroRevert, gM as isBridgeResumeCooldownActiveRevert, gN as isConcreteServiceProbeStatus, gO as isNativeDecodedEvent, gP as isNativeMarketOrderBookStreamPayload, gQ as isSinglePublicServiceProbeMask, gR as isValidNodeRegistryCapabilities, gS as isValidPublicServiceProbeMask, gT as nativeAgentStateFilterParams, gU as nativeEventMatches, gV as nativeEventsFilterParams, gW as nativeEventsFromHistory, gX as nativeEventsFromReceipt, gY as nativeMarketEventFilter, gZ as nativeMarketEventsFromHistory, g_ as nativeMarketEventsFromReceipt, g$ as nativeMarketStateFilterParams, h0 as noEvmReceiptTrustPolicyFromChainInfo, h1 as nodeHostingClassFromByte, h2 as nodeHostingClassToByte, h3 as nodeRegistryAddressHex, h4 as normalizeAddressHex, h5 as normalizeBridgeRouteCatalogue, h6 as oracleAddressHex, h7 as packTimeWindow, h8 as parseAddress, h9 as parseBridgeRouteCatalogueJson, ha as parseChainRegistryToml, hb as parseNativeDecodedEvent, hc as parseQuantity, hd as parseQuantityBig, he as proverMarketStateFromByte, hf as quoteOperatorFee, hg as rankBridgeRoutes, hh as requestSighash, hi as requireTypedAddress, hj as selectBridgeTransferRoute, hk as serviceProbeStatusLabel, hl as spendingPolicyAddressHex, hm as submitSighash, hn as typedBech32ToAddress, ho as validateAddress, hp as validateBridgeRouteCatalogue, hq as verifyNoEvmArchiveProofSignatures, hr as verifyNoEvmBlockFinalityEvidenceMultisig, hs as verifyNoEvmBlockFinalityEvidenceThreshold, ht as verifyNoEvmFinalityEvidenceMultisig, hu as verifyNoEvmFinalityEvidenceThreshold, hv as verifyNoEvmReceiptProof, hw as verifyNoEvmReceiptProofTrust } from './submission-C19l5ilj.cjs';
 
 /**
  * Legacy compatibility call/estimate request shape.
@@ -611,64 +611,6 @@ type MrvValidatedArtifactMetadata = {
      */
     codeBytes: bigint;
 };
-
-/**
- * Address display helpers.
- *
- * Monolythium keeps 20-byte account identifiers on the wire, but
- * user-facing surfaces display them as `mono1...` bech32m strings.
- */
-declare const ADDRESS_HRP: "mono";
-declare const ADDRESS_KIND_HRPS: {
-    readonly user: "mono";
-    readonly smartAccount: "monos";
-    readonly contract: "monoc";
-    readonly cluster: "monok";
-    readonly multisig: "monom";
-    readonly systemModule: "monox";
-};
-declare const RESERVED_ADDRESS_HRPS: readonly ["monor", "monop", "monoi", "monoa"];
-type AddressKind = keyof typeof ADDRESS_KIND_HRPS;
-interface TypedAddress {
-    kind: AddressKind;
-    address: string;
-    bytes: Uint8Array;
-    hex: string;
-}
-declare class AddressError extends Error {
-    constructor(message: string);
-}
-declare function hexToAddressBytes(address: string): Uint8Array;
-declare function addressBytesToHex(address: Uint8Array | readonly number[]): string;
-declare function addressToBech32(address: string | Uint8Array | readonly number[]): string;
-declare function addressToTypedBech32(kind: AddressKind, address: string | Uint8Array | readonly number[]): string;
-declare function bech32ToAddressBytes(address: string): Uint8Array;
-declare function bech32ToAddress(address: string): string;
-declare function typedBech32ToAddress(address: string, expectedKind?: AddressKind): TypedAddress;
-declare function requireTypedAddress(address: string, expectedKind: AddressKind, label?: string): string;
-declare function parseAddress(address: string): Uint8Array;
-/** Address-validation result for non-throwing callers (UI forms, search). */
-type AddressValidation = {
-    valid: true;
-    /** Lower-case bech32m representation; matches what the wire format expects. */
-    normalized: string;
-    /** Bech32m kind when the input is a typed bech32m address, otherwise null. */
-    kind: AddressKind | null;
-    /** Which surface the input came from. */
-    format: "hex" | "bech32m";
-    /** Raw 20-byte payload, useful for client-side bytes-derived lookups. */
-    bytes: Uint8Array;
-} | {
-    valid: false;
-    reason: string;
-};
-/**
- * Validate an address string without throwing. Accepts both raw hex and
- * typed bech32m. On success returns the canonical bech32m form along with
- * the kind/format/bytes; on failure returns a short reason string.
- */
-declare function validateAddress(address: string): AddressValidation;
-declare function normalizeAddressHex(address: string): string;
 
 /**
  * Typed HTTP client for the explorer-facing `/api/v1` surface served by
@@ -1522,6 +1464,10 @@ declare const PRECOMPILE_ADDRESSES: {
     readonly ORACLE: "0x0000000000000000000000000000000000001009";
     /** Distributed delegation primitive — gateable. */
     readonly DELEGATION: "0x000000000000000000000000000000000000100A";
+    /** Operator-fee router — skims an operator surcharge on routed CLOB ops; gateable. */
+    readonly OPERATOR_ROUTER: "0x000000000000000000000000000000000000100B";
+    /** GPU prover market — gateable, genesis-disabled (foundation milestone flip). */
+    readonly PROVER_MARKET: "0x000000000000000000000000000000000000100C";
     /** One-time emergency-key registry — non-gateable. */
     readonly EMERGENCY_KEY: "0x0000000000000000000000000000000000001100";
     /** VRF precompile. */
@@ -1555,92 +1501,24 @@ declare const PRECOMPILE_ADDRESSES: {
 type PrecompileName = keyof typeof PRECOMPILE_ADDRESSES;
 /** Precompile address value type. */
 type PrecompileAddress = (typeof PRECOMPILE_ADDRESSES)[PrecompileName];
-
 /**
- * Oracle-precompile (`0x1009`) event decode types + read-method
- * signatures (MB-6).
+ * Operator-router precompile address (`0x100B`).
  *
- * Mirrors `mono-core/crates/precompiles/platform/oracle/src/events.rs`:
- * the canonical event signatures and a pure decoder that turns one EVM
- * log (topics + data) into a typed {@link OracleEvent}. The decoder is
- * the exact inverse of the chain-side `emit_*` helpers.
+ * Convenience alias for {@link PRECOMPILE_ADDRESSES}`.OPERATOR_ROUTER`.
+ * Sourced from `mono-core` `operator-router::storage::OPERATOR_ROUTER_ADDRESS`.
  */
-declare const ORACLE_EVENT_SIGS: {
-    readonly oracleRoundFinalized: "OracleRoundFinalized(bytes32,uint64,uint256,uint64,uint32)";
-    readonly observationSubmitted: "ObservationSubmitted(bytes32,uint64,address,uint256,uint64)";
-    readonly feedAdded: "FeedAdded(bytes32,uint8,uint16,uint32,uint32)";
-    readonly feedUpdated: "FeedUpdated(bytes32,uint8,uint16,uint32,uint32)";
-    readonly oracleFraudSlashed: "OracleFraudSlashed(bytes32,uint64,address,bytes32)";
-    readonly oracleAdminUpdated: "OracleAdminUpdated(address)";
-    readonly oracleWriterAdded: "OracleWriterAdded(address,address)";
-    readonly oracleWriterRemoved: "OracleWriterRemoved(address,address)";
-};
-declare class OracleEventError extends Error {
-    constructor(message: string);
-}
-/** Return the oracle precompile address (`0x1009`) as lower-case hex. */
-declare function oracleAddressHex(): string;
+declare const OPERATOR_ROUTER_ADDRESS: "0x000000000000000000000000000000000000100B";
 /**
- * Typed view of one oracle-precompile log (MB-6). One variant per
- * chain-side emit helper. `feedId` / `evidenceHash` / address fields are
- * `0x`-prefixed hex; `computedMedian` / `value` are decimal strings of
- * their on-chain `uint256` value.
- */
-type OracleEvent = {
-    kind: "roundFinalized";
-    feedId: string;
-    roundId: bigint;
-    computedMedian: string;
-    finalizedAtBlock: bigint;
-    observationsLen: number;
-} | {
-    kind: "observationSubmitted";
-    feedId: string;
-    roundId: bigint;
-    writer: string;
-    value: string;
-    observedAt: bigint;
-} | {
-    kind: "fraudSlashed";
-    feedId: string;
-    roundId: bigint;
-    writer: string;
-    evidenceHash: string;
-} | {
-    kind: "feedAdded";
-    feedId: string;
-    decimals: number;
-    minSigners: number;
-    circuitBreakerBps: number;
-    allowedWritersLen: number;
-} | {
-    kind: "feedUpdated";
-    feedId: string;
-    decimals: number;
-    minSigners: number;
-    circuitBreakerBps: number;
-    allowedWritersLen: number;
-} | {
-    kind: "adminUpdated";
-    admin: string;
-} | {
-    kind: "writerAdded";
-    admin: string;
-    writer: string;
-} | {
-    kind: "writerRemoved";
-    admin: string;
-    writer: string;
-};
-/**
- * Decode one EVM log emitted by the oracle precompile into a typed
- * {@link OracleEvent}. Pure + deterministic; dispatches on `topic0`,
- * then reads fixed-width 32-byte words.
+ * Protocol ceiling on the operator surcharge, in basis points
+ * (`100 = 1.00%`).
  *
- * @throws {OracleEventError} on a foreign `topic0`, a topic-arity
- *   mismatch, or a data-length mismatch.
+ * Enforced on-chain at both write time (operator registration / update)
+ * and read time (the `placeLimitOrderVia` op); this constant is the
+ * advisory UX mirror so wallets can validate / display a fee before
+ * submitting. Sourced from `mono-core`
+ * `operator-router::storage::PROTOCOL_MAX_OPERATOR_FEE_BPS`.
  */
-declare function decodeOracleEvent(topics: readonly (string | Uint8Array | readonly number[])[], data: string | Uint8Array | readonly number[]): OracleEvent;
+declare const PROTOCOL_MAX_OPERATOR_FEE_BPS: 100;
 
 /**
  * Delegation precompile ABI helpers.
@@ -1711,327 +1589,6 @@ declare function encodeLookupPubkeyCalldata(address: string): string;
 declare function encodeHasPubkeyCalldata(address: string): string;
 declare function decodeLookupPubkeyReturn(data: Uint8Array | readonly number[] | string): PubkeyLookup;
 declare function decodeHasPubkeyReturn(data: Uint8Array | readonly number[] | string): boolean;
-
-/**
- * Native market transaction-plan builders.
- *
- * These helpers only build signer-ready transaction requests or native module
- * call material. They do not predict fills, trades, or execution success.
- */
-
-declare const CLOB_MARKET_ID_DOMAIN_TAG: 193;
-declare const NATIVE_MARKET_MODULE_ADDRESS_BYTES: "0x4d41524b45545f4e41544956455f4d4f445f5631";
-declare const NATIVE_MARKET_MODULE_ADDRESS: string;
-declare const NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE: "native-call-forwarder-v1";
-declare const NATIVE_CALL_FORWARDER_RESPONSE_OFFSET: 768;
-declare const NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY: 256;
-declare const MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES: 2047;
-declare const CLOB_SELECTORS: {
-    /**
-     * `placeLimitOrder(bytes32,bytes32,uint8,uint256,uint256,uint64)`
-     *
-     * Args: `baseTokenId, quoteTokenId, side, price, amount, expiresAtBlock`.
-     */
-    readonly placeLimitOrder: "0x2468786f";
-    /**
-     * `placeMarketOrder(bytes32,bytes32,uint8,uint256,uint16)`
-     *
-     * Args: `baseTokenId, quoteTokenId, side, quantity, maxSlippageBps`.
-     */
-    readonly placeMarketOrder: "0xb9b1fa86";
-    /**
-     * `placeMarketOrderEx(bytes32,bytes32,uint8,uint256,uint16,uint8)`
-     *
-     * Args: `baseTokenId, quoteTokenId, side, quantity, maxSlippageBps, mode`.
-     */
-    readonly placeMarketOrderEx: "0xa6f092f0";
-    /** `cancelOrder(bytes32)` */
-    readonly cancelOrder: "0x7489ec23";
-    /** `setMinNotional(bytes32,bytes32,uint256)` — foundation-authorized. */
-    readonly setMinNotional: "0x395dc48f";
-    /** `setTickSize(bytes32,bytes32,uint256)` — foundation-authorized per-market grid tune. */
-    readonly setTickSize: "0x10666f0b";
-    /** `setLotSize(bytes32,bytes32,uint256)` — foundation-authorized per-market grid tune. */
-    readonly setLotSize: "0x9909be80";
-};
-type SpotLimitOrderSide = "buy" | "sell";
-type SpotMarketOrderMode = "fill-or-refund" | "fill-or-rest-at-cap";
-type NativeMarketAddressKind = AddressKind;
-type NativeMarketAddressInput = string | {
-    kind?: NativeMarketAddressKind;
-    address: string;
-};
-interface PlaceSpotLimitOrderArgs {
-    /**
-     * Canonical 32-byte CLOB market id, derived as
-     * `keccak256(0xC1 || baseTokenId || quoteTokenId)`.
-     */
-    marketId: string;
-    /** 32-byte base token id accepted by the CLOB precompile. */
-    baseTokenId: string;
-    /** 32-byte quote token id accepted by the CLOB precompile. */
-    quoteTokenId: string;
-    /** `buy` maps to side byte `0`; `sell` maps to side byte `1`. */
-    side: SpotLimitOrderSide;
-    /** Positive integer decimal string encoded as uint256. */
-    price: string;
-    /** Positive integer decimal string encoded as uint256 amount. */
-    quantity: string;
-    /** Optional uint64 block height; omitted means `0` / no explicit expiry. */
-    expiryBlock?: string | number | bigint;
-}
-interface PlaceSpotMarketOrderArgs {
-    /**
-     * Canonical 32-byte CLOB market id, derived as
-     * `keccak256(0xC1 || baseTokenId || quoteTokenId)`.
-     */
-    marketId: string;
-    /** 32-byte base token id accepted by the CLOB precompile. */
-    baseTokenId: string;
-    /** 32-byte quote token id accepted by the CLOB precompile. */
-    quoteTokenId: string;
-    /** `buy` maps to side byte `0`; `sell` maps to side byte `1`. */
-    side: SpotLimitOrderSide;
-    /** Positive integer decimal string encoded as uint256 amount. */
-    quantity: string;
-    /** Slippage bound in basis points; must be less than 10,000. */
-    maxSlippageBps: string | number | bigint;
-}
-interface PlaceSpotMarketOrderExArgs extends PlaceSpotMarketOrderArgs {
-    /**
-     * `fill-or-refund` keeps legacy market-order semantics; `fill-or-rest-at-cap`
-     * rests the unfilled remainder at the slippage cap.
-     */
-    mode: SpotMarketOrderMode;
-}
-interface CancelSpotOrderArgs {
-    /** 32-byte order id returned by the CLOB precompile. */
-    orderId: string;
-}
-interface EncodeNativeSpotLimitOrderArgs {
-    /** 32-byte native spot market id. */
-    marketId: string;
-    /** Owner typed bech32m MonoAddress; optional object `kind` asserts the expected HRP. */
-    owner: NativeMarketAddressInput;
-    /** Per-owner order nonce encoded as uint64. */
-    nonce: string | number | bigint;
-    /** `buy` maps to native `OrderSide::Bid`; `sell` maps to native `OrderSide::Ask`. */
-    side: SpotLimitOrderSide;
-    /** Positive integer decimal string encoded as native MrcAmount/u128. */
-    price: string;
-    /** Positive integer decimal string encoded as native MrcAmount/u128. */
-    quantity: string;
-    /** uint64 expiry block encoded as `expires_at_block`. */
-    expiresAtBlock: string | number | bigint;
-}
-interface EncodeNativeSpotCreateMarketArgs {
-    /** Market owner typed bech32m MonoAddress; optional object `kind` asserts the expected HRP. */
-    owner: NativeMarketAddressInput;
-    /** Owner-local market nonce encoded as uint64. */
-    nonce: string | number | bigint;
-    /** 32-byte base asset id. */
-    baseAsset: string;
-    /** 32-byte quote asset id. */
-    quoteAsset: string;
-    /** Positive integer decimal string encoded as native MrcAmount/u128. */
-    tickSize: string;
-    /** Positive integer decimal string encoded as native MrcAmount/u128. */
-    lotSize: string;
-    /** Positive integer decimal string encoded as native MrcAmount/u128. */
-    minQuantity: string;
-    /** Nonnegative integer decimal string encoded as native MrcAmount/u128; 0 disables the floor. */
-    minNotional: string;
-}
-interface EncodeNativeSpotCancelOrderArgs {
-    /** 32-byte native order id. */
-    orderId: string;
-    /** Caller typed bech32m MonoAddress; optional object `kind` asserts the expected HRP. */
-    caller: NativeMarketAddressInput;
-}
-interface EncodeNativeSpotSettleLimitOrderArgs {
-    /** Resting maker order id to match. */
-    makerOrderId: string;
-    /** Taker limit order parameters. */
-    takerOrder: EncodeNativeSpotLimitOrderArgs;
-}
-interface EncodeNativeSpotSettleRoutedLimitOrderArgs {
-    /** Resting maker order ids in deterministic settlement order; mono-core accepts 1..64 ids. */
-    makerOrderIds: readonly string[];
-    /** Taker limit order parameters. */
-    takerOrder: EncodeNativeSpotLimitOrderArgs;
-}
-type NativeNftAssetStandard = "mrc721" | "mrc1155";
-type NativeNftListingKind = "fixed-price" | {
-    english: {
-        /** Minimum starting bid encoded as native MrcAmount/u128. */
-        reserve: string;
-        /** Auction end block encoded as uint64. */
-        endBlock: string | number | bigint;
-        /** Minimum bid bump in basis points; must be less than 10,000. */
-        minBidIncrementBps: string | number | bigint;
-    };
-};
-interface EncodeNativeNftCreateListingArgs {
-    /** Seller typed bech32m MonoAddress; optional object `kind` asserts the expected HRP. */
-    seller: NativeMarketAddressInput;
-    /** Seller-local listing nonce encoded as uint64. */
-    nonce: string | number | bigint;
-    /** Native NFT asset standard. */
-    standard: NativeNftAssetStandard;
-    /** 32-byte collection id. */
-    collectionId: string;
-    /** 32-byte token id. */
-    tokenId: string;
-    /** Positive integer decimal string encoded as native MrcAmount/u128. */
-    quantity: string;
-    /** 32-byte payment asset id. */
-    paymentAsset: string;
-    /** Positive integer decimal string encoded as native MrcAmount/u128. */
-    price: string;
-    /** Fixed-price or English-auction sale model. */
-    kind: NativeNftListingKind;
-    /** uint64 expiry block encoded as `expires_at_block`; 0 means never. */
-    expiresAtBlock: string | number | bigint;
-}
-interface EncodeNativeNftBuyListingArgs {
-    /** 32-byte native NFT listing id. */
-    listingId: string;
-    /** Buyer typed bech32m MonoAddress; optional object `kind` asserts the expected HRP. */
-    buyer: NativeMarketAddressInput;
-    /** Current block attached to the native buy call. */
-    currentBlock: string | number | bigint;
-}
-interface EncodeNativeNftCancelListingArgs {
-    /** 32-byte native NFT listing id. */
-    listingId: string;
-    /** Caller typed bech32m MonoAddress; optional object `kind` asserts the expected HRP. */
-    caller: NativeMarketAddressInput;
-}
-interface EncodeNativeNftPlaceAuctionBidArgs {
-    /** 32-byte native NFT auction listing id. */
-    listingId: string;
-    /** Bidder typed bech32m MonoAddress; optional object `kind` asserts the expected HRP. */
-    bidder: NativeMarketAddressInput;
-    /** Positive integer decimal string encoded as native MrcAmount/u128. */
-    amount: string;
-    /** Current block attached to the native auction bid call. */
-    currentBlock: string | number | bigint;
-}
-interface EncodeNativeNftSettleAuctionArgs {
-    /** 32-byte native NFT auction listing id. */
-    listingId: string;
-    /** Current block attached to the native auction settlement call. */
-    currentBlock: string | number | bigint;
-}
-interface EncodeNativeNftSweepExpiredListingsArgs {
-    /** Candidate 32-byte native NFT listing ids; mono-core accepts 1..64 ids. */
-    listingIds: readonly string[];
-    /** Current block attached to the native listing sweep call. */
-    currentBlock: string | number | bigint;
-}
-interface NativeMarketModuleContractCall {
-    /** Stable typed system-module address (`MARKET_NATIVE_MOD_V1`). */
-    to: string;
-    /** Native market router bincode payload. */
-    input: string;
-    /** Native market module calls must not carry native value. */
-    valueLythoshi: "0";
-    /** Maximum cycles delegated to the RISC-V host call. */
-    maxCycles: string;
-}
-interface NativeMarketModuleCallEnvelope {
-    module: "market";
-    call: NativeMarketModuleContractCall;
-}
-interface NativeMarketForwarderInput {
-    /** Canonical `SyscallRequest::CallContract` bytes for MRV call input. */
-    input: string;
-    /** Byte length of `input`, useful because the minimal forwarder artifact pins this as an immediate. */
-    requestBytes: number;
-}
-interface NativeCallForwarderArtifact {
-    /** Raw bincode MRV artifact bytes for a fixed-size native-call forwarder. */
-    artifactBytes: string;
-    /** Byte length accepted by the generated forwarder. */
-    requestBytes: number;
-    /** Stable runtime profile string used for capability matching. */
-    artifactProfile: typeof NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE;
-    /** Forwarder code-section hash as `0x` hex. */
-    codeHash: string;
-}
-interface EthSendTransactionRequest {
-    to: string;
-    value: "0x0";
-    data: string;
-}
-interface MarketTransactionPlan {
-    method: "eth_sendTransaction";
-    params: [EthSendTransactionRequest];
-    mempoolClass: MempoolClass;
-}
-declare class MarketActionError extends Error {
-    constructor(message: string);
-}
-declare function clobAddressHex(): string;
-declare function deriveClobMarketId(baseTokenId: string, quoteTokenId: string): string;
-declare function deriveNativeSpotMarketId(args: Pick<EncodeNativeSpotCreateMarketArgs, "owner" | "baseAsset" | "quoteAsset" | "nonce">): string;
-declare function deriveNativeSpotOrderId(args: Pick<EncodeNativeSpotLimitOrderArgs, "marketId" | "owner" | "side" | "nonce">): string;
-declare function encodePlaceLimitOrderCalldata(args: PlaceSpotLimitOrderArgs): string;
-declare function encodePlaceMarketOrderCalldata(args: PlaceSpotMarketOrderArgs): string;
-declare function encodePlaceMarketOrderExCalldata(args: PlaceSpotMarketOrderExArgs): string;
-declare function encodeCancelOrderCalldata(args: CancelSpotOrderArgs): string;
-/** Three foundation-authorized per-market grid tuners share the
- *  same `(bytes32,bytes32,uint256)` shape: minNotional, tickSize,
- *  lotSize. They auto-create the market record if absent. */
-interface MarketGridTuneArgs {
-    baseTokenId: string;
-    quoteTokenId: string;
-    /** Decimal string of quote atoms (minNotional) or atoms-per-unit (tick/lot). */
-    newValue: string;
-}
-declare function encodeSetMinNotionalCalldata(args: MarketGridTuneArgs): string;
-declare function encodeSetTickSizeCalldata(args: MarketGridTuneArgs): string;
-declare function encodeSetLotSizeCalldata(args: MarketGridTuneArgs): string;
-declare function encodeNativeSpotLimitOrderCall(args: EncodeNativeSpotLimitOrderArgs): string;
-declare function encodeNativeSpotCreateMarketCall(args: EncodeNativeSpotCreateMarketArgs): string;
-declare function encodeNativeSpotCancelOrderCall(args: EncodeNativeSpotCancelOrderArgs): string;
-declare function encodeNativeSpotSettleLimitOrderCall(args: EncodeNativeSpotSettleLimitOrderArgs): string;
-declare function encodeNativeSpotSettleRoutedLimitOrderCall(args: EncodeNativeSpotSettleRoutedLimitOrderArgs): string;
-declare function encodeNativeNftCreateListingCall(args: EncodeNativeNftCreateListingArgs): string;
-declare function encodeNativeNftBuyListingCall(args: EncodeNativeNftBuyListingArgs): string;
-declare function encodeNativeNftCancelListingCall(args: EncodeNativeNftCancelListingArgs): string;
-declare function encodeNativeNftPlaceAuctionBidCall(args: EncodeNativeNftPlaceAuctionBidArgs): string;
-declare function encodeNativeNftSettleAuctionCall(args: EncodeNativeNftSettleAuctionArgs): string;
-declare function encodeNativeNftSweepExpiredListingsCall(args: EncodeNativeNftSweepExpiredListingsArgs): string;
-declare function buildNativeMarketModuleCallEnvelope(input: string, maxCycles: string | number | bigint): NativeMarketModuleCallEnvelope;
-declare function encodeNativeMarketModuleForwarderInput(envelope: NativeMarketModuleCallEnvelope): NativeMarketForwarderInput;
-declare function buildNativeSpotLimitOrderForwarderInput(args: EncodeNativeSpotLimitOrderArgs, maxCycles: string | number | bigint): NativeMarketForwarderInput;
-declare function buildNativeSpotCreateMarketForwarderInput(args: EncodeNativeSpotCreateMarketArgs, maxCycles: string | number | bigint): NativeMarketForwarderInput;
-declare function buildNativeSpotCancelOrderForwarderInput(args: EncodeNativeSpotCancelOrderArgs, maxCycles: string | number | bigint): NativeMarketForwarderInput;
-declare function buildNativeSpotSettleLimitOrderForwarderInput(args: EncodeNativeSpotSettleLimitOrderArgs, maxCycles: string | number | bigint): NativeMarketForwarderInput;
-declare function buildNativeSpotSettleRoutedLimitOrderForwarderInput(args: EncodeNativeSpotSettleRoutedLimitOrderArgs, maxCycles: string | number | bigint): NativeMarketForwarderInput;
-declare function buildNativeNftCreateListingForwarderInput(args: EncodeNativeNftCreateListingArgs, maxCycles: string | number | bigint): NativeMarketForwarderInput;
-declare function buildNativeNftBuyListingForwarderInput(args: EncodeNativeNftBuyListingArgs, maxCycles: string | number | bigint): NativeMarketForwarderInput;
-declare function buildNativeNftCancelListingForwarderInput(args: EncodeNativeNftCancelListingArgs, maxCycles: string | number | bigint): NativeMarketForwarderInput;
-declare function buildNativeNftPlaceAuctionBidForwarderInput(args: EncodeNativeNftPlaceAuctionBidArgs, maxCycles: string | number | bigint): NativeMarketForwarderInput;
-declare function buildNativeNftSettleAuctionForwarderInput(args: EncodeNativeNftSettleAuctionArgs, maxCycles: string | number | bigint): NativeMarketForwarderInput;
-declare function buildNativeNftSweepExpiredListingsForwarderInput(args: EncodeNativeNftSweepExpiredListingsArgs, maxCycles: string | number | bigint): NativeMarketForwarderInput;
-declare function buildNativeSpotLimitOrderModuleCall(args: EncodeNativeSpotLimitOrderArgs, maxCycles: string | number | bigint): NativeMarketModuleCallEnvelope;
-declare function buildNativeSpotCreateMarketModuleCall(args: EncodeNativeSpotCreateMarketArgs, maxCycles: string | number | bigint): NativeMarketModuleCallEnvelope;
-declare function buildNativeSpotCancelOrderModuleCall(args: EncodeNativeSpotCancelOrderArgs, maxCycles: string | number | bigint): NativeMarketModuleCallEnvelope;
-declare function buildNativeSpotSettleLimitOrderModuleCall(args: EncodeNativeSpotSettleLimitOrderArgs, maxCycles: string | number | bigint): NativeMarketModuleCallEnvelope;
-declare function buildNativeSpotSettleRoutedLimitOrderModuleCall(args: EncodeNativeSpotSettleRoutedLimitOrderArgs, maxCycles: string | number | bigint): NativeMarketModuleCallEnvelope;
-declare function buildNativeNftCreateListingModuleCall(args: EncodeNativeNftCreateListingArgs, maxCycles: string | number | bigint): NativeMarketModuleCallEnvelope;
-declare function buildNativeNftBuyListingModuleCall(args: EncodeNativeNftBuyListingArgs, maxCycles: string | number | bigint): NativeMarketModuleCallEnvelope;
-declare function buildNativeNftCancelListingModuleCall(args: EncodeNativeNftCancelListingArgs, maxCycles: string | number | bigint): NativeMarketModuleCallEnvelope;
-declare function buildNativeNftPlaceAuctionBidModuleCall(args: EncodeNativeNftPlaceAuctionBidArgs, maxCycles: string | number | bigint): NativeMarketModuleCallEnvelope;
-declare function buildNativeNftSettleAuctionModuleCall(args: EncodeNativeNftSettleAuctionArgs, maxCycles: string | number | bigint): NativeMarketModuleCallEnvelope;
-declare function buildNativeNftSweepExpiredListingsModuleCall(args: EncodeNativeNftSweepExpiredListingsArgs, maxCycles: string | number | bigint): NativeMarketModuleCallEnvelope;
-declare function buildPlaceSpotLimitOrderPlan(args: PlaceSpotLimitOrderArgs): MarketTransactionPlan;
-declare function buildPlaceSpotMarketOrderPlan(args: PlaceSpotMarketOrderArgs): MarketTransactionPlan;
-declare function buildPlaceSpotMarketOrderExPlan(args: PlaceSpotMarketOrderExArgs): MarketTransactionPlan;
-declare function buildCancelSpotOrderPlan(args: CancelSpotOrderArgs): MarketTransactionPlan;
-declare function buildNativeCallForwarderArtifact(requestBytes: string | number | bigint): NativeCallForwarderArtifact;
 
 /**
  * Native agent-commerce transaction-plan builders.
@@ -2267,4 +1824,4 @@ interface MonolythiumNetworkConfig {
  */
 declare const version = "0.2.2";
 
-export { ADDRESS_HRP, ADDRESS_KIND_HRPS, AddressError, AddressFlowResponse, type AddressKind, AddressProfileResponse, type AddressValidation, AgentActionError, type ApiAddressActivityData, type ApiAddressActivityEntry, type ApiAddressActivityKind, type ApiAddressActivityKindData, type ApiAddressActivityKindSummary, type ApiBlockData, type ApiBlockHeader, type ApiBlockTransactionsData, type ApiCapabilitiesResponse, ApiClient, type ApiClientOptions, type ApiClusterData, type ApiClusterDirectoryEntry, type ApiClusterDirectoryPage, type ApiClusterMember, type ApiClusterStatus, type ApiClustersData, type ApiEnvelope, type ApiErrorEnvelope, type ApiHealthResponse, type ApiIndexerStatus, type ApiLatestAnchor, type ApiLogEntry, type ApiOperatorData, type ApiOperatorInfo, type ApiQueryValue, type ApiRuntimeProvenanceData, type ApiServiceProbeData, ApiStreamsIndexResponse, type ApiTransactionData, type ApiTransactionNativeReceiptData, type ApiTransactionReceipt, type ApiTransactionReceiptData, type ApiTransactionView, type ApiUpgradePlanStatus, type ApiUpgradeStatus, type ApiUpgradeStatusData, BURN_ADDR, BlockSelector, BridgeRoutesRequest, BridgeRoutesResponse, CLOB_MARKET_ID_DOMAIN_TAG, CLOB_SELECTORS, type CallRequest, type CancelSpotOrderArgs, ChainStatsResponse, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse, ClobTradesResponse, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DelegationPrecompileError, type EncodeNativeAgentAvailabilitySlotArgs, type EncodeNativeAgentCounterEscrowArgs, type EncodeNativeAgentCreateEscrowArgs, type EncodeNativeAgentDeactivateServiceArgs, type EncodeNativeAgentEscrowActorArgs, type EncodeNativeAgentGrantConsentArgs, type EncodeNativeAgentIssueAttestationArgs, type EncodeNativeAgentListServiceArgs, type EncodeNativeAgentRecordPolicySpendArgs, type EncodeNativeAgentRecordReputationArgs, type EncodeNativeAgentRegisterArbiterArgs, type EncodeNativeAgentRegisterIssuerArgs, type EncodeNativeAgentResolveEscrowArgs, type EncodeNativeAgentRevokeAttestationArgs, type EncodeNativeAgentRevokeConsentArgs, type EncodeNativeAgentSetAvailabilityArgs, type EncodeNativeAgentSetSpendingPolicyArgs, type EncodeNativeAgentStartEscrowArgs, type EncodeNativeAgentSubmitEscrowArgs, type EncodeNativeNftBuyListingArgs, type EncodeNativeNftCancelListingArgs, type EncodeNativeNftCreateListingArgs, type EncodeNativeNftPlaceAuctionBidArgs, type EncodeNativeNftSettleAuctionArgs, type EncodeNativeNftSweepExpiredListingsArgs, type EncodeNativeSpotCancelOrderArgs, type EncodeNativeSpotCreateMarketArgs, type EncodeNativeSpotLimitOrderArgs, type EncodeNativeSpotSettleLimitOrderArgs, type EncodeNativeSpotSettleRoutedLimitOrderArgs, type EthSendTransactionRequest, type HealthSummary, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, type LatencyBands, type LythFormatOptions, MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MarketActionError, type MarketTransactionPlan, type MonolythiumNetworkConfig, type MrcAccountRequest, MrcAccountResponse, type MrcHoldersRequest, MrcHoldersResponse, MrcMetadataResponse, type MrvAbiManifest, type MrvAbiParam, type MrvAbiSymbol, type MrvAbiSymbolKind, type MrvAbiType, type MrvAddressKind, type MrvArtifactMetadata, type MrvBuildMetadata, type MrvBytesLike, type MrvCallNativeTxOptions, type MrvCallNativeTxPlan, type MrvCallPlan, type MrvCallRequest, type MrvCallResponse, type MrvCallStatus, type MrvCallSubmission, type MrvCallSubmitOptions, type MrvDecimalLike, type MrvDeployNativeTxOptions, type MrvDeployNativeTxPlan, type MrvDeployPayload, type MrvDeployPayloadNativeTxOptions, type MrvDeployPayloadPlanOptions, type MrvDeployPayloadRequestOptions, type MrvDeployPayloadSubmission, type MrvDeployPayloadSubmitOptions, type MrvDeployPlan, type MrvDeployPlanOptions, type MrvDeployRequest, type MrvDeployResponse, type MrvDeploySubmission, type MrvDeploySubmitOptions, type MrvEncryptedSubmissionResult, type MrvEventRecord, type MrvExecutionReceipt, type MrvFeeDisplayConformanceInput, type MrvFeeDisplayConformanceReport, type MrvMemoryLimits, type MrvMeterCounters, type MrvNativeFeePreview, type MrvNativeStateDelta, type MrvNativeTxFacade, type MrvRequestBuildOptions, type MrvResolvedSyscall, type MrvRevertPayload, type MrvRiscvProfile, type MrvStorageNamespace, type MrvStructuredFeeConformanceOptions, type MrvStructuredFeeConformanceReport, type MrvSyscallImport, type MrvTransactionExtension, type MrvTypedAddress, type MrvValidatedArtifactMetadata, MrvValidationError, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE, NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY, NATIVE_CALL_FORWARDER_RESPONSE_OFFSET, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_MODULE_ADDRESS, NATIVE_MARKET_MODULE_ADDRESS_BYTES, type NativeAgentAddressInput, type NativeAgentAddressKind, type NativeAgentEscrowResolution, type NativeAgentForwarderInput, type NativeAgentModuleCallEnvelope, type NativeAgentModuleContractCall, type NativeAgentReputationScores, NativeAgentStateFilter, NativeAgentStateResponse, type NativeCallForwarderArtifact, NativeDecodedEvent, type NativeDevApprovalKind, type NativeDevCommandName, type NativeDevContractPassport, type NativeDevHostApprovalResultMessage, type NativeDevHostCommandMessage, type NativeDevHostContextMessage, type NativeDevIpcMessage, type NativeDevMrcAllocation, type NativeDevMrcAssetKind, type NativeDevMrcTokenPlan, type NativeDevMrvDeployPlan, type NativeDevRiskLabel, type NativeDevRiskSeverity, type NativeDevSidecarApprovalRequestMessage, type NativeDevSidecarCommandResultMessage, type NativeDevSidecarProjectEventMessage, type NativeDevSidecarReadyMessage, type NativeDevVerificationBundle, type NativeDevWalletApprovalRequest, type NativeDevkitArchive, type NativeDevkitChannel, type NativeDevkitCompatibility, type NativeDevkitManifest, type NativeDevkitSidecarManifest, type NativeDevkitSidecarStatus, type NativeDevkitStatus, NativeEventFilter, NativeEventsFilter, NativeEventsResponse, type NativeMarketAddressInput, type NativeMarketAddressKind, type NativeMarketForwarderInput, type NativeMarketModuleCallEnvelope, type NativeMarketModuleContractCall, NativeMarketOrderBookDeltasRequest, NativeMarketOrderBookDeltasResponse, NativeMarketStateFilter, NativeMarketStateResponse, type NativeNftAssetStandard, type NativeNftListingKind, NativeReceiptFee, type NativeReceiptFeeDisplay, NativeReceiptResponse, ORACLE_EVENT_SIGS, OperatorCapabilitiesResponse, type OracleEvent, OracleEventError, PRECOMPILE_ADDRESSES, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PendingRewardsResponse, type PlaceSpotLimitOrderArgs, type PlaceSpotMarketOrderArgs, type PlaceSpotMarketOrderExArgs, type PrecompileAddress, type PrecompileName, type PubkeyLookup, PubkeyRegistryError, RESERVED_ADDRESS_HRPS, RedemptionQueueResponse, RpcClient, RuntimeBuildProvenance, RuntimeUpgradeStatus, SdkError, SearchResponse, ServiceProbeResponse, type SpotLimitOrderSide, type SpotMarketOrderMode, type StudioHostState, type StudioHostStatus, TxFeedResponse, type TypedAddress, TypedNativeReceiptEvent, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, bech32ToAddress, bech32ToAddressBytes, buildCancelSpotOrderPlan, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildNativeCallForwarderArtifact, buildNativeMarketModuleCallEnvelope, buildNativeNftBuyListingForwarderInput, buildNativeNftBuyListingModuleCall, buildNativeNftCancelListingForwarderInput, buildNativeNftCancelListingModuleCall, buildNativeNftCreateListingForwarderInput, buildNativeNftCreateListingModuleCall, buildNativeNftPlaceAuctionBidForwarderInput, buildNativeNftPlaceAuctionBidModuleCall, buildNativeNftSettleAuctionForwarderInput, buildNativeNftSettleAuctionModuleCall, buildNativeNftSweepExpiredListingsForwarderInput, buildNativeNftSweepExpiredListingsModuleCall, buildNativeSpotCancelOrderForwarderInput, buildNativeSpotCancelOrderModuleCall, buildNativeSpotCreateMarketForwarderInput, buildNativeSpotCreateMarketModuleCall, buildNativeSpotLimitOrderForwarderInput, buildNativeSpotLimitOrderModuleCall, buildNativeSpotSettleLimitOrderForwarderInput, buildNativeSpotSettleLimitOrderModuleCall, buildNativeSpotSettleRoutedLimitOrderForwarderInput, buildNativeSpotSettleRoutedLimitOrderModuleCall, buildPlaceSpotLimitOrderPlan, buildPlaceSpotMarketOrderExPlan, buildPlaceSpotMarketOrderPlan, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, clobAddressHex, compareNativeDevVersions, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeOracleEvent, delegationAddressHex, deriveClobMarketId, deriveMrvContractAddress, deriveNativeSpotMarketId, deriveNativeSpotOrderId, encodeCancelOrderCalldata, encodeClaimCalldata, encodeCompleteRedemptionCalldata, encodeDelegateCalldata, encodeHasPubkeyCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeNativeMarketModuleForwarderInput, encodeNativeNftBuyListingCall, encodeNativeNftCancelListingCall, encodeNativeNftCreateListingCall, encodeNativeNftPlaceAuctionBidCall, encodeNativeNftSettleAuctionCall, encodeNativeNftSweepExpiredListingsCall, encodeNativeSpotCancelOrderCall, encodeNativeSpotCreateMarketCall, encodeNativeSpotLimitOrderCall, encodeNativeSpotSettleLimitOrderCall, encodeNativeSpotSettleRoutedLimitOrderCall, encodePlaceLimitOrderCalldata, encodePlaceMarketOrderCalldata, encodePlaceMarketOrderExCalldata, encodeRedelegateCalldata, encodeRegisterPubkeyCalldata, encodeSetAutoCompoundCalldata, encodeSetLotSizeCalldata, encodeSetMinNotionalCalldata, encodeSetTickSizeCalldata, encodeUndelegateCalldata, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, hexToAddressBytes, isRedemptionPrincipalUnavailableRevert, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeDevSchemaFieldNames, nativeDevUiStrings, normalizeAddressHex, oracleAddressHex, parseAddress, parseLythToLythoshi, pubkeyRegistryAddressHex, requireTypedAddress, resolveStudioHostStatus, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, typedBech32ToAddress, validateAddress, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, version };
+export { AddressFlowResponse, AddressKind, AddressProfileResponse, AgentActionError, type ApiAddressActivityData, type ApiAddressActivityEntry, type ApiAddressActivityKind, type ApiAddressActivityKindData, type ApiAddressActivityKindSummary, type ApiBlockData, type ApiBlockHeader, type ApiBlockTransactionsData, type ApiCapabilitiesResponse, ApiClient, type ApiClientOptions, type ApiClusterData, type ApiClusterDirectoryEntry, type ApiClusterDirectoryPage, type ApiClusterMember, type ApiClusterStatus, type ApiClustersData, type ApiEnvelope, type ApiErrorEnvelope, type ApiHealthResponse, type ApiIndexerStatus, type ApiLatestAnchor, type ApiLogEntry, type ApiOperatorData, type ApiOperatorInfo, type ApiQueryValue, type ApiRuntimeProvenanceData, type ApiServiceProbeData, ApiStreamsIndexResponse, type ApiTransactionData, type ApiTransactionNativeReceiptData, type ApiTransactionReceipt, type ApiTransactionReceiptData, type ApiTransactionView, type ApiUpgradePlanStatus, type ApiUpgradeStatus, type ApiUpgradeStatusData, BURN_ADDR, BlockSelector, BridgeRoutesRequest, BridgeRoutesResponse, type CallRequest, ChainStatsResponse, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse, ClobTradesResponse, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DelegationPrecompileError, type EncodeNativeAgentAvailabilitySlotArgs, type EncodeNativeAgentCounterEscrowArgs, type EncodeNativeAgentCreateEscrowArgs, type EncodeNativeAgentDeactivateServiceArgs, type EncodeNativeAgentEscrowActorArgs, type EncodeNativeAgentGrantConsentArgs, type EncodeNativeAgentIssueAttestationArgs, type EncodeNativeAgentListServiceArgs, type EncodeNativeAgentRecordPolicySpendArgs, type EncodeNativeAgentRecordReputationArgs, type EncodeNativeAgentRegisterArbiterArgs, type EncodeNativeAgentRegisterIssuerArgs, type EncodeNativeAgentResolveEscrowArgs, type EncodeNativeAgentRevokeAttestationArgs, type EncodeNativeAgentRevokeConsentArgs, type EncodeNativeAgentSetAvailabilityArgs, type EncodeNativeAgentSetSpendingPolicyArgs, type EncodeNativeAgentStartEscrowArgs, type EncodeNativeAgentSubmitEscrowArgs, type HealthSummary, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, type LatencyBands, type LythFormatOptions, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, type MonolythiumNetworkConfig, type MrcAccountRequest, MrcAccountResponse, type MrcHoldersRequest, MrcHoldersResponse, MrcMetadataResponse, type MrvAbiManifest, type MrvAbiParam, type MrvAbiSymbol, type MrvAbiSymbolKind, type MrvAbiType, type MrvAddressKind, type MrvArtifactMetadata, type MrvBuildMetadata, type MrvBytesLike, type MrvCallNativeTxOptions, type MrvCallNativeTxPlan, type MrvCallPlan, type MrvCallRequest, type MrvCallResponse, type MrvCallStatus, type MrvCallSubmission, type MrvCallSubmitOptions, type MrvDecimalLike, type MrvDeployNativeTxOptions, type MrvDeployNativeTxPlan, type MrvDeployPayload, type MrvDeployPayloadNativeTxOptions, type MrvDeployPayloadPlanOptions, type MrvDeployPayloadRequestOptions, type MrvDeployPayloadSubmission, type MrvDeployPayloadSubmitOptions, type MrvDeployPlan, type MrvDeployPlanOptions, type MrvDeployRequest, type MrvDeployResponse, type MrvDeploySubmission, type MrvDeploySubmitOptions, type MrvEncryptedSubmissionResult, type MrvEventRecord, type MrvExecutionReceipt, type MrvFeeDisplayConformanceInput, type MrvFeeDisplayConformanceReport, type MrvMemoryLimits, type MrvMeterCounters, type MrvNativeFeePreview, type MrvNativeStateDelta, type MrvNativeTxFacade, type MrvRequestBuildOptions, type MrvResolvedSyscall, type MrvRevertPayload, type MrvRiscvProfile, type MrvStorageNamespace, type MrvStructuredFeeConformanceOptions, type MrvStructuredFeeConformanceReport, type MrvSyscallImport, type MrvTransactionExtension, type MrvTypedAddress, type MrvValidatedArtifactMetadata, MrvValidationError, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, type NativeAgentAddressInput, type NativeAgentAddressKind, type NativeAgentEscrowResolution, type NativeAgentForwarderInput, type NativeAgentModuleCallEnvelope, type NativeAgentModuleContractCall, type NativeAgentReputationScores, NativeAgentStateFilter, NativeAgentStateResponse, NativeDecodedEvent, type NativeDevApprovalKind, type NativeDevCommandName, type NativeDevContractPassport, type NativeDevHostApprovalResultMessage, type NativeDevHostCommandMessage, type NativeDevHostContextMessage, type NativeDevIpcMessage, type NativeDevMrcAllocation, type NativeDevMrcAssetKind, type NativeDevMrcTokenPlan, type NativeDevMrvDeployPlan, type NativeDevRiskLabel, type NativeDevRiskSeverity, type NativeDevSidecarApprovalRequestMessage, type NativeDevSidecarCommandResultMessage, type NativeDevSidecarProjectEventMessage, type NativeDevSidecarReadyMessage, type NativeDevVerificationBundle, type NativeDevWalletApprovalRequest, type NativeDevkitArchive, type NativeDevkitChannel, type NativeDevkitCompatibility, type NativeDevkitManifest, type NativeDevkitSidecarManifest, type NativeDevkitSidecarStatus, type NativeDevkitStatus, NativeEventFilter, NativeEventsFilter, NativeEventsResponse, NativeMarketOrderBookDeltasRequest, NativeMarketOrderBookDeltasResponse, NativeMarketStateFilter, NativeMarketStateResponse, NativeReceiptFee, type NativeReceiptFeeDisplay, NativeReceiptResponse, OPERATOR_ROUTER_ADDRESS, OperatorCapabilitiesResponse, PRECOMPILE_ADDRESSES, PROTOCOL_MAX_OPERATOR_FEE_BPS, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PendingRewardsResponse, type PrecompileAddress, type PrecompileName, type PubkeyLookup, PubkeyRegistryError, RedemptionQueueResponse, RpcClient, RuntimeBuildProvenance, RuntimeUpgradeStatus, SdkError, SearchResponse, ServiceProbeResponse, type StudioHostState, type StudioHostStatus, TxFeedResponse, TypedAddress, TypedNativeReceiptEvent, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, compareNativeDevVersions, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, delegationAddressHex, deriveMrvContractAddress, encodeClaimCalldata, encodeCompleteRedemptionCalldata, encodeDelegateCalldata, encodeHasPubkeyCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeRedelegateCalldata, encodeRegisterPubkeyCalldata, encodeSetAutoCompoundCalldata, encodeUndelegateCalldata, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, isRedemptionPrincipalUnavailableRevert, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeDevSchemaFieldNames, nativeDevUiStrings, parseLythToLythoshi, pubkeyRegistryAddressHex, resolveStudioHostStatus, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, version };

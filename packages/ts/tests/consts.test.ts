@@ -19,6 +19,8 @@ import { describe, expect, it } from "vitest";
 import {
   BURN_ADDR,
   MONOLYTHIUM_TESTNET_CHAIN_ID,
+  OPERATOR_ROUTER_ADDRESS,
+  PROTOCOL_MAX_OPERATOR_FEE_BPS,
   PRECOMPILE_ADDRESSES,
   type PrecompileAddress,
   type PrecompileName,
@@ -91,6 +93,12 @@ describe("PRECOMPILE_ADDRESSES", () => {
     expect(PRECOMPILE_ADDRESSES.DELEGATION).toBe(
       "0x000000000000000000000000000000000000100A",
     );
+    expect(PRECOMPILE_ADDRESSES.OPERATOR_ROUTER).toBe(
+      "0x000000000000000000000000000000000000100B",
+    );
+    expect(PRECOMPILE_ADDRESSES.PROVER_MARKET).toBe(
+      "0x000000000000000000000000000000000000100C",
+    );
     expect(PRECOMPILE_ADDRESSES.EMERGENCY_KEY).toBe(
       "0x0000000000000000000000000000000000001100",
     );
@@ -152,5 +160,19 @@ describe("PRECOMPILE_ADDRESSES", () => {
     const name: PrecompileName = "CLOB";
     const addr: PrecompileAddress = PRECOMPILE_ADDRESSES[name];
     expect(addr).toBe("0x0000000000000000000000000000000000001001");
+  });
+});
+
+describe("operator-router surface", () => {
+  it("OPERATOR_ROUTER_ADDRESS aliases the 0x100B precompile slot", () => {
+    expect(OPERATOR_ROUTER_ADDRESS).toBe(
+      "0x000000000000000000000000000000000000100B",
+    );
+    expect(OPERATOR_ROUTER_ADDRESS).toBe(PRECOMPILE_ADDRESSES.OPERATOR_ROUTER);
+  });
+
+  it("PROTOCOL_MAX_OPERATOR_FEE_BPS is the on-chain 1.00% ceiling", () => {
+    // Mirrors mono-core operator-router::storage::PROTOCOL_MAX_OPERATOR_FEE_BPS.
+    expect(PROTOCOL_MAX_OPERATOR_FEE_BPS).toBe(100);
   });
 });

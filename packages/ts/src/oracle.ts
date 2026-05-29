@@ -29,6 +29,109 @@ export class OracleEventError extends Error {
   }
 }
 
+/** One active oracle writer in a {@link OracleSignersResponse}. */
+export interface OracleSignerRow {
+  /** Writer address in the active global oracle signer roster (`mono` bech32m). */
+  writer: string;
+  /** Admin that last authorized this writer's membership (`mono` bech32m). */
+  admin: string;
+  /** Block height of the latest membership fold. */
+  updatedAtBlock: number;
+}
+
+/**
+ * `lyth_oracleSigners` response — the global oracle writer roster, folded
+ * from `OracleWriterAdded` / `OracleWriterRemoved` by the oracle indexer
+ * projection (MB-6).
+ *
+ * When the node runs without that projection it returns the graceful
+ * fallback `{ status: "indexer_unavailable", writers: [] }` — `writers`
+ * is always present so callers can iterate unconditionally; use
+ * `lyth_oracleWriters(feedId)` for the per-feed writer set in that case.
+ */
+export interface OracleSignersResponse {
+  /** Response schema version (`1`). */
+  schemaVersion: number;
+  /** `"indexer_unavailable"` on the graceful-fallback path; absent when served. */
+  status?: "indexer_unavailable";
+  /** Data source — `"oracle_indexer_projection"`. */
+  source: string;
+  /** Oracle precompile address (`0x1009`). */
+  precompile: string;
+  /** Active writers; empty on the fallback path. */
+  writers: OracleSignerRow[];
+  /** Human-readable reason on the fallback path. */
+  reason?: string;
+}
+
+/**
+ * `lyth_oracleWriters` response — the allowed-writer roster for one feed
+ * (MB-6), read from the feed-config writer list (`0x1009`).
+ */
+export interface OracleWriters {
+  /** Response schema version (`1`). */
+  schemaVersion: number;
+  /** Data source — `"native_state_storage"`. */
+  source: string;
+  /** Oracle precompile address (`0x1009`). */
+  precompile: string;
+  /** Feed the writers are scoped to (`0x` 32 bytes). */
+  feedId: string;
+  /** Allowed writer addresses (`mono` bech32m). */
+  writers: string[];
+}
+
+/**
+ * `lyth_oracleLatestPrice` response — the latest finalized round's median
+ * for one feed (MB-6). A registered feed with no closed round yet returns
+ * `round: 0`, `median: null`, `finalized: false`.
+ */
+export interface OracleLatestPrice {
+  /** Response schema version (`1`). */
+  schemaVersion: number;
+  /** Data source — `"native_state_storage"`. */
+  source: string;
+  /** Oracle precompile address (`0x1009`). */
+  precompile: string;
+  /** Feed id (`0x` 32 bytes). */
+  feedId: string;
+  /** Feed decimals. */
+  decimals: number;
+  /** Latest round id; `0` before the first round closes. */
+  round: number;
+  /** `true` once the latest round is finalized. */
+  finalized: boolean;
+  /** Finalized median (`0x`-hex `uint256`); `null` while unfinalized. */
+  median: string | null;
+  /** Block the latest round finalized at; `null` while unfinalized. */
+  finalizedAtBlock: number | null;
+}
+
+/**
+ * `lyth_oracleFeedConfig` response — one feed's decimals / heartbeat /
+ * deviation-bps (circuit breaker) / min-signers config (MB-6).
+ */
+export interface OracleFeedConfig {
+  /** Response schema version (`1`). */
+  schemaVersion: number;
+  /** Data source — `"native_state_storage"`. */
+  source: string;
+  /** Oracle precompile address (`0x1009`). */
+  precompile: string;
+  /** Feed id (`0x` 32 bytes). */
+  feedId: string;
+  /** Feed decimals. */
+  decimals: number;
+  /** Minimum signers required to finalize a round. */
+  minSigners: number;
+  /** Max observation age (heartbeat) in seconds. */
+  heartbeatSeconds: number;
+  /** Circuit-breaker deviation bound in basis points. */
+  deviationBps: number;
+  /** Number of allowed writers configured for the feed. */
+  allowedWritersLen: number;
+}
+
 /** Return the oracle precompile address (`0x1009`) as lower-case hex. */
 export function oracleAddressHex(): string {
   return PRECOMPILE_ADDRESSES.ORACLE.toLowerCase();
