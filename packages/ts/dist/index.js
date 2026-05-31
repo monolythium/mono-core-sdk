@@ -1828,84 +1828,84 @@ var TESTNET_69420 = {
       provider: "monolythium-foundation",
       region: "fsn1",
       tier: "official",
-      notes: "validator-1"
+      notes: "operator-1"
     },
     {
       url: "http://178.105.15.216:8545",
       provider: "monolythium-foundation",
       region: "fsn1",
       tier: "official",
-      notes: "validator-2; primary foundation seed"
+      notes: "operator-2; primary foundation seed"
     },
     {
       url: "http://178.104.233.182:8545",
       provider: "monolythium-foundation",
       region: "nbg1",
       tier: "official",
-      notes: "validator-3"
+      notes: "operator-3"
     },
     {
       url: "http://65.108.94.1:8545",
       provider: "monolythium-foundation",
       region: "hel1",
       tier: "official",
-      notes: "validator-4"
+      notes: "operator-4"
     },
     {
       url: "http://95.216.154.155:8545",
       provider: "monolythium-foundation",
       region: "hel1",
       tier: "official",
-      notes: "validator-5"
+      notes: "operator-5"
     },
     {
       url: "http://87.99.145.48:8545",
       provider: "monolythium-foundation",
       region: "ash",
       tier: "official",
-      notes: "validator-6; US east"
+      notes: "operator-6; US east"
     },
     {
       url: "http://5.223.85.76:8545",
       provider: "monolythium-foundation",
       region: "sin",
       tier: "official",
-      notes: "validator-7; APAC"
+      notes: "operator-7; APAC"
     },
     {
       url: "http://142.132.180.99:8545",
       provider: "monolythium-foundation",
       region: "fsn1",
       tier: "official",
-      notes: "validator-8"
+      notes: "operator-8"
     },
     {
       url: "http://162.55.54.198:8545",
       provider: "monolythium-foundation",
       region: "nbg1",
       tier: "official",
-      notes: "validator-9"
+      notes: "operator-9"
     },
     {
       url: "http://95.217.156.190:8545",
       provider: "monolythium-foundation",
       region: "hel1",
       tier: "official",
-      notes: "validator-10"
+      notes: "operator-10"
     },
     {
       url: "http://5.223.65.201:8545",
       provider: "monolythium-foundation",
       region: "sin",
       tier: "official",
-      notes: "validator-11; APAC"
+      notes: "operator-11; APAC"
     },
     {
       url: "http://128.140.125.5:8545",
       provider: "monolythium-foundation",
       region: "fsn1",
       tier: "official",
-      notes: "validator-12"
+      notes: "operator-12"
     },
     {
       url: "http://178.105.45.210:8545",
@@ -4036,6 +4036,83 @@ function parseNullableString(value, label) {
   return value;
 }
 
+// src/tx-fee.ts
+var REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT = 250000n;
+var TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT = 100000n;
+var MIN_EXECUTION_UNIT_PRICE_LYTHOSHI = 2000n;
+var EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER = 3n;
+function asBigint(value, label) {
+  try {
+    return typeof value === "bigint" ? value : BigInt(value);
+  } catch {
+    throw new Error(`${label} is not an integer: ${String(value)}`);
+  }
+}
+function clampPriorityTip(priorityTipLythoshi, maxExecutionUnitPriceLythoshi) {
+  const tip = asBigint(priorityTipLythoshi, "priorityTipLythoshi");
+  const cap = asBigint(maxExecutionUnitPriceLythoshi, "maxExecutionUnitPriceLythoshi");
+  if (tip < 0n) throw new Error("priorityTipLythoshi must be non-negative");
+  return tip > cap ? cap : tip;
+}
+async function resolveMaxExecutionUnitPrice(client, options = {}) {
+  const floor = options.minPriceLythoshi ?? MIN_EXECUTION_UNIT_PRICE_LYTHOSHI;
+  const multiplier = options.safetyMultiplier ?? EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER;
+  const quote = await client.lythExecutionUnitPrice();
+  let unitPrice;
+  try {
+    unitPrice = BigInt(quote.executionUnitPriceLythoshi);
+  } catch {
+    throw SdkError.malformed(
+      `lyth_executionUnitPrice returned a non-integer executionUnitPriceLythoshi: ${quote.executionUnitPriceLythoshi}`
+    );
+  }
+  const base = unitPrice > floor ? unitPrice : floor;
+  return base * multiplier;
+}
+async function resolveExecutionFee(client, options = {}) {
+  const maxFeePerGas = await resolveMaxExecutionUnitPrice(client, {
+    minPriceLythoshi: options.minPriceLythoshi,
+    safetyMultiplier: options.safetyMultiplier
+  });
+  const tip = options.priorityTipLythoshi === void 0 ? maxFeePerGas : clampPriorityTip(options.priorityTipLythoshi, maxFeePerGas);
+  return {
+    maxFeePerGas,
+    maxPriorityFeePerGas: tip,
+    gasLimit: options.executionUnitLimit ?? TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT
+  };
+}
+async function resolveRegistryExecutionFee(client, options = {}) {
+  return resolveExecutionFee(client, {
+    ...options,
+    executionUnitLimit: options.executionUnitLimit ?? REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT
+  });
+}
+function feeFieldToBigint(value, field2) {
+  if (typeof value !== "string" || !/^\d+$/.test(value.trim())) {
+    throw SdkError.malformed(`${field2} is not an integer: ${String(value)}`);
+  }
+  try {
+    return BigInt(value.trim());
+  } catch {
+    throw SdkError.malformed(`${field2} is not an integer: ${String(value)}`);
+  }
+}
+function transactionFeeExposure(fee) {
+  const basePrice = feeFieldToBigint(
+    fee.base_price_per_cycle_lythoshi,
+    "fee.base_price_per_cycle_lythoshi"
+  );
+  const priorityTip = feeFieldToBigint(
+    fee.priority_tip_lythoshi,
+    "fee.priority_tip_lythoshi"
+  );
+  feeFieldToBigint(fee.total_lythoshi, "fee.total_lythoshi");
+  return {
+    feeLythoshi: fee.total_lythoshi,
+    effectiveGasPricePerUnit: (basePrice + priorityTip).toString()
+  };
+}
+
 // src/api.ts
 var SDK_VERSION2 = "0.1.0";
 function apiEndpointFromRpcEndpoint(endpoint) {
@@ -4111,7 +4188,13 @@ var ApiClient = class {
     };
   }
   async transaction(hash) {
-    return this.get(`/transactions/${encodePathSegment(hash)}`);
+    const response = await this.get(
+      `/transactions/${encodePathSegment(hash)}`
+    );
+    return {
+      ...response,
+      data: enrichTransactionDataWithFee(response.data)
+    };
   }
   async transactionReceipt(hash) {
     return this.get(`/transactions/${encodePathSegment(hash)}/receipt`);
@@ -4340,6 +4423,22 @@ var ApiClient = class {
     return parsed;
   }
 };
+function enrichTransactionDataWithFee(data) {
+  const exposure = transactionFeeExposure(data.transaction.fee);
+  return {
+    ...data,
+    transaction: {
+      ...data.transaction,
+      feeLythoshi: exposure.feeLythoshi,
+      effectiveGasPricePerUnit: exposure.effectiveGasPricePerUnit
+    },
+    receipt: data.receipt == null ? data.receipt : {
+      ...data.receipt,
+      feeLythoshi: exposure.feeLythoshi,
+      effectiveGasPricePerUnit: exposure.effectiveGasPricePerUnit
+    }
+  };
+}
 function parseApiError(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const error = value["error"];
@@ -6722,58 +6821,6 @@ function assertWholeNumber(field2, value) {
     throw new Error(`${field2} must be a whole number`);
   }
 }
-
-// src/tx-fee.ts
-var REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT = 250000n;
-var TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT = 100000n;
-var MIN_EXECUTION_UNIT_PRICE_LYTHOSHI = 2000n;
-var EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER = 3n;
-function asBigint(value, label) {
-  try {
-    return typeof value === "bigint" ? value : BigInt(value);
-  } catch {
-    throw new Error(`${label} is not an integer: ${String(value)}`);
-  }
-}
-function clampPriorityTip(priorityTipLythoshi, maxExecutionUnitPriceLythoshi) {
-  const tip = asBigint(priorityTipLythoshi, "priorityTipLythoshi");
-  const cap = asBigint(maxExecutionUnitPriceLythoshi, "maxExecutionUnitPriceLythoshi");
-  if (tip < 0n) throw new Error("priorityTipLythoshi must be non-negative");
-  return tip > cap ? cap : tip;
-}
-async function resolveMaxExecutionUnitPrice(client, options = {}) {
-  const floor = options.minPriceLythoshi ?? MIN_EXECUTION_UNIT_PRICE_LYTHOSHI;
-  const multiplier = options.safetyMultiplier ?? EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER;
-  const quote = await client.lythExecutionUnitPrice();
-  let unitPrice;
-  try {
-    unitPrice = BigInt(quote.executionUnitPriceLythoshi);
-  } catch {
-    throw SdkError.malformed(
-      `lyth_executionUnitPrice returned a non-integer executionUnitPriceLythoshi: ${quote.executionUnitPriceLythoshi}`
-    );
-  }
-  const base = unitPrice > floor ? unitPrice : floor;
-  return base * multiplier;
-}
-async function resolveExecutionFee(client, options = {}) {
-  const maxFeePerGas = await resolveMaxExecutionUnitPrice(client, {
-    minPriceLythoshi: options.minPriceLythoshi,
-    safetyMultiplier: options.safetyMultiplier
-  });
-  const tip = options.priorityTipLythoshi === void 0 ? maxFeePerGas : clampPriorityTip(options.priorityTipLythoshi, maxFeePerGas);
-  return {
-    maxFeePerGas,
-    maxPriorityFeePerGas: tip,
-    gasLimit: options.executionUnitLimit ?? TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT
-  };
-}
-async function resolveRegistryExecutionFee(client, options = {}) {
-  return resolveExecutionFee(client, {
-    ...options,
-    executionUnitLimit: options.executionUnitLimit ?? REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT
-  });
-}
 var ORACLE_EVENT_SIGS = {
   oracleRoundFinalized: "OracleRoundFinalized(bytes32,uint64,uint256,uint64,uint32)",
   observationSubmitted: "ObservationSubmitted(bytes32,uint64,address,uint256,uint64)",
@@ -9012,6 +9059,6 @@ var MONOLYTHIUM_NETWORKS = {
 // src/index.ts
 var version = "0.2.2";
 
-export { ADDRESS_HRP, ADDRESS_KIND_HRPS, API_STREAM_TOPICS, AddressError, AgentActionError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, CLOB_MARKET_ID_DOMAIN_TAG, CLOB_SELECTORS, CLUSTER_FORMED_EVENT_SIG, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DIVERSITY_SCORE_MAX, DelegationPrecompileError, EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES, MAX_NATIVE_RECEIPT_EVENTS, MIN_EXECUTION_UNIT_PRICE_LYTHOSHI, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MULTISIG_ADDRESS_DERIVATION_DOMAIN, MarketActionError, MrvValidationError, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE, NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY, NATIVE_CALL_FORWARDER_RESPONSE_OFFSET, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NATIVE_MARKET_MODULE_ADDRESS, NATIVE_MARKET_MODULE_ADDRESS_BYTES, NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_FINALITY_EVIDENCE_SCHEMA, NO_EVM_FINALITY_EVIDENCE_SOURCE, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NoEvmReceiptProofError, NodeRegistryError, OPERATOR_ROUTER_ADDRESS, OPERATOR_ROUTER_EVENT_SIGS, OPERATOR_ROUTER_SELECTORS, OPERATOR_ROUTER_SIGS, ORACLE_EVENT_SIGS, OracleEventError, PRECOMPILE_ADDRESSES, PROTOCOL_MAX_OPERATOR_FEE_BPS, PROVER_MARKET_ADDRESS, PROVER_MARKET_BID_DOMAIN, PROVER_MARKET_EVENT_SIGS, PROVER_MARKET_REQUEST_DOMAIN, PROVER_MARKET_SELECTORS, PROVER_MARKET_SUBMIT_DOMAIN, PROVER_SLASH_REASON_BAD_PROOF, PROVER_SLASH_REASON_NON_DELIVERY, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, ProverMarketError, PubkeyRegistryError, REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT, RESERVED_ADDRESS_HRPS, RpcClient, SERVES_GPU_PROVE, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT, V1_BRIDGE_ALLOWED_FEE_TOKEN, V1_BRIDGE_ALLOWED_PROTOCOL, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, assertNativeMarketOrderBookStreamPayload, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bidSighash, bridgeAddressHex, bridgeDrainRemaining, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildBridgeRouteCatalogue, buildCancelSpotOrderPlan, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildNativeCallForwarderArtifact, buildNativeMarketModuleCallEnvelope, buildNativeNftBuyListingForwarderInput, buildNativeNftBuyListingModuleCall, buildNativeNftCancelListingForwarderInput, buildNativeNftCancelListingModuleCall, buildNativeNftCreateListingForwarderInput, buildNativeNftCreateListingModuleCall, buildNativeNftPlaceAuctionBidForwarderInput, buildNativeNftPlaceAuctionBidModuleCall, buildNativeNftSettleAuctionForwarderInput, buildNativeNftSettleAuctionModuleCall, buildNativeNftSweepExpiredListingsForwarderInput, buildNativeNftSweepExpiredListingsModuleCall, buildNativeSpotCancelOrderForwarderInput, buildNativeSpotCancelOrderModuleCall, buildNativeSpotCreateMarketForwarderInput, buildNativeSpotCreateMarketModuleCall, buildNativeSpotLimitOrderForwarderInput, buildNativeSpotLimitOrderModuleCall, buildNativeSpotSettleLimitOrderForwarderInput, buildNativeSpotSettleLimitOrderModuleCall, buildNativeSpotSettleRoutedLimitOrderForwarderInput, buildNativeSpotSettleRoutedLimitOrderModuleCall, buildPlaceLimitOrderViaPlan, buildPlaceSpotLimitOrderPlan, buildPlaceSpotMarketOrderExPlan, buildPlaceSpotMarketOrderPlan, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, clampPriorityTip, clobAddressHex, compareNativeDevVersions, composeClaimBoundMessage, computeNoEvmDacFinalityMessage, computeNoEvmLeaderFinalityMessage, computeNoEvmReceiptsRoot, computeNoEvmRoundFinalityMessage, computeNoEvmTargetReceiptHash, consumeNativeEvents, decodeClusterDiversity, decodeClusterFormedEvent, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNativeAgentStateResponse, decodeNativeMarketOrderBookDeltasResponse, decodeNativeReceiptResponse, decodeNoEvmReceiptTranscript, decodeOperatorFeeChargedEvent, decodeOperatorNetworkMetadata, decodeOracleEvent, decodeTimeWindow, decodeTxFeedResponse, delegationAddressHex, deriveClobMarketId, deriveClusterAnchorAddress, deriveMrvContractAddress, deriveNativeSpotMarketId, deriveNativeSpotOrderId, encodeBlockSelector, encodeCancelOrderCalldata, encodeClaimCalldata, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeCreateRequestCalldata, encodeCreateRequestCanonical, encodeDelegateCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeNativeMarketModuleForwarderInput, encodeNativeNftBuyListingCall, encodeNativeNftCancelListingCall, encodeNativeNftCreateListingCall, encodeNativeNftPlaceAuctionBidCall, encodeNativeNftSettleAuctionCall, encodeNativeNftSweepExpiredListingsCall, encodeNativeSpotCancelOrderCall, encodeNativeSpotCreateMarketCall, encodeNativeSpotLimitOrderCall, encodeNativeSpotSettleLimitOrderCall, encodeNativeSpotSettleRoutedLimitOrderCall, encodePlaceLimitOrderCalldata, encodePlaceLimitOrderViaCalldata, encodePlaceMarketOrderCalldata, encodePlaceMarketOrderExCalldata, encodeRedelegateCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetAutoCompoundCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetLotSizeCalldata, encodeSetMinNotionalCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, encodeSetTickSizeCalldata, encodeUndelegateCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, getChainInfo, getNoEvmReceiptTrustPolicy, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isNativeMarketOrderBookStreamPayload, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeAgentStateFilterParams, nativeDevSchemaFieldNames, nativeDevUiStrings, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nativeMarketStateFilterParams, noEvmReceiptTrustPolicyFromChainInfo, nodeHostingClassFromByte, nodeHostingClassToByte, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, oracleAddressHex, packTimeWindow, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseLythToLythoshi, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, proverMarketStateFromByte, pubkeyRegistryAddressHex, quoteOperatorFee, rankBridgeRoutes, requestSighash, requireTypedAddress, resolveExecutionFee, resolveMaxExecutionUnitPrice, resolveRegistryExecutionFee, resolveStudioHostStatus, selectBridgeTransferRoute, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, submitSighash, typedBech32ToAddress, validateAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, verifyNoEvmArchiveProofSignatures, verifyNoEvmBlockFinalityEvidenceMultisig, verifyNoEvmBlockFinalityEvidenceThreshold, verifyNoEvmFinalityEvidenceMultisig, verifyNoEvmFinalityEvidenceThreshold, verifyNoEvmReceiptProof, verifyNoEvmReceiptProofTrust, version };
+export { ADDRESS_HRP, ADDRESS_KIND_HRPS, API_STREAM_TOPICS, AddressError, AgentActionError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, CLOB_MARKET_ID_DOMAIN_TAG, CLOB_SELECTORS, CLUSTER_FORMED_EVENT_SIG, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DIVERSITY_SCORE_MAX, DelegationPrecompileError, EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES, MAX_NATIVE_RECEIPT_EVENTS, MIN_EXECUTION_UNIT_PRICE_LYTHOSHI, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MULTISIG_ADDRESS_DERIVATION_DOMAIN, MarketActionError, MrvValidationError, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE, NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY, NATIVE_CALL_FORWARDER_RESPONSE_OFFSET, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NATIVE_MARKET_MODULE_ADDRESS, NATIVE_MARKET_MODULE_ADDRESS_BYTES, NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_FINALITY_EVIDENCE_SCHEMA, NO_EVM_FINALITY_EVIDENCE_SOURCE, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NoEvmReceiptProofError, NodeRegistryError, OPERATOR_ROUTER_ADDRESS, OPERATOR_ROUTER_EVENT_SIGS, OPERATOR_ROUTER_SELECTORS, OPERATOR_ROUTER_SIGS, ORACLE_EVENT_SIGS, OracleEventError, PRECOMPILE_ADDRESSES, PROTOCOL_MAX_OPERATOR_FEE_BPS, PROVER_MARKET_ADDRESS, PROVER_MARKET_BID_DOMAIN, PROVER_MARKET_EVENT_SIGS, PROVER_MARKET_REQUEST_DOMAIN, PROVER_MARKET_SELECTORS, PROVER_MARKET_SUBMIT_DOMAIN, PROVER_SLASH_REASON_BAD_PROOF, PROVER_SLASH_REASON_NON_DELIVERY, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, ProverMarketError, PubkeyRegistryError, REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT, RESERVED_ADDRESS_HRPS, RpcClient, SERVES_GPU_PROVE, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT, V1_BRIDGE_ALLOWED_FEE_TOKEN, V1_BRIDGE_ALLOWED_PROTOCOL, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, assertNativeMarketOrderBookStreamPayload, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bidSighash, bridgeAddressHex, bridgeDrainRemaining, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildBridgeRouteCatalogue, buildCancelSpotOrderPlan, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildNativeCallForwarderArtifact, buildNativeMarketModuleCallEnvelope, buildNativeNftBuyListingForwarderInput, buildNativeNftBuyListingModuleCall, buildNativeNftCancelListingForwarderInput, buildNativeNftCancelListingModuleCall, buildNativeNftCreateListingForwarderInput, buildNativeNftCreateListingModuleCall, buildNativeNftPlaceAuctionBidForwarderInput, buildNativeNftPlaceAuctionBidModuleCall, buildNativeNftSettleAuctionForwarderInput, buildNativeNftSettleAuctionModuleCall, buildNativeNftSweepExpiredListingsForwarderInput, buildNativeNftSweepExpiredListingsModuleCall, buildNativeSpotCancelOrderForwarderInput, buildNativeSpotCancelOrderModuleCall, buildNativeSpotCreateMarketForwarderInput, buildNativeSpotCreateMarketModuleCall, buildNativeSpotLimitOrderForwarderInput, buildNativeSpotLimitOrderModuleCall, buildNativeSpotSettleLimitOrderForwarderInput, buildNativeSpotSettleLimitOrderModuleCall, buildNativeSpotSettleRoutedLimitOrderForwarderInput, buildNativeSpotSettleRoutedLimitOrderModuleCall, buildPlaceLimitOrderViaPlan, buildPlaceSpotLimitOrderPlan, buildPlaceSpotMarketOrderExPlan, buildPlaceSpotMarketOrderPlan, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, clampPriorityTip, clobAddressHex, compareNativeDevVersions, composeClaimBoundMessage, computeNoEvmDacFinalityMessage, computeNoEvmLeaderFinalityMessage, computeNoEvmReceiptsRoot, computeNoEvmRoundFinalityMessage, computeNoEvmTargetReceiptHash, consumeNativeEvents, decodeClusterDiversity, decodeClusterFormedEvent, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNativeAgentStateResponse, decodeNativeMarketOrderBookDeltasResponse, decodeNativeReceiptResponse, decodeNoEvmReceiptTranscript, decodeOperatorFeeChargedEvent, decodeOperatorNetworkMetadata, decodeOracleEvent, decodeTimeWindow, decodeTxFeedResponse, delegationAddressHex, deriveClobMarketId, deriveClusterAnchorAddress, deriveMrvContractAddress, deriveNativeSpotMarketId, deriveNativeSpotOrderId, encodeBlockSelector, encodeCancelOrderCalldata, encodeClaimCalldata, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeCreateRequestCalldata, encodeCreateRequestCanonical, encodeDelegateCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeNativeMarketModuleForwarderInput, encodeNativeNftBuyListingCall, encodeNativeNftCancelListingCall, encodeNativeNftCreateListingCall, encodeNativeNftPlaceAuctionBidCall, encodeNativeNftSettleAuctionCall, encodeNativeNftSweepExpiredListingsCall, encodeNativeSpotCancelOrderCall, encodeNativeSpotCreateMarketCall, encodeNativeSpotLimitOrderCall, encodeNativeSpotSettleLimitOrderCall, encodeNativeSpotSettleRoutedLimitOrderCall, encodePlaceLimitOrderCalldata, encodePlaceLimitOrderViaCalldata, encodePlaceMarketOrderCalldata, encodePlaceMarketOrderExCalldata, encodeRedelegateCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetAutoCompoundCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetLotSizeCalldata, encodeSetMinNotionalCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, encodeSetTickSizeCalldata, encodeUndelegateCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, getChainInfo, getNoEvmReceiptTrustPolicy, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isNativeMarketOrderBookStreamPayload, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeAgentStateFilterParams, nativeDevSchemaFieldNames, nativeDevUiStrings, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nativeMarketStateFilterParams, noEvmReceiptTrustPolicyFromChainInfo, nodeHostingClassFromByte, nodeHostingClassToByte, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, oracleAddressHex, packTimeWindow, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseLythToLythoshi, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, proverMarketStateFromByte, pubkeyRegistryAddressHex, quoteOperatorFee, rankBridgeRoutes, requestSighash, requireTypedAddress, resolveExecutionFee, resolveMaxExecutionUnitPrice, resolveRegistryExecutionFee, resolveStudioHostStatus, selectBridgeTransferRoute, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, submitSighash, transactionFeeExposure, typedBech32ToAddress, validateAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, verifyNoEvmArchiveProofSignatures, verifyNoEvmBlockFinalityEvidenceMultisig, verifyNoEvmBlockFinalityEvidenceThreshold, verifyNoEvmFinalityEvidenceMultisig, verifyNoEvmFinalityEvidenceThreshold, verifyNoEvmReceiptProof, verifyNoEvmReceiptProofTrust, version };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

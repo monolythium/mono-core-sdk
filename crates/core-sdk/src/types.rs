@@ -238,6 +238,67 @@ pub struct NativeReceiptFee {
     pub priority_tip_lythoshi: String,
 }
 
+/// Client-side fee exposure for a settled transaction, derived from the
+/// structured [`NativeReceiptFee`] block the node already returns on the
+/// tx-query and tx-feed surfaces.
+///
+/// The live `eth_getTransactionReceipt` carries only `gas_used` / `status`
+/// / `logs` — no fee fields — so wallets and integrators previously had to
+/// reconstruct the charge themselves. These fields surface that charge
+/// without any chain / RPC change: on-chain the fee is
+/// `(base_price + priority_tip) × execution_units`, split 50% burn /
+/// 30% operator / 20% treasury.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionFeeExposure {
+    /// Total fee charged for the transaction, in lythoshi
+    /// ([`NativeReceiptFee::total_lythoshi`], surfaced verbatim).
+    pub fee_lythoshi: String,
+    /// Effective per-execution-unit price paid, in lythoshi
+    /// (`base_price_per_cycle_lythoshi + priority_tip_lythoshi`). The
+    /// Monolythium analogue of an EVM receipt's `effectiveGasPrice`.
+    pub effective_gas_price_per_unit: String,
+}
+
+impl NativeReceiptFee {
+    /// Compute the client-side [`TransactionFeeExposure`] from this fee
+    /// block — purely arithmetic, no network access.
+    ///
+    /// `effective_gas_price_per_unit` sums the base price per execution
+    /// unit and the priority tip per execution unit, matching the chain's
+    /// `(base_price + priority_tip) × execution_units` fee formula.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SdkError::Malformed`] when any of `total_lythoshi`,
+    /// `base_price_per_cycle_lythoshi`, or `priority_tip_lythoshi` is not a
+    /// non-negative integer.
+    pub fn transaction_fee_exposure(&self) -> Result<TransactionFeeExposure, crate::SdkError> {
+        let base_price = parse_fee_lythoshi(
+            &self.base_price_per_cycle_lythoshi,
+            "fee.base_price_per_cycle_lythoshi",
+        )?;
+        let priority_tip =
+            parse_fee_lythoshi(&self.priority_tip_lythoshi, "fee.priority_tip_lythoshi")?;
+        // Validate `total_lythoshi` but surface it verbatim so the exposed
+        // total exactly matches the node's charged value.
+        parse_fee_lythoshi(&self.total_lythoshi, "fee.total_lythoshi")?;
+        let effective = base_price.checked_add(priority_tip).ok_or_else(|| {
+            crate::SdkError::Malformed("fee base price + priority tip overflows u128".to_owned())
+        })?;
+        Ok(TransactionFeeExposure {
+            fee_lythoshi: self.total_lythoshi.clone(),
+            effective_gas_price_per_unit: effective.to_string(),
+        })
+    }
+}
+
+fn parse_fee_lythoshi(value: &str, field: &str) -> Result<u128, crate::SdkError> {
+    value
+        .parse::<u128>()
+        .map_err(|_| crate::SdkError::Malformed(format!("{field} is not an integer: {value}")))
+}
+
 /// One decoded native event row inside a native receipt response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -6780,6 +6841,64 @@ mod tests {
         });
 
         assert!(serde_json::from_value::<NativeReceiptFee>(wire).is_err());
+    }
+
+    fn fee_fixture(total: &str, base_price: &str, priority_tip: &str) -> NativeReceiptFee {
+        NativeReceiptFee {
+            total_lythoshi: total.to_owned(),
+            total_lyth: None,
+            cycles_used: 44,
+            base_price_per_cycle_lythoshi: base_price.to_owned(),
+            state_io_units: 2,
+            state_io_price_per_unit_lythoshi: "0".to_owned(),
+            priority_tip_lythoshi: priority_tip.to_owned(),
+        }
+    }
+
+    #[test]
+    fn transaction_fee_exposure_sums_base_price_and_priority_tip() {
+        let exposure = fee_fixture("262500000000", "10000000000", "2500000000")
+            .transaction_fee_exposure()
+            .expect("well-formed fee");
+        assert_eq!(exposure.fee_lythoshi, "262500000000");
+        assert_eq!(exposure.effective_gas_price_per_unit, "12500000000");
+    }
+
+    #[test]
+    fn transaction_fee_exposure_handles_large_values_without_loss() {
+        let exposure = fee_fixture(
+            "123456789012345678901234567890",
+            "99999999999999999999",
+            "1",
+        )
+        .transaction_fee_exposure()
+        .expect("well-formed fee");
+        assert_eq!(exposure.fee_lythoshi, "123456789012345678901234567890");
+        assert_eq!(
+            exposure.effective_gas_price_per_unit,
+            "100000000000000000000"
+        );
+    }
+
+    #[test]
+    fn transaction_fee_exposure_rejects_non_integer_fields() {
+        let err = fee_fixture("210000000000", "not-a-number", "0")
+            .transaction_fee_exposure()
+            .expect_err("non-integer base price");
+        assert!(matches!(err, crate::SdkError::Malformed(msg)
+            if msg.contains("base_price_per_cycle_lythoshi")));
+
+        let err = fee_fixture("210000000000", "10000000000", "1.5")
+            .transaction_fee_exposure()
+            .expect_err("non-integer priority tip");
+        assert!(matches!(err, crate::SdkError::Malformed(msg)
+            if msg.contains("priority_tip_lythoshi")));
+
+        let err = fee_fixture("", "10000000000", "0")
+            .transaction_fee_exposure()
+            .expect_err("empty total");
+        assert!(matches!(err, crate::SdkError::Malformed(msg)
+            if msg.contains("total_lythoshi")));
     }
 
     #[test]

@@ -1376,6 +1376,94 @@ describe("ApiClient", () => {
     expect(calls.every((c) => c.method === "GET")).toBe(true);
   });
 
+  it("exposes client-side feeLythoshi + effectiveGasPricePerUnit on transaction views and receipts", async () => {
+    const txHash = `0x${"22".repeat(32)}`;
+    const address = "0x1111111111111111111111111111111111111111";
+    const { fetch, calls } = mockGet(
+      apiEnvelope({
+        transaction: {
+          txHash,
+          blockHash: `0x${"33".repeat(32)}`,
+          blockHeight: 100,
+          txIndex: 0,
+          from: address,
+          to: null,
+          nonce: 1,
+          valueLythoshi: "0",
+          maxExecutionFeeLythoshi: "12500000000",
+          priorityTipLythoshi: "2500000000",
+          executionUnitLimit: 21000,
+          fee: nativeFee({
+            total_lythoshi: "262500000000",
+            base_price_per_cycle_lythoshi: "10000000000",
+            priority_tip_lythoshi: "2500000000",
+          }),
+          input: "0x",
+          signedEnvelope: "0xabcd",
+        },
+        receipt: {
+          txHash,
+          blockHash: `0x${"33".repeat(32)}`,
+          blockHeight: 100,
+          txIndex: 0,
+          status: 1,
+          executionUnitsUsed: 21,
+          logs: [],
+        },
+        source: { chainProvider: "LiveChainProvider" },
+      }),
+    );
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    const tx = await client.transaction(txHash);
+
+    expect(tx.data.transaction.feeLythoshi).toBe("262500000000");
+    expect(tx.data.transaction.effectiveGasPricePerUnit).toBe("12500000000");
+    expect(tx.data.receipt?.feeLythoshi).toBe("262500000000");
+    expect(tx.data.receipt?.effectiveGasPricePerUnit).toBe("12500000000");
+    expect(calls[0]).toEqual({
+      url: `https://rpc.example/api/v1/transactions/${txHash}`,
+      method: "GET",
+    });
+  });
+
+  it("computes transaction fee exposure even when the receipt is absent", async () => {
+    const txHash = `0x${"22".repeat(32)}`;
+    const { fetch } = mockGet(
+      apiEnvelope({
+        transaction: {
+          txHash,
+          blockHash: `0x${"33".repeat(32)}`,
+          blockHeight: 100,
+          txIndex: 0,
+          from: "0x1111111111111111111111111111111111111111",
+          to: null,
+          nonce: 1,
+          valueLythoshi: "0",
+          maxExecutionFeeLythoshi: "10000000000",
+          priorityTipLythoshi: "0",
+          executionUnitLimit: 21000,
+          fee: nativeFee({
+            total_lythoshi: "210000000000",
+            base_price_per_cycle_lythoshi: "10000000000",
+            priority_tip_lythoshi: "0",
+          }),
+          input: "0x",
+          signedEnvelope: "0xabcd",
+        },
+        receipt: null,
+        source: { chainProvider: "LiveChainProvider" },
+      }),
+    );
+    const client = new ApiClient("https://rpc.example", { fetch });
+
+    const tx = await client.transaction(txHash);
+
+    expect(tx.data.receipt).toBeNull();
+    expect(tx.data.transaction.feeLythoshi).toBe("210000000000");
+    expect(tx.data.transaction.effectiveGasPricePerUnit).toBe("10000000000");
+  });
+
   it("rejects legacy keys inside /api/v1 transaction-feed fee objects", async () => {
     const txHash = `0x${"22".repeat(32)}`;
     const address = "0x1111111111111111111111111111111111111111";

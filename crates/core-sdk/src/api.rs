@@ -23,7 +23,8 @@ use crate::types::{
     MrcMetadataResponse, NativeAgentStateFilter, NativeAgentStateResponse, NativeEventFilter,
     NativeEventsFilter, NativeEventsResponse, NativeMarketStateFilter, NativeMarketStateResponse,
     NativeReceiptFee, NativeReceiptResponse, PendingRewardsResponse, RedemptionQueueResponse,
-    SearchResponse, TxFeedResponse, TypedNativeEventsResponse, TypedNativeReceiptEvent,
+    SearchResponse, TransactionFeeExposure, TxFeedResponse, TypedNativeEventsResponse,
+    TypedNativeReceiptEvent,
 };
 
 /// Typed HTTP API client for `/api/v1`.
@@ -839,6 +840,22 @@ pub struct ApiTransactionData {
     pub transaction: ApiTransactionView,
     pub receipt: Option<ApiTransactionReceipt>,
     pub source: Value,
+}
+
+impl ApiTransactionData {
+    /// Client-side fee exposure (`feeLythoshi` + `effectiveGasPricePerUnit`)
+    /// computed from the transaction's structured `fee` block.
+    ///
+    /// The live `eth_getTransactionReceipt` does not carry fee fields; this
+    /// derives them client-side from the tx-query `fee` block with no chain
+    /// or RPC change. See [`NativeReceiptFee::transaction_fee_exposure`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SdkError`] when the `fee` block holds non-integer fields.
+    pub fn fee_exposure(&self) -> Result<TransactionFeeExposure, SdkError> {
+        self.transaction.fee.transaction_fee_exposure()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

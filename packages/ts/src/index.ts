@@ -356,8 +356,9 @@ export {
   resolveExecutionFee,
   resolveMaxExecutionUnitPrice,
   resolveRegistryExecutionFee,
+  transactionFeeExposure,
 } from "./tx-fee.js";
-export type { ResolvedExecutionFee } from "./tx-fee.js";
+export type { ResolvedExecutionFee, TransactionFeeExposure } from "./tx-fee.js";
 export * from "./types.js";
 export {
   BURN_ADDR,

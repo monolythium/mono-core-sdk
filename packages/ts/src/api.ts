@@ -44,6 +44,7 @@ import {
   requireTypedAddress,
   type AddressKind,
 } from "./address.js";
+import { transactionFeeExposure } from "./tx-fee.js";
 import type {
   AddressFlowResponse,
   AddressProfileResponse,
@@ -223,6 +224,17 @@ export interface ApiTransactionView {
   priorityTipLythoshi: string;
   executionUnitLimit: number;
   fee: NativeReceiptFee;
+  /**
+   * Total fee charged, in lythoshi (`fee.total_lythoshi`). Computed
+   * client-side from the `fee` block; see {@link transactionFeeExposure}.
+   */
+  feeLythoshi: string;
+  /**
+   * Effective per-execution-unit price paid, in lythoshi
+   * (`base_price_per_cycle_lythoshi + priority_tip_lythoshi`). Computed
+   * client-side from the `fee` block.
+   */
+  effectiveGasPricePerUnit: string;
   input: string;
   signedEnvelope: string;
 }
@@ -235,6 +247,20 @@ export interface ApiTransactionReceipt {
   status: number;
   executionUnitsUsed: number;
   logs: ApiLogEntry[];
+  /**
+   * Total fee charged for the transaction, in lythoshi. The live
+   * `eth_getTransactionReceipt` does not carry fee fields, so the SDK
+   * computes this client-side from the tx-query `fee` block — present when
+   * the receipt is fetched alongside the transaction view (e.g. via
+   * {@link ApiClient.transaction}); absent on the bare receipt route.
+   */
+  feeLythoshi?: string;
+  /**
+   * Effective per-execution-unit price paid, in lythoshi
+   * (`base_price_per_cycle_lythoshi + priority_tip_lythoshi`). Computed
+   * client-side; see {@link feeLythoshi} for availability.
+   */
+  effectiveGasPricePerUnit?: string;
 }
 
 export interface ApiAddressActivityEntry {
@@ -510,7 +536,13 @@ export class ApiClient {
   }
 
   async transaction(hash: string): Promise<ApiEnvelope<ApiTransactionData>> {
-    return this.get(`/transactions/${encodePathSegment(hash)}`);
+    const response = await this.get<ApiEnvelope<ApiTransactionData>>(
+      `/transactions/${encodePathSegment(hash)}`,
+    );
+    return {
+      ...response,
+      data: enrichTransactionDataWithFee(response.data),
+    };
   }
 
   async transactionReceipt(hash: string): Promise<ApiEnvelope<ApiTransactionReceiptData>> {
@@ -849,6 +881,31 @@ export class ApiClient {
     }
     return parsed as T;
   }
+}
+
+/**
+ * Attach client-side `feeLythoshi` + `effectiveGasPricePerUnit` to a
+ * transaction view (and its receipt, when present) from the structured
+ * `fee` block the node returns. Pure: no network access, no chain change.
+ */
+function enrichTransactionDataWithFee(data: ApiTransactionData): ApiTransactionData {
+  const exposure = transactionFeeExposure(data.transaction.fee);
+  return {
+    ...data,
+    transaction: {
+      ...data.transaction,
+      feeLythoshi: exposure.feeLythoshi,
+      effectiveGasPricePerUnit: exposure.effectiveGasPricePerUnit,
+    },
+    receipt:
+      data.receipt == null
+        ? data.receipt
+        : {
+            ...data.receipt,
+            feeLythoshi: exposure.feeLythoshi,
+            effectiveGasPricePerUnit: exposure.effectiveGasPricePerUnit,
+          },
+  };
 }
 
 function parseApiError(value: unknown): ApiErrorEnvelope["error"] | null {

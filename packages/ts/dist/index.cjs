@@ -1830,84 +1830,84 @@ var TESTNET_69420 = {
       provider: "monolythium-foundation",
       region: "fsn1",
       tier: "official",
-      notes: "validator-1"
+      notes: "operator-1"
     },
     {
       url: "http://178.105.15.216:8545",
       provider: "monolythium-foundation",
       region: "fsn1",
       tier: "official",
-      notes: "validator-2; primary foundation seed"
+      notes: "operator-2; primary foundation seed"
     },
     {
       url: "http://178.104.233.182:8545",
       provider: "monolythium-foundation",
       region: "nbg1",
       tier: "official",
-      notes: "validator-3"
+      notes: "operator-3"
     },
     {
       url: "http://65.108.94.1:8545",
       provider: "monolythium-foundation",
       region: "hel1",
       tier: "official",
-      notes: "validator-4"
+      notes: "operator-4"
     },
     {
       url: "http://95.216.154.155:8545",
       provider: "monolythium-foundation",
       region: "hel1",
       tier: "official",
-      notes: "validator-5"
+      notes: "operator-5"
     },
     {
       url: "http://87.99.145.48:8545",
       provider: "monolythium-foundation",
       region: "ash",
       tier: "official",
-      notes: "validator-6; US east"
+      notes: "operator-6; US east"
     },
     {
       url: "http://5.223.85.76:8545",
       provider: "monolythium-foundation",
       region: "sin",
       tier: "official",
-      notes: "validator-7; APAC"
+      notes: "operator-7; APAC"
     },
     {
       url: "http://142.132.180.99:8545",
       provider: "monolythium-foundation",
       region: "fsn1",
       tier: "official",
-      notes: "validator-8"
+      notes: "operator-8"
     },
     {
       url: "http://162.55.54.198:8545",
       provider: "monolythium-foundation",
       region: "nbg1",
       tier: "official",
-      notes: "validator-9"
+      notes: "operator-9"
     },
     {
       url: "http://95.217.156.190:8545",
       provider: "monolythium-foundation",
       region: "hel1",
       tier: "official",
-      notes: "validator-10"
+      notes: "operator-10"
     },
     {
       url: "http://5.223.65.201:8545",
       provider: "monolythium-foundation",
       region: "sin",
       tier: "official",
-      notes: "validator-11; APAC"
+      notes: "operator-11; APAC"
     },
     {
       url: "http://128.140.125.5:8545",
       provider: "monolythium-foundation",
       region: "fsn1",
       tier: "official",
-      notes: "validator-12"
+      notes: "operator-12"
     },
     {
       url: "http://178.105.45.210:8545",
@@ -4038,6 +4038,83 @@ function parseNullableString(value, label) {
   return value;
 }
 
+// src/tx-fee.ts
+var REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT = 250000n;
+var TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT = 100000n;
+var MIN_EXECUTION_UNIT_PRICE_LYTHOSHI = 2000n;
+var EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER = 3n;
+function asBigint(value, label) {
+  try {
+    return typeof value === "bigint" ? value : BigInt(value);
+  } catch {
+    throw new Error(`${label} is not an integer: ${String(value)}`);
+  }
+}
+function clampPriorityTip(priorityTipLythoshi, maxExecutionUnitPriceLythoshi) {
+  const tip = asBigint(priorityTipLythoshi, "priorityTipLythoshi");
+  const cap = asBigint(maxExecutionUnitPriceLythoshi, "maxExecutionUnitPriceLythoshi");
+  if (tip < 0n) throw new Error("priorityTipLythoshi must be non-negative");
+  return tip > cap ? cap : tip;
+}
+async function resolveMaxExecutionUnitPrice(client, options = {}) {
+  const floor = options.minPriceLythoshi ?? MIN_EXECUTION_UNIT_PRICE_LYTHOSHI;
+  const multiplier = options.safetyMultiplier ?? EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER;
+  const quote = await client.lythExecutionUnitPrice();
+  let unitPrice;
+  try {
+    unitPrice = BigInt(quote.executionUnitPriceLythoshi);
+  } catch {
+    throw SdkError.malformed(
+      `lyth_executionUnitPrice returned a non-integer executionUnitPriceLythoshi: ${quote.executionUnitPriceLythoshi}`
+    );
+  }
+  const base = unitPrice > floor ? unitPrice : floor;
+  return base * multiplier;
+}
+async function resolveExecutionFee(client, options = {}) {
+  const maxFeePerGas = await resolveMaxExecutionUnitPrice(client, {
+    minPriceLythoshi: options.minPriceLythoshi,
+    safetyMultiplier: options.safetyMultiplier
+  });
+  const tip = options.priorityTipLythoshi === void 0 ? maxFeePerGas : clampPriorityTip(options.priorityTipLythoshi, maxFeePerGas);
+  return {
+    maxFeePerGas,
+    maxPriorityFeePerGas: tip,
+    gasLimit: options.executionUnitLimit ?? TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT
+  };
+}
+async function resolveRegistryExecutionFee(client, options = {}) {
+  return resolveExecutionFee(client, {
+    ...options,
+    executionUnitLimit: options.executionUnitLimit ?? REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT
+  });
+}
+function feeFieldToBigint(value, field2) {
+  if (typeof value !== "string" || !/^\d+$/.test(value.trim())) {
+    throw SdkError.malformed(`${field2} is not an integer: ${String(value)}`);
+  }
+  try {
+    return BigInt(value.trim());
+  } catch {
+    throw SdkError.malformed(`${field2} is not an integer: ${String(value)}`);
+  }
+}
+function transactionFeeExposure(fee) {
+  const basePrice = feeFieldToBigint(
+    fee.base_price_per_cycle_lythoshi,
+    "fee.base_price_per_cycle_lythoshi"
+  );
+  const priorityTip = feeFieldToBigint(
+    fee.priority_tip_lythoshi,
+    "fee.priority_tip_lythoshi"
+  );
+  feeFieldToBigint(fee.total_lythoshi, "fee.total_lythoshi");
+  return {
+    feeLythoshi: fee.total_lythoshi,
+    effectiveGasPricePerUnit: (basePrice + priorityTip).toString()
+  };
+}
+
 // src/api.ts
 var SDK_VERSION2 = "0.1.0";
 function apiEndpointFromRpcEndpoint(endpoint) {
@@ -4113,7 +4190,13 @@ var ApiClient = class {
     };
   }
   async transaction(hash) {
-    return this.get(`/transactions/${encodePathSegment(hash)}`);
+    const response = await this.get(
+      `/transactions/${encodePathSegment(hash)}`
+    );
+    return {
+      ...response,
+      data: enrichTransactionDataWithFee(response.data)
+    };
   }
   async transactionReceipt(hash) {
     return this.get(`/transactions/${encodePathSegment(hash)}/receipt`);
@@ -4342,6 +4425,22 @@ var ApiClient = class {
     return parsed;
   }
 };
+function enrichTransactionDataWithFee(data) {
+  const exposure = transactionFeeExposure(data.transaction.fee);
+  return {
+    ...data,
+    transaction: {
+      ...data.transaction,
+      feeLythoshi: exposure.feeLythoshi,
+      effectiveGasPricePerUnit: exposure.effectiveGasPricePerUnit
+    },
+    receipt: data.receipt == null ? data.receipt : {
+      ...data.receipt,
+      feeLythoshi: exposure.feeLythoshi,
+      effectiveGasPricePerUnit: exposure.effectiveGasPricePerUnit
+    }
+  };
+}
 function parseApiError(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const error = value["error"];
@@ -6723,58 +6822,6 @@ function assertWholeNumber(field2, value) {
   if (!/^[0-9]+$/.test(value)) {
     throw new Error(`${field2} must be a whole number`);
   }
-}
-
-// src/tx-fee.ts
-var REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT = 250000n;
-var TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT = 100000n;
-var MIN_EXECUTION_UNIT_PRICE_LYTHOSHI = 2000n;
-var EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER = 3n;
-function asBigint(value, label) {
-  try {
-    return typeof value === "bigint" ? value : BigInt(value);
-  } catch {
-    throw new Error(`${label} is not an integer: ${String(value)}`);
-  }
-}
-function clampPriorityTip(priorityTipLythoshi, maxExecutionUnitPriceLythoshi) {
-  const tip = asBigint(priorityTipLythoshi, "priorityTipLythoshi");
-  const cap = asBigint(maxExecutionUnitPriceLythoshi, "maxExecutionUnitPriceLythoshi");
-  if (tip < 0n) throw new Error("priorityTipLythoshi must be non-negative");
-  return tip > cap ? cap : tip;
-}
-async function resolveMaxExecutionUnitPrice(client, options = {}) {
-  const floor = options.minPriceLythoshi ?? MIN_EXECUTION_UNIT_PRICE_LYTHOSHI;
-  const multiplier = options.safetyMultiplier ?? EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER;
-  const quote = await client.lythExecutionUnitPrice();
-  let unitPrice;
-  try {
-    unitPrice = BigInt(quote.executionUnitPriceLythoshi);
-  } catch {
-    throw SdkError.malformed(
-      `lyth_executionUnitPrice returned a non-integer executionUnitPriceLythoshi: ${quote.executionUnitPriceLythoshi}`
-    );
-  }
-  const base = unitPrice > floor ? unitPrice : floor;
-  return base * multiplier;
-}
-async function resolveExecutionFee(client, options = {}) {
-  const maxFeePerGas = await resolveMaxExecutionUnitPrice(client, {
-    minPriceLythoshi: options.minPriceLythoshi,
-    safetyMultiplier: options.safetyMultiplier
-  });
-  const tip = options.priorityTipLythoshi === void 0 ? maxFeePerGas : clampPriorityTip(options.priorityTipLythoshi, maxFeePerGas);
-  return {
-    maxFeePerGas,
-    maxPriorityFeePerGas: tip,
-    gasLimit: options.executionUnitLimit ?? TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT
-  };
-}
-async function resolveRegistryExecutionFee(client, options = {}) {
-  return resolveExecutionFee(client, {
-    ...options,
-    executionUnitLimit: options.executionUnitLimit ?? REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT
-  });
 }
 var ORACLE_EVENT_SIGS = {
   oracleRoundFinalized: "OracleRoundFinalized(bytes32,uint64,uint256,uint64,uint32)",
@@ -9366,6 +9413,7 @@ exports.submitMrvCallNativeTx = submitMrvCallNativeTx;
 exports.submitMrvDeployNativeTx = submitMrvDeployNativeTx;
 exports.submitMrvDeployPayloadNativeTx = submitMrvDeployPayloadNativeTx;
 exports.submitSighash = submitSighash;
+exports.transactionFeeExposure = transactionFeeExposure;
 exports.typedBech32ToAddress = typedBech32ToAddress;
 exports.validateAddress = validateAddress;
 exports.validateBridgeRouteCatalogue = validateBridgeRouteCatalogue;

@@ -22,7 +22,7 @@
  *     `lyth_executionUnitPrice` quote and clamps the tip to it.
  */
 
-import type { RpcClient } from "./client.js";
+import type { NativeReceiptFee, RpcClient } from "./client.js";
 import { SdkError } from "./error.js";
 
 /**
@@ -183,4 +183,71 @@ export async function resolveRegistryExecutionFee(
     ...options,
     executionUnitLimit: options.executionUnitLimit ?? REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT,
   });
+}
+
+/**
+ * Client-side fee exposure for a settled transaction, derived from the
+ * structured `fee` block the node already returns on the tx-query
+ * (`/api/v1/transactions/{hash}`) and tx-feed surfaces.
+ *
+ * The live `eth_getTransactionReceipt` carries only
+ * `{gas_used, status, logs, ...}` — no fee fields — so wallets and
+ * integrators historically had to reconstruct the charge themselves.
+ * These fields surface that charge without any chain / RPC change:
+ *
+ *  - `feeLythoshi` is the total fee actually charged (`fee.total_lythoshi`).
+ *    On-chain the fee is `(base_price + priority_tip) × execution_units`,
+ *    split 50% burn / 30% operator / 20% treasury; this is the sender's
+ *    full debit.
+ *  - `effectiveGasPricePerUnit` is the per-execution-unit price actually
+ *    paid, `base_price_per_cycle_lythoshi + priority_tip_lythoshi`. It is
+ *    the Monolythium analogue of an EVM receipt's `effectiveGasPrice`.
+ */
+export interface TransactionFeeExposure {
+  /** Total fee charged for the transaction, in lythoshi. */
+  feeLythoshi: string;
+  /**
+   * Effective per-execution-unit price paid, in lythoshi
+   * (`base_price_per_cycle_lythoshi + priority_tip_lythoshi`).
+   */
+  effectiveGasPricePerUnit: string;
+}
+
+function feeFieldToBigint(value: string, field: string): bigint {
+  // `BigInt("")` and `BigInt("  ")` coerce to 0n rather than throwing, so
+  // reject non-digit strings up front to surface a malformed node fee.
+  if (typeof value !== "string" || !/^\d+$/.test(value.trim())) {
+    throw SdkError.malformed(`${field} is not an integer: ${String(value)}`);
+  }
+  try {
+    return BigInt(value.trim());
+  } catch {
+    throw SdkError.malformed(`${field} is not an integer: ${String(value)}`);
+  }
+}
+
+/**
+ * Compute the client-side {@link TransactionFeeExposure} from a node
+ * `NativeReceiptFee` block — purely arithmetic, no network access.
+ *
+ * `effectiveGasPricePerUnit` sums the base price per execution unit and
+ * the priority tip per execution unit, matching the chain's
+ * `(base_price + priority_tip) × execution_units` fee formula.
+ */
+export function transactionFeeExposure(fee: NativeReceiptFee): TransactionFeeExposure {
+  const basePrice = feeFieldToBigint(
+    fee.base_price_per_cycle_lythoshi,
+    "fee.base_price_per_cycle_lythoshi",
+  );
+  const priorityTip = feeFieldToBigint(
+    fee.priority_tip_lythoshi,
+    "fee.priority_tip_lythoshi",
+  );
+  // Validate `total_lythoshi` is well-formed but surface it verbatim so the
+  // exposed total exactly matches the node's charged value.
+  feeFieldToBigint(fee.total_lythoshi, "fee.total_lythoshi");
+  return {
+    feeLythoshi: fee.total_lythoshi,
+    effectiveGasPricePerUnit: (basePrice + priorityTip).toString(),
+  };
 }
