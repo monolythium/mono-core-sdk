@@ -31,21 +31,26 @@ multiaddr = "/dns4/p2p.monolythium.com/tcp/29898/p2p/12D3KooWDKk9ALxqchazXGcRGbq
 `;
 
 describe("chain registry snapshot", () => {
-  it("vendors the public testnet RPC endpoint", () => {
+  it("vendors the public testnet RPC endpoints", () => {
     expect(TESTNET_69420.chain_id).toBe(69420);
     expect(TESTNET_69420.genesis_hash).toBe(
-      "0xad64b785debc17aef3fb4a8d944c2c7c9156394bb08d5ab576ec85782732f897",
+      "0x1769ae4a741e3f326a6f6b2886abe118a10560688c365a654dc5805397d64e14",
     );
-    expect(TESTNET_69420.binary_sha).toBe("058c883");
+    expect(TESTNET_69420.binary_sha).toBe("9338995a");
     expect(getRpcEndpoints("testnet-69420").map((r) => r.url)).toEqual([
-      "https://rpc.monolythium.com",
+      "http://178.105.15.216:8545",
+      "http://178.104.233.182:8545",
+      "http://65.108.94.1:8545",
+      "http://95.216.154.155:8545",
+      "http://87.99.145.48:8545",
+      "http://5.223.85.76:8545",
     ]);
     expect(getP2pSeeds("testnet-69420")).toHaveLength(0);
   });
 
   it("constructs a client from the first registry endpoint without probing", async () => {
     const client = await RpcClient.forNetwork("testnet-69420");
-    expect(client.endpoint).toBe("https://rpc.monolythium.com");
+    expect(client.endpoint).toBe("http://178.105.15.216:8545");
   });
 
   it("probes endpoints until one answers with the expected chain id", async () => {

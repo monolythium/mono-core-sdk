@@ -1822,13 +1822,50 @@ var TESTNET_69420 = {
   network: "testnet-69420",
   display_name: "Monolythium Testnet",
   description: "Public Monolythium testnet. Testnet state may reset without notice; do not store value on this network.",
-  genesis_hash: "0xad64b785debc17aef3fb4a8d944c2c7c9156394bb08d5ab576ec85782732f897",
-  binary_sha: "058c883",
+  genesis_hash: "0x1769ae4a741e3f326a6f6b2886abe118a10560688c365a654dc5805397d64e14",
+  binary_sha: "9338995a",
   rpc: [
     {
-      url: "https://rpc.monolythium.com",
-      provider: "monolythium",
-      tier: "official"
+      url: "http://178.105.15.216:8545",
+      provider: "monolythium-foundation",
+      region: "fsn1",
+      tier: "official",
+      notes: "operator-2; primary foundation seed"
+    },
+    {
+      url: "http://178.104.233.182:8545",
+      provider: "monolythium-foundation",
+      region: "nbg1",
+      tier: "official",
+      notes: "operator-3"
+    },
+    {
+      url: "http://65.108.94.1:8545",
+      provider: "monolythium-foundation",
+      region: "hel1",
+      tier: "official",
+      notes: "operator-4"
+    },
+    {
+      url: "http://95.216.154.155:8545",
+      provider: "monolythium-foundation",
+      region: "hel1",
+      tier: "official",
+      notes: "operator-5"
+    },
+    {
+      url: "http://87.99.145.48:8545",
+      provider: "monolythium-foundation",
+      region: "ash",
+      tier: "official",
+      notes: "operator-6; US east"
+    },
+    {
+      url: "http://5.223.85.76:8545",
+      provider: "monolythium-foundation",
+      region: "sin",
+      tier: "official",
+      notes: "operator-7; APAC"
     }
   ],
   p2p: []

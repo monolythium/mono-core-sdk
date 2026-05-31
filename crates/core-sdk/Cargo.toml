@@ -1,6 +1,6 @@
 [package]
 name = "monolythium-core-sdk"
-version = "0.3.10"
+version = "0.3.12"
 description = "Official Rust SDK for Monolythium / LythiumDAG-BFT"
 edition.workspace = true
 license.workspace = true
