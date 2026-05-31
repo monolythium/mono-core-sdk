@@ -6631,6 +6631,58 @@ function assertWholeNumber(field2, value) {
     throw new Error(`${field2} must be a whole number`);
   }
 }
+
+// src/tx-fee.ts
+var REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT = 250000n;
+var TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT = 100000n;
+var MIN_EXECUTION_UNIT_PRICE_LYTHOSHI = 2000n;
+var EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER = 3n;
+function asBigint(value, label) {
+  try {
+    return typeof value === "bigint" ? value : BigInt(value);
+  } catch {
+    throw new Error(`${label} is not an integer: ${String(value)}`);
+  }
+}
+function clampPriorityTip(priorityTipLythoshi, maxExecutionUnitPriceLythoshi) {
+  const tip = asBigint(priorityTipLythoshi, "priorityTipLythoshi");
+  const cap = asBigint(maxExecutionUnitPriceLythoshi, "maxExecutionUnitPriceLythoshi");
+  if (tip < 0n) throw new Error("priorityTipLythoshi must be non-negative");
+  return tip > cap ? cap : tip;
+}
+async function resolveMaxExecutionUnitPrice(client, options = {}) {
+  const floor = options.minPriceLythoshi ?? MIN_EXECUTION_UNIT_PRICE_LYTHOSHI;
+  const multiplier = options.safetyMultiplier ?? EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER;
+  const quote = await client.lythExecutionUnitPrice();
+  let unitPrice;
+  try {
+    unitPrice = BigInt(quote.executionUnitPriceLythoshi);
+  } catch {
+    throw SdkError.malformed(
+      `lyth_executionUnitPrice returned a non-integer executionUnitPriceLythoshi: ${quote.executionUnitPriceLythoshi}`
+    );
+  }
+  const base = unitPrice > floor ? unitPrice : floor;
+  return base * multiplier;
+}
+async function resolveExecutionFee(client, options = {}) {
+  const maxFeePerGas = await resolveMaxExecutionUnitPrice(client, {
+    minPriceLythoshi: options.minPriceLythoshi,
+    safetyMultiplier: options.safetyMultiplier
+  });
+  const tip = options.priorityTipLythoshi === void 0 ? maxFeePerGas : clampPriorityTip(options.priorityTipLythoshi, maxFeePerGas);
+  return {
+    maxFeePerGas,
+    maxPriorityFeePerGas: tip,
+    gasLimit: options.executionUnitLimit ?? TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT
+  };
+}
+async function resolveRegistryExecutionFee(client, options = {}) {
+  return resolveExecutionFee(client, {
+    ...options,
+    executionUnitLimit: options.executionUnitLimit ?? REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT
+  });
+}
 var ORACLE_EVENT_SIGS = {
   oracleRoundFinalized: "OracleRoundFinalized(bytes32,uint64,uint256,uint64,uint32)",
   observationSubmitted: "ObservationSubmitted(bytes32,uint64,address,uint256,uint64)",
@@ -8891,10 +8943,12 @@ exports.DELEGATION_REVERT_TAGS = DELEGATION_REVERT_TAGS;
 exports.DELEGATION_SELECTORS = DELEGATION_SELECTORS;
 exports.DIVERSITY_SCORE_MAX = DIVERSITY_SCORE_MAX;
 exports.DelegationPrecompileError = DelegationPrecompileError;
+exports.EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER = EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER;
 exports.LYTHOSHI_PER_LYTH = LYTHOSHI_PER_LYTH;
 exports.LYTH_DECIMALS = LYTH_DECIMALS;
 exports.MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES = MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES;
 exports.MAX_NATIVE_RECEIPT_EVENTS = MAX_NATIVE_RECEIPT_EVENTS;
+exports.MIN_EXECUTION_UNIT_PRICE_LYTHOSHI = MIN_EXECUTION_UNIT_PRICE_LYTHOSHI;
 exports.ML_DSA_65_PUBLIC_KEY_LEN = ML_DSA_65_PUBLIC_KEY_LEN2;
 exports.ML_DSA_65_SIGNATURE_LEN = ML_DSA_65_SIGNATURE_LEN2;
 exports.MONOLYTHIUM_NETWORKS = MONOLYTHIUM_NETWORKS;
@@ -8963,6 +9017,7 @@ exports.PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN = PUBKEY_REGISTRY_ML_DSA_65_PUB
 exports.PUBKEY_REGISTRY_SELECTORS = PUBKEY_REGISTRY_SELECTORS;
 exports.ProverMarketError = ProverMarketError;
 exports.PubkeyRegistryError = PubkeyRegistryError;
+exports.REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT = REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT;
 exports.RESERVED_ADDRESS_HRPS = RESERVED_ADDRESS_HRPS;
 exports.RpcClient = RpcClient;
 exports.SERVES_GPU_PROVE = SERVES_GPU_PROVE;
@@ -8972,6 +9027,7 @@ exports.SPENDING_POLICY_SELECTORS = SPENDING_POLICY_SELECTORS;
 exports.SdkError = SdkError;
 exports.SpendingPolicyError = SpendingPolicyError;
 exports.TESTNET_69420 = TESTNET_69420;
+exports.TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT = TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT;
 exports.V1_BRIDGE_ALLOWED_FEE_TOKEN = V1_BRIDGE_ALLOWED_FEE_TOKEN;
 exports.V1_BRIDGE_ALLOWED_PROTOCOL = V1_BRIDGE_ALLOWED_PROTOCOL;
 exports.addressBytesToHex = addressBytesToHex;
@@ -9044,6 +9100,7 @@ exports.buildPlaceSpotMarketOrderPlan = buildPlaceSpotMarketOrderPlan;
 exports.checkMrvFeeDisplayConformance = checkMrvFeeDisplayConformance;
 exports.checkMrvStructuredFeeConformance = checkMrvStructuredFeeConformance;
 exports.checkNativeDevkitCompatibility = checkNativeDevkitCompatibility;
+exports.clampPriorityTip = clampPriorityTip;
 exports.clobAddressHex = clobAddressHex;
 exports.compareNativeDevVersions = compareNativeDevVersions;
 exports.composeClaimBoundMessage = composeClaimBoundMessage;
@@ -9205,6 +9262,9 @@ exports.quoteOperatorFee = quoteOperatorFee;
 exports.rankBridgeRoutes = rankBridgeRoutes;
 exports.requestSighash = requestSighash;
 exports.requireTypedAddress = requireTypedAddress;
+exports.resolveExecutionFee = resolveExecutionFee;
+exports.resolveMaxExecutionUnitPrice = resolveMaxExecutionUnitPrice;
+exports.resolveRegistryExecutionFee = resolveRegistryExecutionFee;
 exports.resolveStudioHostStatus = resolveStudioHostStatus;
 exports.selectBridgeTransferRoute = selectBridgeTransferRoute;
 exports.serviceProbeStatusLabel = serviceProbeStatusLabel;

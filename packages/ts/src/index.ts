@@ -347,6 +347,17 @@ export type {
   RpcEndpoint,
 } from "./registry.js";
 export { SdkError } from "./error.js";
+export {
+  EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER,
+  MIN_EXECUTION_UNIT_PRICE_LYTHOSHI,
+  REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT,
+  TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT,
+  clampPriorityTip,
+  resolveExecutionFee,
+  resolveMaxExecutionUnitPrice,
+  resolveRegistryExecutionFee,
+} from "./tx-fee.js";
+export type { ResolvedExecutionFee } from "./tx-fee.js";
 export * from "./types.js";
 export {
   BURN_ADDR,
