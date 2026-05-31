@@ -570,6 +570,61 @@ async function buildEncryptedSubmission(args) {
 async function submitEncryptedEnvelope(client, envelopeWireHex) {
   return client.call("lyth_submitEncrypted", [envelopeWireHex]);
 }
+function buildPlaintextSubmission(args) {
+  const signed = args.backend.signEvmTx(args.tx);
+  return {
+    signedTxWireHex: `0x${signed.wireHex}`,
+    innerTxHashHex: bytesToHex(signed.txHash),
+    innerSighashHex: bytesToHex(signed.sighash),
+    innerWireBytes: signed.wireBytes.length
+  };
+}
+async function submitPlaintextTransaction(client, signedTxWireHex, expectedTxHashHex) {
+  const returned = await client.call("mesh_submitTx", [signedTxWireHex]);
+  const returnedBytes = hexToBytes(returned, "mesh_submitTx tx hash");
+  if (returnedBytes.length !== 32) {
+    throw new Error(
+      `mesh_submitTx tx hash must be 32 bytes, got ${returnedBytes.length}`
+    );
+  }
+  const expectedBytes = hexToBytes(expectedTxHashHex, "expected tx hash");
+  if (!bytesEqual(returnedBytes, expectedBytes)) {
+    throw new Error(
+      `mesh_submitTx returned tx hash ${bytesToHex(returnedBytes)} but the locally computed canonical hash is ${bytesToHex(expectedBytes)}`
+    );
+  }
+  return bytesToHex(returnedBytes);
+}
+async function submitTransactionWithPrivacy(args) {
+  if (args.private) {
+    if (args.encryptionKey === void 0) {
+      throw new Error(
+        "private submission requires an encryptionKey; fetch it via fetchEncryptionKey()"
+      );
+    }
+    const built = await buildEncryptedSubmission({
+      backend: args.backend,
+      tx: args.tx,
+      encryptionKey: args.encryptionKey,
+      class: args.class
+    });
+    await submitEncryptedEnvelope(args.client, built.envelopeWireHex);
+    return built.innerTxHashHex;
+  }
+  const plaintext = buildPlaintextSubmission({ backend: args.backend, tx: args.tx });
+  return submitPlaintextTransaction(
+    args.client,
+    plaintext.signedTxWireHex,
+    plaintext.innerTxHashHex
+  );
+}
+function bytesEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
 function u128Checked(value, field) {
   const cap = (1n << 128n) - 1n;
   if (value < 0n || value > cap) {
@@ -590,6 +645,6 @@ function normalizeInput(value) {
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
 
-export { ADDRESS_DERIVATION_DOMAIN, BincodeWriter, DKG_AEAD_TAG_LEN, DKG_NONCE_LEN, ENUM_VARIANT_INDEX_ML_DSA_65, ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SEED_LEN, ML_DSA_65_SIGNATURE_LEN, ML_DSA_65_SIGNING_KEY_LEN, ML_KEM_768_CIPHERTEXT_LEN, ML_KEM_768_ENCAPSULATION_KEY_LEN, ML_KEM_768_SHARED_SECRET_LEN, MempoolClass, MlDsa65Backend, PQM1_ALGO_TAG_FALCON512_RESERVED, PQM1_ALGO_TAG_MLDSA65, PQM1_ALGO_TAG_MLDSA87_RESERVED, PQM1_ALGO_TAG_SLHDSA128S_RESERVED, PQM1_ENTROPY_LEN, PQM1_PAYLOAD_LEN, PQM1_V1_MLDSA65_DOMAIN_TAG, PQM1_V1_MNEMONIC_WORDS, PQM1_VERSION_V1, Pqm1Error, STANDARD_ALGO_NUMBER_ML_DSA_65, assemblePqm1Payload, bincodeDecryptHint, bincodeEncryptedEnvelope, bincodeNonceAad, bincodeSignedTransaction, buildEncryptedEnvelope, buildEncryptedSubmission, bytesToHex, concatBytes, derivePqm1MlDsa65SeedFromPayload, encodeMlDsa65Opaque, encodeTransactionForHash, encryptInnerTx, expectBytes, fetchEncryptionKey, generatePqm1Mnemonic, hexToBytes, mlDsa65AddressBytes, mlDsa65AddressFromPublicKey, outerSigDigest, parsePqm1Payload, pqm1MnemonicToAddress, pqm1MnemonicToMlDsa65Backend, pqm1MnemonicToMlDsa65Seed, pqm1MnemonicToPayload, pqm1PayloadToMnemonic, submitEncryptedEnvelope };
+export { ADDRESS_DERIVATION_DOMAIN, BincodeWriter, DKG_AEAD_TAG_LEN, DKG_NONCE_LEN, ENUM_VARIANT_INDEX_ML_DSA_65, ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SEED_LEN, ML_DSA_65_SIGNATURE_LEN, ML_DSA_65_SIGNING_KEY_LEN, ML_KEM_768_CIPHERTEXT_LEN, ML_KEM_768_ENCAPSULATION_KEY_LEN, ML_KEM_768_SHARED_SECRET_LEN, MempoolClass, MlDsa65Backend, PQM1_ALGO_TAG_FALCON512_RESERVED, PQM1_ALGO_TAG_MLDSA65, PQM1_ALGO_TAG_MLDSA87_RESERVED, PQM1_ALGO_TAG_SLHDSA128S_RESERVED, PQM1_ENTROPY_LEN, PQM1_PAYLOAD_LEN, PQM1_V1_MLDSA65_DOMAIN_TAG, PQM1_V1_MNEMONIC_WORDS, PQM1_VERSION_V1, Pqm1Error, STANDARD_ALGO_NUMBER_ML_DSA_65, assemblePqm1Payload, bincodeDecryptHint, bincodeEncryptedEnvelope, bincodeNonceAad, bincodeSignedTransaction, buildEncryptedEnvelope, buildEncryptedSubmission, buildPlaintextSubmission, bytesToHex, concatBytes, derivePqm1MlDsa65SeedFromPayload, encodeMlDsa65Opaque, encodeTransactionForHash, encryptInnerTx, expectBytes, fetchEncryptionKey, generatePqm1Mnemonic, hexToBytes, mlDsa65AddressBytes, mlDsa65AddressFromPublicKey, outerSigDigest, parsePqm1Payload, pqm1MnemonicToAddress, pqm1MnemonicToMlDsa65Backend, pqm1MnemonicToMlDsa65Seed, pqm1MnemonicToPayload, pqm1PayloadToMnemonic, submitEncryptedEnvelope, submitPlaintextTransaction, submitTransactionWithPrivacy };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

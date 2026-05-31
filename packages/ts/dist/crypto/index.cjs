@@ -572,6 +572,61 @@ async function buildEncryptedSubmission(args) {
 async function submitEncryptedEnvelope(client, envelopeWireHex) {
   return client.call("lyth_submitEncrypted", [envelopeWireHex]);
 }
+function buildPlaintextSubmission(args) {
+  const signed = args.backend.signEvmTx(args.tx);
+  return {
+    signedTxWireHex: `0x${signed.wireHex}`,
+    innerTxHashHex: bytesToHex(signed.txHash),
+    innerSighashHex: bytesToHex(signed.sighash),
+    innerWireBytes: signed.wireBytes.length
+  };
+}
+async function submitPlaintextTransaction(client, signedTxWireHex, expectedTxHashHex) {
+  const returned = await client.call("mesh_submitTx", [signedTxWireHex]);
+  const returnedBytes = hexToBytes(returned, "mesh_submitTx tx hash");
+  if (returnedBytes.length !== 32) {
+    throw new Error(
+      `mesh_submitTx tx hash must be 32 bytes, got ${returnedBytes.length}`
+    );
+  }
+  const expectedBytes = hexToBytes(expectedTxHashHex, "expected tx hash");
+  if (!bytesEqual(returnedBytes, expectedBytes)) {
+    throw new Error(
+      `mesh_submitTx returned tx hash ${bytesToHex(returnedBytes)} but the locally computed canonical hash is ${bytesToHex(expectedBytes)}`
+    );
+  }
+  return bytesToHex(returnedBytes);
+}
+async function submitTransactionWithPrivacy(args) {
+  if (args.private) {
+    if (args.encryptionKey === void 0) {
+      throw new Error(
+        "private submission requires an encryptionKey; fetch it via fetchEncryptionKey()"
+      );
+    }
+    const built = await buildEncryptedSubmission({
+      backend: args.backend,
+      tx: args.tx,
+      encryptionKey: args.encryptionKey,
+      class: args.class
+    });
+    await submitEncryptedEnvelope(args.client, built.envelopeWireHex);
+    return built.innerTxHashHex;
+  }
+  const plaintext = buildPlaintextSubmission({ backend: args.backend, tx: args.tx });
+  return submitPlaintextTransaction(
+    args.client,
+    plaintext.signedTxWireHex,
+    plaintext.innerTxHashHex
+  );
+}
+function bytesEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
 function u128Checked(value, field) {
   const cap = (1n << 128n) - 1n;
   if (value < 0n || value > cap) {
@@ -624,6 +679,7 @@ exports.bincodeNonceAad = bincodeNonceAad;
 exports.bincodeSignedTransaction = bincodeSignedTransaction;
 exports.buildEncryptedEnvelope = buildEncryptedEnvelope;
 exports.buildEncryptedSubmission = buildEncryptedSubmission;
+exports.buildPlaintextSubmission = buildPlaintextSubmission;
 exports.bytesToHex = bytesToHex;
 exports.concatBytes = concatBytes;
 exports.derivePqm1MlDsa65SeedFromPayload = derivePqm1MlDsa65SeedFromPayload;
@@ -644,5 +700,7 @@ exports.pqm1MnemonicToMlDsa65Seed = pqm1MnemonicToMlDsa65Seed;
 exports.pqm1MnemonicToPayload = pqm1MnemonicToPayload;
 exports.pqm1PayloadToMnemonic = pqm1PayloadToMnemonic;
 exports.submitEncryptedEnvelope = submitEncryptedEnvelope;
+exports.submitPlaintextTransaction = submitPlaintextTransaction;
+exports.submitTransactionWithPrivacy = submitTransactionWithPrivacy;
 //# sourceMappingURL=index.cjs.map
 //# sourceMappingURL=index.cjs.map

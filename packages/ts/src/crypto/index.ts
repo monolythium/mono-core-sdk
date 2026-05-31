@@ -75,10 +75,14 @@ export type {
 } from "./tx.js";
 export {
   buildEncryptedSubmission,
+  buildPlaintextSubmission,
   fetchEncryptionKey,
   submitEncryptedEnvelope,
+  submitPlaintextTransaction,
+  submitTransactionWithPrivacy,
 } from "./submission.js";
 export type {
   EncryptedSubmission,
   EncryptionKey,
+  PlaintextSubmission,
 } from "./submission.js";
