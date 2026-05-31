@@ -38,19 +38,27 @@ describe("chain registry snapshot", () => {
     );
     expect(TESTNET_69420.binary_sha).toBe("9338995a");
     expect(getRpcEndpoints("testnet-69420").map((r) => r.url)).toEqual([
+      "http://178.105.12.9:8545",
       "http://178.105.15.216:8545",
       "http://178.104.233.182:8545",
       "http://65.108.94.1:8545",
       "http://95.216.154.155:8545",
       "http://87.99.145.48:8545",
       "http://5.223.85.76:8545",
+      "http://142.132.180.99:8545",
+      "http://162.55.54.198:8545",
+      "http://95.217.156.190:8545",
+      "http://5.223.65.201:8545",
+      "http://128.140.125.5:8545",
+      "http://178.105.45.210:8545",
+      "http://65.21.252.34:8545",
     ]);
     expect(getP2pSeeds("testnet-69420")).toHaveLength(0);
   });
 
   it("constructs a client from the first registry endpoint without probing", async () => {
     const client = await RpcClient.forNetwork("testnet-69420");
-    expect(client.endpoint).toBe("http://178.105.15.216:8545");
+    expect(client.endpoint).toBe("http://178.105.12.9:8545");
   });
 
   it("probes endpoints until one answers with the expected chain id", async () => {
