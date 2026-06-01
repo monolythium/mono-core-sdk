@@ -325,6 +325,40 @@ const decoded = decodeLookupPubkeyReturn(returnData);
 The precompile is milestone-gated in `mono-core` and returns a typed revert
 before activation.
 
+## Node Registry Lifecycle
+
+The node-registry helpers expose the Monarch operator lifecycle calldata used by
+Desktop and release runbooks: foundation recovery, pending roster changes,
+pending-change cancellation, and operator DKG re-share attestation.
+
+```ts
+import {
+  PRECOMPILE_ADDRESSES,
+  encodeRecoverOperatorNodeCalldata,
+  encodeSubmitPendingChangeCalldata,
+  encodeAttestDkgReshareCalldata,
+} from "@monolythium/core-sdk";
+
+const recovery = encodeRecoverOperatorNodeCalldata(peerId);
+const pending = encodeSubmitPendingChangeCalldata({
+  kind: "rotate",
+  targetPubkey,
+  effectiveEpoch: 42n,
+  intentId: 7n,
+});
+const attestation = encodeAttestDkgReshareCalldata({
+  intentId: 7n,
+  blsPublicKeys,
+  thresholdSig,
+});
+// Send each calldata payload to PRECOMPILE_ADDRESSES.NODE_REGISTRY with the
+// required foundation/operator signer for that operation.
+```
+
+These helpers only build canonical calldata and validate obvious wire-shape
+errors. The chain still enforces authorization, epoch timing, swap-intent
+state, and DKG threshold verification.
+
 ## PQM-1 And ML-DSA-65
 
 The TypeScript package exposes deterministic PQM-1 helpers for wallets and

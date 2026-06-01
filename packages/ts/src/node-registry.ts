@@ -48,6 +48,14 @@ export const SERVICE_PROBE_STATUS = {
 } as const;
 
 export const NODE_REGISTRY_SELECTORS = {
+  /** `recoverOperatorNode(bytes32)` — foundation-gated DR alias for `unjail`. */
+  recoverOperatorNode: "0x" + selectorHex("recoverOperatorNode(bytes32)"),
+  /** `submitPendingChange(uint8,bytes,uint64,uint64)` — foundation-gated roster lifecycle. */
+  submitPendingChange: "0x" + selectorHex("submitPendingChange(uint8,bytes,uint64,uint64)"),
+  /** `cancelPendingChange(uint64,bytes)` — foundation-gated pending-change cancellation. */
+  cancelPendingChange: "0x" + selectorHex("cancelPendingChange(uint64,bytes)"),
+  /** `attestDkgReshare(uint64,bytes,bytes)` — operator-signed DKG re-share attestation. */
+  attestDkgReshare: "0x" + selectorHex("attestDkgReshare(uint64,bytes,bytes)"),
   reportServiceProbe: "0xeee31bba",
   getServiceProbe: "0x1fcbfbce",
   /** `setNetworkMetadata(bytes32,uint16,bytes3,bytes)` — owner-callable (PF-6). */
@@ -58,8 +66,46 @@ export const NODE_REGISTRY_SELECTORS = {
   getClusterDiversity: "0x" + selectorHex("getClusterDiversity(uint32)"),
 } as const;
 
+export const NODE_REGISTRY_BLS_PUBKEY_BYTES = 48;
+export const NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES = 96;
+export const NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS = 5;
+export const NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS = 7;
+export const NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID = (1n << 56n) - 1n;
+
+export type PendingChangeKind = "add" | "remove" | "rotate";
+
+export const PENDING_CHANGE_KIND_CODES: Record<PendingChangeKind, number> = {
+  add: 1,
+  remove: 2,
+  rotate: 3,
+} as const;
+
+const PENDING_CHANGE_KIND_LABELS: Record<number, PendingChangeKind> = {
+  1: "add",
+  2: "remove",
+  3: "rotate",
+} as const;
+
 /** Canonical `ClusterFormed(uint32,uint64,address,bytes)` event topic0 (MB-5). */
 export const CLUSTER_FORMED_EVENT_SIG = "ClusterFormed(uint32,uint64,address,bytes)" as const;
+
+export interface SubmitPendingChangeCalldataArgs {
+  kind: PendingChangeKind | number;
+  targetPubkey: string | Uint8Array | readonly number[];
+  effectiveEpoch: bigint | number | string;
+  intentId?: bigint | number | string;
+}
+
+export interface CancelPendingChangeCalldataArgs {
+  epoch: bigint | number | string;
+  targetPubkey: string | Uint8Array | readonly number[];
+}
+
+export interface AttestDkgReshareCalldataArgs {
+  intentId: bigint | number | string;
+  blsPublicKeys: string | Uint8Array | readonly number[];
+  thresholdSig: string | Uint8Array | readonly number[];
+}
 
 export interface ReportServiceProbeCalldataArgs {
   peerId: string | Uint8Array | readonly number[];
@@ -115,6 +161,154 @@ export function serviceProbeStatusLabel(status: number): string {
     default:
       return "unknown";
   }
+}
+
+export function normalizePendingChangeKind(
+  kind: PendingChangeKind | number,
+): { kind: PendingChangeKind; kindCode: number } {
+  if (typeof kind === "number") {
+    const label = PENDING_CHANGE_KIND_LABELS[kind];
+    if (!label) throw new NodeRegistryError(`unknown pending-change kind ${kind}`);
+    return { kind: label, kindCode: kind };
+  }
+  const kindCode = PENDING_CHANGE_KIND_CODES[kind];
+  if (!kindCode) throw new NodeRegistryError(`unknown pending-change kind ${kind}`);
+  return { kind, kindCode };
+}
+
+export function encodeRecoverOperatorNodeCalldata(
+  peerId: string | Uint8Array | readonly number[],
+): string {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.recoverOperatorNode),
+      expectLength(toBytes(peerId), 32, "peerId"),
+    ),
+  );
+}
+
+export function encodeSubmitPendingChangeCalldata(
+  args: SubmitPendingChangeCalldataArgs,
+): string {
+  const { kind, kindCode } = normalizePendingChangeKind(args.kind);
+  const targetPubkey = expectLength(
+    toBytes(args.targetPubkey),
+    NODE_REGISTRY_BLS_PUBKEY_BYTES,
+    "targetPubkey",
+  );
+  const effectiveEpoch = toUint64(args.effectiveEpoch, "effectiveEpoch");
+  if (effectiveEpoch === 0n) {
+    throw new NodeRegistryError("effectiveEpoch must be greater than zero");
+  }
+  const intentId = toUint64(args.intentId ?? 0n, "intentId");
+  if (intentId > NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID) {
+    throw new NodeRegistryError("intentId must be <= 2^56-1");
+  }
+  if (kind !== "rotate" && intentId !== 0n) {
+    throw new NodeRegistryError("only rotate pending changes may carry a non-zero intentId");
+  }
+
+  const targetTail = new Uint8Array(32);
+  targetTail.set(targetPubkey.slice(32, 48), 0);
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.submitPendingChange),
+      uint8Word(kindCode),
+      uint64Word(4n * 32n, "targetPubkeyOffset"),
+      uint64Word(effectiveEpoch, "effectiveEpoch"),
+      uint64Word(intentId, "intentId"),
+      uint64Word(BigInt(NODE_REGISTRY_BLS_PUBKEY_BYTES), "targetPubkeyLength"),
+      targetPubkey.slice(0, 32),
+      targetTail,
+    ),
+  );
+}
+
+export function encodeCancelPendingChangeCalldata(
+  args: CancelPendingChangeCalldataArgs,
+): string {
+  const targetPubkey = expectLength(
+    toBytes(args.targetPubkey),
+    NODE_REGISTRY_BLS_PUBKEY_BYTES,
+    "targetPubkey",
+  );
+  const targetTail = new Uint8Array(32);
+  targetTail.set(targetPubkey.slice(32, 48), 0);
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.cancelPendingChange),
+      uint64Word(args.epoch, "epoch"),
+      uint64Word(2n * 32n, "targetPubkeyOffset"),
+      uint64Word(BigInt(NODE_REGISTRY_BLS_PUBKEY_BYTES), "targetPubkeyLength"),
+      targetPubkey.slice(0, 32),
+      targetTail,
+    ),
+  );
+}
+
+export function parseDkgResharePublicKeys(
+  blsPublicKeys: string | Uint8Array | readonly number[],
+): Uint8Array[] {
+  const keys = toBytes(blsPublicKeys);
+  if (keys.length % NODE_REGISTRY_BLS_PUBKEY_BYTES !== 0) {
+    throw new NodeRegistryError("blsPublicKeys length must be a multiple of 48 bytes");
+  }
+  const signerCount = keys.length / NODE_REGISTRY_BLS_PUBKEY_BYTES;
+  if (
+    signerCount < NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS ||
+    signerCount > NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS
+  ) {
+    throw new NodeRegistryError(
+      `blsPublicKeys must contain ${NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS}..${NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS} signers`,
+    );
+  }
+  const out: Uint8Array[] = [];
+  const seen = new Set<string>();
+  for (let offset = 0; offset < keys.length; offset += NODE_REGISTRY_BLS_PUBKEY_BYTES) {
+    const key = keys.slice(offset, offset + NODE_REGISTRY_BLS_PUBKEY_BYTES);
+    const keyHex = bytesToHex(key);
+    if (seen.has(keyHex)) {
+      throw new NodeRegistryError("blsPublicKeys contains a duplicate signer pubkey");
+    }
+    seen.add(keyHex);
+    out.push(key);
+  }
+  return out;
+}
+
+export function encodeAttestDkgReshareCalldata(
+  args: AttestDkgReshareCalldataArgs,
+): string {
+  const intentId = toUint64(args.intentId, "intentId");
+  if (intentId === 0n) {
+    throw new NodeRegistryError("intentId must be greater than zero");
+  }
+  if (intentId > NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID) {
+    throw new NodeRegistryError("intentId must be <= 2^56-1");
+  }
+  const publicKeys = concatBytes(...parseDkgResharePublicKeys(args.blsPublicKeys));
+  const thresholdSig = expectLength(
+    toBytes(args.thresholdSig),
+    NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES,
+    "thresholdSig",
+  );
+  const keysPadded = padToWord(publicKeys);
+  const sigPadded = padToWord(thresholdSig);
+  const offsetKeys = 3n * 32n;
+  const offsetSig = offsetKeys + 32n + BigInt(keysPadded.length);
+
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.attestDkgReshare),
+      uint64Word(intentId, "intentId"),
+      uint64Word(offsetKeys, "blsPublicKeysOffset"),
+      uint64Word(offsetSig, "thresholdSigOffset"),
+      uint64Word(BigInt(publicKeys.length), "blsPublicKeysLength"),
+      keysPadded,
+      uint64Word(BigInt(thresholdSig.length), "thresholdSigLength"),
+      sigPadded,
+    ),
+  );
 }
 
 export function encodeReportServiceProbeCalldata(args: ReportServiceProbeCalldataArgs): string {
@@ -443,6 +637,47 @@ function uint8Word(value: number): Uint8Array {
   }
   const out = new Uint8Array(32);
   out[31] = value;
+  return out;
+}
+
+function uint64Word(value: bigint | number | string, name: string): Uint8Array {
+  const n = toUint64(value, name);
+  const out = new Uint8Array(32);
+  let rest = n;
+  for (let i = 31; i >= 24; i--) {
+    out[i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  return out;
+}
+
+function toUint64(value: bigint | number | string, name: string): bigint {
+  let parsed: bigint;
+  if (typeof value === "bigint") {
+    parsed = value;
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) {
+      throw new NodeRegistryError(`${name} must be a safe integer`);
+    }
+    parsed = BigInt(value);
+  } else {
+    const trimmed = value.trim();
+    if (!/^\d+$/u.test(trimmed)) {
+      throw new NodeRegistryError(`${name} must be a decimal uint64`);
+    }
+    parsed = BigInt(trimmed);
+  }
+  if (parsed < 0n || parsed > 0xffff_ffff_ffff_ffffn) {
+    throw new NodeRegistryError(`${name} must fit uint64`);
+  }
+  return parsed;
+}
+
+function padToWord(bytes: Uint8Array): Uint8Array {
+  const paddedLength = Math.ceil(bytes.length / 32) * 32;
+  if (paddedLength === bytes.length) return bytes;
+  const out = new Uint8Array(paddedLength);
+  out.set(bytes);
   return out;
 }
 

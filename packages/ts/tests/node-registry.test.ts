@@ -1,19 +1,31 @@
 import { describe, expect, it } from "vitest";
 import {
+  NODE_REGISTRY_BLS_PUBKEY_BYTES,
   NODE_REGISTRY_CAPABILITIES,
+  NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS,
+  NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS,
+  NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES,
+  NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID,
   NODE_REGISTRY_PUBLIC_SERVICE_MASK,
   NODE_REGISTRY_SELECTORS,
+  PENDING_CHANGE_KIND_CODES,
   SERVICE_PROBE_STATUS,
   decodeClusterDiversity,
   decodeClusterFormedEvent,
   decodeOperatorNetworkMetadata,
   deriveClusterAnchorAddress,
+  encodeAttestDkgReshareCalldata,
+  encodeCancelPendingChangeCalldata,
+  encodeRecoverOperatorNodeCalldata,
   encodeReportServiceProbeCalldata,
+  encodeSubmitPendingChangeCalldata,
   isConcreteServiceProbeStatus,
   isSinglePublicServiceProbeMask,
   isValidPublicServiceProbeMask,
+  normalizePendingChangeKind,
   nodeHostingClassFromByte,
   nodeRegistryAddressHex,
+  parseDkgResharePublicKeys,
   serviceProbeStatusLabel,
 } from "../src/index.js";
 
@@ -23,6 +35,19 @@ describe("node-registry helpers", () => {
     expect(NODE_REGISTRY_CAPABILITIES.SERVES_PUBLIC_API).toBe(0x0000_0100);
     expect(NODE_REGISTRY_PUBLIC_SERVICE_MASK).toBe(0x0000_011b);
     expect(nodeRegistryAddressHex()).toBe("0x0000000000000000000000000000000000001005");
+    expect(NODE_REGISTRY_BLS_PUBKEY_BYTES).toBe(48);
+    expect(NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES).toBe(96);
+    expect(NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS).toBe(5);
+    expect(NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS).toBe(7);
+    expect(NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID).toBe((1n << 56n) - 1n);
+    expect(PENDING_CHANGE_KIND_CODES).toEqual({ add: 1, remove: 2, rotate: 3 });
+  });
+
+  it("pins node-registry lifecycle selectors", () => {
+    expect(NODE_REGISTRY_SELECTORS.recoverOperatorNode).toBe("0xe58729e6");
+    expect(NODE_REGISTRY_SELECTORS.submitPendingChange).toBe("0x7d09426c");
+    expect(NODE_REGISTRY_SELECTORS.cancelPendingChange).toBe("0xdca5b10e");
+    expect(NODE_REGISTRY_SELECTORS.attestDkgReshare).toBe("0x36e34030");
   });
 
   it("validates public-service probe masks and concrete statuses", () => {
@@ -61,6 +86,72 @@ describe("node-registry helpers", () => {
     expect(calldata.slice(138, 202)).toBe("0".repeat(63) + "1");
     expect(calldata.slice(202, 266)).toBe("0".repeat(60) + "002a");
     expect(calldata.slice(266)).toBe("34".repeat(32));
+  });
+
+  it("encodes recoverOperatorNode calldata", () => {
+    const peerId = `0x${"a5".repeat(32)}`;
+    const calldata = encodeRecoverOperatorNodeCalldata(peerId);
+    expect(calldata).toBe(`${NODE_REGISTRY_SELECTORS.recoverOperatorNode}${"a5".repeat(32)}`);
+    expect((calldata.length - 2) / 2).toBe(4 + 32);
+  });
+
+  it("encodes submitPendingChange calldata for rotate intents", () => {
+    const targetPubkey = `0x${"ab".repeat(48)}`;
+    const calldata = encodeSubmitPendingChangeCalldata({
+      kind: "rotate",
+      targetPubkey,
+      effectiveEpoch: 42n,
+      intentId: 7n,
+    });
+    const bytes = hexBytes(calldata);
+    expect(calldata.startsWith(NODE_REGISTRY_SELECTORS.submitPendingChange)).toBe(true);
+    expect(bytes.length).toBe(4 + 7 * 32);
+    expect(bytes[35]).toBe(3);
+    expect(bytes[67]).toBe(0x80);
+    expect(bytes[99]).toBe(42);
+    expect(bytes[131]).toBe(7);
+    expect(bytes[163]).toBe(48);
+    expect(bytes.slice(164, 196)).toEqual(new Uint8Array(32).fill(0xab));
+    expect(bytes.slice(196, 212)).toEqual(new Uint8Array(16).fill(0xab));
+    expect(bytes.slice(212, 228)).toEqual(new Uint8Array(16));
+    expect(normalizePendingChangeKind(1)).toEqual({ kind: "add", kindCode: 1 });
+  });
+
+  it("encodes cancelPendingChange calldata", () => {
+    const targetPubkey = `0x${"bc".repeat(48)}`;
+    const calldata = encodeCancelPendingChangeCalldata({
+      epoch: "99",
+      targetPubkey,
+    });
+    const bytes = hexBytes(calldata);
+    expect(calldata.startsWith(NODE_REGISTRY_SELECTORS.cancelPendingChange)).toBe(true);
+    expect(bytes.length).toBe(4 + 5 * 32);
+    expect(bytes[35]).toBe(99);
+    expect(bytes[67]).toBe(0x40);
+    expect(bytes[99]).toBe(48);
+    expect(bytes.slice(100, 132)).toEqual(new Uint8Array(32).fill(0xbc));
+    expect(bytes.slice(132, 148)).toEqual(new Uint8Array(16).fill(0xbc));
+    expect(bytes.slice(148, 164)).toEqual(new Uint8Array(16));
+  });
+
+  it("encodes attestDkgReshare calldata with bounded signers", () => {
+    const keys = Array.from({ length: 5 }, (_, i) => new Uint8Array(48).fill(0x10 + i));
+    const blsPublicKeys = concatTestBytes(...keys);
+    const thresholdSig = new Uint8Array(96).fill(0xee);
+    const calldata = encodeAttestDkgReshareCalldata({
+      intentId: 7n,
+      blsPublicKeys,
+      thresholdSig,
+    });
+    const bytes = hexBytes(calldata);
+    expect(calldata.startsWith(NODE_REGISTRY_SELECTORS.attestDkgReshare)).toBe(true);
+    expect(bytes.length).toBe(4 + 3 * 32 + 32 + 256 + 32 + 96);
+    expect(bytes[35]).toBe(7);
+    expect(bytes[67]).toBe(0x60);
+    expect(bytes[98]).toBe(0x01);
+    expect(bytes[99]).toBe(0x80);
+    expect(bytes[131]).toBe(240);
+    expect(parseDkgResharePublicKeys(blsPublicKeys)).toHaveLength(5);
   });
 
   it("exposes the SERVES_GPU_PROVE bit (MB-4) without changing the public-service mask", () => {
@@ -158,4 +249,75 @@ describe("node-registry helpers", () => {
       }),
     ).toThrow();
   });
+
+  it("rejects malformed lifecycle calldata inputs", () => {
+    const targetPubkey = `0x${"ab".repeat(48)}`;
+    const keys = concatTestBytes(...Array.from({ length: 5 }, (_, i) => new Uint8Array(48).fill(0x20 + i)));
+    const sig = new Uint8Array(96).fill(0xee);
+
+    expect(() => encodeRecoverOperatorNodeCalldata("0x1234")).toThrow();
+    expect(() =>
+      encodeSubmitPendingChangeCalldata({
+        kind: "remove",
+        targetPubkey,
+        effectiveEpoch: 10n,
+        intentId: 1n,
+      }),
+    ).toThrow();
+    expect(() =>
+      encodeSubmitPendingChangeCalldata({
+        kind: "rotate",
+        targetPubkey,
+        effectiveEpoch: 10n,
+        intentId: NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID + 1n,
+      }),
+    ).toThrow();
+    expect(() =>
+      encodeAttestDkgReshareCalldata({
+        intentId: 0n,
+        blsPublicKeys: keys,
+        thresholdSig: sig,
+      }),
+    ).toThrow();
+    expect(() =>
+      encodeAttestDkgReshareCalldata({
+        intentId: 1n,
+        blsPublicKeys: concatTestBytes(new Uint8Array(48).fill(0x11), new Uint8Array(48).fill(0x12)),
+        thresholdSig: sig,
+      }),
+    ).toThrow();
+    expect(() =>
+      encodeAttestDkgReshareCalldata({
+        intentId: 1n,
+        blsPublicKeys: concatTestBytes(...Array.from({ length: 5 }, () => new Uint8Array(48).fill(0x11))),
+        thresholdSig: sig,
+      }),
+    ).toThrow();
+    expect(() =>
+      encodeAttestDkgReshareCalldata({
+        intentId: 1n,
+        blsPublicKeys: keys,
+        thresholdSig: new Uint8Array(95),
+      }),
+    ).toThrow();
+  });
 });
+
+function hexBytes(hex: string): Uint8Array {
+  const body = hex.startsWith("0x") ? hex.slice(2) : hex;
+  const out = new Uint8Array(body.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = Number.parseInt(body.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+function concatTestBytes(...parts: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}

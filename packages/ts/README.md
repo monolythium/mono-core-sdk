@@ -209,6 +209,30 @@ const lookup = encodeLookupPubkeyCalldata(account);
 const decoded = decodeLookupPubkeyReturn(returnData);
 ```
 
+### Node-registry lifecycle helpers
+
+Operator tooling can build canonical node-registry calldata for Monarch
+recovery, roster pending changes, cancellation, and DKG re-share attestation.
+
+```ts
+import {
+  encodeRecoverOperatorNodeCalldata,
+  encodeSubmitPendingChangeCalldata,
+  encodeCancelPendingChangeCalldata,
+  encodeAttestDkgReshareCalldata,
+} from "@monolythium/core-sdk";
+
+const recovery = encodeRecoverOperatorNodeCalldata(peerId);
+const pending = encodeSubmitPendingChangeCalldata({
+  kind: "rotate",
+  targetPubkey,
+  effectiveEpoch: 42n,
+  intentId: 7n,
+});
+const cancel = encodeCancelPendingChangeCalldata({ epoch: 42n, targetPubkey });
+const dkg = encodeAttestDkgReshareCalldata({ intentId: 7n, blsPublicKeys, thresholdSig });
+```
+
 ### Bridge route readiness
 
 Bridge helpers assess explicit route disclosures and fail closed. The SDK can
