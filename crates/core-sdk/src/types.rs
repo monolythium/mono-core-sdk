@@ -4389,6 +4389,11 @@ pub struct RegistryRecord {
     /// Uptime in basis points (0..=10_000).
     #[serde(rename = "uptimeBps")]
     pub uptime_bps: u32,
+    /// Block height the operator first registered at (operator "active
+    /// since"). Always present on the live `lyth_getRegistration` /
+    /// `lyth_listProviders` JSON.
+    #[serde(rename = "registeredAtBlock")]
+    pub registered_at_block: u64,
 }
 
 /// `lyth_getAccountPolicy` response.

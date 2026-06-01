@@ -8,6 +8,7 @@
  * recorded on-chain.
  */
 
+import { keccak_256 } from "@noble/hashes/sha3.js";
 import { addressBytesToHex, hexToAddressBytes, typedBech32ToAddress } from "./address.js";
 import { PRECOMPILE_ADDRESSES } from "./consts.js";
 
@@ -135,6 +136,88 @@ export class SpendingPolicyError extends Error {
 
 export function spendingPolicyAddressHex(): string {
   return PRECOMPILE_ADDRESSES.SPENDING_POLICY.toLowerCase();
+}
+
+/**
+ * The "no constraint configured" sentinel root (`Hash::ZERO`, 32 zero
+ * bytes). Feed this as `allowRoot` / `denyRoot` / `categoryAllowRoot` to
+ * mean "allow any" for that dimension.
+ */
+export const EMPTY_ROOT: Uint8Array = new Uint8Array(32);
+
+/**
+ * Build the destination allow/deny Merkle root for a SINGLE permitted (or
+ * banned) counterparty.
+ *
+ * The chain's v1 spending-policy verifier
+ * (`spending-policy/src/storage.rs` `destination_matches_root`) does a
+ * flat equality check — `keccak256(dest_addr_20_bytes) == root` — so a
+ * "root" is simply the keccak256 of the 20 raw address bytes, with NO
+ * domain prefix and NO length prefix. There is currently NO multi-entry
+ * Merkle path on-chain (see {@link setDestinationRoot}); a multi-leaf
+ * root would be rejected for every member.
+ *
+ * @param address typed `mono` bech32m user address.
+ * @returns the 32-byte root, ready for `SpendingPolicyArgs.allowRoot` / `.denyRoot`.
+ */
+export function destinationRoot(address: string): Uint8Array {
+  const bytes = toUserAddressBytes(address, "address");
+  return keccak_256(bytes);
+}
+
+/** Alias of {@link destinationRoot} — the byte construction is identical for allow and deny. */
+export const allowRootFor = destinationRoot;
+/** Alias of {@link destinationRoot} — the byte construction is identical for allow and deny. */
+export const denyRootFor = destinationRoot;
+
+/**
+ * Build the category allow root for a SINGLE permitted transaction
+ * category.
+ *
+ * The chain's v1 verifier
+ * (`spending-policy/src/storage.rs` `category_matches_root`) checks
+ * `keccak256(category_id) == root`, where `category_id` is the 4-byte
+ * ABI selector the runtime extracts from the tx (`input[0..4]`).
+ *
+ * Accepts either the raw 4-byte selector (`Uint8Array` / number[] of
+ * length 4) or a canonical function signature string (e.g.
+ * `"transfer(address,uint256)"`), in which case the selector is derived
+ * as `keccak256(utf8(sig))[0..4]` first. The returned root is
+ * `keccak256(selector)` either way.
+ */
+export function categoryRoot(selectorOrSig: Uint8Array | readonly number[] | string): Uint8Array {
+  let selector: Uint8Array;
+  if (typeof selectorOrSig === "string") {
+    selector = keccak_256(new TextEncoder().encode(selectorOrSig)).slice(0, 4);
+  } else {
+    selector = selectorOrSig instanceof Uint8Array ? selectorOrSig : Uint8Array.from(selectorOrSig);
+    if (selector.length !== 4) {
+      throw new SpendingPolicyError("category selector must be exactly 4 bytes");
+    }
+  }
+  return keccak_256(selector);
+}
+
+/**
+ * Build a destination allow/deny root from a list of counterparties.
+ *
+ * The chain's v1 verifier supports exactly ONE entry per root (a flat
+ * `keccak256(member) == root` check). Multi-entry sets require the chain
+ * v1.5 inline-list / Merkle-membership work that is NOT yet shipped, so
+ * this helper throws on more than one entry rather than emit a root the
+ * chain would silently reject for every member.
+ *
+ * @returns {@link EMPTY_ROOT} for an empty list, else
+ *   {@link destinationRoot} of the single entry.
+ */
+export function setDestinationRoot(entries: readonly string[]): Uint8Array {
+  if (entries.length === 0) return EMPTY_ROOT;
+  if (entries.length > 1) {
+    throw new SpendingPolicyError(
+      "multi-entry destination sets are not supported by the chain yet (v1 allows a single counterparty per root); pass exactly one address",
+    );
+  }
+  return destinationRoot(entries[0]);
 }
 
 export function composeClaimBoundMessage(

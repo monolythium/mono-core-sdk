@@ -23,4 +23,10 @@ bond: string,
 /**
  * Uptime in basis points (0..=10_000).
  */
-uptimeBps: number, };
+uptimeBps: number,
+/**
+ * Block height the operator first registered at (operator "active
+ * since"). Always present on the live `lyth_getRegistration` /
+ * `lyth_listProviders` JSON.
+ */
+registeredAtBlock: bigint, };

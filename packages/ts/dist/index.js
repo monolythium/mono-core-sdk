@@ -420,6 +420,14 @@ var SERVICE_PROBE_STATUS = {
   UNREACHABLE: 3
 };
 var NODE_REGISTRY_SELECTORS = {
+  /** `recoverOperatorNode(bytes32)` — foundation-gated DR alias for `unjail`. */
+  recoverOperatorNode: "0x" + selectorHex("recoverOperatorNode(bytes32)"),
+  /** `submitPendingChange(uint8,bytes,uint64,uint64)` — foundation-gated roster lifecycle. */
+  submitPendingChange: "0x" + selectorHex("submitPendingChange(uint8,bytes,uint64,uint64)"),
+  /** `cancelPendingChange(uint64,bytes)` — foundation-gated pending-change cancellation. */
+  cancelPendingChange: "0x" + selectorHex("cancelPendingChange(uint64,bytes)"),
+  /** `attestDkgReshare(uint64,bytes,bytes)` — operator-signed DKG re-share attestation. */
+  attestDkgReshare: "0x" + selectorHex("attestDkgReshare(uint64,bytes,bytes)"),
   reportServiceProbe: "0xeee31bba",
   getServiceProbe: "0x1fcbfbce",
   /** `setNetworkMetadata(bytes32,uint16,bytes3,bytes)` — owner-callable (PF-6). */
@@ -428,6 +436,21 @@ var NODE_REGISTRY_SELECTORS = {
   getOperatorNetworkMetadata: "0x" + selectorHex("getOperatorNetworkMetadata(bytes32)"),
   /** `getClusterDiversity(uint32)` view (PF-6). */
   getClusterDiversity: "0x" + selectorHex("getClusterDiversity(uint32)")
+};
+var NODE_REGISTRY_BLS_PUBKEY_BYTES = 48;
+var NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES = 96;
+var NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS = 5;
+var NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS = 7;
+var NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID = (1n << 56n) - 1n;
+var PENDING_CHANGE_KIND_CODES = {
+  add: 1,
+  remove: 2,
+  rotate: 3
+};
+var PENDING_CHANGE_KIND_LABELS = {
+  1: "add",
+  2: "remove",
+  3: "rotate"
 };
 var CLUSTER_FORMED_EVENT_SIG = "ClusterFormed(uint32,uint64,address,bytes)";
 var NodeRegistryError = class extends Error {
@@ -462,6 +485,131 @@ function serviceProbeStatusLabel(status) {
     default:
       return "unknown";
   }
+}
+function normalizePendingChangeKind(kind) {
+  if (typeof kind === "number") {
+    const label = PENDING_CHANGE_KIND_LABELS[kind];
+    if (!label) throw new NodeRegistryError(`unknown pending-change kind ${kind}`);
+    return { kind: label, kindCode: kind };
+  }
+  const kindCode = PENDING_CHANGE_KIND_CODES[kind];
+  if (!kindCode) throw new NodeRegistryError(`unknown pending-change kind ${kind}`);
+  return { kind, kindCode };
+}
+function encodeRecoverOperatorNodeCalldata(peerId) {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.recoverOperatorNode),
+      expectLength2(toBytes(peerId), 32, "peerId")
+    )
+  );
+}
+function encodeSubmitPendingChangeCalldata(args) {
+  const { kind, kindCode } = normalizePendingChangeKind(args.kind);
+  const targetPubkey = expectLength2(
+    toBytes(args.targetPubkey),
+    NODE_REGISTRY_BLS_PUBKEY_BYTES,
+    "targetPubkey"
+  );
+  const effectiveEpoch = toUint64(args.effectiveEpoch, "effectiveEpoch");
+  if (effectiveEpoch === 0n) {
+    throw new NodeRegistryError("effectiveEpoch must be greater than zero");
+  }
+  const intentId = toUint64(args.intentId ?? 0n, "intentId");
+  if (intentId > NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID) {
+    throw new NodeRegistryError("intentId must be <= 2^56-1");
+  }
+  if (kind !== "rotate" && intentId !== 0n) {
+    throw new NodeRegistryError("only rotate pending changes may carry a non-zero intentId");
+  }
+  const targetTail = new Uint8Array(32);
+  targetTail.set(targetPubkey.slice(32, 48), 0);
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.submitPendingChange),
+      uint8Word(kindCode),
+      uint64Word(4n * 32n, "targetPubkeyOffset"),
+      uint64Word(effectiveEpoch, "effectiveEpoch"),
+      uint64Word(intentId, "intentId"),
+      uint64Word(BigInt(NODE_REGISTRY_BLS_PUBKEY_BYTES), "targetPubkeyLength"),
+      targetPubkey.slice(0, 32),
+      targetTail
+    )
+  );
+}
+function encodeCancelPendingChangeCalldata(args) {
+  const targetPubkey = expectLength2(
+    toBytes(args.targetPubkey),
+    NODE_REGISTRY_BLS_PUBKEY_BYTES,
+    "targetPubkey"
+  );
+  const targetTail = new Uint8Array(32);
+  targetTail.set(targetPubkey.slice(32, 48), 0);
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.cancelPendingChange),
+      uint64Word(args.epoch, "epoch"),
+      uint64Word(2n * 32n, "targetPubkeyOffset"),
+      uint64Word(BigInt(NODE_REGISTRY_BLS_PUBKEY_BYTES), "targetPubkeyLength"),
+      targetPubkey.slice(0, 32),
+      targetTail
+    )
+  );
+}
+function parseDkgResharePublicKeys(blsPublicKeys) {
+  const keys = toBytes(blsPublicKeys);
+  if (keys.length % NODE_REGISTRY_BLS_PUBKEY_BYTES !== 0) {
+    throw new NodeRegistryError("blsPublicKeys length must be a multiple of 48 bytes");
+  }
+  const signerCount = keys.length / NODE_REGISTRY_BLS_PUBKEY_BYTES;
+  if (signerCount < NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS || signerCount > NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS) {
+    throw new NodeRegistryError(
+      `blsPublicKeys must contain ${NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS}..${NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS} signers`
+    );
+  }
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (let offset = 0; offset < keys.length; offset += NODE_REGISTRY_BLS_PUBKEY_BYTES) {
+    const key = keys.slice(offset, offset + NODE_REGISTRY_BLS_PUBKEY_BYTES);
+    const keyHex = bytesToHex(key);
+    if (seen.has(keyHex)) {
+      throw new NodeRegistryError("blsPublicKeys contains a duplicate signer pubkey");
+    }
+    seen.add(keyHex);
+    out.push(key);
+  }
+  return out;
+}
+function encodeAttestDkgReshareCalldata(args) {
+  const intentId = toUint64(args.intentId, "intentId");
+  if (intentId === 0n) {
+    throw new NodeRegistryError("intentId must be greater than zero");
+  }
+  if (intentId > NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID) {
+    throw new NodeRegistryError("intentId must be <= 2^56-1");
+  }
+  const publicKeys = concatBytes(...parseDkgResharePublicKeys(args.blsPublicKeys));
+  const thresholdSig = expectLength2(
+    toBytes(args.thresholdSig),
+    NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES,
+    "thresholdSig"
+  );
+  const keysPadded = padToWord(publicKeys);
+  const sigPadded = padToWord(thresholdSig);
+  const offsetKeys = 3n * 32n;
+  const offsetSig = offsetKeys + 32n + BigInt(keysPadded.length);
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.attestDkgReshare),
+      uint64Word(intentId, "intentId"),
+      uint64Word(offsetKeys, "blsPublicKeysOffset"),
+      uint64Word(offsetSig, "thresholdSigOffset"),
+      uint64Word(BigInt(publicKeys.length), "blsPublicKeysLength"),
+      keysPadded,
+      uint64Word(BigInt(thresholdSig.length), "thresholdSigLength"),
+      sigPadded
+    )
+  );
 }
 function encodeReportServiceProbeCalldata(args) {
   if (!isValidPublicServiceProbeMask(args.serviceMask)) {
@@ -620,6 +768,44 @@ function uint8Word(value) {
   }
   const out = new Uint8Array(32);
   out[31] = value;
+  return out;
+}
+function uint64Word(value, name) {
+  const n = toUint64(value, name);
+  const out = new Uint8Array(32);
+  let rest = n;
+  for (let i = 31; i >= 24; i--) {
+    out[i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  return out;
+}
+function toUint64(value, name) {
+  let parsed;
+  if (typeof value === "bigint") {
+    parsed = value;
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) {
+      throw new NodeRegistryError(`${name} must be a safe integer`);
+    }
+    parsed = BigInt(value);
+  } else {
+    const trimmed = value.trim();
+    if (!/^\d+$/u.test(trimmed)) {
+      throw new NodeRegistryError(`${name} must be a decimal uint64`);
+    }
+    parsed = BigInt(trimmed);
+  }
+  if (parsed < 0n || parsed > 0xffffffffffffffffn) {
+    throw new NodeRegistryError(`${name} must fit uint64`);
+  }
+  return parsed;
+}
+function padToWord(bytes) {
+  const paddedLength = Math.ceil(bytes.length / 32) * 32;
+  if (paddedLength === bytes.length) return bytes;
+  const out = new Uint8Array(paddedLength);
+  out.set(bytes);
   return out;
 }
 function toBytes(value) {
@@ -2428,6 +2614,192 @@ function encodeBlockSelector(b) {
   if (typeof b === "bigint") return `0x${b.toString(16)}`;
   return b;
 }
+var NameRegistryError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "NameRegistryError";
+  }
+};
+var NAME_REGISTRY_SELECTORS = {
+  register: selectorHex2("register(string,address)"),
+  proposeTransfer: selectorHex2("proposeTransfer(string,address)"),
+  acceptTransfer: selectorHex2("acceptTransfer(string)")
+};
+var NAME_BASE_MULTIPLIER = {
+  human: 5,
+  agent: 2,
+  cluster: 20,
+  contract: 10
+};
+var NAME_FALLBACK_FEE_UNIT_LYTHOSHI = 100n;
+var NAME_MAX_LEN = 80;
+var NAME_LABEL_MIN_LEN = 1;
+var NAME_LABEL_MAX_LEN = 63;
+function nameRegistryAddressHex() {
+  return PRECOMPILE_ADDRESSES.NAME_REGISTRY.toLowerCase();
+}
+function nameLengthModifierX10(labelLen) {
+  if (labelLen === 1) return 1e3;
+  if (labelLen === 2) return 500;
+  if (labelLen === 3) return 100;
+  if (labelLen === 4) return 50;
+  if (labelLen === 5) return 30;
+  if (labelLen >= 6 && labelLen <= 12) return 10;
+  if (labelLen >= 13 && labelLen <= 20) return 15;
+  if (labelLen >= 21 && labelLen <= 32) return 30;
+  if (labelLen >= 33 && labelLen <= 50) return 100;
+  if (labelLen >= 51 && labelLen <= 63) return 500;
+  return null;
+}
+function parseNameCategory(name) {
+  if (name.length === 0) throw new NameRegistryError("name is empty");
+  if (name.length > NAME_MAX_LEN) throw new NameRegistryError(`name exceeds ${NAME_MAX_LEN} chars`);
+  const parts = name.split(".");
+  if (parts.some((p) => p.length === 0)) {
+    throw new NameRegistryError("name has an empty label");
+  }
+  for (const label of parts) validateLabel(label);
+  if (parts[parts.length - 1] !== "mono") {
+    throw new NameRegistryError("name must end with .mono");
+  }
+  const primaryLabelLen = parts[0].length;
+  switch (parts.length) {
+    case 2:
+      if (STRUCTURAL_RESERVES.has(parts[0])) {
+        throw new NameRegistryError(`"${parts[0]}.mono" is a structural reserve`);
+      }
+      return { category: "human", primaryLabelLen };
+    case 3: {
+      const anchor = parts[1];
+      if (anchor === "cluster") return { category: "cluster", primaryLabelLen };
+      if (anchor === "contract") return { category: "contract", primaryLabelLen };
+      if (anchor === "system") return { category: "system", primaryLabelLen };
+      throw new NameRegistryError(`unknown name category anchor ".${anchor}.mono"`);
+    }
+    case 4:
+      if (parts[1] !== "agent") {
+        throw new NameRegistryError("unknown 4-label name form (expected <x>.agent.<human>.mono)");
+      }
+      return { category: "agent", primaryLabelLen };
+    default:
+      throw new NameRegistryError("unrecognised name structure");
+  }
+}
+function nameRegistrationCost(category, primaryLabelLen, feeUnitLythoshi) {
+  if (category === "system") {
+    throw new NameRegistryError("system names are not registerable via this path");
+  }
+  const base = BigInt(NAME_BASE_MULTIPLIER[category]);
+  const modX10 = nameLengthModifierX10(primaryLabelLen);
+  if (modX10 === null) {
+    throw new NameRegistryError("primary label length is outside the priceable 1..=63 range");
+  }
+  return base * BigInt(modX10) * feeUnitLythoshi / 10n;
+}
+function encodeNameRegisterCall(name, owner) {
+  return encodeStringAddressCall(NAME_REGISTRY_SELECTORS.register, name, owner);
+}
+function encodeNameProposeTransferCall(name, recipient) {
+  return encodeStringAddressCall(NAME_REGISTRY_SELECTORS.proposeTransfer, name, recipient);
+}
+function encodeNameAcceptTransferCall(name) {
+  const nameBytes = new TextEncoder().encode(name);
+  return bytesToHex4(
+    concatBytes4(
+      hexToBytes4(NAME_REGISTRY_SELECTORS.acceptTransfer),
+      // Single head word → the string offset is 0x20 (one word precedes the tail).
+      uint256Word(0x20n),
+      uint256Word(BigInt(nameBytes.length)),
+      padTo32(nameBytes)
+    )
+  );
+}
+var STRUCTURAL_RESERVES = /* @__PURE__ */ new Set(["agent", "cluster", "contract", "system"]);
+function encodeStringAddressCall(selector, name, address) {
+  const nameBytes = new TextEncoder().encode(name);
+  return bytesToHex4(
+    concatBytes4(
+      hexToBytes4(selector),
+      // Two head words (string offset, address) → string tail starts at 0x40.
+      uint256Word(0x40n),
+      addressWord(address),
+      uint256Word(BigInt(nameBytes.length)),
+      padTo32(nameBytes)
+    )
+  );
+}
+function validateLabel(label) {
+  if (label.length < NAME_LABEL_MIN_LEN || label.length > NAME_LABEL_MAX_LEN) {
+    throw new NameRegistryError(`label "${label}" must be ${NAME_LABEL_MIN_LEN}..${NAME_LABEL_MAX_LEN} chars`);
+  }
+  if (label.startsWith("-") || label.endsWith("-")) {
+    throw new NameRegistryError(`label "${label}" may not start or end with a hyphen`);
+  }
+  if (label.includes("--")) {
+    throw new NameRegistryError(`label "${label}" may not contain a double hyphen`);
+  }
+  if (!/^[a-z0-9-]+$/.test(label)) {
+    throw new NameRegistryError(`label "${label}" has an invalid char (allowed: a-z 0-9 -)`);
+  }
+}
+function selectorHex2(signature) {
+  const sel = keccak_256(new TextEncoder().encode(signature)).slice(0, 4);
+  return `0x${[...sel].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+function addressWord(value) {
+  const out = new Uint8Array(32);
+  if (value == null) return out;
+  const bytes = toBytes2(value);
+  if (bytes.length !== 20) {
+    throw new NameRegistryError(`address must be 20 bytes, got ${bytes.length}`);
+  }
+  out.set(bytes, 12);
+  return out;
+}
+function uint256Word(value) {
+  if (value < 0n || value > (1n << 256n) - 1n) {
+    throw new NameRegistryError("uint256 word out of range");
+  }
+  const out = new Uint8Array(32);
+  let rest = value;
+  for (let i = 31; i >= 0 && rest > 0n; i--) {
+    out[i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  return out;
+}
+function padTo32(bytes) {
+  const padded = Math.ceil(bytes.length / 32) * 32;
+  if (padded === bytes.length) return bytes;
+  const out = new Uint8Array(padded);
+  out.set(bytes);
+  return out;
+}
+function toBytes2(value) {
+  if (typeof value === "string") return hexToBytes4(value);
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+function hexToBytes4(hex) {
+  const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
+  if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
+    throw new NameRegistryError("invalid hex bytes");
+  }
+  const out = new Uint8Array(body.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = Number.parseInt(body.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}
+function bytesToHex4(bytes) {
+  return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+function concatBytes4(...parts) {
+  const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
 
 // src/client.ts
 var MAX_NATIVE_RECEIPT_EVENTS = 1e3;
@@ -3265,7 +3637,234 @@ var RpcClient = class _RpcClient {
   async meshSubmitTx(signedTx) {
     return this.call("mesh_submitTx", [signedTx]);
   }
+  // ---- lyth_* additions (R15 / wallet + monoscan surfaces) -----------
+  /**
+   * `lyth_clusterApr` — observed APR for a cluster over a rolling window.
+   * `windowBlocks` defaults to the chain's 1200-block (~1h) window and is
+   * server-clamped to `[10, 86_400]`.
+   */
+  async lythClusterApr(clusterId, windowBlocks) {
+    const params = windowBlocks === void 0 ? [clusterId] : [clusterId, windowBlocks];
+    return normalizeClusterApr(await this.call("lyth_clusterApr", params));
+  }
+  /** `lyth_resolveName` — forward name → address resolution (0x110E). */
+  async lythResolveName(name, block = "latest") {
+    return this.call("lyth_resolveName", [name, encodeBlockSelector(block)]);
+  }
+  /** `lyth_nameOf` — reverse address → name resolution. */
+  async lythNameOf(address, block = "latest") {
+    return this.call("lyth_nameOf", [sdkTypedAddress(address, "user", "address"), encodeBlockSelector(block)]);
+  }
+  /** `lyth_getClusterName` — reverse cluster id → canonical name. */
+  async lythGetClusterName(clusterId, block = "latest") {
+    return this.call("lyth_getClusterName", [clusterId, encodeBlockSelector(block)]);
+  }
+  /**
+   * Convenience over {@link lythResolveName}: `true` when a well-formed
+   * name is unregistered. A malformed name throws `RpcError`
+   * (`InvalidParams`) rather than returning `true`, so the UI should treat
+   * a thrown validation error distinctly from "taken".
+   */
+  async lythIsNameAvailable(name, block = "latest") {
+    const resolved = await this.lythResolveName(name, block);
+    return resolved.address === null;
+  }
+  /**
+   * Live name-registration quote: parses the name's category + primary
+   * label length, reads the chain's base fee unit via `eth_feeHistory`
+   * (the bare `baseFeePerGas` — NOT `eth_gasPrice`, which adds the tip and
+   * would over-quote), and applies the U-curve. The resulting
+   * `costLythoshi` is what the `register` tx `value` must equal exactly
+   * (else the precompile reverts `IncorrectFee`).
+   */
+  async quoteNameRegistration(name, block = "latest") {
+    const parsed = parseNameCategory(name);
+    const history = await this.ethFeeHistory(1, block, []);
+    const baseFees = history.baseFeePerGas ?? [];
+    const lastHex = baseFees.length > 0 ? baseFees[baseFees.length - 1] : "0x0";
+    const baseFee = parseQuantityBig(lastHex);
+    const feeUnitLythoshi = baseFee > 0n ? baseFee : NAME_FALLBACK_FEE_UNIT_LYTHOSHI;
+    return {
+      name,
+      category: parsed.category,
+      primaryLabelLen: parsed.primaryLabelLen,
+      feeUnitLythoshi,
+      costLythoshi: nameRegistrationCost(parsed.category, parsed.primaryLabelLen, feeUnitLythoshi)
+    };
+  }
+  /** `lyth_circulatingSupply` — native LYTH circulating / initial / burned (decimal lythoshi strings). */
+  async lythCirculatingSupply() {
+    return this.call("lyth_circulatingSupply", []);
+  }
+  /** `lyth_totalBurned` — cumulative burned native LYTH (decimal lythoshi string). */
+  async lythTotalBurned() {
+    return this.call("lyth_totalBurned", []);
+  }
+  /** `lyth_swapIntentStatus` — bridge swap-intent / DKG-reshare lifecycle for one intent id. */
+  async lythSwapIntentStatus(intentId) {
+    let id;
+    if (typeof intentId === "number") {
+      id = intentId;
+    } else if (typeof intentId === "bigint") {
+      id = `0x${intentId.toString(16)}`;
+    } else if (intentId.startsWith("0x") || intentId.startsWith("0X")) {
+      id = intentId;
+    } else {
+      id = `0x${BigInt(intentId).toString(16)}`;
+    }
+    return this.call("lyth_swapIntentStatus", [id]);
+  }
+  /**
+   * Per-tx confirmation depth, derived from `lyth_txStatus` (which returns
+   * both the tx's `blockNumber` and the node `latestHeight`).
+   */
+  async lythTxConfirmations(txHash) {
+    const status = await this.lythTxStatus(txHash);
+    if (status.status === "found") {
+      return {
+        status: "found",
+        confirmations: status.latestHeight - status.blockNumber + 1,
+        blockNumber: status.blockNumber,
+        latestHeight: status.latestHeight
+      };
+    }
+    return {
+      status: "not_found",
+      confirmations: null,
+      blockNumber: null,
+      latestHeight: status.latestHeight
+    };
+  }
+  /**
+   * Resolve a user-pasted MRC token id to its metadata (name/symbol/
+   * decimals), for an "add custom token" flow. Returns `null` for an
+   * unknown/untracked id. Performs light client-side format validation
+   * (32-byte hex) for fast UX feedback; the chain re-validates regardless.
+   */
+  async lythResolveTokenMetadata(rawTokenId) {
+    const body = rawTokenId.startsWith("0x") || rawTokenId.startsWith("0X") ? rawTokenId.slice(2) : rawTokenId;
+    if (!/^[0-9a-fA-F]{64}$/.test(body)) {
+      throw SdkError.malformed("token id must be 32 bytes (64 hex chars)");
+    }
+    return (await this.lythMrcMetadata(rawTokenId)).metadata;
+  }
+  /**
+   * `lyth_getTokenBalances` joined with per-token MRC metadata. Balances
+   * are PUBLIC-only by construction (private-denomination balances are
+   * excluded by the chain). Raw `balance` strings are preserved (apply
+   * `metadata.decimals` client-side for display).
+   */
+  async lythGetTokenBalancesWithMetadata(address) {
+    const rows = await this.lythGetTokenBalances(address);
+    const keyFor = (row) => {
+      const assetId = row.mrc?.assetId ?? row.tokenId;
+      const tokenId = row.mrc?.tokenId ?? null;
+      return { assetId, tokenId, key: `${assetId}:${tokenId ?? ""}` };
+    };
+    const distinct = /* @__PURE__ */ new Map();
+    for (const row of rows) {
+      const k = keyFor(row);
+      if (!distinct.has(k.key)) distinct.set(k.key, { assetId: k.assetId, tokenId: k.tokenId });
+    }
+    const metaByKey = /* @__PURE__ */ new Map();
+    await Promise.all(
+      [...distinct.entries()].map(async ([key, { assetId, tokenId }]) => {
+        const resp = await this.lythMrcMetadata(assetId, tokenId);
+        metaByKey.set(key, resp.metadata);
+      })
+    );
+    return rows.map((row) => ({ ...row, metadata: metaByKey.get(keyFor(row).key) ?? null }));
+  }
+  /**
+   * Resolve a CLOB market's base/quote asset metadata (symbol/name/
+   * decimals) by joining `lyth_clobMarket` to `lyth_mrcMetadata`. Either
+   * side may be `null` when the indexer has no MRC row (e.g. native LYTH).
+   */
+  async resolveClobMarketAssets(marketId) {
+    const response = await this.lythClobMarket(marketId);
+    const market = response.market;
+    if (!market) return { base: null, quote: null };
+    const [base, quote] = await Promise.all([
+      this.lythMrcMetadata(market.baseToken).then((m) => m.metadata),
+      this.lythMrcMetadata(market.quoteToken).then((m) => m.metadata)
+    ]);
+    return { base, quote };
+  }
+  /**
+   * `lyth_getAddressActivity` enriched with each row's block timestamp,
+   * canonical tx hash (resolved from `(blockHeight, txIndex)`), and
+   * resolved cluster name. Issues one block read per distinct height and
+   * one name read per distinct cluster.
+   */
+  async enrichAddressActivity(address, limit = 50, cursor) {
+    const entries = await this.lythGetAddressActivity(address, limit, cursor);
+    const heights = [...new Set(entries.map((entry) => BigInt(entry.blockHeight)))];
+    const blockByHeight = /* @__PURE__ */ new Map();
+    await Promise.all(
+      heights.map(async (height) => {
+        blockByHeight.set(height, await this.blockTimeAndTxHashes(height));
+      })
+    );
+    const clusters = [
+      ...new Set(entries.map((entry) => entry.cluster).filter((c) => c != null))
+    ];
+    const nameByCluster = /* @__PURE__ */ new Map();
+    await Promise.all(
+      clusters.map(async (clusterId) => {
+        nameByCluster.set(clusterId, (await this.lythGetClusterName(clusterId)).name);
+      })
+    );
+    return entries.map((entry) => {
+      const block = blockByHeight.get(BigInt(entry.blockHeight));
+      const txHash = block && entry.txIndex >= 0 && entry.txIndex < block.txHashes.length ? block.txHashes[entry.txIndex] : null;
+      return {
+        ...entry,
+        blockTimestampSeconds: block?.timestampSeconds ?? null,
+        txHash,
+        clusterName: entry.cluster != null ? nameByCluster.get(entry.cluster) ?? null : null
+      };
+    });
+  }
+  /**
+   * Read a block's header timestamp (UNIX seconds) and ordered tx-hash
+   * array via the raw `eth_getBlockByNumber` (hash-only mode). The typed
+   * `ethGetBlockByNumber` wrapper drops the `transactions` array, so this
+   * uses the raw call.
+   */
+  async blockTimeAndTxHashes(height) {
+    const hexHeight = `0x${height.toString(16)}`;
+    const raw = await this.call("eth_getBlockByNumber", [
+      hexHeight,
+      false
+    ]);
+    if (!raw || typeof raw !== "object") return { timestampSeconds: null, txHashes: [] };
+    const ts = raw["timestamp"];
+    const timestampSeconds = ts === null || ts === void 0 ? null : parseRpcBigint(ts, "block timestamp");
+    const txs = raw["transactions"];
+    const txHashes = Array.isArray(txs) ? txs.filter((t) => typeof t === "string") : [];
+    return { timestampSeconds, txHashes };
+  }
 };
+function clusterApyPercent(apr) {
+  return Number(apr.aprBps) / 100;
+}
+function computeQuoteLiquidity(book) {
+  const sumQuote = (levels) => levels.reduce((acc, level) => acc + BigInt(level.price) * BigInt(level.size), 0n);
+  const bidQuote = sumQuote(book.bids);
+  const askQuote = sumQuote(book.asks);
+  return {
+    bidQuote: bidQuote.toString(10),
+    askQuote: askQuote.toString(10),
+    totalQuote: (bidQuote + askQuote).toString(10)
+  };
+}
+function rankMarketsByVolume(markets) {
+  return [...markets].sort((a, b) => {
+    const av = BigInt(a.totalVolumeBase);
+    const bv = BigInt(b.totalVolumeBase);
+    return av < bv ? 1 : av > bv ? -1 : 0;
+  }).map((market, index) => ({ ...market, volumeRank: index + 1 }));
+}
 function parseQuantityBig(hex) {
   if (!hex) return 0n;
   const rest = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
@@ -3920,6 +4519,29 @@ function normalizeRoundInfo(value) {
     height: parseRpcBigint(row["height"], "round height")
   };
 }
+function normalizeClusterApr(value) {
+  if (!value || typeof value !== "object") {
+    throw SdkError.malformed("cluster apr must be an object");
+  }
+  const row = value;
+  const blocks = row["blocks"] ?? {};
+  return {
+    clusterId: parseRpcNumber(row["clusterId"], "clusterId"),
+    blocks: {
+      from: parseRpcBigint(blocks["from"], "blocks.from"),
+      to: parseRpcBigint(blocks["to"], "blocks.to"),
+      window: parseRpcBigint(blocks["window"], "blocks.window")
+    },
+    rewardIndexFromHex: parseStringField(row["rewardIndexFromHex"], "rewardIndexFromHex"),
+    rewardIndexToHex: parseStringField(row["rewardIndexToHex"], "rewardIndexToHex"),
+    deltaIndexHex: parseStringField(row["deltaIndexHex"], "deltaIndexHex"),
+    rewardIndexScale: parseStringField(row["rewardIndexScale"], "rewardIndexScale"),
+    totalBps: parseRpcNumber(row["totalBps"], "totalBps"),
+    blocksPerYear: parseRpcBigint(row["blocksPerYear"], "blocksPerYear"),
+    stakePerBpsLythoshi: parseRpcBigint(row["stakePerBpsLythoshi"], "stakePerBpsLythoshi"),
+    aprBps: parseRpcBigint(row["aprBps"], "aprBps")
+  };
+}
 function normalizeExecutionUnitPriceResponse(value) {
   if (!value || typeof value !== "object") {
     throw SdkError.malformed("execution unit price response must be an object");
@@ -4565,8 +5187,6 @@ function encodePathBlock(block) {
 function encodePathSegment(value) {
   return encodeURIComponent(typeof value === "bigint" ? value.toString() : String(value));
 }
-
-// src/bridge.ts
 var BRIDGE_SELECTORS = {
   lockBridgeConfig: "0x8956feb3",
   setBridgeResumeCooldown: "0x1a3a0672",
@@ -4600,42 +5220,105 @@ function bridgeAddressHex() {
   return PRECOMPILE_ADDRESSES.BRIDGE.toLowerCase();
 }
 function encodeLockBridgeConfigCalldata(bridgeId) {
-  return bytesToHex4(
-    concatBytes4(
-      hexToBytes4(BRIDGE_SELECTORS.lockBridgeConfig),
-      expectLength3(toBytes2(bridgeId), 32, "bridgeId")
+  return bytesToHex5(
+    concatBytes5(
+      hexToBytes5(BRIDGE_SELECTORS.lockBridgeConfig),
+      expectLength3(toBytes3(bridgeId), 32, "bridgeId")
     )
   );
 }
 function encodeSetBridgeResumeCooldownCalldata(bridgeId, cooldownBlocks) {
-  return bytesToHex4(
-    concatBytes4(
-      hexToBytes4(BRIDGE_SELECTORS.setBridgeResumeCooldown),
-      expectLength3(toBytes2(bridgeId), 32, "bridgeId"),
-      uint64Word(cooldownBlocks, "cooldownBlocks")
+  return bytesToHex5(
+    concatBytes5(
+      hexToBytes5(BRIDGE_SELECTORS.setBridgeResumeCooldown),
+      expectLength3(toBytes3(bridgeId), 32, "bridgeId"),
+      uint64Word2(cooldownBlocks, "cooldownBlocks")
     )
   );
 }
 function encodeSetBridgeRouteFinalityCalldata(bridgeId, finalityBlocks) {
-  return bytesToHex4(
-    concatBytes4(
-      hexToBytes4(BRIDGE_SELECTORS.setBridgeRouteFinality),
-      expectLength3(toBytes2(bridgeId), 32, "bridgeId"),
-      uint64Word(finalityBlocks, "finalityBlocks")
+  return bytesToHex5(
+    concatBytes5(
+      hexToBytes5(BRIDGE_SELECTORS.setBridgeRouteFinality),
+      expectLength3(toBytes3(bridgeId), 32, "bridgeId"),
+      uint64Word2(finalityBlocks, "finalityBlocks")
+    )
+  );
+}
+function bridgeSelector(signature) {
+  return keccak_256(new TextEncoder().encode(signature)).slice(0, 4);
+}
+function addressWord2(value, name) {
+  const addr = expectLength3(toBytes3(value), 20, name);
+  const out = new Uint8Array(32);
+  out.set(addr, 12);
+  return out;
+}
+function padTo322(bytes) {
+  const padded = Math.ceil(bytes.length / 32) * 32;
+  if (padded === bytes.length) return bytes;
+  const out = new Uint8Array(padded);
+  out.set(bytes);
+  return out;
+}
+function encodeBridgeClaimCalldata(bridgeId, depositId, recipient) {
+  return bytesToHex5(
+    concatBytes5(
+      bridgeSelector("claim(bytes32,bytes32,address)"),
+      expectLength3(toBytes3(bridgeId), 32, "bridgeId"),
+      expectLength3(toBytes3(depositId), 32, "depositId"),
+      addressWord2(recipient, "recipient")
+    )
+  );
+}
+function encodeBridgeChallengeCalldata(bridgeId, depositId, fraudProof) {
+  const proof = toBytes3(fraudProof);
+  return bytesToHex5(
+    concatBytes5(
+      bridgeSelector("challenge(bytes32,bytes32,bytes)"),
+      expectLength3(toBytes3(bridgeId), 32, "bridgeId"),
+      expectLength3(toBytes3(depositId), 32, "depositId"),
+      uint64Word2(3n * 32n, "fraudProofOffset"),
+      uint64Word2(BigInt(proof.length), "fraudProofLength"),
+      padTo322(proof)
+    )
+  );
+}
+function encodeSubmitBridgeProofCalldata(bridgeId, depositId, lockReceipt, zkProof, publicInputs) {
+  const receipt = toBytes3(lockReceipt);
+  const proof = toBytes3(zkProof);
+  const inputs = toBytes3(publicInputs);
+  const off0 = 5n * 32n;
+  const off1 = off0 + 32n + BigInt(Math.ceil(receipt.length / 32) * 32);
+  const off2 = off1 + 32n + BigInt(Math.ceil(proof.length / 32) * 32);
+  return bytesToHex5(
+    concatBytes5(
+      bridgeSelector("submitProof(bytes32,bytes32,bytes,bytes,bytes)"),
+      expectLength3(toBytes3(bridgeId), 32, "bridgeId"),
+      expectLength3(toBytes3(depositId), 32, "depositId"),
+      uint64Word2(off0, "lockReceiptOffset"),
+      uint64Word2(off1, "zkProofOffset"),
+      uint64Word2(off2, "publicInputsOffset"),
+      uint64Word2(BigInt(receipt.length), "lockReceiptLength"),
+      padTo322(receipt),
+      uint64Word2(BigInt(proof.length), "zkProofLength"),
+      padTo322(proof),
+      uint64Word2(BigInt(inputs.length), "publicInputsLength"),
+      padTo322(inputs)
     )
   );
 }
 function isBridgeAdminLockedRevert(data) {
-  return bytesToHex4(toBytes2(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeAdminLocked;
+  return bytesToHex5(toBytes3(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeAdminLocked;
 }
 function isBridgeResumeCooldownActiveRevert(data) {
-  return bytesToHex4(toBytes2(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeResumeCooldownActive;
+  return bytesToHex5(toBytes3(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeResumeCooldownActive;
 }
 function isBridgeCooldownZeroRevert(data) {
-  return bytesToHex4(toBytes2(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeCooldownZero;
+  return bytesToHex5(toBytes3(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeCooldownZero;
 }
 function isBridgeFinalityZeroRevert(data) {
-  return bytesToHex4(toBytes2(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeFinalityZero;
+  return bytesToHex5(toBytes3(data)).toLowerCase() === BRIDGE_REVERT_TAGS.bridgeFinalityZero;
 }
 function bridgeDrainRemaining(capPerWindow, drained) {
   const cap = BigInt(capPerWindow);
@@ -5238,7 +5921,7 @@ function expectLength3(value, len, name) {
   }
   return value;
 }
-function uint64Word(value, name) {
+function uint64Word2(value, name) {
   const n = toBigint(value, name);
   if (n < 0n || n > 0xffffffffffffffffn) {
     throw new BridgePrecompileError(`${name} must fit uint64`);
@@ -5264,13 +5947,13 @@ function toBigint(value, name) {
   }
   return BigInt(value);
 }
-function toBytes2(value) {
+function toBytes3(value) {
   if (typeof value === "string") {
-    return hexToBytes4(value);
+    return hexToBytes5(value);
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes4(hex) {
+function hexToBytes5(hex) {
   const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
   if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
     throw new BridgePrecompileError("invalid hex bytes");
@@ -5281,10 +5964,10 @@ function hexToBytes4(hex) {
   }
   return out;
 }
-function bytesToHex4(bytes) {
+function bytesToHex5(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function concatBytes4(...parts) {
+function concatBytes5(...parts) {
   const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
   let offset = 0;
   for (const part of parts) {
@@ -5339,10 +6022,10 @@ function decodeNoEvmReceiptTranscript(proof) {
   );
 }
 function computeNoEvmReceiptsRoot(receipts) {
-  return bytesToHex5(computeNoEvmReceiptsRootBytes(receipts));
+  return bytesToHex6(computeNoEvmReceiptsRootBytes(receipts));
 }
 function computeNoEvmTargetReceiptHash(receiptBytes) {
-  return bytesToHex5(keccak_256(receiptBytes));
+  return bytesToHex6(keccak_256(receiptBytes));
 }
 function verifyNoEvmReceiptProof(proof) {
   if (proof == null) return null;
@@ -5929,7 +6612,7 @@ function verifyCompactReceiptProof(proof) {
   if (!bytesEqual(expectedLeafHashBytes, actualLeafHashBytes)) {
     throw new NoEvmReceiptProofError(
       "compact_leaf_hash_mismatch",
-      `compactInclusionProof.leafHash mismatch: expected ${compactProof.leafHash}, computed ${bytesToHex5(
+      `compactInclusionProof.leafHash mismatch: expected ${compactProof.leafHash}, computed ${bytesToHex6(
         actualLeafHashBytes
       )}`
     );
@@ -5962,14 +6645,14 @@ function verifyCompactReceiptProof(proof) {
   if (!bytesEqual(actualRootBytes, compactRootBytes)) {
     throw new NoEvmReceiptProofError(
       "compact_path_mismatch",
-      `compact inclusion path mismatch: expected ${compactProof.root}, computed ${bytesToHex5(
+      `compact inclusion path mismatch: expected ${compactProof.root}, computed ${bytesToHex6(
         actualRootBytes
       )}`
     );
   }
   return {
     receipts: [],
-    receiptsRoot: bytesToHex5(actualRootBytes),
+    receiptsRoot: bytesToHex6(actualRootBytes),
     targetReceiptHash: actualTargetHash,
     receiptCount: proof.receiptCount,
     txIndex: proof.txIndex,
@@ -6179,7 +6862,7 @@ function parseArchiveProofSignature(signature, index, fieldPrefix = "archiveProo
       `${field2}.payload must be non-empty`
     );
   }
-  return { signerId: bytesToHex5(signerId), payload };
+  return { signerId: bytesToHex6(signerId), payload };
 }
 function normalizeSignerId(value) {
   const bytes = decodeHexBytes(value, "signerId");
@@ -6189,7 +6872,7 @@ function normalizeSignerId(value) {
       `signerId must be ${ARCHIVE_SIGNATURE_SIGNER_ID_BYTE_LENGTH} bytes, got ${bytes.length}`
     );
   }
-  return bytesToHex5(bytes);
+  return bytesToHex6(bytes);
 }
 function expectArchivePublicKey(value, field2) {
   if (value.length !== ML_DSA_65_PUBLIC_KEY_LEN) {
@@ -6670,7 +7353,7 @@ function bytesEqual(a, b) {
   }
   return diff === 0;
 }
-function bytesToHex5(bytes) {
+function bytesToHex6(bytes) {
   let out = "0x";
   for (let index = 0; index < bytes.length; index++) {
     out += bytes[index].toString(16).padStart(2, "0");
@@ -6889,12 +7572,48 @@ var OracleEventError = class extends Error {
 function oracleAddressHex() {
   return PRECOMPILE_ADDRESSES.ORACLE.toLowerCase();
 }
+var FEED_ID_DOMAIN_TAG = "protocore-oracle/feed-id/v1";
+function deriveFeedId(name, decimals) {
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 255) {
+    throw new OracleEventError("feed decimals must be an integer in 0..=255");
+  }
+  const nameBytes = new TextEncoder().encode(name);
+  const buf = concatBytes6(
+    new TextEncoder().encode(FEED_ID_DOMAIN_TAG),
+    nameBytes,
+    Uint8Array.of(decimals & 255)
+  );
+  return bytesToHex7(keccak_256(buf));
+}
+function formatOraclePrice(price) {
+  if (price.median === null) return null;
+  const value = BigInt(price.median);
+  const decimals = price.decimals;
+  if (decimals <= 0) return value.toString(10);
+  const base = 10n ** BigInt(decimals);
+  const whole = value / base;
+  const frac = (value % base).toString(10).padStart(decimals, "0").replace(/0+$/, "");
+  return frac.length > 0 ? `${whole.toString(10)}.${frac}` : whole.toString(10);
+}
+function oraclePriceToNumber(price) {
+  const formatted = formatOraclePrice(price);
+  return formatted === null ? null : Number(formatted);
+}
+function concatBytes6(...parts) {
+  const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
 function decodeOracleEvent(topics, data) {
   if (topics.length === 0) {
     throw new OracleEventError("event record has no topics");
   }
-  const topic0 = bytesToHex6(expectLength4(toBytes3(topics[0]), 32, "topic0"));
-  const body = toBytes3(data);
+  const topic0 = bytesToHex7(expectLength4(toBytes4(topics[0]), 32, "topic0"));
+  const body = toBytes4(data);
   if (topic0 === topicHex(ORACLE_EVENT_SIGS.oracleRoundFinalized)) {
     checkArity("OracleRoundFinalized", 3, topics.length);
     checkData("OracleRoundFinalized", 3 * 32, body.length);
@@ -6927,7 +7646,7 @@ function decodeOracleEvent(topics, data) {
       feedId: hex32(topics[1]),
       roundId: u64FromTopic(topics[2]),
       writer: addressFromTopic(topics[3]),
-      evidenceHash: bytesToHex6(body.subarray(0, 32))
+      evidenceHash: bytesToHex7(body.subarray(0, 32))
     };
   }
   if (topic0 === topicHex(ORACLE_EVENT_SIGS.feedAdded)) {
@@ -6975,7 +7694,7 @@ function decodeFeedFields(feedTopic, body) {
   };
 }
 function topicHex(sig) {
-  return bytesToHex6(keccak_256(new TextEncoder().encode(sig)));
+  return bytesToHex7(keccak_256(new TextEncoder().encode(sig)));
 }
 function checkArity(event, expected, found) {
   if (found !== expected) {
@@ -6988,13 +7707,13 @@ function checkData(event, expected, found) {
   }
 }
 function hex32(topic) {
-  return bytesToHex6(expectLength4(toBytes3(topic), 32, "feedId topic"));
+  return bytesToHex7(expectLength4(toBytes4(topic), 32, "feedId topic"));
 }
 function addressFromTopic(topic) {
-  return bytesToHex6(expectLength4(toBytes3(topic), 32, "address topic").subarray(12, 32));
+  return bytesToHex7(expectLength4(toBytes4(topic), 32, "address topic").subarray(12, 32));
 }
 function u64FromTopic(topic) {
-  return u64FromWord2(expectLength4(toBytes3(topic), 32, "u64 topic"));
+  return u64FromWord2(expectLength4(toBytes4(topic), 32, "u64 topic"));
 }
 function u64FromWord2(word) {
   let v = 0n;
@@ -7009,11 +7728,11 @@ function u256Decimal(word) {
   for (const b of word) v = v << 8n | BigInt(b);
   return v.toString(10);
 }
-function toBytes3(value) {
-  if (typeof value === "string") return hexToBytes5(value);
+function toBytes4(value) {
+  if (typeof value === "string") return hexToBytes6(value);
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes5(hex) {
+function hexToBytes6(hex) {
   const b = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
   if (b.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(b)) {
     throw new OracleEventError("invalid hex bytes");
@@ -7022,7 +7741,7 @@ function hexToBytes5(hex) {
   for (let i = 0; i < out.length; i++) out[i] = Number.parseInt(b.slice(i * 2, i * 2 + 2), 16);
   return out;
 }
-function bytesToHex6(bytes) {
+function bytesToHex7(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 function expectLength4(value, len, name) {
@@ -7034,12 +7753,12 @@ function expectLength4(value, len, name) {
 var PROVER_MARKET_ADDRESS = PRECOMPILE_ADDRESSES.PROVER_MARKET;
 var SERVES_GPU_PROVE = 512;
 var PROVER_MARKET_SELECTORS = {
-  createRequest: "0x" + selectorHex2("createRequest(bytes)"),
-  submitBid: "0x" + selectorHex2("submitBid(bytes)"),
-  closeRequest: "0x" + selectorHex2("closeRequest(bytes)"),
-  submitProof: "0x" + selectorHex2("submitProof(bytes)"),
-  settle: "0x" + selectorHex2("settle(bytes)"),
-  slash: "0x" + selectorHex2("slash(bytes)")
+  createRequest: "0x" + selectorHex3("createRequest(bytes)"),
+  submitBid: "0x" + selectorHex3("submitBid(bytes)"),
+  closeRequest: "0x" + selectorHex3("closeRequest(bytes)"),
+  submitProof: "0x" + selectorHex3("submitProof(bytes)"),
+  settle: "0x" + selectorHex3("settle(bytes)"),
+  slash: "0x" + selectorHex3("slash(bytes)")
 };
 var PROVER_MARKET_EVENT_SIGS = {
   proofRequested: "ProofRequested(bytes32,address,bytes32,uint128,uint64)",
@@ -7077,12 +7796,12 @@ var ProverMarketError = class extends Error {
   }
 };
 function requestSighash(vkeyHash, inputsHash, maxFee, deadline, nonce) {
-  return bytesToHex7(
+  return bytesToHex8(
     keccak_256(
-      concatBytes5(
+      concatBytes7(
         new TextEncoder().encode(PROVER_MARKET_REQUEST_DOMAIN),
-        expectLength5(toBytes4(vkeyHash), 32, "vkeyHash"),
-        expectLength5(toBytes4(inputsHash), 32, "inputsHash"),
+        expectLength5(toBytes5(vkeyHash), 32, "vkeyHash"),
+        expectLength5(toBytes5(inputsHash), 32, "inputsHash"),
         u128Bytes(maxFee, "maxFee"),
         u64Bytes(deadline, "deadline"),
         u64Bytes(nonce, "nonce")
@@ -7091,44 +7810,44 @@ function requestSighash(vkeyHash, inputsHash, maxFee, deadline, nonce) {
   );
 }
 function bidSighash(requestId, fee) {
-  return bytesToHex7(
+  return bytesToHex8(
     keccak_256(
-      concatBytes5(
+      concatBytes7(
         new TextEncoder().encode(PROVER_MARKET_BID_DOMAIN),
-        expectLength5(toBytes4(requestId), 32, "requestId"),
+        expectLength5(toBytes5(requestId), 32, "requestId"),
         u128Bytes(fee, "fee")
       )
     )
   );
 }
 function submitSighash(requestId, proofHash) {
-  return bytesToHex7(
+  return bytesToHex8(
     keccak_256(
-      concatBytes5(
+      concatBytes7(
         new TextEncoder().encode(PROVER_MARKET_SUBMIT_DOMAIN),
-        expectLength5(toBytes4(requestId), 32, "requestId"),
-        expectLength5(toBytes4(proofHash), 32, "proofHash")
+        expectLength5(toBytes5(requestId), 32, "requestId"),
+        expectLength5(toBytes5(proofHash), 32, "proofHash")
       )
     )
   );
 }
 function encodeCreateRequestCanonical(args) {
-  const buyer = expectLength5(toBytes4(args.buyer), 20, "buyer");
-  const buyerPubkey = toBytes4(args.buyerPubkey);
-  const sig = toBytes4(args.sig);
+  const buyer = expectLength5(toBytes5(args.buyer), 20, "buyer");
+  const buyerPubkey = toBytes5(args.buyerPubkey);
+  const sig = toBytes5(args.sig);
   if (buyerPubkey.length === 0 || buyerPubkey.length > 65535) {
     throw new ProverMarketError("buyerPubkey length out of range (1..=65535)");
   }
   if (sig.length === 0 || sig.length > 65535) {
     throw new ProverMarketError("sig length out of range (1..=65535)");
   }
-  return bytesToHex7(
-    concatBytes5(
+  return bytesToHex8(
+    concatBytes7(
       buyer,
       u16Bytes(buyerPubkey.length),
       buyerPubkey,
-      expectLength5(toBytes4(args.vkeyHash), 32, "vkeyHash"),
-      expectLength5(toBytes4(args.inputsHash), 32, "inputsHash"),
+      expectLength5(toBytes5(args.vkeyHash), 32, "vkeyHash"),
+      expectLength5(toBytes5(args.inputsHash), 32, "inputsHash"),
       u128Bytes(args.maxFee, "maxFee"),
       u64Bytes(args.deadline, "deadline"),
       u64Bytes(args.nonce, "nonce"),
@@ -7138,7 +7857,7 @@ function encodeCreateRequestCanonical(args) {
   );
 }
 function encodeCreateRequestCalldata(args) {
-  const canonical = toBytes4(encodeCreateRequestCanonical(args));
+  const canonical = toBytes5(encodeCreateRequestCanonical(args));
   const offset = new Uint8Array(32);
   offset[31] = 32;
   const lenWord = new Uint8Array(32);
@@ -7148,18 +7867,18 @@ function encodeCreateRequestCalldata(args) {
   lenWord[30] = len >>> 8 & 255;
   lenWord[31] = len & 255;
   const pad = (32 - len % 32) % 32;
-  return bytesToHex7(
-    concatBytes5(hexToBytes6(PROVER_MARKET_SELECTORS.createRequest), offset, lenWord, canonical, new Uint8Array(pad))
+  return bytesToHex8(
+    concatBytes7(hexToBytes7(PROVER_MARKET_SELECTORS.createRequest), offset, lenWord, canonical, new Uint8Array(pad))
   );
 }
-function selectorHex2(sig) {
+function selectorHex3(sig) {
   return [...keccak_256(new TextEncoder().encode(sig)).slice(0, 4)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
-function toBytes4(value) {
-  if (typeof value === "string") return hexToBytes6(value);
+function toBytes5(value) {
+  if (typeof value === "string") return hexToBytes7(value);
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes6(hex) {
+function hexToBytes7(hex) {
   const b = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
   if (b.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(b)) {
     throw new ProverMarketError("invalid hex bytes");
@@ -7168,10 +7887,10 @@ function hexToBytes6(hex) {
   for (let i = 0; i < out.length; i++) out[i] = Number.parseInt(b.slice(i * 2, i * 2 + 2), 16);
   return out;
 }
-function bytesToHex7(bytes) {
+function bytesToHex8(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function concatBytes5(...parts) {
+function concatBytes7(...parts) {
   const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
   let offset = 0;
   for (const part of parts) {
@@ -7248,34 +7967,34 @@ function delegationAddressHex() {
   return PRECOMPILE_ADDRESSES.DELEGATION.toLowerCase();
 }
 function encodeCompleteRedemptionCalldata(index) {
-  return bytesToHex8(
-    concatBytes6(
-      hexToBytes7(DELEGATION_SELECTORS.completeRedemption),
-      uint64Word2(index, "index")
+  return bytesToHex9(
+    concatBytes8(
+      hexToBytes8(DELEGATION_SELECTORS.completeRedemption),
+      uint64Word3(index, "index")
     )
   );
 }
 function encodeDelegateCalldata(cluster, weightBps) {
-  return bytesToHex8(
-    concatBytes6(
-      hexToBytes7(DELEGATION_SELECTORS.delegate),
+  return bytesToHex9(
+    concatBytes8(
+      hexToBytes8(DELEGATION_SELECTORS.delegate),
       uint32Word2(cluster, "cluster"),
       uint16Word(weightBps, "weightBps")
     )
   );
 }
 function encodeUndelegateCalldata(cluster) {
-  return bytesToHex8(
-    concatBytes6(
-      hexToBytes7(DELEGATION_SELECTORS.undelegate),
+  return bytesToHex9(
+    concatBytes8(
+      hexToBytes8(DELEGATION_SELECTORS.undelegate),
       uint32Word2(cluster, "cluster")
     )
   );
 }
 function encodeRedelegateCalldata(fromCluster, toCluster, weightBps) {
-  return bytesToHex8(
-    concatBytes6(
-      hexToBytes7(DELEGATION_SELECTORS.redelegate),
+  return bytesToHex9(
+    concatBytes8(
+      hexToBytes8(DELEGATION_SELECTORS.redelegate),
       uint32Word2(fromCluster, "fromCluster"),
       uint32Word2(toCluster, "toCluster"),
       uint16Word(weightBps, "weightBps")
@@ -7288,14 +8007,14 @@ function encodeClaimCalldata() {
 function encodeSetAutoCompoundCalldata(enabled) {
   const flag = new Uint8Array(32);
   flag[31] = enabled ? 1 : 0;
-  return bytesToHex8(
-    concatBytes6(hexToBytes7(DELEGATION_SELECTORS.setAutoCompound), flag)
+  return bytesToHex9(
+    concatBytes8(hexToBytes8(DELEGATION_SELECTORS.setAutoCompound), flag)
   );
 }
 function isRedemptionPrincipalUnavailableRevert(data) {
-  return bytesToHex8(toBytes5(data)).toLowerCase() === DELEGATION_REVERT_TAGS.redemptionPrincipalUnavailable;
+  return bytesToHex9(toBytes6(data)).toLowerCase() === DELEGATION_REVERT_TAGS.redemptionPrincipalUnavailable;
 }
-function uint64Word2(value, name) {
+function uint64Word3(value, name) {
   const n = toBigint3(value, name);
   if (n < 0n || n > 0xffffffffffffffffn) {
     throw new DelegationPrecompileError(`${name} must fit uint64`);
@@ -7347,13 +8066,13 @@ function toBigint3(value, name) {
   }
   return BigInt(value);
 }
-function toBytes5(value) {
+function toBytes6(value) {
   if (typeof value === "string") {
-    return hexToBytes7(value);
+    return hexToBytes8(value);
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes7(hex) {
+function hexToBytes8(hex) {
   const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
   if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
     throw new DelegationPrecompileError("invalid hex bytes");
@@ -7364,10 +8083,10 @@ function hexToBytes7(hex) {
   }
   return out;
 }
-function bytesToHex8(bytes) {
+function bytesToHex9(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function concatBytes6(...parts) {
+function concatBytes8(...parts) {
   const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
   let offset = 0;
   for (const part of parts) {
@@ -7376,8 +8095,6 @@ function concatBytes6(...parts) {
   }
   return out;
 }
-
-// src/spending-policy.ts
 var SET_POLICY_CLAIM_DOMAIN_TAG = "lyth.spending-policy.claim.v1";
 var ML_DSA_65_PUBLIC_KEY_LEN2 = 1952;
 var ML_DSA_65_SIGNATURE_LEN2 = 3309;
@@ -7400,10 +8117,38 @@ var SpendingPolicyError = class extends Error {
 function spendingPolicyAddressHex() {
   return PRECOMPILE_ADDRESSES.SPENDING_POLICY.toLowerCase();
 }
+var EMPTY_ROOT = new Uint8Array(32);
+function destinationRoot(address) {
+  const bytes = toUserAddressBytes(address, "address");
+  return keccak_256(bytes);
+}
+var allowRootFor = destinationRoot;
+var denyRootFor = destinationRoot;
+function categoryRoot(selectorOrSig) {
+  let selector;
+  if (typeof selectorOrSig === "string") {
+    selector = keccak_256(new TextEncoder().encode(selectorOrSig)).slice(0, 4);
+  } else {
+    selector = selectorOrSig instanceof Uint8Array ? selectorOrSig : Uint8Array.from(selectorOrSig);
+    if (selector.length !== 4) {
+      throw new SpendingPolicyError("category selector must be exactly 4 bytes");
+    }
+  }
+  return keccak_256(selector);
+}
+function setDestinationRoot(entries) {
+  if (entries.length === 0) return EMPTY_ROOT;
+  if (entries.length > 1) {
+    throw new SpendingPolicyError(
+      "multi-entry destination sets are not supported by the chain yet (v1 allows a single counterparty per root); pass exactly one address"
+    );
+  }
+  return destinationRoot(entries[0]);
+}
 function composeClaimBoundMessage(chainId, args, opts) {
   const precompileAddress = toRawAddressBytes(opts?.precompileAddress ?? PRECOMPILE_ADDRESSES.SPENDING_POLICY);
   const normalized = normalizeArgs(args);
-  return concatBytes7(
+  return concatBytes9(
     new TextEncoder().encode(SET_POLICY_CLAIM_DOMAIN_TAG),
     uint64Bytes(chainId, "chainId"),
     precompileAddress,
@@ -7426,17 +8171,17 @@ function composeClaimBoundMessage(chainId, args, opts) {
 }
 function encodeSetPolicyCalldata(args) {
   const normalized = normalizeArgs(args);
-  return bytesToHex9(
-    concatBytes7(
-      hexToBytes8(SPENDING_POLICY_SELECTORS.setPolicy),
+  return bytesToHex10(
+    concatBytes9(
+      hexToBytes9(SPENDING_POLICY_SELECTORS.setPolicy),
       encodePolicyWords(normalized)
     )
   );
 }
 function encodeSetPolicyClaimCalldata(args, subAccountPubkey, subAccountSig) {
   const normalized = normalizeArgs(args);
-  const pubkey = toBytes6(subAccountPubkey);
-  const sig = toBytes6(subAccountSig);
+  const pubkey = toBytes7(subAccountPubkey);
+  const sig = toBytes7(subAccountSig);
   if (pubkey.length !== ML_DSA_65_PUBLIC_KEY_LEN2) {
     throw new SpendingPolicyError(
       `subAccountPubkey must be ${ML_DSA_65_PUBLIC_KEY_LEN2} bytes, got ${pubkey.length}`
@@ -7447,9 +8192,9 @@ function encodeSetPolicyClaimCalldata(args, subAccountPubkey, subAccountSig) {
       `subAccountSig must be ${ML_DSA_65_SIGNATURE_LEN2} bytes, got ${sig.length}`
     );
   }
-  return bytesToHex9(
-    concatBytes7(
-      hexToBytes8(SPENDING_POLICY_SELECTORS.setPolicyClaim),
+  return bytesToHex10(
+    concatBytes9(
+      hexToBytes9(SPENDING_POLICY_SELECTORS.setPolicyClaim),
       encodePolicyWords(normalized),
       pubkey,
       sig
@@ -7458,15 +8203,15 @@ function encodeSetPolicyClaimCalldata(args, subAccountPubkey, subAccountSig) {
 }
 function encodeClaimPolicyByAddressCalldata(args, subAccountSig) {
   const normalized = normalizeArgs(args);
-  const sig = toBytes6(subAccountSig);
+  const sig = toBytes7(subAccountSig);
   if (sig.length !== ML_DSA_65_SIGNATURE_LEN2) {
     throw new SpendingPolicyError(
       `subAccountSig must be ${ML_DSA_65_SIGNATURE_LEN2} bytes, got ${sig.length}`
     );
   }
-  return bytesToHex9(
-    concatBytes7(
-      hexToBytes8(SPENDING_POLICY_SELECTORS.claimPolicyByAddress),
+  return bytesToHex10(
+    concatBytes9(
+      hexToBytes9(SPENDING_POLICY_SELECTORS.claimPolicyByAddress),
       encodePolicyWords(normalized),
       sig
     )
@@ -7485,17 +8230,17 @@ function normalizeArgs(args) {
     principal: toUserAddressBytes(args.principal, "principal"),
     dailyCapLythoshi: toBigint4(args.dailyCapLythoshi, "dailyCapLythoshi"),
     perTxCapLythoshi: toBigint4(args.perTxCapLythoshi, "perTxCapLythoshi"),
-    allowRoot: expectLength6(toBytes6(args.allowRoot), 32, "allowRoot"),
-    denyRoot: expectLength6(toBytes6(args.denyRoot), 32, "denyRoot"),
+    allowRoot: expectLength6(toBytes7(args.allowRoot), 32, "allowRoot"),
+    denyRoot: expectLength6(toBytes7(args.denyRoot), 32, "denyRoot"),
     weeklyCapLythoshi: toBigint4(args.weeklyCapLythoshi ?? 0n, "weeklyCapLythoshi"),
     monthlyCapLythoshi: toBigint4(args.monthlyCapLythoshi ?? 0n, "monthlyCapLythoshi"),
-    categoryAllowRoot: args.categoryAllowRoot == null ? ZERO_WORD : expectLength6(toBytes6(args.categoryAllowRoot), 32, "categoryAllowRoot"),
-    timeWindow: args.timeWindow == null ? ZERO_WORD : expectLength6(toBytes6(args.timeWindow), 32, "timeWindow"),
+    categoryAllowRoot: args.categoryAllowRoot == null ? ZERO_WORD : expectLength6(toBytes7(args.categoryAllowRoot), 32, "categoryAllowRoot"),
+    timeWindow: args.timeWindow == null ? ZERO_WORD : expectLength6(toBytes7(args.timeWindow), 32, "timeWindow"),
     policyExpiry: toBigint4(args.policyExpiry ?? 0n, "policyExpiry")
   };
 }
 function encodePolicyWords(args) {
-  return concatBytes7(
+  return concatBytes9(
     encodeAddressWord(args.subAccount),
     encodeAddressWord(args.principal),
     encodeUint128Word(args.dailyCapLythoshi),
@@ -7520,7 +8265,7 @@ function packTimeWindow(enabled, startHour, endHour) {
   return out;
 }
 function decodeTimeWindow(word) {
-  const bytes = expectLength6(toBytes6(word), 32, "timeWindow");
+  const bytes = expectLength6(toBytes7(word), 32, "timeWindow");
   if (bytes.every((b) => b === 0)) return null;
   if (bytes[29] === 0) return null;
   return [Math.min(bytes[30], 23), Math.min(bytes[31], 23)];
@@ -7532,16 +8277,16 @@ function clampHour(hour) {
   return Math.min(hour, 23);
 }
 function encodeUint64Word(value) {
-  return concatBytes7(new Uint8Array(24), uint64Bytes(value, "policyExpiry"));
+  return concatBytes9(new Uint8Array(24), uint64Bytes(value, "policyExpiry"));
 }
 function encodeSingleAddressCall(selector, address, name) {
-  return bytesToHex9(concatBytes7(hexToBytes8(selector), encodeAddressWord(toUserAddressBytes(address, name))));
+  return bytesToHex10(concatBytes9(hexToBytes9(selector), encodeAddressWord(toUserAddressBytes(address, name))));
 }
 function encodeAddressWord(address) {
-  return concatBytes7(new Uint8Array(12), address);
+  return concatBytes9(new Uint8Array(12), address);
 }
 function encodeUint128Word(value) {
-  return concatBytes7(new Uint8Array(16), uint128Bytes(value, "uint128"));
+  return concatBytes9(new Uint8Array(16), uint128Bytes(value, "uint128"));
 }
 function toUserAddressBytes(value, name) {
   if (typeof value !== "string") {
@@ -7563,13 +8308,13 @@ function toRawAddressBytes(value) {
   }
   return expectLength6(value instanceof Uint8Array ? value : Uint8Array.from(value), 20, "address");
 }
-function toBytes6(value) {
+function toBytes7(value) {
   if (typeof value === "string") {
-    return hexToBytes8(value);
+    return hexToBytes9(value);
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes8(hex) {
+function hexToBytes9(hex) {
   const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
   if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
     throw new SpendingPolicyError("invalid hex bytes");
@@ -7580,10 +8325,10 @@ function hexToBytes8(hex) {
   }
   return out;
 }
-function bytesToHex9(bytes) {
+function bytesToHex10(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function concatBytes7(...parts) {
+function concatBytes9(...parts) {
   const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
   let offset = 0;
   for (const part of parts) {
@@ -7645,17 +8390,17 @@ function pubkeyRegistryAddressHex() {
   return PRECOMPILE_ADDRESSES.PUBKEY_REGISTRY.toLowerCase();
 }
 function encodeRegisterPubkeyCalldata(pubkey) {
-  const bytes = toBytes7(pubkey);
+  const bytes = toBytes8(pubkey);
   if (bytes.length !== PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN) {
     throw new PubkeyRegistryError(
       `pubkey must be ${PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN} bytes, got ${bytes.length}`
     );
   }
-  return bytesToHex10(
-    concatBytes8(
-      hexToBytes9(PUBKEY_REGISTRY_SELECTORS.registerPubkey),
-      uint256Word(32n),
-      uint256Word(BigInt(bytes.length)),
+  return bytesToHex11(
+    concatBytes10(
+      hexToBytes10(PUBKEY_REGISTRY_SELECTORS.registerPubkey),
+      uint256Word2(32n),
+      uint256Word2(BigInt(bytes.length)),
       bytes
     )
   );
@@ -7667,7 +8412,7 @@ function encodeHasPubkeyCalldata(address) {
   return encodeSingleAddressCall2(PUBKEY_REGISTRY_SELECTORS.hasPubkey, address);
 }
 function decodeLookupPubkeyReturn(data) {
-  const bytes = toBytes7(data);
+  const bytes = toBytes8(data);
   if (bytes.length < 96) {
     throw new PubkeyRegistryError("lookup return must be at least 96 bytes");
   }
@@ -7692,7 +8437,7 @@ function decodeLookupPubkeyReturn(data) {
   };
 }
 function decodeHasPubkeyReturn(data) {
-  const bytes = toBytes7(data);
+  const bytes = toBytes8(data);
   if (bytes.length !== 32) {
     throw new PubkeyRegistryError("hasPubkey return must be 32 bytes");
   }
@@ -7706,10 +8451,10 @@ function decodeHasPubkeyReturn(data) {
   throw new PubkeyRegistryError("hasPubkey bool must be 0 or 1");
 }
 function encodeSingleAddressCall2(selector, address) {
-  return bytesToHex10(concatBytes8(hexToBytes9(selector), addressWord(toAddressBytes(address))));
+  return bytesToHex11(concatBytes10(hexToBytes10(selector), addressWord3(toAddressBytes(address))));
 }
-function addressWord(address) {
-  return concatBytes8(new Uint8Array(12), address);
+function addressWord3(address) {
+  return concatBytes10(new Uint8Array(12), address);
 }
 function toAddressBytes(value) {
   if (typeof value !== "string") {
@@ -7725,13 +8470,13 @@ function toAddressBytes(value) {
     throw new PubkeyRegistryError(`address must be a typed mono bech32m address${detail}`);
   }
 }
-function toBytes7(value) {
+function toBytes8(value) {
   if (typeof value === "string") {
-    return hexToBytes9(value);
+    return hexToBytes10(value);
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
-function hexToBytes9(hex) {
+function hexToBytes10(hex) {
   const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
   if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
     throw new PubkeyRegistryError("invalid hex bytes");
@@ -7742,10 +8487,10 @@ function hexToBytes9(hex) {
   }
   return out;
 }
-function bytesToHex10(bytes) {
+function bytesToHex11(bytes) {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function concatBytes8(...parts) {
+function concatBytes10(...parts) {
   const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
   let offset = 0;
   for (const part of parts) {
@@ -7754,7 +8499,7 @@ function concatBytes8(...parts) {
   }
   return out;
 }
-function uint256Word(value) {
+function uint256Word2(value) {
   if (value < 0n || value > (1n << 256n) - 1n) {
     throw new PubkeyRegistryError("uint256 value out of range");
   }
@@ -7902,9 +8647,9 @@ function encodePlaceLimitOrderCalldata(args) {
       normalized.baseTokenId,
       normalized.quoteTokenId,
       uint8Word2(normalized.side),
-      uint256Word2(normalized.price, "price"),
-      uint256Word2(normalized.quantity, "quantity"),
-      uint64Word3(normalized.expiryBlock, "expiryBlock")
+      uint256Word3(normalized.price, "price"),
+      uint256Word3(normalized.quantity, "quantity"),
+      uint64Word4(normalized.expiryBlock, "expiryBlock")
     )
   );
 }
@@ -7916,7 +8661,7 @@ function encodePlaceMarketOrderCalldata(args) {
       normalized.baseTokenId,
       normalized.quoteTokenId,
       uint8Word2(normalized.side),
-      uint256Word2(normalized.quantity, "quantity"),
+      uint256Word3(normalized.quantity, "quantity"),
       uint16Word2(normalized.maxSlippageBps, "maxSlippageBps")
     )
   );
@@ -7929,7 +8674,7 @@ function encodePlaceMarketOrderExCalldata(args) {
       normalized.baseTokenId,
       normalized.quoteTokenId,
       uint8Word2(normalized.side),
-      uint256Word2(normalized.quantity, "quantity"),
+      uint256Word3(normalized.quantity, "quantity"),
       uint16Word2(normalized.maxSlippageBps, "maxSlippageBps"),
       uint8Word2(normalized.mode)
     )
@@ -7949,7 +8694,7 @@ function encodeMarketGridTuneCalldata(selector, label, args) {
       hexToBytes2(selector, `${label} selector`),
       bytes32FromHex(args.baseTokenId, "baseTokenId"),
       bytes32FromHex(args.quoteTokenId, "quoteTokenId"),
-      uint256Word2(BigInt(args.newValue), "newValue")
+      uint256Word3(BigInt(args.newValue), "newValue")
     )
   );
 }
@@ -8237,13 +8982,13 @@ function encodePlaceLimitOrderViaCalldata(args) {
   return bytesToHex2(
     concatBytes2(
       hexToBytes2(OPERATOR_ROUTER_SELECTORS.placeLimitOrderVia, "placeLimitOrderVia selector"),
-      addressWord2(operator.bytes),
+      addressWord4(operator.bytes),
       bytes32FromHex(args.base, "base"),
       bytes32FromHex(args.quote, "quote"),
       uint8Word2(side),
-      uint256Word2(price, "price"),
-      uint256Word2(amount, "amount"),
-      uint64Word3(expiresAtBlock, "expiresAtBlock")
+      uint256Word3(price, "price"),
+      uint256Word3(amount, "amount"),
+      uint64Word4(expiresAtBlock, "expiresAtBlock")
     )
   );
 }
@@ -8533,7 +9278,7 @@ function uint8Word2(value) {
   out[31] = value;
   return out;
 }
-function uint64Word3(value, name) {
+function uint64Word4(value, name) {
   if (value < 0n || value > 0xffffffffffffffffn) {
     throw new MarketActionError(`${name} must fit uint64`);
   }
@@ -8554,7 +9299,7 @@ function uint16Word2(value, name) {
   out[31] = Number(value & 0xffn);
   return out;
 }
-function uint256Word2(value, name) {
+function uint256Word3(value, name) {
   if (value < 0n || value >= 1n << 256n) {
     throw new MarketActionError(`${name} must fit uint256`);
   }
@@ -8566,7 +9311,7 @@ function uint256Word2(value, name) {
   }
   return out;
 }
-function addressWord2(addr) {
+function addressWord4(addr) {
   if (addr.length !== 20) {
     throw new MarketActionError("address must be 20 bytes");
   }
@@ -9108,6 +9853,6 @@ var MONOLYTHIUM_NETWORKS = {
 // src/index.ts
 var version = "0.2.2";
 
-export { ADDRESS_HRP, ADDRESS_KIND_HRPS, API_STREAM_TOPICS, AddressError, AgentActionError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, CLOB_MARKET_ID_DOMAIN_TAG, CLOB_SELECTORS, CLUSTER_FORMED_EVENT_SIG, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DIVERSITY_SCORE_MAX, DelegationPrecompileError, EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES, MAX_NATIVE_RECEIPT_EVENTS, MIN_EXECUTION_UNIT_PRICE_LYTHOSHI, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MULTISIG_ADDRESS_DERIVATION_DOMAIN, MarketActionError, MrvValidationError, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE, NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY, NATIVE_CALL_FORWARDER_RESPONSE_OFFSET, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NATIVE_MARKET_MODULE_ADDRESS, NATIVE_MARKET_MODULE_ADDRESS_BYTES, NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_FINALITY_EVIDENCE_SCHEMA, NO_EVM_FINALITY_EVIDENCE_SOURCE, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NoEvmReceiptProofError, NodeRegistryError, OPERATOR_ROUTER_ADDRESS, OPERATOR_ROUTER_EVENT_SIGS, OPERATOR_ROUTER_SELECTORS, OPERATOR_ROUTER_SIGS, ORACLE_EVENT_SIGS, OracleEventError, PRECOMPILE_ADDRESSES, PROTOCOL_MAX_OPERATOR_FEE_BPS, PROVER_MARKET_ADDRESS, PROVER_MARKET_BID_DOMAIN, PROVER_MARKET_EVENT_SIGS, PROVER_MARKET_REQUEST_DOMAIN, PROVER_MARKET_SELECTORS, PROVER_MARKET_SUBMIT_DOMAIN, PROVER_SLASH_REASON_BAD_PROOF, PROVER_SLASH_REASON_NON_DELIVERY, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, ProverMarketError, PubkeyRegistryError, REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT, RESERVED_ADDRESS_HRPS, RpcClient, SERVES_GPU_PROVE, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT, V1_BRIDGE_ALLOWED_FEE_TOKEN, V1_BRIDGE_ALLOWED_PROTOCOL, addressBytesToHex, addressToBech32, addressToTypedBech32, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, assertNativeMarketOrderBookStreamPayload, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bidSighash, bridgeAddressHex, bridgeDrainRemaining, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildBridgeRouteCatalogue, buildCancelSpotOrderPlan, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildNativeCallForwarderArtifact, buildNativeMarketModuleCallEnvelope, buildNativeNftBuyListingForwarderInput, buildNativeNftBuyListingModuleCall, buildNativeNftCancelListingForwarderInput, buildNativeNftCancelListingModuleCall, buildNativeNftCreateListingForwarderInput, buildNativeNftCreateListingModuleCall, buildNativeNftPlaceAuctionBidForwarderInput, buildNativeNftPlaceAuctionBidModuleCall, buildNativeNftSettleAuctionForwarderInput, buildNativeNftSettleAuctionModuleCall, buildNativeNftSweepExpiredListingsForwarderInput, buildNativeNftSweepExpiredListingsModuleCall, buildNativeSpotCancelOrderForwarderInput, buildNativeSpotCancelOrderModuleCall, buildNativeSpotCreateMarketForwarderInput, buildNativeSpotCreateMarketModuleCall, buildNativeSpotLimitOrderForwarderInput, buildNativeSpotLimitOrderModuleCall, buildNativeSpotSettleLimitOrderForwarderInput, buildNativeSpotSettleLimitOrderModuleCall, buildNativeSpotSettleRoutedLimitOrderForwarderInput, buildNativeSpotSettleRoutedLimitOrderModuleCall, buildPlaceLimitOrderViaPlan, buildPlaceSpotLimitOrderPlan, buildPlaceSpotMarketOrderExPlan, buildPlaceSpotMarketOrderPlan, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, clampPriorityTip, clobAddressHex, compareNativeDevVersions, composeClaimBoundMessage, computeNoEvmDacFinalityMessage, computeNoEvmLeaderFinalityMessage, computeNoEvmReceiptsRoot, computeNoEvmRoundFinalityMessage, computeNoEvmTargetReceiptHash, consumeNativeEvents, decodeClusterDiversity, decodeClusterFormedEvent, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNativeAgentStateResponse, decodeNativeMarketOrderBookDeltasResponse, decodeNativeReceiptResponse, decodeNoEvmReceiptTranscript, decodeOperatorFeeChargedEvent, decodeOperatorNetworkMetadata, decodeOracleEvent, decodeTimeWindow, decodeTxFeedResponse, delegationAddressHex, deriveClobMarketId, deriveClusterAnchorAddress, deriveMrvContractAddress, deriveNativeSpotMarketId, deriveNativeSpotOrderId, encodeBlockSelector, encodeCancelOrderCalldata, encodeClaimCalldata, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeCreateRequestCalldata, encodeCreateRequestCanonical, encodeDelegateCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeNativeMarketModuleForwarderInput, encodeNativeNftBuyListingCall, encodeNativeNftCancelListingCall, encodeNativeNftCreateListingCall, encodeNativeNftPlaceAuctionBidCall, encodeNativeNftSettleAuctionCall, encodeNativeNftSweepExpiredListingsCall, encodeNativeSpotCancelOrderCall, encodeNativeSpotCreateMarketCall, encodeNativeSpotLimitOrderCall, encodeNativeSpotSettleLimitOrderCall, encodeNativeSpotSettleRoutedLimitOrderCall, encodePlaceLimitOrderCalldata, encodePlaceLimitOrderViaCalldata, encodePlaceMarketOrderCalldata, encodePlaceMarketOrderExCalldata, encodeRedelegateCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetAutoCompoundCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetLotSizeCalldata, encodeSetMinNotionalCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, encodeSetTickSizeCalldata, encodeUndelegateCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, getChainInfo, getNoEvmReceiptTrustPolicy, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isNativeMarketOrderBookStreamPayload, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeAgentStateFilterParams, nativeDevSchemaFieldNames, nativeDevUiStrings, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nativeMarketStateFilterParams, noEvmReceiptTrustPolicyFromChainInfo, nodeHostingClassFromByte, nodeHostingClassToByte, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, oracleAddressHex, packTimeWindow, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseLythToLythoshi, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, proverMarketStateFromByte, pubkeyRegistryAddressHex, quoteOperatorFee, rankBridgeRoutes, requestSighash, requireTypedAddress, resolveExecutionFee, resolveMaxExecutionUnitPrice, resolveRegistryExecutionFee, resolveStudioHostStatus, selectBridgeTransferRoute, serviceProbeStatusLabel, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, submitSighash, transactionFeeExposure, typedBech32ToAddress, validateAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, verifyNoEvmArchiveProofSignatures, verifyNoEvmBlockFinalityEvidenceMultisig, verifyNoEvmBlockFinalityEvidenceThreshold, verifyNoEvmFinalityEvidenceMultisig, verifyNoEvmFinalityEvidenceThreshold, verifyNoEvmReceiptProof, verifyNoEvmReceiptProofTrust, version };
+export { ADDRESS_HRP, ADDRESS_KIND_HRPS, API_STREAM_TOPICS, AddressError, AgentActionError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, CLOB_MARKET_ID_DOMAIN_TAG, CLOB_SELECTORS, CLUSTER_FORMED_EVENT_SIG, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DIVERSITY_SCORE_MAX, DelegationPrecompileError, EMPTY_ROOT, EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER, FEED_ID_DOMAIN_TAG, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES, MAX_NATIVE_RECEIPT_EVENTS, MIN_EXECUTION_UNIT_PRICE_LYTHOSHI, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MULTISIG_ADDRESS_DERIVATION_DOMAIN, MarketActionError, MrvValidationError, NAME_BASE_MULTIPLIER, NAME_FALLBACK_FEE_UNIT_LYTHOSHI, NAME_LABEL_MAX_LEN, NAME_LABEL_MIN_LEN, NAME_MAX_LEN, NAME_REGISTRY_SELECTORS, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE, NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY, NATIVE_CALL_FORWARDER_RESPONSE_OFFSET, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NATIVE_MARKET_MODULE_ADDRESS, NATIVE_MARKET_MODULE_ADDRESS_BYTES, NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, NODE_REGISTRY_BLS_PUBKEY_BYTES, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS, NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS, NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES, NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_FINALITY_EVIDENCE_SCHEMA, NO_EVM_FINALITY_EVIDENCE_SOURCE, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NameRegistryError, NoEvmReceiptProofError, NodeRegistryError, OPERATOR_ROUTER_ADDRESS, OPERATOR_ROUTER_EVENT_SIGS, OPERATOR_ROUTER_SELECTORS, OPERATOR_ROUTER_SIGS, ORACLE_EVENT_SIGS, OracleEventError, PENDING_CHANGE_KIND_CODES, PRECOMPILE_ADDRESSES, PROTOCOL_MAX_OPERATOR_FEE_BPS, PROVER_MARKET_ADDRESS, PROVER_MARKET_BID_DOMAIN, PROVER_MARKET_EVENT_SIGS, PROVER_MARKET_REQUEST_DOMAIN, PROVER_MARKET_SELECTORS, PROVER_MARKET_SUBMIT_DOMAIN, PROVER_SLASH_REASON_BAD_PROOF, PROVER_SLASH_REASON_NON_DELIVERY, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, ProverMarketError, PubkeyRegistryError, REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT, RESERVED_ADDRESS_HRPS, RpcClient, SERVES_GPU_PROVE, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT, V1_BRIDGE_ALLOWED_FEE_TOKEN, V1_BRIDGE_ALLOWED_PROTOCOL, addressBytesToHex, addressToBech32, addressToTypedBech32, allowRootFor, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, assertNativeMarketOrderBookStreamPayload, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bidSighash, bridgeAddressHex, bridgeDrainRemaining, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildBridgeRouteCatalogue, buildCancelSpotOrderPlan, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildNativeCallForwarderArtifact, buildNativeMarketModuleCallEnvelope, buildNativeNftBuyListingForwarderInput, buildNativeNftBuyListingModuleCall, buildNativeNftCancelListingForwarderInput, buildNativeNftCancelListingModuleCall, buildNativeNftCreateListingForwarderInput, buildNativeNftCreateListingModuleCall, buildNativeNftPlaceAuctionBidForwarderInput, buildNativeNftPlaceAuctionBidModuleCall, buildNativeNftSettleAuctionForwarderInput, buildNativeNftSettleAuctionModuleCall, buildNativeNftSweepExpiredListingsForwarderInput, buildNativeNftSweepExpiredListingsModuleCall, buildNativeSpotCancelOrderForwarderInput, buildNativeSpotCancelOrderModuleCall, buildNativeSpotCreateMarketForwarderInput, buildNativeSpotCreateMarketModuleCall, buildNativeSpotLimitOrderForwarderInput, buildNativeSpotLimitOrderModuleCall, buildNativeSpotSettleLimitOrderForwarderInput, buildNativeSpotSettleLimitOrderModuleCall, buildNativeSpotSettleRoutedLimitOrderForwarderInput, buildNativeSpotSettleRoutedLimitOrderModuleCall, buildPlaceLimitOrderViaPlan, buildPlaceSpotLimitOrderPlan, buildPlaceSpotMarketOrderExPlan, buildPlaceSpotMarketOrderPlan, categoryRoot, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, clampPriorityTip, clobAddressHex, clusterApyPercent, compareNativeDevVersions, composeClaimBoundMessage, computeNoEvmDacFinalityMessage, computeNoEvmLeaderFinalityMessage, computeNoEvmReceiptsRoot, computeNoEvmRoundFinalityMessage, computeNoEvmTargetReceiptHash, computeQuoteLiquidity, consumeNativeEvents, decodeClusterDiversity, decodeClusterFormedEvent, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNativeAgentStateResponse, decodeNativeMarketOrderBookDeltasResponse, decodeNativeReceiptResponse, decodeNoEvmReceiptTranscript, decodeOperatorFeeChargedEvent, decodeOperatorNetworkMetadata, decodeOracleEvent, decodeTimeWindow, decodeTxFeedResponse, delegationAddressHex, denyRootFor, deriveClobMarketId, deriveClusterAnchorAddress, deriveFeedId, deriveMrvContractAddress, deriveNativeSpotMarketId, deriveNativeSpotOrderId, destinationRoot, encodeAttestDkgReshareCalldata, encodeBlockSelector, encodeBridgeChallengeCalldata, encodeBridgeClaimCalldata, encodeCancelOrderCalldata, encodeCancelPendingChangeCalldata, encodeClaimCalldata, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeCreateRequestCalldata, encodeCreateRequestCanonical, encodeDelegateCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeNameAcceptTransferCall, encodeNameProposeTransferCall, encodeNameRegisterCall, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeNativeMarketModuleForwarderInput, encodeNativeNftBuyListingCall, encodeNativeNftCancelListingCall, encodeNativeNftCreateListingCall, encodeNativeNftPlaceAuctionBidCall, encodeNativeNftSettleAuctionCall, encodeNativeNftSweepExpiredListingsCall, encodeNativeSpotCancelOrderCall, encodeNativeSpotCreateMarketCall, encodeNativeSpotLimitOrderCall, encodeNativeSpotSettleLimitOrderCall, encodeNativeSpotSettleRoutedLimitOrderCall, encodePlaceLimitOrderCalldata, encodePlaceLimitOrderViaCalldata, encodePlaceMarketOrderCalldata, encodePlaceMarketOrderExCalldata, encodeRecoverOperatorNodeCalldata, encodeRedelegateCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeSetAutoCompoundCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetLotSizeCalldata, encodeSetMinNotionalCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, encodeSetTickSizeCalldata, encodeSubmitBridgeProofCalldata, encodeSubmitPendingChangeCalldata, encodeUndelegateCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, formatOraclePrice, getChainInfo, getNoEvmReceiptTrustPolicy, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isNativeMarketOrderBookStreamPayload, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nameLengthModifierX10, nameRegistrationCost, nameRegistryAddressHex, nativeAgentStateFilterParams, nativeDevSchemaFieldNames, nativeDevUiStrings, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nativeMarketStateFilterParams, noEvmReceiptTrustPolicyFromChainInfo, nodeHostingClassFromByte, nodeHostingClassToByte, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, normalizePendingChangeKind, oracleAddressHex, oraclePriceToNumber, packTimeWindow, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseDkgResharePublicKeys, parseLythToLythoshi, parseNameCategory, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, proverMarketStateFromByte, pubkeyRegistryAddressHex, quoteOperatorFee, rankBridgeRoutes, rankMarketsByVolume, requestSighash, requireTypedAddress, resolveExecutionFee, resolveMaxExecutionUnitPrice, resolveRegistryExecutionFee, resolveStudioHostStatus, selectBridgeTransferRoute, serviceProbeStatusLabel, setDestinationRoot, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, submitSighash, transactionFeeExposure, typedBech32ToAddress, validateAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, verifyNoEvmArchiveProofSignatures, verifyNoEvmBlockFinalityEvidenceMultisig, verifyNoEvmBlockFinalityEvidenceThreshold, verifyNoEvmFinalityEvidenceMultisig, verifyNoEvmFinalityEvidenceThreshold, verifyNoEvmReceiptProof, verifyNoEvmReceiptProofTrust, version };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

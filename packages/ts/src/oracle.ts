@@ -138,6 +138,76 @@ export function oracleAddressHex(): string {
 }
 
 /**
+ * Domain tag mixed into {@link deriveFeedId}. Mirrors the chain constant
+ * `FEED_ID_DOMAIN_TAG` (`mono-core/crates/precompiles/platform/oracle/src/lib.rs`).
+ */
+export const FEED_ID_DOMAIN_TAG = "protocore-oracle/feed-id/v1" as const;
+
+/**
+ * Derive the 32-byte oracle feed id (`0x`-hex) from a human pair name
+ * (e.g. `"LYTH/USD"`) and the feed's display decimals.
+ *
+ * Byte-identical to the chain's `FeedId::derive(name, decimals)`:
+ * `keccak256(FEED_ID_DOMAIN_TAG || name || [decimals])`, where `decimals`
+ * is appended as a single raw byte (NOT a 32-byte word). Every oracle
+ * read (`lyth_oracleLatestPrice`, `lyth_oracleFeedConfig`,
+ * `lyth_oracleWriters`) takes this feed id, so this is the bridge from a
+ * human pair name to the opaque id.
+ *
+ * @param name canonical pair name, e.g. `"LYTH/USD"` (UTF-8 bytes are hashed).
+ * @param decimals feed decimals (`0..=255`).
+ */
+export function deriveFeedId(name: string, decimals: number): string {
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 255) {
+    throw new OracleEventError("feed decimals must be an integer in 0..=255");
+  }
+  const nameBytes = new TextEncoder().encode(name);
+  const buf = concatBytes(
+    new TextEncoder().encode(FEED_ID_DOMAIN_TAG),
+    nameBytes,
+    Uint8Array.of(decimals & 0xff),
+  );
+  return bytesToHex(keccak_256(buf));
+}
+
+/**
+ * Scale a finalized oracle median into a decimal price string, applying
+ * the feed's `decimals`. Returns `null` when the latest round has not
+ * finalized yet (`median === null`). The result is an exact base-10
+ * string (no float rounding); trailing fractional zeros are trimmed.
+ */
+export function formatOraclePrice(price: OracleLatestPrice): string | null {
+  if (price.median === null) return null;
+  const value = BigInt(price.median);
+  const decimals = price.decimals;
+  if (decimals <= 0) return value.toString(10);
+  const base = 10n ** BigInt(decimals);
+  const whole = value / base;
+  const frac = (value % base).toString(10).padStart(decimals, "0").replace(/0+$/, "");
+  return frac.length > 0 ? `${whole.toString(10)}.${frac}` : whole.toString(10);
+}
+
+/**
+ * Convenience wrapper over {@link formatOraclePrice} returning a JS
+ * `number`. Lossy for high-precision values — prefer
+ * {@link formatOraclePrice} for display of large or high-decimal feeds.
+ */
+export function oraclePriceToNumber(price: OracleLatestPrice): number | null {
+  const formatted = formatOraclePrice(price);
+  return formatted === null ? null : Number(formatted);
+}
+
+function concatBytes(...parts: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((acc, p) => acc + p.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
+/**
  * Typed view of one oracle-precompile log (MB-6). One variant per
  * chain-side emit helper. `feedId` / `evidenceHash` / address fields are
  * `0x`-prefixed hex; `computedMedian` / `value` are decimal strings of

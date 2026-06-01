@@ -5,6 +5,7 @@
  * node route and do not claim any bridge integration is live.
  */
 
+import { keccak_256 } from "@noble/hashes/sha3.js";
 import { PRECOMPILE_ADDRESSES } from "./consts.js";
 
 export const BRIDGE_SELECTORS = {
@@ -87,6 +88,122 @@ export function encodeSetBridgeRouteFinalityCalldata(
       hexToBytes(BRIDGE_SELECTORS.setBridgeRouteFinality),
       expectLength(toBytes(bridgeId), 32, "bridgeId"),
       uint64Word(finalityBlocks, "finalityBlocks"),
+    ),
+  );
+}
+
+// --- Bridge submit-side calldata encoders (precompile 0x1008) --------
+//
+// CALLDATA ONLY. The bridge precompile at 0x1008 is genesis-disabled on
+// testnet and ships with the no-op stub verifier, so a submitted proof is
+// rejected with ProofVerifyUnavailable until ops install a productive
+// verifier and register a route. These encoders build the standard
+// Solidity ABI-v2 calldata so a wallet/operator can prepare the tx; they
+// do not imply the live submit path is enabled. Signatures are frozen in
+// the chain's bridge ABI (`crates/precompiles/bridge/.../abi.rs`).
+
+/** keccak256(signature)[0..4] selector bytes (big-endian), matching the chain `selector()`. */
+function bridgeSelector(signature: string): Uint8Array {
+  return keccak_256(new TextEncoder().encode(signature)).slice(0, 4);
+}
+
+/** Left-pad a 20-byte address into a 32-byte ABI word (high 12 bytes zero). */
+function addressWord(value: BridgeBytesInput, name: string): Uint8Array {
+  const addr = expectLength(toBytes(value), 20, name);
+  const out = new Uint8Array(32);
+  out.set(addr, 12);
+  return out;
+}
+
+/** Right-pad a byte string to the next 32-byte boundary (ABI dynamic-bytes tail). */
+function padTo32(bytes: Uint8Array): Uint8Array {
+  const padded = Math.ceil(bytes.length / 32) * 32;
+  if (padded === bytes.length) return bytes;
+  const out = new Uint8Array(padded);
+  out.set(bytes);
+  return out;
+}
+
+/**
+ * Encode `claim(bytes32,bytes32,address)` calldata for the bridge
+ * precompile (0x1008) — claim a wrapped asset after a deposit proof
+ * lands.
+ *
+ * @param bridgeId 32-byte bridge id.
+ * @param depositId 32-byte deposit id.
+ * @param recipient 20-byte recipient address (raw bytes or `0x`-hex).
+ */
+export function encodeBridgeClaimCalldata(
+  bridgeId: BridgeBytesInput,
+  depositId: BridgeBytesInput,
+  recipient: BridgeBytesInput,
+): string {
+  return bytesToHex(
+    concatBytes(
+      bridgeSelector("claim(bytes32,bytes32,address)"),
+      expectLength(toBytes(bridgeId), 32, "bridgeId"),
+      expectLength(toBytes(depositId), 32, "depositId"),
+      addressWord(recipient, "recipient"),
+    ),
+  );
+}
+
+/**
+ * Encode `challenge(bytes32,bytes32,bytes)` calldata for the bridge
+ * precompile (0x1008) — submit fraud-proof bytes against a pending claim.
+ */
+export function encodeBridgeChallengeCalldata(
+  bridgeId: BridgeBytesInput,
+  depositId: BridgeBytesInput,
+  fraudProof: BridgeBytesInput,
+): string {
+  const proof = toBytes(fraudProof);
+  return bytesToHex(
+    concatBytes(
+      bridgeSelector("challenge(bytes32,bytes32,bytes)"),
+      expectLength(toBytes(bridgeId), 32, "bridgeId"),
+      expectLength(toBytes(depositId), 32, "depositId"),
+      uint64Word(3n * 32n, "fraudProofOffset"),
+      uint64Word(BigInt(proof.length), "fraudProofLength"),
+      padTo32(proof),
+    ),
+  );
+}
+
+/**
+ * Encode `submitProof(bytes32,bytes32,bytes,bytes,bytes)` calldata for
+ * the bridge precompile (0x1008) — submit the deposit lock-receipt, the
+ * zk proof, and its public inputs.
+ */
+export function encodeSubmitBridgeProofCalldata(
+  bridgeId: BridgeBytesInput,
+  depositId: BridgeBytesInput,
+  lockReceipt: BridgeBytesInput,
+  zkProof: BridgeBytesInput,
+  publicInputs: BridgeBytesInput,
+): string {
+  const receipt = toBytes(lockReceipt);
+  const proof = toBytes(zkProof);
+  const inputs = toBytes(publicInputs);
+  // 5 head words: bridgeId, depositId, offset(lockReceipt), offset(zkProof),
+  // offset(publicInputs). Dynamic tails are 32-byte length word + padded body.
+  const off0 = 5n * 32n;
+  const off1 = off0 + 32n + BigInt(Math.ceil(receipt.length / 32) * 32);
+  const off2 = off1 + 32n + BigInt(Math.ceil(proof.length / 32) * 32);
+  return bytesToHex(
+    concatBytes(
+      bridgeSelector("submitProof(bytes32,bytes32,bytes,bytes,bytes)"),
+      expectLength(toBytes(bridgeId), 32, "bridgeId"),
+      expectLength(toBytes(depositId), 32, "depositId"),
+      uint64Word(off0, "lockReceiptOffset"),
+      uint64Word(off1, "zkProofOffset"),
+      uint64Word(off2, "publicInputsOffset"),
+      uint64Word(BigInt(receipt.length), "lockReceiptLength"),
+      padTo32(receipt),
+      uint64Word(BigInt(proof.length), "zkProofLength"),
+      padTo32(proof),
+      uint64Word(BigInt(inputs.length), "publicInputsLength"),
+      padTo32(inputs),
     ),
   );
 }

@@ -87,6 +87,7 @@ import type {
   MrcAccountResponse,
   MrcHoldersRequest,
   MrcHoldersResponse,
+  MrcMetadataRecord,
   MrcMetadataResponse,
   PeerSummary,
   PendingRewardsResponse,
@@ -106,6 +107,8 @@ import type {
 } from "./bindings/index.js";
 import type { BlockSelector } from "./types.js";
 import { encodeBlockSelector } from "./types.js";
+import type { NameRegistrationQuote } from "./name-registry.js";
+import { NAME_FALLBACK_FEE_UNIT_LYTHOSHI, nameRegistrationCost, parseNameCategory } from "./name-registry.js";
 import type { ApiStreamTopic } from "./streams.js";
 import type {
   NativeDecodedEvent,
@@ -1067,6 +1070,16 @@ export interface TxStatusFoundResponse {
   blockHash: string;
   blockNumber: number;
   txIndex: number;
+  /**
+   * Node head height at query time. Confirmation depth =
+   * `latestHeight - blockNumber + 1`. Returned by the chain on the found
+   * arm (`lyth_txStatus`); see {@link RpcClient.lythTxConfirmations}.
+   */
+  latestHeight: number;
+  /** `true` when the serving node has the indexer enabled. */
+  indexerEnabled?: boolean;
+  /** Serving provider kind (e.g. `"indexer"` / `"node"`). */
+  providerKind?: string;
 }
 
 export interface TxStatusNotFoundResponse {
@@ -1079,7 +1092,20 @@ export interface TxStatusNotFoundResponse {
 
 export interface VertexAtRound {
   vertexHash: string;
+  /** Authoring authority index (u16). */
   author: number;
+  /** Parent vertex references (DAG edges). */
+  parentRefs?: Array<{ blockHash: string; round: number }>;
+  payloadHash?: string;
+  transactionsRoot?: string;
+  stateRootPrev?: string;
+  /** Vertex author-stamped timestamp (ms). */
+  timestampMs?: number;
+  authorSignature?: string;
+  /** Local ingest timestamp (ms). */
+  ingestedAtMs?: number;
+  /** Data-availability state of the vertex payload. */
+  dacState?: "certified" | "missing" | "unavailable" | string;
 }
 
 export interface VerticesAtRoundResponse {
@@ -1116,6 +1142,135 @@ export type AddressActivityKind =
   | "pruned"
   | "private"
   | string;
+
+/** `lyth_clusterApr` response — observed APR for a cluster over a rolling window. */
+export interface ClusterAprResponse {
+  clusterId: number;
+  /** Window the APR was measured over (block heights). */
+  blocks: { from: bigint; to: bigint; window: bigint };
+  /** Cumulative reward index at `blocks.from` (`0x`-hex uint256). */
+  rewardIndexFromHex: string;
+  /** Cumulative reward index at `blocks.to` (`0x`-hex uint256). */
+  rewardIndexToHex: string;
+  /** `rewardIndexTo - rewardIndexFrom` (`0x`-hex uint256). */
+  deltaIndexHex: string;
+  /** Fixed-point scale for the reward index (decimal string, `1e18`). */
+  rewardIndexScale: string;
+  /** Delegator weight basis-points total for the cluster. */
+  totalBps: number;
+  /** Blocks per year used to annualize (ADR-0031 cadence). */
+  blocksPerYear: bigint;
+  /** Reference stake-per-bps ratio (lythoshi). */
+  stakePerBpsLythoshi: bigint;
+  /** Baseline annualized rate in basis points. `0` when no reward accrued in the window. */
+  aprBps: bigint;
+}
+
+/** `lyth_resolveName` response — forward name → address resolution. */
+export interface ResolveNameResponse {
+  /** The (lower-cased) name that was resolved. */
+  name: string;
+  /** Owner address (`mono` bech32m), or `null` when the name is unregistered. */
+  address: string | null;
+  category: "human" | "agent" | "cluster" | "contract" | "system" | string;
+  /** Block the name was registered at, or `null` when unregistered. */
+  registeredAtBlock: number | null;
+  /**
+   * Block selector the read was answered at. A `string` for tags/hashes
+   * (e.g. `"latest"`), a `number` when a numeric/hex height was requested
+   * (`block_id_to_json` emits a number for `BlockId::Number`).
+   */
+  block: string | number;
+}
+
+/** `lyth_nameOf` response — reverse address → name resolution. */
+export interface NameOfResponse {
+  /** Queried address (`mono` bech32m). */
+  address: string;
+  /** The address's reverse name, or `null` when none is set. */
+  name: string | null;
+  /** Block selector the read was answered at (string for tags, number for heights). */
+  block: string | number;
+}
+
+/** `lyth_getClusterName` response — reverse cluster id → canonical name. */
+export interface ClusterNameResponse {
+  clusterId: number;
+  /** Canonical cluster name, or `null` when unnamed. */
+  name: string | null;
+  /** Block selector the read was answered at (string for tags, number for heights). */
+  block: string | number;
+}
+
+/** `lyth_circulatingSupply` response. All amounts are decimal lythoshi strings (u128). */
+export interface CirculatingSupplyResponse {
+  circulatingSupplyLythoshi: string;
+  initialSupplyLythoshi: string;
+  totalBurnedLythoshi: string;
+}
+
+/** `lyth_totalBurned` response. Amount is a decimal lythoshi string (u128). */
+export interface TotalBurnedResponse {
+  totalBurnedLythoshi: string;
+}
+
+/** `lyth_swapIntentStatus` response — bridge swap-intent / DKG-reshare lifecycle. */
+export interface SwapIntentStatus {
+  schemaVersion: number;
+  /**
+   * Intent id (u64, capped 2^56-1 by the chain). Emitted as a JSON number,
+   * so ids beyond 2^53 (JS safe-int) lose precision in transit — realistic
+   * ids are small monotonic counters. The request side accepts bigint/hex.
+   */
+  intentId: number;
+  status: "not_found" | "pending" | "attested" | "ready" | "stalled" | string;
+  found: boolean;
+  operatorId?: string;
+  sourcePubkey?: string;
+  destinationPubkey?: string;
+  sourceEpoch?: number;
+  effectiveEpoch?: number;
+  dkgAttested?: boolean;
+  currentEpoch: number;
+  latestHeight: number;
+}
+
+/** Derived per-tx confirmation depth (see {@link RpcClient.lythTxConfirmations}). */
+export interface TxConfirmations {
+  status: "found" | "not_found";
+  /** `latestHeight - blockNumber + 1` when found, else `null`. */
+  confirmations: number | null;
+  blockNumber: number | null;
+  latestHeight: number;
+}
+
+/** A token-balance row joined with its MRC metadata (or `null` when unknown). */
+export type TokenBalanceWithMetadata = TokenBalanceRecord & {
+  metadata: MrcMetadataRecord | null;
+};
+
+/** Base/quote asset metadata for a CLOB market (`null` when the indexer has no row). */
+export interface ClobMarketAssets {
+  base: MrcMetadataRecord | null;
+  quote: MrcMetadataRecord | null;
+}
+
+/** Quote-notional liquidity aggregated from an order book (raw quote atomic units, decimal strings). */
+export interface QuoteLiquidity {
+  bidQuote: string;
+  askQuote: string;
+  totalQuote: string;
+}
+
+/** An {@link AddressActivityEntry} enriched with block time, tx hash, and resolved cluster name. */
+export type AddressActivityEntryEnriched = AddressActivityEntry & {
+  /** Block header timestamp (UNIX seconds), or `null` when the block read failed. */
+  blockTimestampSeconds: bigint | null;
+  /** Canonical tx hash resolved from `(blockHeight, txIndex)`, or `null`. */
+  txHash: string | null;
+  /** Resolved cluster name when the row carries a cluster id, else `null`. */
+  clusterName: string | null;
+};
 
 interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -2296,6 +2451,294 @@ export class RpcClient {
   async meshSubmitTx(signedTx: string): Promise<string> {
     return this.call("mesh_submitTx", [signedTx]);
   }
+
+  // ---- lyth_* additions (R15 / wallet + monoscan surfaces) -----------
+
+  /**
+   * `lyth_clusterApr` — observed APR for a cluster over a rolling window.
+   * `windowBlocks` defaults to the chain's 1200-block (~1h) window and is
+   * server-clamped to `[10, 86_400]`.
+   */
+  async lythClusterApr(clusterId: number, windowBlocks?: number): Promise<ClusterAprResponse> {
+    const params = windowBlocks === undefined ? [clusterId] : [clusterId, windowBlocks];
+    return normalizeClusterApr(await this.call("lyth_clusterApr", params));
+  }
+
+  /** `lyth_resolveName` — forward name → address resolution (0x110E). */
+  async lythResolveName(name: string, block: BlockSelector = "latest"): Promise<ResolveNameResponse> {
+    return this.call("lyth_resolveName", [name, encodeBlockSelector(block)]);
+  }
+
+  /** `lyth_nameOf` — reverse address → name resolution. */
+  async lythNameOf(address: string, block: BlockSelector = "latest"): Promise<NameOfResponse> {
+    return this.call("lyth_nameOf", [sdkTypedAddress(address, "user", "address"), encodeBlockSelector(block)]);
+  }
+
+  /** `lyth_getClusterName` — reverse cluster id → canonical name. */
+  async lythGetClusterName(clusterId: number, block: BlockSelector = "latest"): Promise<ClusterNameResponse> {
+    return this.call("lyth_getClusterName", [clusterId, encodeBlockSelector(block)]);
+  }
+
+  /**
+   * Convenience over {@link lythResolveName}: `true` when a well-formed
+   * name is unregistered. A malformed name throws `RpcError`
+   * (`InvalidParams`) rather than returning `true`, so the UI should treat
+   * a thrown validation error distinctly from "taken".
+   */
+  async lythIsNameAvailable(name: string, block: BlockSelector = "latest"): Promise<boolean> {
+    const resolved = await this.lythResolveName(name, block);
+    return resolved.address === null;
+  }
+
+  /**
+   * Live name-registration quote: parses the name's category + primary
+   * label length, reads the chain's base fee unit via `eth_feeHistory`
+   * (the bare `baseFeePerGas` — NOT `eth_gasPrice`, which adds the tip and
+   * would over-quote), and applies the U-curve. The resulting
+   * `costLythoshi` is what the `register` tx `value` must equal exactly
+   * (else the precompile reverts `IncorrectFee`).
+   */
+  async quoteNameRegistration(
+    name: string,
+    block: BlockSelector = "latest",
+  ): Promise<NameRegistrationQuote> {
+    const parsed = parseNameCategory(name);
+    const history = await this.ethFeeHistory(1, block, []);
+    const baseFees = history.baseFeePerGas ?? [];
+    const lastHex = baseFees.length > 0 ? baseFees[baseFees.length - 1] : "0x0";
+    const baseFee = parseQuantityBig(lastHex);
+    const feeUnitLythoshi = baseFee > 0n ? baseFee : NAME_FALLBACK_FEE_UNIT_LYTHOSHI;
+    return {
+      name,
+      category: parsed.category,
+      primaryLabelLen: parsed.primaryLabelLen,
+      feeUnitLythoshi,
+      costLythoshi: nameRegistrationCost(parsed.category, parsed.primaryLabelLen, feeUnitLythoshi),
+    };
+  }
+
+  /** `lyth_circulatingSupply` — native LYTH circulating / initial / burned (decimal lythoshi strings). */
+  async lythCirculatingSupply(): Promise<CirculatingSupplyResponse> {
+    return this.call("lyth_circulatingSupply", []);
+  }
+
+  /** `lyth_totalBurned` — cumulative burned native LYTH (decimal lythoshi string). */
+  async lythTotalBurned(): Promise<TotalBurnedResponse> {
+    return this.call("lyth_totalBurned", []);
+  }
+
+  /** `lyth_swapIntentStatus` — bridge swap-intent / DKG-reshare lifecycle for one intent id. */
+  async lythSwapIntentStatus(intentId: number | bigint | string): Promise<SwapIntentStatus> {
+    // The chain accepts a JSON number, a `0x`-hex string, OR a decimal
+    // string (parse_u64_maybe_hex). Ids are capped at 2^56-1, beyond JS
+    // safe-int, so a bigint (or decimal string) is normalized to `0x`-hex
+    // to avoid precision loss in transit.
+    let id: number | string;
+    if (typeof intentId === "number") {
+      id = intentId;
+    } else if (typeof intentId === "bigint") {
+      id = `0x${intentId.toString(16)}`;
+    } else if (intentId.startsWith("0x") || intentId.startsWith("0X")) {
+      id = intentId;
+    } else {
+      id = `0x${BigInt(intentId).toString(16)}`;
+    }
+    return this.call("lyth_swapIntentStatus", [id]);
+  }
+
+  /**
+   * Per-tx confirmation depth, derived from `lyth_txStatus` (which returns
+   * both the tx's `blockNumber` and the node `latestHeight`).
+   */
+  async lythTxConfirmations(txHash: string): Promise<TxConfirmations> {
+    const status = await this.lythTxStatus(txHash);
+    if (status.status === "found") {
+      return {
+        status: "found",
+        confirmations: status.latestHeight - status.blockNumber + 1,
+        blockNumber: status.blockNumber,
+        latestHeight: status.latestHeight,
+      };
+    }
+    return {
+      status: "not_found",
+      confirmations: null,
+      blockNumber: null,
+      latestHeight: status.latestHeight,
+    };
+  }
+
+  /**
+   * Resolve a user-pasted MRC token id to its metadata (name/symbol/
+   * decimals), for an "add custom token" flow. Returns `null` for an
+   * unknown/untracked id. Performs light client-side format validation
+   * (32-byte hex) for fast UX feedback; the chain re-validates regardless.
+   */
+  async lythResolveTokenMetadata(rawTokenId: string): Promise<MrcMetadataRecord | null> {
+    const body = rawTokenId.startsWith("0x") || rawTokenId.startsWith("0X")
+      ? rawTokenId.slice(2)
+      : rawTokenId;
+    if (!/^[0-9a-fA-F]{64}$/.test(body)) {
+      throw SdkError.malformed("token id must be 32 bytes (64 hex chars)");
+    }
+    return (await this.lythMrcMetadata(rawTokenId)).metadata;
+  }
+
+  /**
+   * `lyth_getTokenBalances` joined with per-token MRC metadata. Balances
+   * are PUBLIC-only by construction (private-denomination balances are
+   * excluded by the chain). Raw `balance` strings are preserved (apply
+   * `metadata.decimals` client-side for display).
+   */
+  async lythGetTokenBalancesWithMetadata(address: string): Promise<TokenBalanceWithMetadata[]> {
+    const rows = await this.lythGetTokenBalances(address);
+    const keyFor = (row: TokenBalanceRecord): { assetId: string; tokenId: string | null; key: string } => {
+      const assetId = row.mrc?.assetId ?? row.tokenId;
+      const tokenId = row.mrc?.tokenId ?? null;
+      return { assetId, tokenId, key: `${assetId}:${tokenId ?? ""}` };
+    };
+    const distinct = new Map<string, { assetId: string; tokenId: string | null }>();
+    for (const row of rows) {
+      const k = keyFor(row);
+      if (!distinct.has(k.key)) distinct.set(k.key, { assetId: k.assetId, tokenId: k.tokenId });
+    }
+    const metaByKey = new Map<string, MrcMetadataRecord | null>();
+    await Promise.all(
+      [...distinct.entries()].map(async ([key, { assetId, tokenId }]) => {
+        const resp = await this.lythMrcMetadata(assetId, tokenId);
+        metaByKey.set(key, resp.metadata);
+      }),
+    );
+    return rows.map((row) => ({ ...row, metadata: metaByKey.get(keyFor(row).key) ?? null }));
+  }
+
+  /**
+   * Resolve a CLOB market's base/quote asset metadata (symbol/name/
+   * decimals) by joining `lyth_clobMarket` to `lyth_mrcMetadata`. Either
+   * side may be `null` when the indexer has no MRC row (e.g. native LYTH).
+   */
+  async resolveClobMarketAssets(marketId: string): Promise<ClobMarketAssets> {
+    const response = await this.lythClobMarket(marketId);
+    const market = response.market;
+    if (!market) return { base: null, quote: null };
+    const [base, quote] = await Promise.all([
+      this.lythMrcMetadata(market.baseToken).then((m) => m.metadata),
+      this.lythMrcMetadata(market.quoteToken).then((m) => m.metadata),
+    ]);
+    return { base, quote };
+  }
+
+  /**
+   * `lyth_getAddressActivity` enriched with each row's block timestamp,
+   * canonical tx hash (resolved from `(blockHeight, txIndex)`), and
+   * resolved cluster name. Issues one block read per distinct height and
+   * one name read per distinct cluster.
+   */
+  async enrichAddressActivity(
+    address: string,
+    limit = 50,
+    cursor?: string | null,
+  ): Promise<AddressActivityEntryEnriched[]> {
+    const entries = await this.lythGetAddressActivity(address, limit, cursor);
+    // `blockHeight` is typed bigint but arrives as a JSON number (no bigint
+    // reviver in call()); coerce so keying is consistent at runtime.
+    const heights = [...new Set(entries.map((entry) => BigInt(entry.blockHeight)))];
+    const blockByHeight = new Map<bigint, { timestampSeconds: bigint | null; txHashes: string[] }>();
+    await Promise.all(
+      heights.map(async (height) => {
+        blockByHeight.set(height, await this.blockTimeAndTxHashes(height));
+      }),
+    );
+    const clusters = [
+      ...new Set(entries.map((entry) => entry.cluster).filter((c): c is number => c != null)),
+    ];
+    const nameByCluster = new Map<number, string | null>();
+    await Promise.all(
+      clusters.map(async (clusterId) => {
+        nameByCluster.set(clusterId, (await this.lythGetClusterName(clusterId)).name);
+      }),
+    );
+    return entries.map((entry) => {
+      const block = blockByHeight.get(BigInt(entry.blockHeight));
+      const txHash =
+        block && entry.txIndex >= 0 && entry.txIndex < block.txHashes.length
+          ? block.txHashes[entry.txIndex]
+          : null;
+      return {
+        ...entry,
+        blockTimestampSeconds: block?.timestampSeconds ?? null,
+        txHash,
+        clusterName: entry.cluster != null ? nameByCluster.get(entry.cluster) ?? null : null,
+      };
+    });
+  }
+
+  /**
+   * Read a block's header timestamp (UNIX seconds) and ordered tx-hash
+   * array via the raw `eth_getBlockByNumber` (hash-only mode). The typed
+   * `ethGetBlockByNumber` wrapper drops the `transactions` array, so this
+   * uses the raw call.
+   */
+  private async blockTimeAndTxHashes(
+    height: bigint,
+  ): Promise<{ timestampSeconds: bigint | null; txHashes: string[] }> {
+    const hexHeight = `0x${height.toString(16)}`;
+    const raw = await this.call<Record<string, unknown> | null>("eth_getBlockByNumber", [
+      hexHeight,
+      false,
+    ]);
+    if (!raw || typeof raw !== "object") return { timestampSeconds: null, txHashes: [] };
+    const ts = raw["timestamp"];
+    const timestampSeconds =
+      ts === null || ts === undefined ? null : parseRpcBigint(ts, "block timestamp");
+    const txs = raw["transactions"];
+    const txHashes = Array.isArray(txs) ? txs.filter((t): t is string => typeof t === "string") : [];
+    return { timestampSeconds, txHashes };
+  }
+}
+
+/**
+ * Annualized cluster yield as a percentage, from a {@link ClusterAprResponse}
+ * (`aprBps / 100`; 10_000 bps = 100%). Safe for realistic basis-point
+ * magnitudes.
+ */
+export function clusterApyPercent(apr: ClusterAprResponse): number {
+  return Number(apr.aprBps) / 100;
+}
+
+/**
+ * Quote-notional liquidity from a CLOB order book: `sum(price * size)`
+ * over each side, in raw quote atomic units (decimal strings). Apply the
+ * quote asset's decimals client-side for display.
+ */
+export function computeQuoteLiquidity(book: ClobOrderBookResponse): QuoteLiquidity {
+  const sumQuote = (levels: ReadonlyArray<{ price: string; size: string }>): bigint =>
+    levels.reduce((acc, level) => acc + BigInt(level.price) * BigInt(level.size), 0n);
+  const bidQuote = sumQuote(book.bids);
+  const askQuote = sumQuote(book.asks);
+  return {
+    bidQuote: bidQuote.toString(10),
+    askQuote: askQuote.toString(10),
+    totalQuote: (bidQuote + askQuote).toString(10),
+  };
+}
+
+/**
+ * Rank CLOB markets by total base volume (descending), assigning a 1-based
+ * `volumeRank`. Ranks the supplied set only (e.g. the ≤100 markets
+ * `lyth_clobMarkets` returns); volume is base atomic units, not
+ * quote-normalized.
+ */
+export function rankMarketsByVolume(
+  markets: ReadonlyArray<ClobMarketSummary>,
+): Array<ClobMarketSummary & { volumeRank: number }> {
+  return [...markets]
+    .sort((a, b) => {
+      const av = BigInt(a.totalVolumeBase);
+      const bv = BigInt(b.totalVolumeBase);
+      return av < bv ? 1 : av > bv ? -1 : 0;
+    })
+    .map((market, index) => ({ ...market, volumeRank: index + 1 }));
 }
 
 /** Decode a `0x`-prefixed hex quantity to a `bigint`. */
@@ -3053,6 +3496,30 @@ function normalizeRoundInfo(value: unknown): RoundInfo {
   const row = value as Record<string, unknown>;
   return {
     height: parseRpcBigint(row["height"], "round height"),
+  };
+}
+
+function normalizeClusterApr(value: unknown): ClusterAprResponse {
+  if (!value || typeof value !== "object") {
+    throw SdkError.malformed("cluster apr must be an object");
+  }
+  const row = value as Record<string, unknown>;
+  const blocks = (row["blocks"] ?? {}) as Record<string, unknown>;
+  return {
+    clusterId: parseRpcNumber(row["clusterId"], "clusterId"),
+    blocks: {
+      from: parseRpcBigint(blocks["from"], "blocks.from"),
+      to: parseRpcBigint(blocks["to"], "blocks.to"),
+      window: parseRpcBigint(blocks["window"], "blocks.window"),
+    },
+    rewardIndexFromHex: parseStringField(row["rewardIndexFromHex"], "rewardIndexFromHex"),
+    rewardIndexToHex: parseStringField(row["rewardIndexToHex"], "rewardIndexToHex"),
+    deltaIndexHex: parseStringField(row["deltaIndexHex"], "deltaIndexHex"),
+    rewardIndexScale: parseStringField(row["rewardIndexScale"], "rewardIndexScale"),
+    totalBps: parseRpcNumber(row["totalBps"], "totalBps"),
+    blocksPerYear: parseRpcBigint(row["blocksPerYear"], "blocksPerYear"),
+    stakePerBpsLythoshi: parseRpcBigint(row["stakePerBpsLythoshi"], "stakePerBpsLythoshi"),
+    aprBps: parseRpcBigint(row["aprBps"], "aprBps"),
   };
 }
 
