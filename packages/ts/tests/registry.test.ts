@@ -34,9 +34,9 @@ describe("chain registry snapshot", () => {
   it("vendors the public testnet RPC endpoints", () => {
     expect(TESTNET_69420.chain_id).toBe(69420);
     expect(TESTNET_69420.genesis_hash).toBe(
-      "0x1769ae4a741e3f326a6f6b2886abe118a10560688c365a654dc5805397d64e14",
+      "0xe67cf82131fc63e335ce61afeae53299283eaa3a692830a618911aa840245031",
     );
-    expect(TESTNET_69420.binary_sha).toBe("9338995a");
+    expect(TESTNET_69420.binary_sha).toBe("e4697f9b");
     expect(getRpcEndpoints("testnet-69420").map((r) => r.url)).toEqual([
       "http://178.105.12.9:8545",
       "http://178.105.15.216:8545",
@@ -53,7 +53,10 @@ describe("chain registry snapshot", () => {
       "http://178.105.45.210:8545",
       "http://65.21.252.34:8545",
     ]);
-    expect(getP2pSeeds("testnet-69420")).toHaveLength(0);
+    expect(getP2pSeeds("testnet-69420")).toHaveLength(12);
+    expect(getP2pSeeds("testnet-69420")[0]?.multiaddr).toBe(
+      "/ip4/178.105.12.9/tcp/29898/p2p/12D3KooWPv4ctqZX9faHicr8dJifyBwrpPA4oBev7w2WZStejMKa",
+    );
   });
 
   it("constructs a client from the first registry endpoint without probing", async () => {

@@ -1820,8 +1820,8 @@ var TESTNET_69420 = {
   network: "testnet-69420",
   display_name: "Monolythium Testnet",
   description: "Public Monolythium testnet. Testnet state may reset without notice; do not store value on this network.",
-  genesis_hash: "0x1769ae4a741e3f326a6f6b2886abe118a10560688c365a654dc5805397d64e14",
-  binary_sha: "9338995a",
+  genesis_hash: "0xe67cf82131fc63e335ce61afeae53299283eaa3a692830a618911aa840245031",
+  binary_sha: "e4697f9b",
   rpc: [
     {
       url: "http://178.105.12.9:8545",
@@ -1922,7 +1922,56 @@ var TESTNET_69420 = {
       notes: "relay-2"
     }
   ],
-  p2p: []
+  p2p: [
+    {
+      multiaddr: "/ip4/178.105.12.9/tcp/29898/p2p/12D3KooWPv4ctqZX9faHicr8dJifyBwrpPA4oBev7w2WZStejMKa",
+      region: "fsn1"
+    },
+    {
+      multiaddr: "/ip4/178.105.15.216/tcp/29898/p2p/12D3KooWFZqKgAbve2dsAm9kKomychF4dyhtJYHL13mzh3D62d1r",
+      region: "fsn1"
+    },
+    {
+      multiaddr: "/ip4/178.104.233.182/tcp/29898/p2p/12D3KooWMG1tbP4hcvqdPP8QmnnPjaJCs4M1GUskzAJsL15ZFcVX",
+      region: "nbg1"
+    },
+    {
+      multiaddr: "/ip4/65.108.94.1/tcp/29898/p2p/12D3KooWR5cz3fR4YkDDoPmQ6Qe7fmsXA7zo5AqdHY5Enmk5bKyT",
+      region: "hel1"
+    },
+    {
+      multiaddr: "/ip4/95.216.154.155/tcp/29898/p2p/12D3KooWFJHH3zgAaPtSBXPkCEKeGNCWQTn1QYcm4YCr5VFT3GbC",
+      region: "hel1"
+    },
+    {
+      multiaddr: "/ip4/87.99.145.48/tcp/29898/p2p/12D3KooWSDQdjgoiEbvsLErphM52u8tETdBtgyr4mbHQC5pT6HQz",
+      region: "ash"
+    },
+    {
+      multiaddr: "/ip4/5.223.85.76/tcp/29898/p2p/12D3KooWKHgMQnBtSfZqUknJdhGK8niKKbLXy81ifHV2khRgAYFX",
+      region: "sin"
+    },
+    {
+      multiaddr: "/ip4/142.132.180.99/tcp/29898/p2p/12D3KooWBx29V8iNQL22jk2CSVbvhodtXy4uTXVG7AgobxNcUuyP",
+      region: "fsn1"
+    },
+    {
+      multiaddr: "/ip4/162.55.54.198/tcp/29898/p2p/12D3KooWJK2w6xzRFJMHWMxVuXpBHZE7PtDNGahEp9rq86AuhNRk",
+      region: "nbg1"
+    },
+    {
+      multiaddr: "/ip4/95.217.156.190/tcp/29898/p2p/12D3KooWLD8kzKHPVexZv2pMTvpjcEPTVZxr5qMxCeVB2QR6NNa6",
+      region: "hel1"
+    },
+    {
+      multiaddr: "/ip4/5.223.65.201/tcp/29898/p2p/12D3KooWAHC1cCiVsyVqrg4ofS2EQmu6Pv6G9Rc1t5btmoW6YicJ",
+      region: "sin"
+    },
+    {
+      multiaddr: "/ip4/128.140.125.5/tcp/29898/p2p/12D3KooWNAc4EWkWWprKvqoF5aiq1ByqsLQjSN7r9ZTwYgGW365r",
+      region: "fsn1"
+    }
+  ]
 };
 var CHAIN_REGISTRY = {
   "testnet-69420": TESTNET_69420
