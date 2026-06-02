@@ -4053,7 +4053,11 @@ pub struct MrcAccountRecord {
     pub account: Address,
     /// Controller address authorized for this account.
     pub controller: Address,
-    /// Recovery address registered for this account, when smart-account state carries one.
+    /// Recovery address registered for this account, when smart-account state
+    /// carries one. ADVISORY / DISPLAY-ONLY: this is an inert stored field —
+    /// the chain has no on-chain account `Recover` / `RotateController` path
+    /// yet, so a registered recovery address cannot currently be exercised.
+    /// Surfaces MUST NOT present this as a working "recover account" action.
     #[serde(default)]
     pub recovery: Option<Address>,
     /// Active policy hash, when this row is a policy account.
@@ -6836,7 +6840,7 @@ mod tests {
     fn native_receipt_fee_rejects_legacy_fee_fields() {
         let wire = serde_json::json!({
             "total_lythoshi": "21000",
-            "total_lyth": "0.00021",
+            "total_lyth": "0.000000000000021",
             "cycles_used": 21_000,
             "base_price_per_cycle_lythoshi": "1",
             "state_io_units": 0,
@@ -6858,6 +6862,39 @@ mod tests {
             state_io_price_per_unit_lythoshi: "0".to_owned(),
             priority_tip_lythoshi: priority_tip.to_owned(),
         }
+    }
+
+    #[test]
+    fn fee_history_reads_camel_case_base_fee_per_gas() {
+        let value = serde_json::json!({
+            "oldestBlock": "0x1",
+            "baseFeePerGas": ["0x1", "0x2"],
+            "gasUsedRatio": [0.5],
+        });
+        let parsed: FeeHistoryResponse =
+            serde_json::from_value(value).expect("camelCase baseFeePerGas must deserialize");
+        assert_eq!(
+            parsed.base_fee_per_gas,
+            vec!["0x1".to_owned(), "0x2".to_owned()]
+        );
+    }
+
+    #[test]
+    fn fee_history_fails_loud_if_base_fee_drifts_to_snake_case() {
+        // Guard: the chain serializes the eth-compat fee window as camelCase
+        // `baseFeePerGas`. A drift to snake_case `base_fee_per_gas` must fail
+        // deserialization (missing required field) rather than silently
+        // yielding an empty window that would mis-quote fees.
+        let value = serde_json::json!({
+            "oldestBlock": "0x1",
+            "base_fee_per_gas": ["0x64"],
+            "gasUsedRatio": [0.0],
+        });
+        let parsed = serde_json::from_value::<FeeHistoryResponse>(value);
+        assert!(
+            parsed.is_err(),
+            "snake_case base_fee_per_gas must not deserialize into FeeHistoryResponse"
+        );
     }
 
     #[test]
@@ -7950,7 +7987,7 @@ mod tests {
             },
             "fee": {
                 "total_lythoshi": "440000000000",
-                "total_lyth": "4,400",
+                "total_lyth": "0.00000044",
                 "cycles_used": 44,
                 "base_price_per_cycle_lythoshi": "10000000000",
                 "state_io_units": 2,
@@ -8070,7 +8107,7 @@ mod tests {
                 "priorityTipLythoshi": "1",
                 "fee": {
                     "total_lythoshi": "21000",
-                    "total_lyth": "0.00021",
+                    "total_lyth": "0.000000000000021",
                     "cycles_used": 21_000,
                     "base_price_per_cycle_lythoshi": "1",
                     "state_io_units": 0,
@@ -8103,7 +8140,7 @@ mod tests {
             "executionUnitsUsed": 20_500,
             "fee": {
                 "total_lythoshi": "20500",
-                "total_lyth": "0.000205",
+                "total_lyth": "0.0000000000000205",
                 "cycles_used": 20_500,
                 "base_price_per_cycle_lythoshi": "1",
                 "state_io_units": 0,
@@ -8218,7 +8255,7 @@ mod tests {
             },
             fee: NativeReceiptFee {
                 total_lythoshi: "440000000000".to_owned(),
-                total_lyth: Some("4,400".to_owned()),
+                total_lyth: Some("0.00000044".to_owned()),
                 cycles_used: 44,
                 base_price_per_cycle_lythoshi: "10000000000".to_owned(),
                 state_io_units: 2,

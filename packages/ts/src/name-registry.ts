@@ -40,8 +40,8 @@ export const NAME_BASE_MULTIPLIER: Record<Exclude<NameCategory, "system">, numbe
   contract: 10,
 } as const;
 
-/** Fallback fee unit when the block base fee reads zero (`ops.rs` `FALLBACK_FEE_UNIT_LYTHOSHI`). */
-export const NAME_FALLBACK_FEE_UNIT_LYTHOSHI = 100n;
+/** Fallback fee unit when the block base fee reads zero (`ops.rs` `FALLBACK_FEE_UNIT_LYTHOSHI`); 18-decimal value per ADR-0037. */
+export const NAME_FALLBACK_FEE_UNIT_LYTHOSHI = 1_000_000_000_000n;
 
 export const NAME_MAX_LEN = 80;
 export const NAME_LABEL_MIN_LEN = 1;

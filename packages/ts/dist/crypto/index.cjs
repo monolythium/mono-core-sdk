@@ -502,28 +502,6 @@ function bincodeMlDsa65OpaqueInto2(w, raw) {
   w.bytes(raw);
 }
 
-// src/address.ts
-var CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
-new Map([...CHARSET].map((c, i) => [c, i]));
-var HEX_20_BYTE_RE = /^0x[0-9a-fA-F]{40}$/;
-var AddressError = class extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "AddressError";
-  }
-};
-function hexToAddressBytes(address) {
-  if (!HEX_20_BYTE_RE.test(address)) {
-    throw new AddressError("expected 0x-prefixed 20-byte hex address");
-  }
-  const out = new Uint8Array(20);
-  const body = address.slice(2);
-  for (let i = 0; i < 20; i++) {
-    out[i] = Number.parseInt(body.slice(i * 2, i * 2 + 2), 16);
-  }
-  return out;
-}
-
 // src/crypto/submission.ts
 async function fetchEncryptionKey(client) {
   const result = await client.call(
@@ -536,38 +514,10 @@ async function fetchEncryptionKey(client) {
     encapsulationKey: hexToBytes(result.encapsulationKey, "encapsulationKey")
   };
 }
-async function buildEncryptedSubmission(args) {
-  const input = normalizeInput(args.tx.input);
-  const to = normalizeTo2(args.tx.to);
-  const nonceAad = {
-    sender: args.backend.addressBytes(),
-    nonce: parseBigint(args.tx.nonce, "nonce"),
-    chainId: parseBigint(args.tx.chainId, "chainId"),
-    class: args.class ?? (to !== null && input.length === 0 ? MempoolClass.Transfer : MempoolClass.ContractCall),
-    maxFeePerGas: u128Checked(parseBigint(args.tx.maxFeePerGas, "maxFeePerGas"), "maxFeePerGas"),
-    maxPriorityFeePerGas: u128Checked(
-      parseBigint(args.tx.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
-      "maxPriorityFeePerGas"
-    ),
-    gasLimit: parseBigint(args.tx.gasLimit, "gasLimit")
-  };
-  const signed = args.backend.signEvmTx(args.tx);
-  const decryptionHint = { epoch: args.encryptionKey.epoch, scheme: 0 };
-  const built = await buildEncryptedEnvelope({
-    signedInnerTxBincode: signed.wireBytes,
-    nonceAad,
-    decryptionHint,
-    kemEncapsulationKey: args.encryptionKey.encapsulationKey,
-    senderAddress: args.backend.addressBytes(),
-    senderPubkey: args.backend.publicKey(),
-    signOuterDigest: (digest) => args.backend.signPrehash(digest)
-  });
-  return {
-    envelopeWireHex: built.wireHex,
-    innerSighashHex: `0x${[...signed.sighash].map((b) => b.toString(16).padStart(2, "0")).join("")}`,
-    innerTxHashHex: bytesToHex(signed.txHash),
-    innerWireBytes: signed.wireBytes.length
-  };
+var ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE = "encrypted mempool submission unavailable until MB-3 threshold decryption is active";
+async function buildEncryptedSubmission(_args) {
+  await Promise.resolve();
+  throw new Error(ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE);
 }
 async function submitEncryptedEnvelope(client, envelopeWireHex) {
   return client.call("lyth_submitEncrypted", [envelopeWireHex]);
@@ -627,30 +577,12 @@ function bytesEqual(a, b) {
   }
   return true;
 }
-function u128Checked(value, field) {
-  const cap = (1n << 128n) - 1n;
-  if (value < 0n || value > cap) {
-    throw new Error(`${field} must fit in u128 for encrypted nonce AAD`);
-  }
-  return value;
-}
-function normalizeTo2(value) {
-  if (value === null) return null;
-  if (typeof value === "string") return hexToAddressBytes(value);
-  const bytes = value instanceof Uint8Array ? value : Uint8Array.from(value);
-  if (bytes.length !== 20) throw new Error("to must be 20 bytes");
-  return bytes;
-}
-function normalizeInput(value) {
-  if (value === void 0) return new Uint8Array(0);
-  if (typeof value === "string") return hexToBytes(value, "input");
-  return value instanceof Uint8Array ? value : Uint8Array.from(value);
-}
 
 exports.ADDRESS_DERIVATION_DOMAIN = ADDRESS_DERIVATION_DOMAIN;
 exports.BincodeWriter = BincodeWriter;
 exports.DKG_AEAD_TAG_LEN = DKG_AEAD_TAG_LEN;
 exports.DKG_NONCE_LEN = DKG_NONCE_LEN;
+exports.ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE = ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE;
 exports.ENUM_VARIANT_INDEX_ML_DSA_65 = ENUM_VARIANT_INDEX_ML_DSA_65;
 exports.ML_DSA_65_PUBLIC_KEY_LEN = ML_DSA_65_PUBLIC_KEY_LEN;
 exports.ML_DSA_65_SEED_LEN = ML_DSA_65_SEED_LEN;

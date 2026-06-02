@@ -118,51 +118,52 @@ function validMetadata(): MrvArtifactMetadata {
 }
 
 describe("MRV/RISC-V SDK helpers", () => {
-  it("formats and parses native LYTH amounts at 8 decimal precision", () => {
+  it("formats and parses native LYTH amounts at 18 decimal precision", () => {
     const cases: Array<[bigint, string]> = [
       [0n, "0 LYTH"],
-      [1n, "0.00000001 LYTH"],
-      [50_000n, "0.0005 LYTH"],
-      [12_340_000n, "0.1234 LYTH"],
-      [12_345_678n, "0.12345678 LYTH"],
-      [500_050_000_000n, "5,000.5 LYTH"],
+      [1n, "0.000000000000000001 LYTH"],
+      [5_000_000_000_000_000n, "0.005 LYTH"],
+      [123_400_000_000_000_000n, "0.1234 LYTH"],
+      [123_456_789_012_345_678n, "0.123456789012345678 LYTH"],
+      [5_000_500_000_000_000_000_000n, "5,000.5 LYTH"],
     ];
 
-    expect(NATIVE_LYTH_DECIMALS).toBe(8);
+    expect(NATIVE_LYTH_DECIMALS).toBe(18);
     for (const [lythoshi, expected] of cases) {
       expect(formatLyth(lythoshi)).toBe(expected);
       expect(formatLythoshi(lythoshi)).toBe(expected);
       expect(parseLythToLythoshi(expected)).toBe(lythoshi);
     }
-    expect(formatLyth(500_050_000_000n, { includeUnit: false })).toBe("5,000.5");
-    expect(parseLythToLythoshi("1.00000001")).toBe(100_000_001n);
+    expect(formatLyth(5_000_500_000_000_000_000_000n, { includeUnit: false })).toBe("5,000.5");
+    expect(parseLythToLythoshi("1.000000000000000001")).toBe(1_000_000_000_000_000_001n);
     expect(() => parseLythToLythoshi("1.")).toThrow(/canonical LYTH decimal/);
-    expect(() => parseLythToLythoshi("1.000000001")).toThrow(/8 decimal/);
+    expect(() => parseLythToLythoshi("1.0000000000000000001")).toThrow(/18 decimal/);
     expect(() => parseLythToLythoshi("12,34 LYTH")).toThrow(/canonical LYTH decimal/);
   });
 
   it("checks fee display conformance for default and structured fee surfaces", () => {
+    // 18-decimal (ADR-0037): total scaled ×1e10 so 0.0005 LYTH display holds.
     const requiredFee = {
-      total_lythoshi: "50000",
+      total_lythoshi: "500000000000000",
       cycles_used: 42,
-      base_price_per_cycle_lythoshi: "1000",
+      base_price_per_cycle_lythoshi: "10000000000000",
       state_io_units: 8,
-      state_io_price_per_unit_lythoshi: "250",
+      state_io_price_per_unit_lythoshi: "2500000000000",
       priority_tip_lythoshi: "0",
     };
     expect(Object.keys(requiredFee)).toEqual([...MRV_STRUCTURED_FEE_FIELDS]);
     expect(() =>
       assertMrvStructuredFeeConformance(requiredFee, {
-        expectedTotalLythoshi: "50000",
+        expectedTotalLythoshi: "500000000000000",
       }),
     ).not.toThrow();
 
     const fee = { ...requiredFee, total_lyth: "0.0005" };
 
     const report = checkMrvFeeDisplayConformance({
-      expectedTotalLythoshi: "50000",
+      expectedTotalLythoshi: "500000000000000",
       defaultFeeText: "Network fee: 0.0005 LYTH",
-      detailTexts: ["cycles 42, state I/O 8, total 50000 lythoshi"],
+      detailTexts: ["cycles 42, state I/O 8, total 500000000000000 lythoshi"],
       structuredFee: fee,
       customFeeInputVisible: false,
       speedUpCancelVisible: false,
@@ -174,15 +175,15 @@ describe("MRV/RISC-V SDK helpers", () => {
     });
     expect(() =>
       assertMrvFeeDisplayConformance({
-        expectedTotalLythoshi: 50_000n,
+        expectedTotalLythoshi: 500_000_000_000_000n,
         defaultFeeText: "Network fee: 0.0005 LYTH",
         structuredFee: fee,
       }),
     ).not.toThrow();
 
     const failed = checkMrvFeeDisplayConformance({
-      expectedTotalLythoshi: "50000",
-      defaultFeeText: "50000 lythoshi / 42 cycles / gas price 0.00050000 LYTH",
+      expectedTotalLythoshi: "500000000000000",
+      defaultFeeText: "500000000000000 lythoshi / 42 cycles / gas price 0.00050000 LYTH",
       detailTexts: ["gas price 10 gwei"],
       structuredFee: { ...fee, gas_price: "1", total_lyth: "0.00050000" },
       customFeeInputVisible: true,
@@ -238,24 +239,26 @@ describe("MRV/RISC-V SDK helpers", () => {
   });
 
   it("formats native receipt fee objects for app default surfaces", () => {
+    // 18-decimal (ADR-0037): lythoshi amounts scaled ×1e10 so the LYTH
+    // display stays 8,250 LYTH (1 lythoshi == 1 wei).
     const fee = {
-      total_lythoshi: "825000000000",
+      total_lythoshi: "8250000000000000000000",
       total_lyth: "8,250",
       cycles_used: 47,
-      base_price_per_cycle_lythoshi: "10000000000",
+      base_price_per_cycle_lythoshi: "100000000000000000000",
       state_io_units: 2,
-      state_io_price_per_unit_lythoshi: "40000000000",
-      priority_tip_lythoshi: "15000000000",
+      state_io_price_per_unit_lythoshi: "400000000000000000000",
+      priority_tip_lythoshi: "150000000000000000000",
     };
 
     const display = formatNativeReceiptFeeDisplay(fee);
     expect(display).toEqual({
       defaultFeeText: "Network fee: 8,250 LYTH",
       detailTexts: [
-        "cycles 47, state I/O 2, total 825000000000 lythoshi",
-        "cycle price 10000000000 lythoshi, state I/O price 40000000000 lythoshi, priority tip 15000000000 lythoshi",
+        "cycles 47, state I/O 2, total 8250000000000000000000 lythoshi",
+        "cycle price 100000000000000000000 lythoshi, state I/O price 400000000000000000000 lythoshi, priority tip 150000000000000000000 lythoshi",
       ],
-      totalLythoshi: "825000000000",
+      totalLythoshi: "8250000000000000000000",
       totalLyth: "8,250",
     });
     expect(() =>
@@ -476,7 +479,7 @@ describe("MRV/RISC-V SDK helpers", () => {
     });
     expect(deploy.feePreview).toEqual({
       totalLythoshi: "25",
-      totalLyth: "0.00000025",
+      totalLyth: "0.000000000000000025",
       cyclesUsed: 100_000n,
       executionUnitLimit: 100_000n,
       maxExecutionFeeLythoshi: "25",
@@ -526,7 +529,7 @@ describe("MRV/RISC-V SDK helpers", () => {
     });
     expect(call.feePreview).toEqual({
       totalLythoshi: "10",
-      totalLyth: "0.0000001",
+      totalLyth: "0.00000000000000001",
       cyclesUsed: 50_000n,
       executionUnitLimit: 50_000n,
       maxExecutionFeeLythoshi: "10",
@@ -601,7 +604,7 @@ describe("MRV/RISC-V SDK helpers", () => {
     expect(() => assertMrvDeployNativeSubmissionPlan(tooLargeFee)).toThrow(/u128/);
   });
 
-  it("submits MRV deploy and call plans through encrypted native envelopes", async () => {
+  it("gates MRV encrypted-submit helpers off (MB-3) without emitting a scheme-0 envelope", async () => {
     const backend = MlDsa65Backend.fromSeed(new Uint8Array(ML_DSA_65_SEED_LEN).fill(0x41));
     const user = addressToTypedBech32("user", backend.getAddress());
     const contract = addressToTypedBech32("contract", "0x2222222222222222222222222222222222222222");
@@ -610,80 +613,58 @@ describe("MRV/RISC-V SDK helpers", () => {
       epoch: 9n,
       encapsulationKey: new Uint8Array(ML_KEM_768_ENCAPSULATION_KEY_LEN).fill(0x33),
     };
+    // The encrypted-submit helpers route through buildEncryptedSubmission,
+    // which is gated OFF until MB-3 Ferveo threshold decryption is live. They
+    // must reject (never build/submit a scheme-0 envelope) — but plan
+    // validation still runs first, so a valid plan reaches the gate.
     const { fetch, calls } = mockFetchSequence([
       {
         algo: encryptionKey.algo,
         epoch: encryptionKey.epoch.toString(),
         encapsulationKey: bytesToHex(encryptionKey.encapsulationKey),
       },
-      `0x${"aa".repeat(32)}`,
-      `0x${"cc".repeat(32)}`,
-      `0x${"bb".repeat(32)}`,
     ]);
     const client = new RpcClient("http://node", { fetch });
 
-    const deploy = await submitMrvDeployNativeTx(client, backend, "0x13000000", {
-      from: user,
-      chainId: 69_420n,
-      nonce: 7n,
-      executionUnitLimit: 100_000n,
-      maxExecutionFeeLythoshi: "25",
-      priorityTipLythoshi: "1",
-      class: MempoolClass.ContractCall,
-    });
-    expect(deploy.txHash).toBe(`0x${"aa".repeat(32)}`);
-    expect(deploy.request.artifactBytes).toBe("0x13000000");
-    expect(deploy.nativeTx.maxExecutionFeeLythoshi).toBe("25");
-    expect(deploy.feePreview.totalLyth).toBe("0.00000025");
-    expect(deploy.innerSighashHex).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(deploy.innerTxHashHex).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(deploy.envelopeWireHex.startsWith("0x")).toBe(true);
-    expect(deploy.innerWireBytes).toBeGreaterThan(0);
+    await expect(
+      submitMrvDeployNativeTx(client, backend, "0x13000000", {
+        from: user,
+        chainId: 69_420n,
+        nonce: 7n,
+        executionUnitLimit: 100_000n,
+        maxExecutionFeeLythoshi: "25",
+        priorityTipLythoshi: "1",
+        class: MempoolClass.ContractCall,
+        encryptionKey,
+      }),
+    ).rejects.toThrow(/encrypted mempool submission unavailable until MB-3/);
 
-    const payloadDeploy = await submitMrvDeployPayloadNativeTx(client, backend, "0x13000000", {
-      from: user,
-      chainId: 69_420n,
-      nonce: 9n,
-      executionUnitLimit: 100_000n,
-      maxExecutionFeeLythoshi: "25",
-      constructorInput: [0x01, 0x02],
-      encryptionKey,
-    });
-    expect(payloadDeploy.txHash).toBe(`0x${"cc".repeat(32)}`);
-    expect(payloadDeploy.request.artifactBytes).toBe("0x01000400000000000000130000000102000000000000000102");
-    expect(payloadDeploy.tx.input).toBe(payloadDeploy.request.artifactBytes);
+    await expect(
+      submitMrvDeployPayloadNativeTx(client, backend, "0x13000000", {
+        from: user,
+        chainId: 69_420n,
+        nonce: 9n,
+        executionUnitLimit: 100_000n,
+        maxExecutionFeeLythoshi: "25",
+        constructorInput: [0x01, 0x02],
+        encryptionKey,
+      }),
+    ).rejects.toThrow(/encrypted mempool submission unavailable until MB-3/);
 
-    const call = await submitMrvCallNativeTx(client, backend, contract, [0x01, 0x02], {
-      from: user,
-      chainId: 69_420n,
-      nonce: 8n,
-      executionUnitLimit: 50_000n,
-      maxExecutionFeeLythoshi: "10",
-      valueLythoshi: "3",
-      encryptionKey,
-    });
-    expect(call.txHash).toBe(`0x${"bb".repeat(32)}`);
-    expect(call.request.contractAddress).toBe(contract);
-    expect(call.nativeTx.valueLythoshi).toBe("3");
-    expect(call.feePreview.totalLythoshi).toBe("10");
+    await expect(
+      submitMrvCallNativeTx(client, backend, contract, [0x01, 0x02], {
+        from: user,
+        chainId: 69_420n,
+        nonce: 8n,
+        executionUnitLimit: 50_000n,
+        maxExecutionFeeLythoshi: "10",
+        valueLythoshi: "3",
+        encryptionKey,
+      }),
+    ).rejects.toThrow(/encrypted mempool submission unavailable until MB-3/);
 
-    expect(calls.map((c) => c.method)).toEqual([
-      "lyth_getEncryptionKey",
-      "lyth_submitEncrypted",
-      "lyth_submitEncrypted",
-      "lyth_submitEncrypted",
-    ]);
-    expect(calls[0].params).toEqual([]);
-    expect(calls[1].params).toEqual([deploy.envelopeWireHex]);
-    expect(calls[2].params).toEqual([payloadDeploy.envelopeWireHex]);
-    expect(calls[3].params).toEqual([call.envelopeWireHex]);
-    const { tx: _deploySigningAdapter, ...deployAppFacing } = deploy;
-    const { tx: _payloadDeploySigningAdapter, ...payloadDeployAppFacing } = payloadDeploy;
-    const { tx: _callSigningAdapter, ...callAppFacing } = call;
-    const appWire = JSON.stringify(
-      [deployAppFacing, payloadDeployAppFacing, callAppFacing],
-      (_key, value) => (typeof value === "bigint" ? value.toString() : value),
-    );
-    expect(appWire).not.toMatch(/gas|gwei|wei/i);
+    // Guard: with an explicit encryptionKey supplied, no encrypted envelope is
+    // ever submitted to the node (lyth_submitEncrypted never called).
+    expect(calls.map((c) => c.method)).not.toContain("lyth_submitEncrypted");
   });
 });

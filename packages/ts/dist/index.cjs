@@ -2,11 +2,11 @@
 
 var blake3_js = require('@noble/hashes/blake3.js');
 var sha3_js = require('@noble/hashes/sha3.js');
-var mlKem_js = require('@noble/post-quantum/ml-kem.js');
-var chacha_js = require('@noble/ciphers/chacha.js');
-var utils_js = require('@noble/hashes/utils.js');
 var mlDsa_js = require('@noble/post-quantum/ml-dsa.js');
 var bls12381_js = require('@noble/curves/bls12-381.js');
+require('@noble/post-quantum/ml-kem.js');
+require('@noble/ciphers/chacha.js');
+require('@noble/hashes/utils.js');
 
 // src/error.ts
 var SdkError = class _SdkError extends Error {
@@ -897,15 +897,26 @@ function bigintToBeBytes(value, bytes, label) {
   }
   return out;
 }
-function parseBigint(value, label) {
-  if (value === void 0) throw new Error(`${label} missing`);
-  if (typeof value === "bigint") return value;
-  if (typeof value === "number") {
-    if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${label} must be a non-negative safe integer`);
-    return BigInt(value);
-  }
-  if (value.startsWith("0x") || value.startsWith("0X")) return BigInt(value);
-  return BigInt(value);
+
+// src/crypto/submission.ts
+async function fetchEncryptionKey(client) {
+  const result = await client.call(
+    "lyth_getEncryptionKey",
+    []
+  );
+  return {
+    algo: result.algo ?? "ml-kem-768",
+    epoch: typeof result.epoch === "string" ? BigInt(result.epoch) : BigInt(result.epoch),
+    encapsulationKey: hexToBytes2(result.encapsulationKey, "encapsulationKey")
+  };
+}
+var ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE = "encrypted mempool submission unavailable until MB-3 threshold decryption is active";
+async function buildEncryptedSubmission(_args) {
+  await Promise.resolve();
+  throw new Error(ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE);
+}
+async function submitEncryptedEnvelope(client, envelopeWireHex) {
+  return client.call("lyth_submitEncrypted", [envelopeWireHex]);
 }
 
 // src/crypto/bincode.ts
@@ -966,164 +977,6 @@ var BincodeWriter = class {
     }
   }
 };
-var ML_DSA_65_PUBLIC_KEY_LEN = 1952;
-var ML_DSA_65_SIGNATURE_LEN = 3309;
-var STANDARD_ALGO_NUMBER_ML_DSA_65 = 1001;
-var ENUM_VARIANT_INDEX_ML_DSA_65 = 5;
-var ADDRESS_DERIVATION_DOMAIN = "MONO_ADDRESS_BLAKE3_20_V1";
-var ADDRESS_DERIVATION_DOMAIN_BYTES = new TextEncoder().encode(ADDRESS_DERIVATION_DOMAIN);
-function mlDsa65AddressFromPublicKey(publicKey) {
-  return bytesToHex2(mlDsa65AddressBytes(publicKey));
-}
-function mlDsa65AddressBytes(publicKey) {
-  const bytes = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key");
-  return blake3_js.blake3(concatBytes2(
-    ADDRESS_DERIVATION_DOMAIN_BYTES,
-    bigintToBeBytes(BigInt(STANDARD_ALGO_NUMBER_ML_DSA_65), 2, "ML-DSA-65 algo id"),
-    bytes
-  )).slice(0, 20);
-}
-
-// src/crypto/envelope.ts
-var DKG_AEAD_DOMAIN_TAG = new TextEncoder().encode("protocore/v2/mempool/dkg-mlkem768/1");
-var ML_KEM_768_ENCAPSULATION_KEY_LEN = 1184;
-var DKG_NONCE_LEN = 12;
-var MempoolClass = {
-  Transfer: 0,
-  ContractCall: 1,
-  CLOBOp: 3};
-function bincodeNonceAad(aad) {
-  const w = new BincodeWriter();
-  w.bytes(expectBytes(aad.sender, 20, "NonceAad.sender"));
-  w.u64(aad.nonce);
-  w.u64(aad.chainId);
-  w.enumVariant(aad.class);
-  w.u128(aad.maxFeePerGas);
-  w.u128(aad.maxPriorityFeePerGas);
-  w.u64(aad.gasLimit);
-  return w.toBytes();
-}
-function bincodeDecryptHint(hint) {
-  const w = new BincodeWriter();
-  w.u64(hint.epoch);
-  w.u16(hint.scheme);
-  return w.toBytes();
-}
-function bincodeEncryptedEnvelope(env) {
-  const w = new BincodeWriter();
-  w.rawBytes(bincodeNonceAad(env.nonceAad));
-  w.bytes(env.ciphertext);
-  w.rawBytes(bincodeDecryptHint(env.decryptionHint));
-  bincodeMlDsa65OpaqueInto(w, expectBytes(env.senderPubkey, ML_DSA_65_PUBLIC_KEY_LEN, "senderPubkey"));
-  bincodeMlDsa65OpaqueInto(w, expectBytes(env.outerSignature, ML_DSA_65_SIGNATURE_LEN, "outerSignature"));
-  w.bytes(expectBytes(env.sender, 20, "sender"));
-  return w.toBytes();
-}
-function encryptInnerTx(signedInnerTxBincode, nonceAad, kemEncapsulationKey) {
-  expectBytes(kemEncapsulationKey, ML_KEM_768_ENCAPSULATION_KEY_LEN, "kemEncapsulationKey");
-  const { cipherText: kemCt, sharedSecret } = mlKem_js.ml_kem768.encapsulate(kemEncapsulationKey);
-  const nonce = utils_js.randomBytes(DKG_NONCE_LEN);
-  const cipher = chacha_js.chacha20poly1305(sharedSecret, nonce, aadFor(nonceAad));
-  const aeadCt = cipher.encrypt(signedInnerTxBincode);
-  sharedSecret.fill(0);
-  return concatBytes2(kemCt, nonce, aeadCt);
-}
-function outerSigDigest(nonceAad, ciphertext, decryptionHint, senderPubkey) {
-  const aad = bincodeNonceAad(nonceAad);
-  const hint = bincodeDecryptHint(decryptionHint);
-  return sha3_js.keccak_256(concatBytes2(aad, ciphertext, hint, expectBytes(senderPubkey, ML_DSA_65_PUBLIC_KEY_LEN, "senderPubkey")));
-}
-async function buildEncryptedEnvelope(args) {
-  const ciphertext = encryptInnerTx(args.signedInnerTxBincode, args.nonceAad, args.kemEncapsulationKey);
-  const digest = outerSigDigest(args.nonceAad, ciphertext, args.decryptionHint, args.senderPubkey);
-  const outerSignature = await args.signOuterDigest(digest);
-  const envelope = {
-    nonceAad: args.nonceAad,
-    ciphertext,
-    decryptionHint: args.decryptionHint,
-    senderPubkey: expectBytes(args.senderPubkey, ML_DSA_65_PUBLIC_KEY_LEN, "senderPubkey"),
-    outerSignature: expectBytes(outerSignature, ML_DSA_65_SIGNATURE_LEN, "outerSignature"),
-    sender: expectBytes(args.senderAddress, 20, "senderAddress")
-  };
-  const wireBytes = bincodeEncryptedEnvelope(envelope);
-  return { envelope, wireBytes, wireHex: bytesToHex2(wireBytes) };
-}
-function aadFor(aad) {
-  return concatBytes2(DKG_AEAD_DOMAIN_TAG, bincodeNonceAad(aad));
-}
-function bincodeMlDsa65OpaqueInto(w, raw) {
-  w.enumVariant(ENUM_VARIANT_INDEX_ML_DSA_65);
-  w.u16(STANDARD_ALGO_NUMBER_ML_DSA_65);
-  w.bytes(raw);
-}
-
-// src/crypto/submission.ts
-async function fetchEncryptionKey(client) {
-  const result = await client.call(
-    "lyth_getEncryptionKey",
-    []
-  );
-  return {
-    algo: result.algo ?? "ml-kem-768",
-    epoch: typeof result.epoch === "string" ? BigInt(result.epoch) : BigInt(result.epoch),
-    encapsulationKey: hexToBytes2(result.encapsulationKey, "encapsulationKey")
-  };
-}
-async function buildEncryptedSubmission(args) {
-  const input = normalizeInput(args.tx.input);
-  const to = normalizeTo(args.tx.to);
-  const nonceAad = {
-    sender: args.backend.addressBytes(),
-    nonce: parseBigint(args.tx.nonce, "nonce"),
-    chainId: parseBigint(args.tx.chainId, "chainId"),
-    class: args.class ?? (to !== null && input.length === 0 ? MempoolClass.Transfer : MempoolClass.ContractCall),
-    maxFeePerGas: u128Checked(parseBigint(args.tx.maxFeePerGas, "maxFeePerGas"), "maxFeePerGas"),
-    maxPriorityFeePerGas: u128Checked(
-      parseBigint(args.tx.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
-      "maxPriorityFeePerGas"
-    ),
-    gasLimit: parseBigint(args.tx.gasLimit, "gasLimit")
-  };
-  const signed = args.backend.signEvmTx(args.tx);
-  const decryptionHint = { epoch: args.encryptionKey.epoch, scheme: 0 };
-  const built = await buildEncryptedEnvelope({
-    signedInnerTxBincode: signed.wireBytes,
-    nonceAad,
-    decryptionHint,
-    kemEncapsulationKey: args.encryptionKey.encapsulationKey,
-    senderAddress: args.backend.addressBytes(),
-    senderPubkey: args.backend.publicKey(),
-    signOuterDigest: (digest) => args.backend.signPrehash(digest)
-  });
-  return {
-    envelopeWireHex: built.wireHex,
-    innerSighashHex: `0x${[...signed.sighash].map((b) => b.toString(16).padStart(2, "0")).join("")}`,
-    innerTxHashHex: bytesToHex2(signed.txHash),
-    innerWireBytes: signed.wireBytes.length
-  };
-}
-async function submitEncryptedEnvelope(client, envelopeWireHex) {
-  return client.call("lyth_submitEncrypted", [envelopeWireHex]);
-}
-function u128Checked(value, field2) {
-  const cap = (1n << 128n) - 1n;
-  if (value < 0n || value > cap) {
-    throw new Error(`${field2} must fit in u128 for encrypted nonce AAD`);
-  }
-  return value;
-}
-function normalizeTo(value) {
-  if (value === null) return null;
-  if (typeof value === "string") return hexToAddressBytes(value);
-  const bytes = value instanceof Uint8Array ? value : Uint8Array.from(value);
-  if (bytes.length !== 20) throw new Error("to must be 20 bytes");
-  return bytes;
-}
-function normalizeInput(value) {
-  if (value === void 0) return new Uint8Array(0);
-  if (typeof value === "string") return hexToBytes2(value, "input");
-  return value instanceof Uint8Array ? value : Uint8Array.from(value);
-}
 
 // src/mrv.ts
 var MRV_FORMAT_VERSION = 1;
@@ -1135,9 +988,9 @@ var MRV_MAX_DEBUG_BYTES = 16 * 1024 * 1024;
 var MRV_MAX_MEMORY_PAGES = 1024;
 var MRV_MAX_ABI_SYMBOLS = 1024;
 var MRV_MAX_STORAGE_NAMESPACE_BYTES = 64;
-var LYTH_DECIMALS = 8;
+var LYTH_DECIMALS = 18;
 var NATIVE_LYTH_DECIMALS = LYTH_DECIMALS;
-var LYTHOSHI_PER_LYTH = 100000000n;
+var LYTHOSHI_PER_LYTH = 1000000000000000000n;
 var MRV_TX_EXTENSION_KIND = 48;
 var MRV_TX_EXTENSION_V1 = 1;
 var MRV_CODE_HASH_DOMAIN = new TextEncoder().encode("MONO_MRV_CODE_V1");
@@ -1204,7 +1057,7 @@ function parseLythToLythoshi(input) {
     throw new MrvValidationError("lyth amount must be a canonical LYTH decimal");
   }
   if (fractionRaw.length > NATIVE_LYTH_DECIMALS || !/^[0-9]*$/.test(fractionRaw)) {
-    throw new MrvValidationError("lyth amount supports at most 8 decimal places");
+    throw new MrvValidationError(`lyth amount supports at most ${NATIVE_LYTH_DECIMALS} decimal places`);
   }
   const whole = BigInt(wholeRaw.replaceAll(",", ""));
   const fraction = fractionRaw === "" ? 0n : BigInt(fractionRaw.padEnd(NATIVE_LYTH_DECIMALS, "0"));
@@ -1228,7 +1081,7 @@ function checkMrvFeeDisplayConformance(input) {
         failures.push(`defaultFeeText fee must total ${expectedTotalLythoshi} lythoshi`);
       }
     } catch {
-      failures.push("defaultFeeText fee must be a canonical 8-decimal LYTH amount");
+      failures.push(`defaultFeeText fee must be a canonical ${NATIVE_LYTH_DECIMALS}-decimal LYTH amount`);
     }
   }
   const defaultForbidden = firstForbiddenDefaultFeeTerm(input.defaultFeeText);
@@ -1612,38 +1465,20 @@ function buildMrvNativeFeePreview(executionUnitLimit, maxExecutionFeeLythoshi, p
 async function submitMrvDeployNativeTx(client, backend, artifactBytes, options) {
   const plan = buildMrvDeployNativeTxPlan(artifactBytes, options);
   assertMrvDeployNativeSubmissionPlan(plan);
-  const submission = await buildEncryptedSubmission({
-    backend,
-    tx: plan.tx,
-    encryptionKey: options.encryptionKey ?? await fetchEncryptionKey(client),
-    class: options.class
-  });
-  return {
-    ...plan,
-    ...submission,
-    txHash: await submitEncryptedEnvelope(client, submission.envelopeWireHex)
-  };
+  return submitMrvEncryptedNativeTxGated(client, backend, plan, options);
 }
 async function submitMrvDeployPayloadNativeTx(client, backend, artifactBytes, options) {
   const plan = buildMrvDeployPayloadNativeTxPlan(artifactBytes, options);
   assertMrvDeployNativeSubmissionPlan(plan);
-  const submission = await buildEncryptedSubmission({
-    backend,
-    tx: plan.tx,
-    encryptionKey: options.encryptionKey ?? await fetchEncryptionKey(client),
-    class: options.class
-  });
-  return {
-    ...plan,
-    ...submission,
-    txHash: await submitEncryptedEnvelope(client, submission.envelopeWireHex)
-  };
+  return submitMrvEncryptedNativeTxGated(client, backend, plan, options);
 }
 async function submitMrvCallNativeTx(client, backend, contractAddress, input, options) {
   const plan = buildMrvCallNativeTxPlan(contractAddress, input, options);
   assertMrvCallNativeSubmissionPlan(plan);
+  return submitMrvEncryptedNativeTxGated(client, backend, plan, options);
+}
+async function submitMrvEncryptedNativeTxGated(client, backend, plan, options) {
   const submission = await buildEncryptedSubmission({
-    backend,
     tx: plan.tx,
     encryptionKey: options.encryptionKey ?? await fetchEncryptionKey(client),
     class: options.class
@@ -1999,6 +1834,22 @@ function concatBytes3(...parts) {
 }
 function isIdentifier(value) {
   return /^[a-z][a-z0-9_]*$/.test(value);
+}
+var ML_DSA_65_PUBLIC_KEY_LEN = 1952;
+var ML_DSA_65_SIGNATURE_LEN = 3309;
+var STANDARD_ALGO_NUMBER_ML_DSA_65 = 1001;
+var ADDRESS_DERIVATION_DOMAIN = "MONO_ADDRESS_BLAKE3_20_V1";
+var ADDRESS_DERIVATION_DOMAIN_BYTES = new TextEncoder().encode(ADDRESS_DERIVATION_DOMAIN);
+function mlDsa65AddressFromPublicKey(publicKey) {
+  return bytesToHex2(mlDsa65AddressBytes(publicKey));
+}
+function mlDsa65AddressBytes(publicKey) {
+  const bytes = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key");
+  return blake3_js.blake3(concatBytes2(
+    ADDRESS_DERIVATION_DOMAIN_BYTES,
+    bigintToBeBytes(BigInt(STANDARD_ALGO_NUMBER_ML_DSA_65), 2, "ML-DSA-65 algo id"),
+    bytes
+  )).slice(0, 20);
 }
 
 // src/registry.ts
@@ -2633,7 +2484,7 @@ var NAME_BASE_MULTIPLIER = {
   cluster: 20,
   contract: 10
 };
-var NAME_FALLBACK_FEE_UNIT_LYTHOSHI = 100n;
+var NAME_FALLBACK_FEE_UNIT_LYTHOSHI = 1000000000000n;
 var NAME_MAX_LEN = 80;
 var NAME_LABEL_MIN_LEN = 1;
 var NAME_LABEL_MAX_LEN = 63;
@@ -2977,13 +2828,31 @@ var RpcClient = class _RpcClient {
   async ethGasPrice() {
     return parseQuantityBig(await this.call("eth_gasPrice", []));
   }
-  /** `eth_feeHistory` — base-fee + gas-used history. */
+  /**
+   * `eth_feeHistory` — base-fee + gas-used history.
+   *
+   * The chain's eth-compat surface serializes the base-fee window under the
+   * camelCase key `baseFeePerGas`. Internally the chain header field is
+   * `base_fee_per_gas`; this method asserts the on-the-wire response actually
+   * carries the expected `baseFeePerGas` array and fails LOUD if the field is
+   * missing or has drifted to snake_case `base_fee_per_gas`. Without this
+   * guard a future rename would silently collapse the base fee to an empty
+   * array and over-/under-quote fees (e.g. name registration would fall back
+   * to the placeholder fee unit and revert `IncorrectFee` on submit).
+   */
   async ethFeeHistory(blockCount, newestBlock = "latest", rewardPercentiles = []) {
-    return this.call("eth_feeHistory", [
+    const result = await this.call("eth_feeHistory", [
       `0x${blockCount.toString(16)}`,
       encodeBlockSelector(newestBlock),
       rewardPercentiles
     ]);
+    if (result !== null && typeof result === "object" && !Array.isArray(result.baseFeePerGas)) {
+      const drifted = "base_fee_per_gas" in result ? " (found snake_case 'base_fee_per_gas')" : "";
+      throw SdkError.malformed(
+        `eth_feeHistory response is missing the camelCase 'baseFeePerGas' array${drifted}; the base-fee field contract changed`
+      );
+    }
+    return result;
   }
   /** `eth_syncing` — `null` when caught up. */
   async ethSyncing() {
@@ -8523,6 +8392,11 @@ function wordToBigint(word) {
   }
   return out;
 }
+new TextEncoder().encode("protocore/v2/mempool/dkg-mlkem768/1");
+var MempoolClass = {
+  CLOBOp: 3};
+
+// src/market-actions.ts
 var CLOB_MARKET_ID_DOMAIN_TAG = 193;
 var NATIVE_MARKET_MODULE_ADDRESS_BYTES = "0x4d41524b45545f4e41544956455f4d4f445f5631";
 var NATIVE_MARKET_MODULE_ADDRESS = addressToTypedBech32(
@@ -9853,7 +9727,7 @@ var MONOLYTHIUM_NETWORKS = {
 };
 
 // src/index.ts
-var version = "0.2.2";
+var version = "0.3.15";
 
 exports.ADDRESS_HRP = ADDRESS_HRP;
 exports.ADDRESS_KIND_HRPS = ADDRESS_KIND_HRPS;

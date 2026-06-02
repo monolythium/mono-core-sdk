@@ -453,6 +453,25 @@ describe("name registration (pricing + encoders)", () => {
     expect(quote.feeUnitLythoshi).toBe(100n); // 0x64
     expect(quote.costLythoshi).toBe(1500n);
   });
+
+  it("reads the camelCase baseFeePerGas array from eth_feeHistory", async () => {
+    const { fetch } = mockFetch({ baseFeePerGas: ["0x1", "0x2"], oldestBlock: "0x1", gasUsedRatio: [0.5] });
+    const client = new RpcClient("http://x", { fetch });
+    const history = await client.ethFeeHistory(2);
+    expect(history.baseFeePerGas).toEqual(["0x1", "0x2"]);
+  });
+
+  it("fails LOUD if eth_feeHistory base fee drifts to snake_case base_fee_per_gas", async () => {
+    // Guard: the chain serializes the eth-compat fee window as camelCase
+    // `baseFeePerGas`. A future rename to snake_case must throw, not silently
+    // collapse to an empty window (which would mis-quote fees).
+    const { fetch } = mockFetch({ base_fee_per_gas: ["0x64"], oldestBlock: "0x1", gasUsedRatio: [0] });
+    const client = new RpcClient("http://x", { fetch });
+    await expect(client.ethFeeHistory(1)).rejects.toThrow(
+      /missing the camelCase 'baseFeePerGas' array.*snake_case 'base_fee_per_gas'/,
+    );
+    await expect(client.quoteNameRegistration("alice.mono")).rejects.toThrow(/baseFeePerGas/);
+  });
 });
 
 describe("token-balance + metadata join", () => {

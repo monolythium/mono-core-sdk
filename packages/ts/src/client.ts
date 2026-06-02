@@ -1495,17 +1495,35 @@ export class RpcClient {
     return parseQuantityBig(await this.call<string>("eth_gasPrice", []));
   }
 
-  /** `eth_feeHistory` — base-fee + gas-used history. */
+  /**
+   * `eth_feeHistory` — base-fee + gas-used history.
+   *
+   * The chain's eth-compat surface serializes the base-fee window under the
+   * camelCase key `baseFeePerGas`. Internally the chain header field is
+   * `base_fee_per_gas`; this method asserts the on-the-wire response actually
+   * carries the expected `baseFeePerGas` array and fails LOUD if the field is
+   * missing or has drifted to snake_case `base_fee_per_gas`. Without this
+   * guard a future rename would silently collapse the base fee to an empty
+   * array and over-/under-quote fees (e.g. name registration would fall back
+   * to the placeholder fee unit and revert `IncorrectFee` on submit).
+   */
   async ethFeeHistory(
     blockCount: number,
     newestBlock: BlockSelector = "latest",
     rewardPercentiles: number[] = [],
   ): Promise<FeeHistoryResponse> {
-    return this.call("eth_feeHistory", [
+    const result = await this.call<Record<string, unknown>>("eth_feeHistory", [
       `0x${blockCount.toString(16)}`,
       encodeBlockSelector(newestBlock),
       rewardPercentiles,
     ]);
+    if (result !== null && typeof result === "object" && !Array.isArray(result.baseFeePerGas)) {
+      const drifted = "base_fee_per_gas" in result ? " (found snake_case 'base_fee_per_gas')" : "";
+      throw SdkError.malformed(
+        `eth_feeHistory response is missing the camelCase 'baseFeePerGas' array${drifted}; the base-fee field contract changed`,
+      );
+    }
+    return result as unknown as FeeHistoryResponse;
   }
 
   /** `eth_syncing` — `null` when caught up. */

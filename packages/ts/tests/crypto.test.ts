@@ -241,7 +241,7 @@ describe("crypto subpath", () => {
     expect(outerSigDigest(nonceAad, built.envelope.ciphertext, decryptionHint, backend.publicKey())).toHaveLength(32);
   });
 
-  it("rejects encrypted submission fee fields outside u128 before envelope build", async () => {
+  it("gates encrypted submission off (MB-3) and never emits a scheme-0 envelope", async () => {
     const backend = MlDsa65Backend.fromSeed(new Uint8Array(ML_DSA_65_SEED_LEN).fill(0x12));
     const encryptionKey = {
       algo: "ml-kem-768",
@@ -249,23 +249,34 @@ describe("crypto subpath", () => {
       encapsulationKey: new Uint8Array(ML_KEM_768_ENCAPSULATION_KEY_LEN).fill(0x34),
     };
 
-    await expect(
-      buildEncryptedSubmission({
-        backend,
-        encryptionKey,
-        tx: {
-          chainId: 69_420n,
-          nonce: 0n,
-          maxPriorityFeePerGas: 0n,
-          maxFeePerGas: 1n << 128n,
-          gasLimit: 30_000n,
-          to: null,
-          value: 0n,
-          input: "0x13000000",
-          extensions: [{ kind: 0x30, bodyHex: "0x01" }],
-        },
-      }),
-    ).rejects.toThrow(/maxFeePerGas must fit in u128/);
+    // The retired single-key ML-KEM-768 scheme-0 envelope is unsafe (one
+    // operator could decrypt). Until MB-3 Ferveo threshold decryption is
+    // live, buildEncryptedSubmission must refuse to build ANY envelope and
+    // throw — never returning a scheme-0 (or any) envelope.
+    const promise = buildEncryptedSubmission({
+      backend,
+      encryptionKey,
+      tx: {
+        chainId: 69_420n,
+        nonce: 0n,
+        maxPriorityFeePerGas: 0n,
+        maxFeePerGas: 1n,
+        gasLimit: 30_000n,
+        to: null,
+        value: 0n,
+        input: "0x13000000",
+        extensions: [{ kind: 0x30, bodyHex: "0x01" }],
+      },
+    });
+    await expect(promise).rejects.toThrow(/encrypted mempool submission unavailable until MB-3/);
+    // Hard guard: the call rejected, so no envelope object exists to inspect.
+    let envelope: unknown;
+    try {
+      envelope = await promise;
+    } catch {
+      envelope = undefined;
+    }
+    expect(envelope).toBeUndefined();
   });
 
   it("round-trips PQM-1 v1 ML-DSA-65 mnemonics using the Rust payload layout", () => {

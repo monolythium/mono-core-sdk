@@ -10,7 +10,7 @@
  * subpath so native SDK consumers do not import that peer dependency.
  */
 
-export const version = "0.2.2";
+export const version = "0.3.15";
 
 export { ApiClient, apiEndpointFromRpcEndpoint } from "./api.js";
 export {

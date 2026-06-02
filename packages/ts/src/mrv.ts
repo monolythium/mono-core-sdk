@@ -183,9 +183,9 @@ export const MRV_MAX_DEBUG_BYTES = 16 * 1024 * 1024;
 export const MRV_MAX_MEMORY_PAGES = 1024 as const;
 export const MRV_MAX_ABI_SYMBOLS = 1024 as const;
 export const MRV_MAX_STORAGE_NAMESPACE_BYTES = 64 as const;
-export const LYTH_DECIMALS = 8 as const;
+export const LYTH_DECIMALS = 18 as const;
 export const NATIVE_LYTH_DECIMALS = LYTH_DECIMALS;
-export const LYTHOSHI_PER_LYTH = 100_000_000n;
+export const LYTHOSHI_PER_LYTH = 1_000_000_000_000_000_000n;
 export const MRV_TX_EXTENSION_KIND = 0x30 as const;
 export const MRV_TX_EXTENSION_V1 = 0x01 as const;
 
@@ -296,7 +296,7 @@ export function parseLythToLythoshi(input: string): bigint {
     throw new MrvValidationError("lyth amount must be a canonical LYTH decimal");
   }
   if (fractionRaw.length > NATIVE_LYTH_DECIMALS || !/^[0-9]*$/.test(fractionRaw)) {
-    throw new MrvValidationError("lyth amount supports at most 8 decimal places");
+    throw new MrvValidationError(`lyth amount supports at most ${NATIVE_LYTH_DECIMALS} decimal places`);
   }
   const whole = BigInt(wholeRaw.replaceAll(",", ""));
   const fraction = fractionRaw === "" ? 0n : BigInt(fractionRaw.padEnd(NATIVE_LYTH_DECIMALS, "0"));
@@ -324,7 +324,7 @@ export function checkMrvFeeDisplayConformance(
         failures.push(`defaultFeeText fee must total ${expectedTotalLythoshi} lythoshi`);
       }
     } catch {
-      failures.push("defaultFeeText fee must be a canonical 8-decimal LYTH amount");
+      failures.push(`defaultFeeText fee must be a canonical ${NATIVE_LYTH_DECIMALS}-decimal LYTH amount`);
     }
   }
 
@@ -814,19 +814,13 @@ export async function submitMrvDeployNativeTx(
   artifactBytes: MrvBytesLike,
   options: MrvDeploySubmitOptions,
 ): Promise<MrvDeploySubmission> {
+  // MB-3 gate: the encrypted-submit path is unavailable until the chain runs
+  // Ferveo threshold decryption. Validate the plan (so callers still get plan
+  // errors loud) then route through buildEncryptedSubmission, which throws
+  // ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE before any envelope is produced.
   const plan = buildMrvDeployNativeTxPlan(artifactBytes, options);
   assertMrvDeployNativeSubmissionPlan(plan);
-  const submission = await buildEncryptedSubmission({
-    backend,
-    tx: plan.tx,
-    encryptionKey: options.encryptionKey ?? (await fetchEncryptionKey(client)),
-    class: options.class,
-  });
-  return {
-    ...plan,
-    ...submission,
-    txHash: await submitEncryptedEnvelope(client, submission.envelopeWireHex),
-  };
+  return submitMrvEncryptedNativeTxGated(client, backend, plan, options);
 }
 
 export async function submitMrvDeployPayloadNativeTx(
@@ -837,17 +831,7 @@ export async function submitMrvDeployPayloadNativeTx(
 ): Promise<MrvDeployPayloadSubmission> {
   const plan = buildMrvDeployPayloadNativeTxPlan(artifactBytes, options);
   assertMrvDeployNativeSubmissionPlan(plan);
-  const submission = await buildEncryptedSubmission({
-    backend,
-    tx: plan.tx,
-    encryptionKey: options.encryptionKey ?? (await fetchEncryptionKey(client)),
-    class: options.class,
-  });
-  return {
-    ...plan,
-    ...submission,
-    txHash: await submitEncryptedEnvelope(client, submission.envelopeWireHex),
-  };
+  return submitMrvEncryptedNativeTxGated(client, backend, plan, options);
 }
 
 export async function submitMrvCallNativeTx(
@@ -859,6 +843,23 @@ export async function submitMrvCallNativeTx(
 ): Promise<MrvCallSubmission> {
   const plan = buildMrvCallNativeTxPlan(contractAddress, input, options);
   assertMrvCallNativeSubmissionPlan(plan);
+  return submitMrvEncryptedNativeTxGated(client, backend, plan, options);
+}
+
+/**
+ * Shared MB-3 gate body for the MRV encrypted-submit helpers.
+ *
+ * Builds the encrypted submission through the single chokepoint
+ * ({@link buildEncryptedSubmission}), which currently throws
+ * {@link ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE} so no `scheme: 0` envelope
+ * is ever produced. When MB-3 Ferveo threshold decryption activates and the
+ * chokepoint is unblocked, this body submits the envelope and returns the
+ * admission tx hash without further changes here.
+ */
+async function submitMrvEncryptedNativeTxGated<
+  P extends MrvDeployNativeTxPlan | MrvCallNativeTxPlan,
+  O extends { encryptionKey?: EncryptionKey; class?: MempoolClass },
+>(client: RpcClient, backend: MlDsa65Backend, plan: P, options: O): Promise<P & MrvEncryptedSubmissionResult> {
   const submission = await buildEncryptedSubmission({
     backend,
     tx: plan.tx,

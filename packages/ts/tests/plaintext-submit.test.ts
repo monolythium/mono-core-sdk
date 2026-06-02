@@ -17,6 +17,7 @@ import {
 } from "../src/index.js";
 import {
   ML_DSA_65_SEED_LEN,
+  ML_KEM_768_ENCAPSULATION_KEY_LEN,
   MlDsa65Backend,
   buildPlaintextSubmission,
   submitPlaintextTransaction,
@@ -164,6 +165,24 @@ describe("privacy toggle (default plaintext)", () => {
     await expect(
       submitTransactionWithPrivacy({ client, backend: b, tx: TX_FIELDS, private: true }),
     ).rejects.toThrow(/private submission requires an encryptionKey/);
+  });
+
+  it("gates the encrypted path off (MB-3) when private === true with a key", async () => {
+    const b = backend();
+    const { fetch, calls } = mockFetch("0x");
+    const client = new RpcClient("http://x", { fetch });
+    const encryptionKey = {
+      algo: "ml-kem-768",
+      epoch: 1n,
+      encapsulationKey: new Uint8Array(ML_KEM_768_ENCAPSULATION_KEY_LEN).fill(0x33),
+    };
+
+    // Even with a valid key, the retired scheme-0 envelope must NOT be built
+    // or submitted; the encrypted path is unavailable until MB-3.
+    await expect(
+      submitTransactionWithPrivacy({ client, backend: b, tx: TX_FIELDS, private: true, encryptionKey }),
+    ).rejects.toThrow(/encrypted mempool submission unavailable until MB-3/);
+    expect(calls.map((c) => c.method)).not.toContain("lyth_submitEncrypted");
   });
 });
 

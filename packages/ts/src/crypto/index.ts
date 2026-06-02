@@ -76,6 +76,7 @@ export type {
 export {
   buildEncryptedSubmission,
   buildPlaintextSubmission,
+  ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE,
   fetchEncryptionKey,
   submitEncryptedEnvelope,
   submitPlaintextTransaction,

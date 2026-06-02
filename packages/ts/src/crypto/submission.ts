@@ -1,7 +1,6 @@
 import { RpcClient } from "../client.js";
-import { hexToAddressBytes } from "../address.js";
-import { bytesToHex, hexToBytes, parseBigint } from "./bytes.js";
-import { buildEncryptedEnvelope, MempoolClass, type DecryptHint, type NonceAad } from "./envelope.js";
+import { bytesToHex, hexToBytes } from "./bytes.js";
+import { MempoolClass } from "./envelope.js";
 import type { MlDsa65Backend } from "./ml-dsa.js";
 import type { NativeEvmTxFields } from "./tx.js";
 
@@ -54,43 +53,49 @@ export async function fetchEncryptionKey(client: RpcClient): Promise<EncryptionK
   };
 }
 
-export async function buildEncryptedSubmission(args: {
+/**
+ * Error message returned when an encrypted-mempool submission is attempted.
+ *
+ * The encrypted-submit path is gated OFF until the chain's MB-3 Ferveo
+ * threshold decryption is live (see {@link buildEncryptedSubmission}).
+ */
+export const ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE =
+  "encrypted mempool submission unavailable until MB-3 threshold decryption is active";
+
+/**
+ * Encrypted-mempool submission is GATED OFF.
+ *
+ * The single-key ML-KEM-768 `scheme: 0` envelope this used to build is the
+ * RETIRED scheme: a single operator holding the cluster decryption key could
+ * decrypt the inner transaction, violating the threshold-privacy guarantee
+ * the encrypted mempool promises. The live chain runs with plaintext
+ * submission as the default and does NOT run threshold decryption yet, so
+ * there is no safe encrypted path to emit.
+ *
+ * This helper therefore refuses to build any envelope and throws. It never
+ * produces a `scheme: 0` (or any) envelope, so a wallet can never be tricked
+ * into believing its transaction is privately decryptable by a threshold of
+ * operators when it is in fact decryptable by one.
+ *
+ * Use {@link buildPlaintextSubmission} / {@link submitPlaintextTransaction}
+ * (the unaffected default path) for transaction submission.
+ *
+ * TODO(MB-3): when the chain activates MB-3 threshold decryption, port the
+ * chain's Ferveo `scheme = 2` path here — the `ThresholdPubkey` is a 96-byte
+ * BLS12-381 G1 element fetched from `lyth_getEncryptionKey`, and the inner tx
+ * is encrypted to that threshold public key (not a single ML-KEM-768
+ * encapsulation key). Only then may an envelope be emitted again.
+ *
+ * @throws always — the encrypted path is unavailable.
+ */
+export async function buildEncryptedSubmission(_args: {
   backend: MlDsa65Backend;
   tx: NativeEvmTxFields;
   encryptionKey: EncryptionKey;
   class?: MempoolClass;
 }): Promise<EncryptedSubmission> {
-  const input = normalizeInput(args.tx.input);
-  const to = normalizeTo(args.tx.to);
-  const nonceAad: NonceAad = {
-    sender: args.backend.addressBytes(),
-    nonce: parseBigint(args.tx.nonce, "nonce"),
-    chainId: parseBigint(args.tx.chainId, "chainId"),
-    class: args.class ?? (to !== null && input.length === 0 ? MempoolClass.Transfer : MempoolClass.ContractCall),
-    maxFeePerGas: u128Checked(parseBigint(args.tx.maxFeePerGas, "maxFeePerGas"), "maxFeePerGas"),
-    maxPriorityFeePerGas: u128Checked(
-      parseBigint(args.tx.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
-      "maxPriorityFeePerGas",
-    ),
-    gasLimit: parseBigint(args.tx.gasLimit, "gasLimit"),
-  };
-  const signed = args.backend.signEvmTx(args.tx);
-  const decryptionHint: DecryptHint = { epoch: args.encryptionKey.epoch, scheme: 0 };
-  const built = await buildEncryptedEnvelope({
-    signedInnerTxBincode: signed.wireBytes,
-    nonceAad,
-    decryptionHint,
-    kemEncapsulationKey: args.encryptionKey.encapsulationKey,
-    senderAddress: args.backend.addressBytes(),
-    senderPubkey: args.backend.publicKey(),
-    signOuterDigest: (digest) => args.backend.signPrehash(digest),
-  });
-  return {
-    envelopeWireHex: built.wireHex,
-    innerSighashHex: `0x${[...signed.sighash].map((b) => b.toString(16).padStart(2, "0")).join("")}`,
-    innerTxHashHex: bytesToHex(signed.txHash),
-    innerWireBytes: signed.wireBytes.length,
-  };
+  await Promise.resolve();
+  throw new Error(ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE);
 }
 
 export async function submitEncryptedEnvelope(client: RpcClient, envelopeWireHex: string): Promise<string> {
@@ -162,20 +167,21 @@ export async function submitPlaintextTransaction(
  * Build, sign, and submit a native transaction with an explicit
  * encryption toggle. `private == false` (the default for the RC testnet
  * / operator posture) routes through the plaintext `mesh_submitTx`
- * path; `private == true` routes through the Ferveo encrypt-then-submit
- * pipeline. Wallets wire a UI privacy toggle straight onto `private`.
+ * path; `private == true` routes through the encrypted pipeline.
+ * Wallets wire a UI privacy toggle straight onto `private`.
  *
  * Mirrors `TxClient::build_sign_submit_with_privacy` in the Rust SDK.
- * The default is PLAINTEXT; the encrypted path is engaged only when
- * `private === true`, and requires an {@link EncryptionKey} (fetch it
- * via {@link fetchEncryptionKey}).
+ * The default is PLAINTEXT and is fully supported.
  *
- * @returns the canonical native tx hash (`0x`-prefixed). For the
- *   plaintext path this is the node-echoed-and-validated hash; for the
- *   encrypted path it is the locally computed inner tx hash (the
- *   `lyth_submitEncrypted` RPC returns the encrypted-envelope admission
- *   hash, so wallets track the canonical inner hash for receipts /
- *   `lyth_txStatus` / indexer history).
+ * MB-3 gate: `private === true` is currently UNAVAILABLE — the encrypted
+ * path throws {@link ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE} via
+ * {@link buildEncryptedSubmission} because the chain does not yet run
+ * Ferveo threshold decryption and the retired single-key scheme is unsafe.
+ * Keep wallet privacy toggles disabled until MB-3 activates.
+ *
+ * @returns for the plaintext path, the node-echoed-and-validated canonical
+ *   native tx hash (`0x`-prefixed).
+ * @throws when `private === true` (encrypted submission unavailable).
  */
 export async function submitTransactionWithPrivacy(args: {
   client: RpcClient;
@@ -214,26 +220,4 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
     if (a[i] !== b[i]) return false;
   }
   return true;
-}
-
-function u128Checked(value: bigint, field: string): bigint {
-  const cap = (1n << 128n) - 1n;
-  if (value < 0n || value > cap) {
-    throw new Error(`${field} must fit in u128 for encrypted nonce AAD`);
-  }
-  return value;
-}
-
-function normalizeTo(value: NativeEvmTxFields["to"]): Uint8Array | null {
-  if (value === null) return null;
-  if (typeof value === "string") return hexToAddressBytes(value);
-  const bytes = value instanceof Uint8Array ? value : Uint8Array.from(value);
-  if (bytes.length !== 20) throw new Error("to must be 20 bytes");
-  return bytes;
-}
-
-function normalizeInput(value: NativeEvmTxFields["input"]): Uint8Array {
-  if (value === undefined) return new Uint8Array(0);
-  if (typeof value === "string") return hexToBytes(value, "input");
-  return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }

@@ -1977,20 +1977,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mrv_encrypted_submit_fetches_key_and_submits_envelope() {
+    async fn mrv_encrypted_submit_gated_off_never_submits_envelope() {
         use ml_kem::{kem::KeyExport, DecapsulationKey, MlKem768};
 
         let seed: ml_kem::Seed = [0x45; 64].into();
         let dk = DecapsulationKey::<MlKem768>::from_seed(seed);
         let encapsulation_key = dk.encapsulation_key().to_bytes();
-        let (endpoint, server) = spawn_rpc_server(vec![
-            json!({
-                "algo": "ml-kem-768",
-                "epoch": 12,
-                "encapsulationKey": test_hex(encapsulation_key.as_ref()),
-            }),
-            json!("0xfeedface"),
-        ]);
+        // Only ONE mock response (lyth_getEncryptionKey). The MB-3 gate must
+        // make the build fail BEFORE lyth_submitEncrypted is ever called — so
+        // no second request reaches the server.
+        let (endpoint, server) = spawn_rpc_server(vec![json!({
+            "algo": "ml-kem-768",
+            "epoch": 12,
+            "encapsulationKey": test_hex(encapsulation_key.as_ref()),
+        })]);
 
         let client = RpcClient::new(endpoint).unwrap();
         let plan = build_mrv_deploy_native_tx_plan(
@@ -2001,35 +2001,33 @@ mod tests {
         .unwrap();
         let inner_signature = vec![0x55; ML_DSA_65_SIGNATURE_LEN];
         let public_key = vec![0x66; ML_DSA_65_PUBLIC_KEY_LEN];
-        let result = client
+        let err = client
             .submit_mrv_deploy_native_encrypted(
                 &plan,
                 &inner_signature,
                 &public_key,
                 None,
                 Some(MrvMempoolClass::ContractCall),
-                |_| Ok(vec![0x77; ML_DSA_65_SIGNATURE_LEN]),
+                |_| panic!("signer callback must not run while encrypted submit is gated off"),
             )
             .await
-            .unwrap();
+            .unwrap_err();
 
-        assert_eq!(result.tx_hash, "0xfeedface");
-        assert_eq!(result.encrypted.request.artifact_bytes, "0x13000000");
-        assert!(result
-            .encrypted
-            .submission
-            .envelope_wire_hex
-            .starts_with("0x"));
+        match err {
+            SdkError::Malformed(msg) => assert!(
+                msg.contains("encrypted mempool submission unavailable until MB-3"),
+                "gate error must name the MB-3 unavailability: {msg}"
+            ),
+            other => panic!("expected Malformed gate error, got {other:?}"),
+        }
 
         let requests = server.join().unwrap();
-        assert_eq!(requests.len(), 2);
+        // Exactly one request — the encryption-key fetch — and never a submit.
+        assert_eq!(requests.len(), 1);
         assert_eq!(requests[0]["method"], "lyth_getEncryptionKey");
-        assert_eq!(requests[0]["params"], json!([]));
-        assert_eq!(requests[1]["method"], "lyth_submitEncrypted");
-        assert_eq!(
-            requests[1]["params"],
-            json!([result.encrypted.submission.envelope_wire_hex])
-        );
+        assert!(requests
+            .iter()
+            .all(|r| r["method"] != json!("lyth_submitEncrypted")));
     }
 
     #[tokio::test]

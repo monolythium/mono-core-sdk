@@ -18,7 +18,11 @@ account: string,
  */
 controller: string,
 /**
- * Recovery address registered for this account, when smart-account state carries one.
+ * Recovery address registered for this account, when smart-account state
+ * carries one. ADVISORY / DISPLAY-ONLY: this is an inert stored field —
+ * the chain has no on-chain account `Recover` / `RotateController` path
+ * yet, so a registered recovery address cannot currently be exercised.
+ * Surfaces MUST NOT present this as a working "recover account" action.
  */
 recovery: string | null,
 /**
