@@ -197,6 +197,12 @@ pub struct TransactionReceipt {
     )]
     #[cfg_attr(feature = "ts-bindings", ts(rename = "executionUnitsUsed"))]
     pub execution_units_used: u64,
+    /// Human-readable failure reason when `status == 0` (OBS-1). `None` on
+    /// success; carries a short machine-stable label (e.g. `"OutOfGas"`) or
+    /// the decoded revert message otherwise. Absent from JSON on success.
+    #[serde(default, rename = "revertReason", alias = "revert_reason")]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "revertReason", optional))]
+    pub revert_reason: Option<String>,
 }
 
 /// Maximum native receipt event rows returned by the node's v4.1 API surface.

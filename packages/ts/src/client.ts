@@ -1206,12 +1206,27 @@ export interface ClusterNameResponse {
 export interface CirculatingSupplyResponse {
   circulatingSupplyLythoshi: string;
   initialSupplyLythoshi: string;
+  /** H1/#60 — cumulative minted native LYTH (block rewards). */
+  totalMintedLythoshi: string;
   totalBurnedLythoshi: string;
 }
 
 /** `lyth_totalBurned` response. Amount is a decimal lythoshi string (u128). */
 export interface TotalBurnedResponse {
   totalBurnedLythoshi: string;
+}
+
+/** `lyth_totalMinted` response — cumulative minted native LYTH from block rewards (decimal lythoshi string, H1/#60). */
+export interface TotalMintedResponse {
+  totalMintedLythoshi: string;
+}
+
+/** `lyth_totalSupply` response — authoritative supply accounting (H1/#60). `current = initial + minted − burned`. */
+export interface TotalSupplyResponse {
+  initialSupplyLythoshi: string;
+  totalMintedLythoshi: string;
+  totalBurnedLythoshi: string;
+  currentSupplyLythoshi: string;
 }
 
 /** `lyth_swapIntentStatus` response — bridge swap-intent / DKG-reshare lifecycle. */
@@ -2543,6 +2558,16 @@ export class RpcClient {
   /** `lyth_totalBurned` — cumulative burned native LYTH (decimal lythoshi string). */
   async lythTotalBurned(): Promise<TotalBurnedResponse> {
     return this.call("lyth_totalBurned", []);
+  }
+
+  /** `lyth_totalMinted` — cumulative minted native LYTH from block rewards (decimal lythoshi string, H1/#60). */
+  async lythTotalMinted(): Promise<TotalMintedResponse> {
+    return this.call("lyth_totalMinted", []);
+  }
+
+  /** `lyth_totalSupply` — authoritative supply accounting: `{ initial, minted, burned, current }` (H1/#60). */
+  async lythTotalSupply(): Promise<TotalSupplyResponse> {
+    return this.call("lyth_totalSupply", []);
   }
 
   /** `lyth_swapIntentStatus` — bridge swap-intent / DKG-reshare lifecycle for one intent id. */

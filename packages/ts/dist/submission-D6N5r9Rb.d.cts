@@ -2180,6 +2180,12 @@ type TransactionReceipt = {
      * Execution units consumed by this transaction.
      */
     executionUnitsUsed: bigint;
+    /**
+     * Human-readable failure reason when `status == 0` (OBS-1). `None` on
+     * success; carries a short machine-stable label (e.g. `"OutOfGas"`) or
+     * the decoded revert message otherwise. Absent from JSON on success.
+     */
+    revertReason?: string;
 };
 
 /**
@@ -5231,11 +5237,24 @@ interface ClusterNameResponse {
 interface CirculatingSupplyResponse {
     circulatingSupplyLythoshi: string;
     initialSupplyLythoshi: string;
+    /** H1/#60 — cumulative minted native LYTH (block rewards). */
+    totalMintedLythoshi: string;
     totalBurnedLythoshi: string;
 }
 /** `lyth_totalBurned` response. Amount is a decimal lythoshi string (u128). */
 interface TotalBurnedResponse {
     totalBurnedLythoshi: string;
+}
+/** `lyth_totalMinted` response — cumulative minted native LYTH from block rewards (decimal lythoshi string, H1/#60). */
+interface TotalMintedResponse {
+    totalMintedLythoshi: string;
+}
+/** `lyth_totalSupply` response — authoritative supply accounting (H1/#60). `current = initial + minted − burned`. */
+interface TotalSupplyResponse {
+    initialSupplyLythoshi: string;
+    totalMintedLythoshi: string;
+    totalBurnedLythoshi: string;
+    currentSupplyLythoshi: string;
 }
 /** `lyth_swapIntentStatus` response — bridge swap-intent / DKG-reshare lifecycle. */
 interface SwapIntentStatus {
@@ -5666,6 +5685,10 @@ declare class RpcClient {
     lythCirculatingSupply(): Promise<CirculatingSupplyResponse>;
     /** `lyth_totalBurned` — cumulative burned native LYTH (decimal lythoshi string). */
     lythTotalBurned(): Promise<TotalBurnedResponse>;
+    /** `lyth_totalMinted` — cumulative minted native LYTH from block rewards (decimal lythoshi string, H1/#60). */
+    lythTotalMinted(): Promise<TotalMintedResponse>;
+    /** `lyth_totalSupply` — authoritative supply accounting: `{ initial, minted, burned, current }` (H1/#60). */
+    lythTotalSupply(): Promise<TotalSupplyResponse>;
     /** `lyth_swapIntentStatus` — bridge swap-intent / DKG-reshare lifecycle for one intent id. */
     lythSwapIntentStatus(intentId: number | bigint | string): Promise<SwapIntentStatus>;
     /**

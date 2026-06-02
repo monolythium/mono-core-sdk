@@ -27,4 +27,10 @@ status: number,
 /**
  * Execution units consumed by this transaction.
  */
-executionUnitsUsed: bigint, };
+executionUnitsUsed: bigint,
+/**
+ * Human-readable failure reason when `status == 0` (OBS-1). `None` on
+ * success; carries a short machine-stable label (e.g. `"OutOfGas"`) or
+ * the decoded revert message otherwise. Absent from JSON on success.
+ */
+revertReason?: string, };

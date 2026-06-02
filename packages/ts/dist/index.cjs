@@ -3571,6 +3571,14 @@ var RpcClient = class _RpcClient {
   async lythTotalBurned() {
     return this.call("lyth_totalBurned", []);
   }
+  /** `lyth_totalMinted` — cumulative minted native LYTH from block rewards (decimal lythoshi string, H1/#60). */
+  async lythTotalMinted() {
+    return this.call("lyth_totalMinted", []);
+  }
+  /** `lyth_totalSupply` — authoritative supply accounting: `{ initial, minted, burned, current }` (H1/#60). */
+  async lythTotalSupply() {
+    return this.call("lyth_totalSupply", []);
+  }
   /** `lyth_swapIntentStatus` — bridge swap-intent / DKG-reshare lifecycle for one intent id. */
   async lythSwapIntentStatus(intentId) {
     let id;
@@ -9727,7 +9735,7 @@ var MONOLYTHIUM_NETWORKS = {
 };
 
 // src/index.ts
-var version = "0.3.15";
+var version = "0.3.16";
 
 exports.ADDRESS_HRP = ADDRESS_HRP;
 exports.ADDRESS_KIND_HRPS = ADDRESS_KIND_HRPS;
