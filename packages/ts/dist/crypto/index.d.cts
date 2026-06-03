@@ -1,5 +1,5 @@
-import { I as MlDsa65Backend } from '../submission-D6N5r9Rb.cjs';
-export { iw as ADDRESS_DERIVATION_DOMAIN, ix as DKG_AEAD_TAG_LEN, iy as DKG_NONCE_LEN, iz as DecryptHint, iA as ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE, iB as ENUM_VARIANT_INDEX_ML_DSA_65, iC as EncryptedEnvelope, iD as EncryptedSubmission, E as EncryptionKey, iE as ML_DSA_65_PUBLIC_KEY_LEN, iF as ML_DSA_65_SEED_LEN, iG as ML_DSA_65_SIGNATURE_LEN, iH as ML_DSA_65_SIGNING_KEY_LEN, iI as ML_KEM_768_CIPHERTEXT_LEN, iJ as ML_KEM_768_ENCAPSULATION_KEY_LEN, iK as ML_KEM_768_SHARED_SECRET_LEN, F as MempoolClass, D as NativeEvmTxFields, iL as NativeTxExtension, iM as NativeTxExtensionDescriptor, iN as NativeTxExtensionLike, iO as NonceAad, iP as PlaintextSubmission, iQ as STANDARD_ALGO_NUMBER_ML_DSA_65, iR as bincodeDecryptHint, iS as bincodeEncryptedEnvelope, iT as bincodeNonceAad, iU as bincodeSignedTransaction, iV as buildEncryptedEnvelope, iW as buildEncryptedSubmission, iX as buildPlaintextSubmission, iY as encodeMlDsa65Opaque, iZ as encodeTransactionForHash, i_ as encryptInnerTx, i$ as fetchEncryptionKey, j0 as mlDsa65AddressBytes, j1 as mlDsa65AddressFromPublicKey, j2 as outerSigDigest, j3 as submitEncryptedEnvelope, j4 as submitPlaintextTransaction, j5 as submitTransactionWithPrivacy } from '../submission-D6N5r9Rb.cjs';
+import { I as MlDsa65Backend, H as RpcClient, iw as NonceAad } from '../submission-CKXlYstD.cjs';
+export { ix as ADDRESS_DERIVATION_DOMAIN, iy as DKG_AEAD_TAG_LEN, iz as DKG_NONCE_LEN, iA as DecryptHint, iB as ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE, iC as ENUM_VARIANT_INDEX_ML_DSA_65, iD as EncryptedEnvelope, iE as EncryptedSubmission, E as EncryptionKey, iF as ML_DSA_65_PUBLIC_KEY_LEN, iG as ML_DSA_65_SEED_LEN, iH as ML_DSA_65_SIGNATURE_LEN, iI as ML_DSA_65_SIGNING_KEY_LEN, iJ as ML_KEM_768_CIPHERTEXT_LEN, iK as ML_KEM_768_ENCAPSULATION_KEY_LEN, iL as ML_KEM_768_SHARED_SECRET_LEN, F as MempoolClass, D as NativeEvmTxFields, iM as NativeTxExtension, iN as NativeTxExtensionDescriptor, iO as NativeTxExtensionLike, iP as PlaintextSubmission, iQ as STANDARD_ALGO_NUMBER_ML_DSA_65, iR as bincodeDecryptHint, iS as bincodeEncryptedEnvelope, iT as bincodeNonceAad, iU as bincodeSignedTransaction, iV as buildEncryptedEnvelope, iW as buildEncryptedSubmission, iX as buildPlaintextSubmission, iY as encodeMlDsa65Opaque, iZ as encodeTransactionForHash, i_ as encryptInnerTx, i$ as fetchEncryptionKey, j0 as mlDsa65AddressBytes, j1 as mlDsa65AddressFromPublicKey, j2 as outerSigDigest, j3 as submitEncryptedEnvelope, j4 as submitPlaintextTransaction, j5 as submitTransactionWithPrivacy } from '../submission-CKXlYstD.cjs';
 
 declare class BincodeWriter {
     #private;
@@ -51,4 +51,253 @@ declare function pqm1MnemonicToMlDsa65Backend(mnemonic: string): MlDsa65Backend;
 declare function pqm1MnemonicToAddress(mnemonic: string): string;
 declare function generatePqm1Mnemonic(rng?: Pqm1Rng): string;
 
-export { BincodeWriter, MlDsa65Backend, PQM1_ALGO_TAG_FALCON512_RESERVED, PQM1_ALGO_TAG_MLDSA65, PQM1_ALGO_TAG_MLDSA87_RESERVED, PQM1_ALGO_TAG_SLHDSA128S_RESERVED, PQM1_ENTROPY_LEN, PQM1_PAYLOAD_LEN, PQM1_V1_MLDSA65_DOMAIN_TAG, PQM1_V1_MNEMONIC_WORDS, PQM1_VERSION_V1, Pqm1Error, type Pqm1ErrorKind, type Pqm1Payload, type Pqm1Rng, assemblePqm1Payload, bytesToHex, concatBytes, derivePqm1MlDsa65SeedFromPayload, expectBytes, generatePqm1Mnemonic, hexToBytes, parsePqm1Payload, pqm1MnemonicToAddress, pqm1MnemonicToMlDsa65Backend, pqm1MnemonicToMlDsa65Seed, pqm1MnemonicToPayload, pqm1PayloadToMnemonic };
+/**
+ * LythiumSeal scheme-3 client-side seal primitive.
+ *
+ * Post-quantum cluster-threshold encrypted-mempool sealing:
+ * cluster-ML-KEM-768 (FIPS-203) + information-theoretic GF(256) Shamir
+ * `t`-of-`n` + committing ChaCha20-Poly1305 (with an explicit SHAKE256
+ * key-commitment). A signed transaction body is sealed to a committee of
+ * `n` operators such that any `t` of them, each holding only its own
+ * ML-KEM decapsulation key, must cooperate to recover the plaintext. No
+ * single operator (and no minority of `< t`) can read the body.
+ *
+ * This is a byte-exact port of the standalone `lythiumseal` Rust crate
+ * (github.com/monolythium/lythiumseal) plus the chain-side
+ * `LythiumSealEnvelope` wire shape from `mono-core`'s mempool
+ * (`seal_to_cluster`). Byte-compatibility is proven by a cross-language
+ * KAT (`tests/lythiumseal-kat.test.ts`) against vectors generated from the
+ * Rust reference: the same fixed roster + deterministic draw order
+ * reproduces the exact envelope bincode bytes the chain accepts, and a
+ * Rust-sealed envelope round-trips through the TS decoder.
+ *
+ * The cryptography is standardized: ML-KEM-768 from `@noble/post-quantum`,
+ * ChaCha20-Poly1305 from `@noble/ciphers`, and SHAKE256 from
+ * `@noble/hashes`. The GF(256) Shamir layer is the AES field (reduction
+ * polynomial 0x11b) implemented in-module to match the crate exactly.
+ */
+/** ML-KEM-768 encapsulation-key byte length. */
+declare const SEAL_EK_LEN = 1184;
+/** ML-KEM-768 decapsulation-key byte length. */
+declare const SEAL_DK_LEN = 2400;
+/** ML-KEM-768 ciphertext byte length. */
+declare const SEAL_KEM_CT_LEN = 1088;
+/** ML-KEM-768 keygen seed length (`d || z`, FIPS-203). */
+declare const SEAL_KEM_SEED_LEN = 64;
+/** AEAD key length (ChaCha20-Poly1305 / body key). */
+declare const SEAL_KEY_LEN = 32;
+/** AEAD nonce length (96-bit). */
+declare const SEAL_NONCE_LEN = 12;
+/** Poly1305 tag length. */
+declare const SEAL_TAG_LEN = 16;
+/** Explicit SHAKE256 key-commitment length. */
+declare const SEAL_COMMIT_LEN = 32;
+/** Shamir share wire length (`index || value`). */
+declare const SEAL_SHARE_LEN: number;
+/** Scheme selector for the cluster-ML-KEM + Shamir threshold body. */
+declare const CLUSTER_MLKEM_SHAMIR = 3;
+/**
+ * Random source for a seal: fills `dest` with random bytes. Production
+ * callers pass a CSPRNG-backed source ({@link cryptoRandomSource}); the
+ * KAT passes a deterministic source so the seal bytes are reproducible.
+ *
+ * Each call must consume the source the same way the Rust reference does:
+ * the deterministic source models `rand_core`'s `fill_bytes`, which fills
+ * in 8-byte chunks (one `u64` per chunk) and discards the unused tail of
+ * the final chunk of each call.
+ */
+interface SealRandomSource {
+    fillBytes(dest: Uint8Array): void;
+}
+/** CSPRNG-backed source (WebCrypto). The default for production seals. */
+declare function cryptoRandomSource(): SealRandomSource;
+interface CommittingBody {
+    nonce: Uint8Array;
+    ct: Uint8Array;
+    commitment: Uint8Array;
+}
+/**
+ * `keccak256(domain || cluster_id_le || t || n || concat(idx || ek)...)`.
+ * Commits to the exact recipient ek set + order. Operators and wallets
+ * MUST compute it identically; this is the single canonical site.
+ *
+ * keccak256 is taken from the ml-dsa module's hash import to avoid a second
+ * keccak dependency; passed in by the caller to keep this module
+ * cipher-only.
+ */
+declare function sealRosterHash(keccak256: (input: Uint8Array) => Uint8Array, clusterId: number, t: number, n: number, roster: ReadonlyArray<{
+    operatorIndex: number;
+    ek: Uint8Array;
+}>): Uint8Array;
+/** One recipient slot in the scheme-3 envelope. */
+interface SealRecipient {
+    operatorIndex: number;
+    kemCt: Uint8Array;
+    wrapped: CommittingBody;
+}
+/**
+ * Scheme-3 LythiumSeal envelope - the encrypted-tx body for the
+ * cluster-ML-KEM + Shamir threshold path. Bincode-encodes into the bytes
+ * that ride inside `EncryptedEnvelope.ciphertext`.
+ */
+interface LythiumSealEnvelope {
+    clusterId: number;
+    epoch: bigint;
+    rosterHash: Uint8Array;
+    t: number;
+    n: number;
+    aeadBody: CommittingBody;
+    recipients: SealRecipient[];
+}
+/**
+ * Bincode-encode (bincode 1.3 defaults: LE fixint, `u64` length prefixes,
+ * raw fixed-size arrays) the envelope into the `EncryptedEnvelope.ciphertext`
+ * body bytes. Byte-identical to `LythiumSealEnvelope::encode` in mono-core.
+ */
+declare function encodeSealEnvelope(env: LythiumSealEnvelope): Uint8Array;
+/**
+ * Seal `plaintext` to the cluster's ordered `recipientEks` (`n` operators)
+ * at reconstruction threshold `t`, bound to `(clusterId, epoch,
+ * rosterHash)`. Draws a fresh body key for every call (nonce safety rests
+ * on body-key freshness, not nonce uniqueness - see the crate invariants),
+ * GF(256) Shamir `t`-of-`n` splits it, and ML-KEM-encapsulates one share
+ * to each operator's encapsulation key under a KDF-bound member KEK.
+ *
+ * The result is the `LythiumSealEnvelope` (scheme 3) that nests inside the
+ * outer `EncryptedEnvelope.ciphertext`. Recovering the plaintext requires
+ * `t` operators to each decapsulate their own slot; no single operator can.
+ *
+ * @param rng deterministic source for the KAT; defaults to a CSPRNG.
+ */
+declare function sealToCluster(args: {
+    plaintext: Uint8Array;
+    recipientEks: ReadonlyArray<Uint8Array>;
+    t: number;
+    clusterId: number;
+    epoch: bigint;
+    rosterHash: Uint8Array;
+    rng?: SealRandomSource;
+}): LythiumSealEnvelope;
+
+/**
+ * Client-side scheme-3 LythiumSeal seal path for the wallet/SDK.
+ *
+ * `getClusterSealKeys` reads the cluster seal roster (per-operator ML-KEM-768
+ * encapsulation keys + `(t, n)` + roster hash + epoch). `sealTransaction`
+ * turns a signed inner transaction into the scheme-3 `LythiumSealEnvelope`,
+ * wraps it in an `EncryptedEnvelope` with the outer ML-DSA-65 signature, and
+ * yields the wire bytes mono-core's `lyth_submitEncrypted` accepts.
+ *
+ * Byte-compatibility with the chain is proven by the cross-language KAT in
+ * `tests/lythiumseal-kat.test.ts`.
+ */
+
+/** Algorithm tag the node serves for the scheme-3 seal path. */
+declare const CLUSTER_MLKEM_SHAMIR_ALGO = "cluster-mlkem768-shamir";
+/**
+ * The cluster seal roster the SDK seals a transaction body to.
+ *
+ * Built from the `lyth_getClusterSealKeys(clusterId)` RPC response (or read
+ * from genesis when that RPC is disabled on the public profile): the ordered
+ * per-operator ML-KEM-768 encapsulation keys + the `(t, n)` threshold + the
+ * roster hash + the epoch.
+ */
+interface ClusterSealKeys {
+    algo: string;
+    clusterId: number;
+    epoch: bigint;
+    /** 32-byte roster hash the seal context binds. */
+    rosterHash: Uint8Array;
+    /** Reconstruction threshold `t`. */
+    t: number;
+    /** Total operators `n`. */
+    n: number;
+    /** Per-operator 1184-byte ML-KEM-768 encapsulation keys, ordered `1..=n`. */
+    recipientEks: Uint8Array[];
+}
+/** One operator's entry in a roster source (RPC JSON or genesis). */
+interface ClusterSealKeyEntryInput {
+    operatorIndex: number;
+    /** `0x`-hex of the operator's 1184-byte ML-KEM-768 encapsulation key. */
+    mlKemEk: string;
+}
+/** A cluster seal roster as served by the RPC or read from genesis. */
+interface ClusterSealKeysSource {
+    algo?: string;
+    clusterId: number;
+    epoch: number | string | bigint;
+    /** `0x`-hex of the 32-byte roster hash (optional; recomputed + verified). */
+    rosterHash?: string;
+    t: number;
+    n: number;
+    roster: ClusterSealKeyEntryInput[];
+}
+/**
+ * Normalize a roster source into the typed {@link ClusterSealKeys} the SDK
+ * seals against. The roster hash is RECOMPUTED from the ordered ek set via
+ * the canonical `seal_roster_hash` and, when the source carries one, the
+ * recomputed value must match - so a wallet can never seal under a roster
+ * hash that does not commit to the exact recipient set it is sealing to.
+ *
+ * @throws if the roster is empty, an ek has the wrong length, the operator
+ *   indices are not the contiguous `1..=n` order, the threshold is out of
+ *   `2 <= t <= n`, or a supplied roster hash does not match the recomputed one.
+ */
+declare function parseClusterSealKeys(source: ClusterSealKeysSource): ClusterSealKeys;
+/**
+ * Fetch the cluster seal roster from a running node via
+ * `lyth_getClusterSealKeys(clusterId)`.
+ *
+ * NOTE: this RPC is DISABLED on the public node profile. When it returns
+ * "method not found" / "unavailable", read the roster from genesis instead
+ * and pass it through {@link parseClusterSealKeys} - the roster lives in the
+ * genesis `[[clusters.members]]` `seal_ek` fields, which is exactly what the
+ * RPC would otherwise serve.
+ *
+ * @throws if the RPC is unavailable (carry the roster as input instead) or
+ *   the served roster does not validate.
+ */
+declare function getClusterSealKeys(client: RpcClient, clusterId?: number): Promise<ClusterSealKeys>;
+/** A built scheme-3 encrypted submission, ready for `lyth_submitEncrypted`. */
+interface SealedSubmission {
+    /** Bincode `EncryptedEnvelope` wire bytes, `0x`-prefixed hex. */
+    envelopeWireHex: string;
+    /** Bincode `EncryptedEnvelope` wire bytes. */
+    envelopeWireBytes: Uint8Array;
+    /** Length of the inner scheme-3 ciphertext body in bytes. */
+    ciphertextBytes: number;
+}
+/**
+ * Seal a signed inner transaction to the cluster and wrap it in an
+ * `EncryptedEnvelope` with the outer ML-DSA-65 signature.
+ *
+ * `signedTxBincode` is the bincode `SignedTransaction` wire bytes (the body
+ * `mesh_submitTx` would otherwise carry in the clear). `aad` is the
+ * authenticated envelope header; per Law §3.6 / R3-H08 its fee fields MUST
+ * mirror the inner tx's fee fields exactly, so the chain's `verify_inner_match`
+ * passes on reveal - the caller is responsible for building it from the same
+ * fields it signed.
+ *
+ * The outer signature is taken over the canonical preimage
+ * `keccak256(bincode(aad) || ciphertext || bincode(hint) || sender_pubkey)`,
+ * identical to mono-core's `EncryptedEnvelope::signed_digest`.
+ *
+ * @param rng deterministic source for the KAT; defaults to a CSPRNG.
+ */
+declare function sealTransaction(args: {
+    signedTxBincode: Uint8Array;
+    clusterSealKeys: ClusterSealKeys;
+    aad: NonceAad;
+    senderAddress: Uint8Array;
+    senderPubkey: Uint8Array;
+    signOuterDigest: (digest: Uint8Array) => Promise<Uint8Array> | Uint8Array;
+    rng?: SealRandomSource;
+}): Promise<SealedSubmission>;
+/**
+ * Submit a built scheme-3 encrypted envelope through `lyth_submitEncrypted`.
+ *
+ * @returns the mempool tx hash the node assigns on admission.
+ */
+declare function submitSealedTransaction(client: RpcClient, submission: SealedSubmission): Promise<string>;
+
+export { BincodeWriter, CLUSTER_MLKEM_SHAMIR, CLUSTER_MLKEM_SHAMIR_ALGO, type ClusterSealKeyEntryInput, type ClusterSealKeys, type ClusterSealKeysSource, type LythiumSealEnvelope, MlDsa65Backend, NonceAad, PQM1_ALGO_TAG_FALCON512_RESERVED, PQM1_ALGO_TAG_MLDSA65, PQM1_ALGO_TAG_MLDSA87_RESERVED, PQM1_ALGO_TAG_SLHDSA128S_RESERVED, PQM1_ENTROPY_LEN, PQM1_PAYLOAD_LEN, PQM1_V1_MLDSA65_DOMAIN_TAG, PQM1_V1_MNEMONIC_WORDS, PQM1_VERSION_V1, Pqm1Error, type Pqm1ErrorKind, type Pqm1Payload, type Pqm1Rng, SEAL_COMMIT_LEN, SEAL_DK_LEN, SEAL_EK_LEN, SEAL_KEM_CT_LEN, SEAL_KEM_SEED_LEN, SEAL_KEY_LEN, SEAL_NONCE_LEN, SEAL_SHARE_LEN, SEAL_TAG_LEN, type SealRandomSource, type SealRecipient, type SealedSubmission, assemblePqm1Payload, bytesToHex, concatBytes, cryptoRandomSource, derivePqm1MlDsa65SeedFromPayload, encodeSealEnvelope, expectBytes, generatePqm1Mnemonic, getClusterSealKeys, hexToBytes, parseClusterSealKeys, parsePqm1Payload, pqm1MnemonicToAddress, pqm1MnemonicToMlDsa65Backend, pqm1MnemonicToMlDsa65Seed, pqm1MnemonicToPayload, pqm1PayloadToMnemonic, sealRosterHash, sealToCluster, sealTransaction, submitSealedTransaction };

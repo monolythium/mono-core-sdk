@@ -264,6 +264,56 @@ const backend = pqm1MnemonicToMlDsa65Backend(mnemonic);
 const signature = backend.sign(new Uint8Array([1, 2, 3]));
 ```
 
+### LythiumSeal scheme-3 (encrypted mempool)
+
+The SDK can seal a signed transaction to a cluster's post-quantum
+threshold recipient set so that no single operator can read the body. The
+scheme is cluster-ML-KEM-768 (FIPS-203) + GF(256) Shamir `t`-of-`n` +
+committing ChaCha20-Poly1305 with an explicit SHAKE256 key-commitment. The
+TypeScript seal is byte-exact against the chain: a cross-language known-
+answer test reproduces the exact envelope bincode bytes the node accepts.
+
+```ts
+import {
+  getClusterSealKeys,
+  parseClusterSealKeys,
+  sealTransaction,
+  submitSealedTransaction,
+  MempoolClass,
+} from "@monolythium/core-sdk/crypto";
+
+// Read the cluster seal roster. On nodes that disable
+// `lyth_getClusterSealKeys` (the public profile), read the roster from
+// genesis (`[[clusters.members]]` `seal_ek`) and pass it through
+// `parseClusterSealKeys` instead - the roster hash is recomputed and
+// verified against the ek set so a wallet cannot seal under a mismatched
+// roster hash.
+const clusterSealKeys = await getClusterSealKeys(client, 0);
+
+// `aad` fee fields MUST mirror the signed inner tx exactly (Law §3.6).
+const submission = await sealTransaction({
+  signedTxBincode,          // bincode SignedTransaction wire bytes
+  clusterSealKeys,
+  aad: {
+    sender,                 // 20-byte address
+    nonce,
+    chainId,
+    class: MempoolClass.Transfer,
+    maxFeePerGas,
+    maxPriorityFeePerGas,
+    gasLimit,
+  },
+  senderAddress: sender,
+  senderPubkey,             // 1952-byte ML-DSA-65 public key
+  signOuterDigest: (digest) => backend.sign(digest),
+});
+
+await submitSealedTransaction(client, submission);
+```
+
+The lower-level `sealToCluster` / `encodeSealEnvelope` / `sealRosterHash`
+primitives are also exported for callers that build the envelope directly.
+
 ### ethers / viem compatibility
 
 The SDK does not ship an ethers-style provider or signer. The chain

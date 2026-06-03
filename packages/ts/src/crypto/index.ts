@@ -87,3 +87,37 @@ export type {
   EncryptionKey,
   PlaintextSubmission,
 } from "./submission.js";
+export {
+  CLUSTER_MLKEM_SHAMIR,
+  cryptoRandomSource,
+  encodeSealEnvelope,
+  SEAL_COMMIT_LEN,
+  SEAL_DK_LEN,
+  SEAL_EK_LEN,
+  SEAL_KEM_CT_LEN,
+  SEAL_KEM_SEED_LEN,
+  SEAL_KEY_LEN,
+  SEAL_NONCE_LEN,
+  SEAL_SHARE_LEN,
+  SEAL_TAG_LEN,
+  sealRosterHash,
+  sealToCluster,
+} from "./lythiumseal.js";
+export type {
+  LythiumSealEnvelope,
+  SealRandomSource,
+  SealRecipient,
+} from "./lythiumseal.js";
+export {
+  CLUSTER_MLKEM_SHAMIR_ALGO,
+  getClusterSealKeys,
+  parseClusterSealKeys,
+  sealTransaction,
+  submitSealedTransaction,
+} from "./seal.js";
+export type {
+  ClusterSealKeyEntryInput,
+  ClusterSealKeys,
+  ClusterSealKeysSource,
+  SealedSubmission,
+} from "./seal.js";

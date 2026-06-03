@@ -577,9 +577,326 @@ function bytesEqual(a, b) {
   }
   return true;
 }
+var SEAL_EK_LEN = 1184;
+var SEAL_DK_LEN = 2400;
+var SEAL_KEM_CT_LEN = 1088;
+var SEAL_KEM_SEED_LEN = 64;
+var SEAL_KEY_LEN = 32;
+var SEAL_NONCE_LEN = 12;
+var SEAL_TAG_LEN = 16;
+var SEAL_COMMIT_LEN = 32;
+var SEAL_SECRET_LEN = 32;
+var SEAL_SHARE_LEN = 1 + SEAL_SECRET_LEN;
+var CLUSTER_MLKEM_SHAMIR = 3;
+var COMMIT_DOMAIN = new TextEncoder().encode("lythiumseal/commit/v1");
+var KEK_DOMAIN = new TextEncoder().encode("lythiumseal/kek/v1");
+var NONCE_DOMAIN = new TextEncoder().encode("lythiumseal/nonce/v1");
+var BODY_AAD_DOMAIN = new TextEncoder().encode("lythiumseal/body/v1");
+var SHARE_AAD_DOMAIN = new TextEncoder().encode("lythiumseal/share/v1");
+var ROSTER_DOMAIN = new TextEncoder().encode("lythiumseal/roster/v1");
+function cryptoRandomSource() {
+  return {
+    fillBytes(dest) {
+      crypto.getRandomValues(dest);
+    }
+  };
+}
+function u32le(n) {
+  const out = new Uint8Array(4);
+  out[0] = n & 255;
+  out[1] = n >>> 8 & 255;
+  out[2] = n >>> 16 & 255;
+  out[3] = n >>> 24 & 255;
+  return out;
+}
+function u64le(n) {
+  const out = new Uint8Array(8);
+  let v = n;
+  for (let i = 0; i < 8; i++) {
+    out[i] = Number(v & 0xffn);
+    v >>= 8n;
+  }
+  return out;
+}
+function framed(field) {
+  return concatBytes(u32le(field.length), field);
+}
+function keyCommitment(key) {
+  return sha3_js.shake256(concatBytes(framed(COMMIT_DOMAIN), key), { dkLen: SEAL_COMMIT_LEN });
+}
+function deriveKek(sharedSecret, domain, clusterId, epoch, opIndex) {
+  const input = concatBytes(
+    framed(KEK_DOMAIN),
+    framed(sharedSecret),
+    framed(domain),
+    u32le(clusterId),
+    u64le(epoch),
+    Uint8Array.of(opIndex)
+  );
+  return sha3_js.shake256(input, { dkLen: SEAL_KEY_LEN });
+}
+function deriveNonce(domain, context) {
+  const input = concatBytes(framed(NONCE_DOMAIN), framed(domain), framed(context));
+  return sha3_js.shake256(input, { dkLen: SEAL_NONCE_LEN });
+}
+function bodyAad(ctx, k, n) {
+  return concatBytes(
+    BODY_AAD_DOMAIN,
+    u32le(ctx.clusterId),
+    u64le(ctx.epoch),
+    Uint8Array.of(k),
+    Uint8Array.of(n),
+    ctx.rosterHash
+  );
+}
+function shareAad(ctx, opIndex) {
+  return concatBytes(
+    SHARE_AAD_DOMAIN,
+    u32le(ctx.clusterId),
+    u64le(ctx.epoch),
+    Uint8Array.of(opIndex),
+    ctx.rosterHash
+  );
+}
+function aeadSeal(key, nonce, plaintext, aad) {
+  const cipher = chacha_js.chacha20poly1305(key, nonce, aad);
+  const ct = cipher.encrypt(plaintext);
+  return { nonce, ct, commitment: keyCommitment(key) };
+}
+function gfMul(a, b) {
+  let product = 0;
+  let x = a & 255;
+  let y = b & 255;
+  for (let i = 0; i < 8; i++) {
+    const mask = -(y & 1) & 255;
+    product ^= x & mask;
+    const high = -(x >> 7 & 1) & 255;
+    x = x << 1 & 255;
+    x ^= 27 & high;
+    y >>= 1;
+  }
+  return product & 255;
+}
+function polyEval(coeffs, x) {
+  let acc = 0;
+  for (let i = coeffs.length - 1; i >= 0; i--) {
+    acc = gfMul(acc, x) ^ coeffs[i];
+  }
+  return acc & 255;
+}
+function shamirSplit(secret, t, n, rng) {
+  const byteCoeffs = [];
+  for (let j = 0; j < SEAL_SECRET_LEN; j++) {
+    const c = new Uint8Array(t);
+    c[0] = secret[j];
+    if (t > 1) {
+      const tail = new Uint8Array(t - 1);
+      rng.fillBytes(tail);
+      c.set(tail, 1);
+    }
+    byteCoeffs.push(c);
+  }
+  const shares = [];
+  for (let k = 0; k < n; k++) {
+    const x = k + 1 & 255;
+    const value = new Uint8Array(SEAL_SECRET_LEN);
+    for (let j = 0; j < SEAL_SECRET_LEN; j++) {
+      value[j] = polyEval(byteCoeffs[j], x);
+    }
+    shares.push({ index: x, value });
+  }
+  return shares;
+}
+function shareToBytes(s) {
+  const out = new Uint8Array(SEAL_SHARE_LEN);
+  out[0] = s.index;
+  out.set(s.value, 1);
+  return out;
+}
+function sealRosterHash(keccak2562, clusterId, t, n, roster) {
+  const chunks = [ROSTER_DOMAIN, u32le(clusterId), Uint8Array.of(t), Uint8Array.of(n)];
+  for (const { operatorIndex, ek } of roster) {
+    chunks.push(Uint8Array.of(operatorIndex), ek);
+  }
+  return keccak2562(concatBytes(...chunks));
+}
+function encodeSealEnvelope(env) {
+  const chunks = [];
+  chunks.push(u32le(env.clusterId));
+  chunks.push(u64le(env.epoch));
+  chunks.push(expectBytes(env.rosterHash, 32, "rosterHash"));
+  chunks.push(Uint8Array.of(env.t));
+  chunks.push(Uint8Array.of(env.n));
+  pushAeadBody(chunks, env.aeadBody);
+  chunks.push(u64le(BigInt(env.recipients.length)));
+  for (const r of env.recipients) {
+    chunks.push(Uint8Array.of(r.operatorIndex));
+    chunks.push(u64le(BigInt(r.kemCt.length)));
+    chunks.push(r.kemCt);
+    pushAeadBody(chunks, r.wrapped);
+  }
+  return concatBytes(...chunks);
+}
+function pushAeadBody(chunks, body) {
+  chunks.push(expectBytes(body.nonce, SEAL_NONCE_LEN, "aead nonce"));
+  chunks.push(u64le(BigInt(body.ct.length)));
+  chunks.push(body.ct);
+  chunks.push(expectBytes(body.commitment, SEAL_COMMIT_LEN, "aead commitment"));
+}
+function sealToCluster(args) {
+  const { plaintext, recipientEks, t, clusterId } = args;
+  const epoch = args.epoch;
+  const rosterHash = expectBytes(args.rosterHash, 32, "rosterHash");
+  const rng = args.rng ?? cryptoRandomSource();
+  const n = recipientEks.length;
+  if (!Number.isInteger(t) || t < 1 || t > n || n < 1 || n > 255) {
+    throw new Error(`invalid threshold/recipient count: t=${t} n=${n}`);
+  }
+  for (let i = 0; i < n; i++) {
+    expectBytes(recipientEks[i], SEAL_EK_LEN, `recipientEks[${i}]`);
+  }
+  const ctx = { clusterId, epoch, rosterHash };
+  const bodyKey = new Uint8Array(SEAL_KEY_LEN);
+  rng.fillBytes(bodyKey);
+  const aad = bodyAad(ctx, t, n);
+  const bodyNonce = deriveNonce(new TextEncoder().encode("body"), aad);
+  const aeadBody = aeadSeal(bodyKey, bodyNonce, plaintext, aad);
+  const shares = shamirSplit(bodyKey, t, n, rng);
+  const recipients = [];
+  for (let i = 0; i < n; i++) {
+    const opIndex = i + 1 & 255;
+    const m = new Uint8Array(32);
+    rng.fillBytes(m);
+    const { cipherText: kemCt, sharedSecret } = mlKem_js.ml_kem768.encapsulate(recipientEks[i], m);
+    const kek = deriveKek(sharedSecret, rosterHash, clusterId, epoch, opIndex);
+    const sAad = shareAad(ctx, opIndex);
+    const wrapNonce = deriveNonce(new TextEncoder().encode("share"), sAad);
+    const wrapped = aeadSeal(kek, wrapNonce, shareToBytes(shares[i]), sAad);
+    recipients.push({ operatorIndex: opIndex, kemCt, wrapped });
+    sharedSecret.fill(0);
+    kek.fill(0);
+  }
+  bodyKey.fill(0);
+  return {
+    clusterId,
+    epoch,
+    rosterHash,
+    t,
+    n,
+    aeadBody,
+    recipients
+  };
+}
+var CLUSTER_MLKEM_SHAMIR_ALGO = "cluster-mlkem768-shamir";
+function parseClusterSealKeys(source) {
+  const n = source.roster.length;
+  if (n === 0) {
+    throw new Error("cluster seal roster is empty");
+  }
+  if (source.n !== n) {
+    throw new Error(`cluster seal roster n=${source.n} disagrees with ${n} entries`);
+  }
+  if (!Number.isInteger(source.t) || source.t < 2 || source.t > n) {
+    throw new Error(`cluster seal threshold t=${source.t} out of range 2..=${n}`);
+  }
+  const sorted = [...source.roster].sort((a, b) => a.operatorIndex - b.operatorIndex);
+  const recipientEks = [];
+  const hashInput = [];
+  for (let i = 0; i < n; i++) {
+    const entry = sorted[i];
+    if (entry.operatorIndex !== i + 1) {
+      throw new Error(
+        `cluster seal roster operator indices must be 1..=${n}; got ${entry.operatorIndex} at slot ${i + 1}`
+      );
+    }
+    const ek = expectBytes(hexToBytes(entry.mlKemEk, `operator ${entry.operatorIndex} mlKemEk`), SEAL_EK_LEN, `operator ${entry.operatorIndex} ek`);
+    recipientEks.push(ek);
+    hashInput.push({ operatorIndex: entry.operatorIndex, ek });
+  }
+  const recomputed = sealRosterHash(keccak256, source.clusterId, source.t, n, hashInput);
+  if (source.rosterHash !== void 0) {
+    const supplied = expectBytes(hexToBytes(source.rosterHash, "rosterHash"), 32, "rosterHash");
+    if (!bytesEqual2(supplied, recomputed)) {
+      throw new Error(
+        `cluster seal roster hash mismatch: source ${bytesToHex(supplied)} != recomputed ${bytesToHex(recomputed)} (the roster hash does not commit to this ek set)`
+      );
+    }
+  }
+  return {
+    algo: source.algo ?? CLUSTER_MLKEM_SHAMIR_ALGO,
+    clusterId: source.clusterId,
+    epoch: toBigInt(source.epoch),
+    rosterHash: recomputed,
+    t: source.t,
+    n,
+    recipientEks
+  };
+}
+async function getClusterSealKeys(client, clusterId = 0) {
+  const result = await client.call(
+    "lyth_getClusterSealKeys",
+    [clusterId]
+  );
+  return parseClusterSealKeys({ ...result, clusterId: result.clusterId ?? clusterId });
+}
+async function sealTransaction(args) {
+  const keys = args.clusterSealKeys;
+  const senderPubkey = expectBytes(args.senderPubkey, ML_DSA_65_PUBLIC_KEY_LEN, "senderPubkey");
+  const senderAddress = expectBytes(args.senderAddress, 20, "senderAddress");
+  const env = sealToCluster({
+    plaintext: args.signedTxBincode,
+    recipientEks: keys.recipientEks,
+    t: keys.t,
+    clusterId: keys.clusterId,
+    epoch: keys.epoch,
+    rosterHash: keys.rosterHash,
+    rng: args.rng
+  });
+  const ciphertext = encodeSealEnvelope(env);
+  const decryptionHint = { epoch: keys.epoch, scheme: CLUSTER_MLKEM_SHAMIR };
+  const digest = outerSigDigest(args.aad, ciphertext, decryptionHint, senderPubkey);
+  const outerSignature = expectBytes(
+    await args.signOuterDigest(digest),
+    ML_DSA_65_SIGNATURE_LEN,
+    "outerSignature"
+  );
+  const envelope = {
+    nonceAad: args.aad,
+    ciphertext,
+    decryptionHint,
+    senderPubkey,
+    outerSignature,
+    sender: senderAddress
+  };
+  const envelopeWireBytes = bincodeEncryptedEnvelope(envelope);
+  return {
+    envelopeWireHex: `0x${bytesToHex(envelopeWireBytes).slice(2)}`,
+    envelopeWireBytes,
+    ciphertextBytes: ciphertext.length
+  };
+}
+async function submitSealedTransaction(client, submission) {
+  return client.call("lyth_submitEncrypted", [submission.envelopeWireHex]);
+}
+function keccak256(input) {
+  return sha3_js.keccak_256(input);
+}
+function toBigInt(value) {
+  if (typeof value === "bigint") return value;
+  return BigInt(value);
+}
+function bytesEqual2(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
 
 exports.ADDRESS_DERIVATION_DOMAIN = ADDRESS_DERIVATION_DOMAIN;
 exports.BincodeWriter = BincodeWriter;
+exports.CLUSTER_MLKEM_SHAMIR = CLUSTER_MLKEM_SHAMIR;
+exports.CLUSTER_MLKEM_SHAMIR_ALGO = CLUSTER_MLKEM_SHAMIR_ALGO;
 exports.DKG_AEAD_TAG_LEN = DKG_AEAD_TAG_LEN;
 exports.DKG_NONCE_LEN = DKG_NONCE_LEN;
 exports.ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE = ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE;
@@ -603,6 +920,15 @@ exports.PQM1_V1_MLDSA65_DOMAIN_TAG = PQM1_V1_MLDSA65_DOMAIN_TAG;
 exports.PQM1_V1_MNEMONIC_WORDS = PQM1_V1_MNEMONIC_WORDS;
 exports.PQM1_VERSION_V1 = PQM1_VERSION_V1;
 exports.Pqm1Error = Pqm1Error;
+exports.SEAL_COMMIT_LEN = SEAL_COMMIT_LEN;
+exports.SEAL_DK_LEN = SEAL_DK_LEN;
+exports.SEAL_EK_LEN = SEAL_EK_LEN;
+exports.SEAL_KEM_CT_LEN = SEAL_KEM_CT_LEN;
+exports.SEAL_KEM_SEED_LEN = SEAL_KEM_SEED_LEN;
+exports.SEAL_KEY_LEN = SEAL_KEY_LEN;
+exports.SEAL_NONCE_LEN = SEAL_NONCE_LEN;
+exports.SEAL_SHARE_LEN = SEAL_SHARE_LEN;
+exports.SEAL_TAG_LEN = SEAL_TAG_LEN;
 exports.STANDARD_ALGO_NUMBER_ML_DSA_65 = STANDARD_ALGO_NUMBER_ML_DSA_65;
 exports.assemblePqm1Payload = assemblePqm1Payload;
 exports.bincodeDecryptHint = bincodeDecryptHint;
@@ -614,25 +940,33 @@ exports.buildEncryptedSubmission = buildEncryptedSubmission;
 exports.buildPlaintextSubmission = buildPlaintextSubmission;
 exports.bytesToHex = bytesToHex;
 exports.concatBytes = concatBytes;
+exports.cryptoRandomSource = cryptoRandomSource;
 exports.derivePqm1MlDsa65SeedFromPayload = derivePqm1MlDsa65SeedFromPayload;
 exports.encodeMlDsa65Opaque = encodeMlDsa65Opaque;
+exports.encodeSealEnvelope = encodeSealEnvelope;
 exports.encodeTransactionForHash = encodeTransactionForHash;
 exports.encryptInnerTx = encryptInnerTx;
 exports.expectBytes = expectBytes;
 exports.fetchEncryptionKey = fetchEncryptionKey;
 exports.generatePqm1Mnemonic = generatePqm1Mnemonic;
+exports.getClusterSealKeys = getClusterSealKeys;
 exports.hexToBytes = hexToBytes;
 exports.mlDsa65AddressBytes = mlDsa65AddressBytes;
 exports.mlDsa65AddressFromPublicKey = mlDsa65AddressFromPublicKey;
 exports.outerSigDigest = outerSigDigest;
+exports.parseClusterSealKeys = parseClusterSealKeys;
 exports.parsePqm1Payload = parsePqm1Payload;
 exports.pqm1MnemonicToAddress = pqm1MnemonicToAddress;
 exports.pqm1MnemonicToMlDsa65Backend = pqm1MnemonicToMlDsa65Backend;
 exports.pqm1MnemonicToMlDsa65Seed = pqm1MnemonicToMlDsa65Seed;
 exports.pqm1MnemonicToPayload = pqm1MnemonicToPayload;
 exports.pqm1PayloadToMnemonic = pqm1PayloadToMnemonic;
+exports.sealRosterHash = sealRosterHash;
+exports.sealToCluster = sealToCluster;
+exports.sealTransaction = sealTransaction;
 exports.submitEncryptedEnvelope = submitEncryptedEnvelope;
 exports.submitPlaintextTransaction = submitPlaintextTransaction;
+exports.submitSealedTransaction = submitSealedTransaction;
 exports.submitTransactionWithPrivacy = submitTransactionWithPrivacy;
 //# sourceMappingURL=index.cjs.map
 //# sourceMappingURL=index.cjs.map
