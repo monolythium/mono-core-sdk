@@ -179,6 +179,7 @@ export type ClusterJoinRequestStatus = "none" | "open" | "admitted" | "cancelled
 export interface ClusterJoinRequestView {
   owner: string;
   requestEpoch: bigint;
+  requestNonce?: bigint;
   snapshotThreshold: number;
   snapshotN: number;
   voteCount: number;

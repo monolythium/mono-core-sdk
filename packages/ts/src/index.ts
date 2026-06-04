@@ -398,6 +398,8 @@ export {
   clusterJoinRequestExists,
   deriveClusterJoinOperatorId,
   preflightClusterJoinRequest,
+  previewRequestClusterJoin,
+  previewVoteClusterAdmit,
   readClusterJoinRequest,
   resolveClusterJoinExecutionFee,
   submitRequestClusterJoin,
@@ -411,6 +413,7 @@ export type {
   ClusterJoinSubmitClient,
   ClusterJoinSubmitResult,
   ClusterJoinTxFee,
+  OperatorOnboardingPreview,
   SubmitRequestClusterJoinArgs,
   SubmitVoteClusterAdmitArgs,
 } from "./cluster-join.js";

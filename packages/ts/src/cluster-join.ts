@@ -2,9 +2,10 @@
  * CJ-1 cluster-admission submit helpers.
  *
  * The low-level ABI encoders live in `node-registry.ts`. This module adds
- * the wallet-facing guardrails around those calls: read the request view
- * first, fail before signing if CJ-1 is unavailable or the request state
- * is not admissible, then submit a plaintext native transaction.
+ * the wallet-facing guardrails around those calls: ask the node's native
+ * operator-onboarding preview surface first, fail before signing if CJ-1 is
+ * unavailable or the request state is not admissible, then submit a plaintext
+ * native transaction.
  */
 
 import { blake3 } from "@noble/hashes/blake3.js";
@@ -17,10 +18,8 @@ import { pqm1MnemonicToMlDsa65Backend } from "./crypto/pqm1.js";
 import {
   NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
   type ClusterJoinRequestView,
-  encodeGetClusterJoinRequestCalldata,
   encodeRequestClusterJoinCalldata,
   encodeVoteClusterAdmitCalldata,
-  decodeClusterJoinRequest,
   nodeRegistryAddressHex,
 } from "./node-registry.js";
 import {
@@ -101,6 +100,40 @@ export interface ClusterJoinSubmitResult {
   signedTxWireBytes: number;
 }
 
+export interface OperatorOnboardingPreview {
+  schemaVersion: number;
+  capability: string;
+  method: string;
+  ok: boolean;
+  status: "ok" | "rejected" | string;
+  reason?: string | null;
+  message?: string | null;
+  clusterId?: number;
+  operatorId?: string;
+  details?: Record<string, unknown>;
+}
+
+interface NativeClusterJoinRequestEnvelope {
+  schemaVersion: number;
+  capability: string;
+  method: "getClusterJoinRequest";
+  clusterId: number;
+  operatorId: string;
+  request: {
+    exists: boolean;
+    owner: string | null;
+    requestEpoch: string;
+    requestNonce?: string;
+    snapshotThreshold: number;
+    snapshotN: number;
+    voteCount: number;
+    status: string;
+    statusCode: number;
+    bondLythoshi: string;
+    sealRosterPending: boolean;
+  };
+}
+
 export function deriveClusterJoinOperatorId(
   operatorPubkey: string | Uint8Array | readonly number[],
 ): string {
@@ -122,18 +155,13 @@ export async function readClusterJoinRequest(
     operatorId: string | Uint8Array | readonly number[];
   },
 ): Promise<ClusterJoinRequestView> {
-  const data = encodeGetClusterJoinRequestCalldata({
-    clusterId: args.clusterId,
-    operatorId: normalizeOperatorId(args.operatorId),
-  });
-  const output = await client.call<string>("eth_call", [
-    {
-      to: nodeRegistryAddressHex(),
-      data,
-    },
-    "latest",
+  const clusterId = parseUint32(args.clusterId, "clusterId");
+  const operatorId = normalizeOperatorId(args.operatorId);
+  const envelope = await client.call<NativeClusterJoinRequestEnvelope>("lyth_getClusterJoinRequest", [
+    Number(clusterId),
+    operatorId,
   ]);
-  return decodeClusterJoinRequest(output);
+  return adaptNativeClusterJoinRequest(envelope.request);
 }
 
 export async function preflightClusterJoinRequest(
@@ -147,7 +175,55 @@ export async function preflightClusterJoinRequest(
     return await readClusterJoinRequest(client, args);
   } catch (cause) {
     throw new Error(
-      `CJ-1 getClusterJoinRequest is not exposed or failed on the connected chain: ${errorMessage(cause)}`,
+      `CJ-1 lyth_getClusterJoinRequest is not exposed or failed on the connected chain: ${errorMessage(cause)}`,
+    );
+  }
+}
+
+export async function previewRequestClusterJoin(
+  client: ClusterJoinReadClient,
+  args: {
+    from: string;
+    clusterId: bigint | number | string;
+    operatorPubkey: string | Uint8Array | readonly number[];
+    bondLythoshi: bigint | number | string;
+  },
+): Promise<OperatorOnboardingPreview> {
+  const clusterId = parseUint32(args.clusterId, "clusterId");
+  try {
+    return await client.call<OperatorOnboardingPreview>("lyth_previewRequestClusterJoin", [{
+      from: args.from,
+      clusterId: Number(clusterId),
+      operatorPubkey: bytesToHex(normalizeConsensusPubkey(args.operatorPubkey, "operatorPubkey")),
+      bondLythoshi: parseU256(args.bondLythoshi, "bondLythoshi").toString(10),
+    }]);
+  } catch (cause) {
+    throw new Error(
+      `CJ-1 request preview is not exposed or failed on the connected chain: ${errorMessage(cause)}`,
+    );
+  }
+}
+
+export async function previewVoteClusterAdmit(
+  client: ClusterJoinReadClient,
+  args: {
+    from: string;
+    clusterId: bigint | number | string;
+    operatorId: string | Uint8Array | readonly number[];
+    voterPubkey: string | Uint8Array | readonly number[];
+  },
+): Promise<OperatorOnboardingPreview> {
+  const clusterId = parseUint32(args.clusterId, "clusterId");
+  try {
+    return await client.call<OperatorOnboardingPreview>("lyth_previewVoteClusterAdmit", [{
+      from: args.from,
+      clusterId: Number(clusterId),
+      operatorId: normalizeOperatorId(args.operatorId),
+      voterPubkey: bytesToHex(normalizeConsensusPubkey(args.voterPubkey, "voterPubkey")),
+    }]);
+  } catch (cause) {
+    throw new Error(
+      `CJ-1 admit-vote preview is not exposed or failed on the connected chain: ${errorMessage(cause)}`,
     );
   }
 }
@@ -225,19 +301,16 @@ export async function submitRequestClusterJoin(
   const clusterId = parseUint32(args.clusterId, "clusterId");
   const operatorPubkey = normalizeConsensusPubkey(args.operatorPubkey, "operatorPubkey");
   const operatorIdHex = deriveClusterJoinOperatorId(operatorPubkey);
-  const existing = await preflightClusterJoinRequest(args.client, {
-    clusterId,
-    operatorId: operatorIdHex,
-  });
-  if (existing.status === "open") {
-    throw new Error("cluster join request is already open for this operator");
-  }
-  if (existing.status === "admitted") {
-    throw new Error("operator is already admitted for this cluster request");
-  }
-
   const backend = pqm1MnemonicToMlDsa65Backend(args.mnemonic);
   const senderAddress = addressToTypedBech32("user", backend.addressBytes());
+  const preview = await previewRequestClusterJoin(args.client, {
+    from: senderAddress,
+    clusterId,
+    operatorPubkey,
+    bondLythoshi: args.bondLythoshi,
+  });
+  assertPreviewOk("requestClusterJoin", preview);
+
   const [chainId, nonce, quote] = await Promise.all([
     args.client.ethChainId(),
     args.client.lythGetTransactionCount(senderAddress),
@@ -259,16 +332,16 @@ export async function submitVoteClusterAdmit(
 ): Promise<ClusterJoinSubmitResult> {
   const clusterId = parseUint32(args.clusterId, "clusterId");
   const operatorIdHex = normalizeOperatorId(args.operatorId);
-  const existing = await preflightClusterJoinRequest(args.client, {
-    clusterId,
-    operatorId: operatorIdHex,
-  });
-  if (!clusterJoinRequestExists(existing) || existing.status !== "open") {
-    throw new Error("candidate cluster join request is not open for voting");
-  }
-
   const backend = pqm1MnemonicToMlDsa65Backend(args.mnemonic);
   const senderAddress = addressToTypedBech32("user", backend.addressBytes());
+  const preview = await previewVoteClusterAdmit(args.client, {
+    from: senderAddress,
+    clusterId,
+    operatorId: operatorIdHex,
+    voterPubkey: args.voterPubkey,
+  });
+  assertPreviewOk("voteClusterAdmit", preview);
+
   const [chainId, nonce, quote] = await Promise.all([
     args.client.ethChainId(),
     args.client.lythGetTransactionCount(senderAddress),
@@ -305,6 +378,48 @@ async function submitClusterJoinTx(
     innerSighashHex: plaintext.innerSighashHex,
     signedTxWireBytes: plaintext.innerWireBytes,
   };
+}
+
+function adaptNativeClusterJoinRequest(
+  request: NativeClusterJoinRequestEnvelope["request"],
+): ClusterJoinRequestView {
+  return {
+    owner: request.owner ?? ZERO_ADDRESS,
+    requestEpoch: parseBigint(request.requestEpoch, "requestEpoch"),
+    requestNonce: request.requestNonce === undefined
+      ? undefined
+      : parseBigint(request.requestNonce, "requestNonce"),
+    snapshotThreshold: request.snapshotThreshold,
+    snapshotN: request.snapshotN,
+    voteCount: request.voteCount,
+    statusCode: request.statusCode,
+    status: clusterJoinStatus(request.status),
+    bondLythoshi: parseBigint(request.bondLythoshi, "bondLythoshi"),
+    sealRosterPending: request.sealRosterPending,
+  };
+}
+
+function clusterJoinStatus(status: string): ClusterJoinRequestView["status"] {
+  switch (status) {
+    case "none":
+    case "open":
+    case "admitted":
+    case "cancelled":
+    case "expired":
+      return status;
+    default:
+      return "unknown";
+  }
+}
+
+function previewError(action: string, preview: OperatorOnboardingPreview): Error {
+  const reason = preview.reason ? `: ${preview.reason}` : "";
+  const message = preview.message ? ` (${preview.message})` : "";
+  return new Error(`${action} preview rejected${reason}${message}`);
+}
+
+function assertPreviewOk(action: string, preview: OperatorOnboardingPreview): void {
+  if (!preview.ok) throw previewError(action, preview);
 }
 
 function normalizeConsensusPubkey(

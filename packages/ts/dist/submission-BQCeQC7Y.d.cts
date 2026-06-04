@@ -2518,6 +2518,7 @@ type ClusterJoinRequestStatus = "none" | "open" | "admitted" | "cancelled" | "ex
 interface ClusterJoinRequestView {
     owner: string;
     requestEpoch: bigint;
+    requestNonce?: bigint;
     snapshotThreshold: number;
     snapshotN: number;
     voteCount: number;

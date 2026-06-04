@@ -12,6 +12,7 @@ import {
   resolveClusterJoinExecutionFee,
   submitRequestClusterJoin,
   submitVoteClusterAdmit,
+  type OperatorOnboardingPreview,
 } from "../src/index.js";
 import {
   assemblePqm1Payload,
@@ -57,25 +58,45 @@ function mockFetchByMethod(
   return { fetch: fetchImpl, calls };
 }
 
-function requestView(status: number): string {
-  const owner = status === 0 ? `0x${"00".repeat(20)}` : `0x${"77".repeat(20)}`;
-  return `0x${[
-    word(owner),
-    word(9),
-    word(7),
-    word(10),
-    word(status === 1 ? 3 : 7),
-    word(status),
-    word(status === 0 ? 0 : 5000),
-    word(status === 2 ? 1 : 0),
-  ].join("")}`;
+function requestView(status: number) {
+  return {
+    schemaVersion: 1,
+    capability: "operatorOnboardingRpcV1",
+    method: "getClusterJoinRequest",
+    clusterId: 7,
+    operatorId,
+    request: {
+      exists: status !== 0,
+      owner: status === 0 ? null : `mono1${"7".repeat(38)}`,
+      requestEpoch: "9",
+      requestNonce: "2",
+      snapshotThreshold: 7,
+      snapshotN: 10,
+      voteCount: status === 1 ? 3 : 7,
+      statusCode: status,
+      status: status === 0 ? "none" : status === 1 ? "open" : "admitted",
+      bondLythoshi: status === 0 ? "0" : "5000",
+      sealRosterPending: status === 2,
+    },
+  };
 }
 
-function word(value: bigint | number | string): string {
-  if (typeof value === "string" && value.startsWith("0x")) {
-    return value.slice(2).padStart(64, "0");
-  }
-  return BigInt(value).toString(16).padStart(64, "0");
+function preview(
+  method: "requestClusterJoin" | "voteClusterAdmit",
+  overrides: Partial<OperatorOnboardingPreview> = {},
+): OperatorOnboardingPreview {
+  return {
+    schemaVersion: 1,
+    capability: "operatorOnboardingRpcV1",
+    method,
+    ok: true,
+    status: "ok",
+    reason: null,
+    message: null,
+    clusterId: 7,
+    operatorId,
+    ...overrides,
+  };
 }
 
 function expectedRequestTxHash(): string {
@@ -106,21 +127,16 @@ function expectedVoteTxHash(): string {
 
 describe("CJ-1 cluster-admission submit helpers", () => {
   it("reads and decodes the cluster join request view", async () => {
-    const { fetch, calls } = mockFetchByMethod({ eth_call: requestView(1) });
+    const { fetch, calls } = mockFetchByMethod({ lyth_getClusterJoinRequest: requestView(1) });
     const client = new RpcClient("http://x", { fetch });
 
     const view = await readClusterJoinRequest(client, { clusterId: 7, operatorId });
 
     expect(view.status).toBe("open");
+    expect(view.requestNonce).toBe(2n);
     expect(clusterJoinRequestExists(view)).toBe(true);
-    expect(calls[0]?.method).toBe("eth_call");
-    expect(calls[0]?.params).toEqual([
-      {
-        to: "0x0000000000000000000000000000000000001005",
-        data: expect.stringContaining(NODE_REGISTRY_SELECTORS.getClusterJoinRequest),
-      },
-      "latest",
-    ]);
+    expect(calls[0]?.method).toBe("lyth_getClusterJoinRequest");
+    expect(calls[0]?.params).toEqual([7, operatorId]);
   });
 
   it("builds request and vote transactions with registry fee defaults", () => {
@@ -157,7 +173,7 @@ describe("CJ-1 cluster-admission submit helpers", () => {
 
   it("submits requestClusterJoin after preflight and before any broadcast", async () => {
     const { fetch, calls } = mockFetchByMethod({
-      eth_call: requestView(0),
+      lyth_previewRequestClusterJoin: preview("requestClusterJoin"),
       eth_chainId: "0x10f2c",
       lyth_getTransactionCount: 18,
       lyth_executionUnitPrice: quote,
@@ -177,7 +193,7 @@ describe("CJ-1 cluster-admission submit helpers", () => {
     expect(res.operatorIdHex).toBe(operatorId);
     expect(res.signedTxWireBytes).toBeGreaterThan(0);
     expect(calls.map((c) => c.method)).toEqual([
-      "eth_call",
+      "lyth_previewRequestClusterJoin",
       "eth_chainId",
       "lyth_getTransactionCount",
       "lyth_executionUnitPrice",
@@ -187,7 +203,7 @@ describe("CJ-1 cluster-admission submit helpers", () => {
 
   it("submits voteClusterAdmit only when the candidate request is open", async () => {
     const { fetch, calls } = mockFetchByMethod({
-      eth_call: requestView(1),
+      lyth_previewVoteClusterAdmit: preview("voteClusterAdmit"),
       eth_chainId: "0x10f2c",
       lyth_getTransactionCount: 18,
       lyth_executionUnitPrice: quote,
@@ -210,7 +226,7 @@ describe("CJ-1 cluster-admission submit helpers", () => {
 
   it("fails before nonce reads, signing, or broadcast when CJ-1 is unavailable", async () => {
     const { fetch, calls } = mockFetchByMethod({
-      eth_call: () => {
+      lyth_previewRequestClusterJoin: () => {
         throw new Error("method not found");
       },
       eth_chainId: "0x10f2c",
@@ -228,14 +244,19 @@ describe("CJ-1 cluster-admission submit helpers", () => {
         operatorPubkey,
         bondLythoshi: 9000n,
       }),
-    ).rejects.toThrow(/getClusterJoinRequest is not exposed/);
+    ).rejects.toThrow(/request preview is not exposed/);
 
-    expect(calls.map((c) => c.method)).toEqual(["eth_call"]);
+    expect(calls.map((c) => c.method)).toEqual(["lyth_previewRequestClusterJoin"]);
   });
 
   it("does not broadcast an admit vote when no open request exists", async () => {
     const { fetch, calls } = mockFetchByMethod({
-      eth_call: requestView(0),
+      lyth_previewVoteClusterAdmit: preview("voteClusterAdmit", {
+        ok: false,
+        status: "rejected",
+        reason: "request_not_open",
+        message: "candidate join request is not open",
+      }),
       eth_chainId: "0x10f2c",
       lyth_getTransactionCount: 18,
       lyth_executionUnitPrice: quote,
@@ -251,8 +272,8 @@ describe("CJ-1 cluster-admission submit helpers", () => {
         operatorId,
         voterPubkey,
       }),
-    ).rejects.toThrow(/not open for voting/);
+    ).rejects.toThrow(/voteClusterAdmit preview rejected: request_not_open/);
 
-    expect(calls.map((c) => c.method)).toEqual(["eth_call"]);
+    expect(calls.map((c) => c.method)).toEqual(["lyth_previewVoteClusterAdmit"]);
   });
 });
