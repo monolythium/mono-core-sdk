@@ -76,10 +76,12 @@ export const NODE_REGISTRY_SELECTORS = {
   getClusterJoinRequest: "0x" + selectorHex("getClusterJoinRequest(uint32,bytes32)"),
 } as const;
 
-/** Legacy cluster-member pubkey width. Kept for genesis-roster and finality surfaces. */
-export const NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES = 48;
-/** @deprecated Use NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES. */
-export const NODE_REGISTRY_BLS_PUBKEY_BYTES = NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES;
+/** Cluster-member reference width used by genesis and formation rosters. */
+export const NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES = 48;
+/** @deprecated Use NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES. */
+export const NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES = NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES;
+/** @deprecated Use NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES. */
+export const NODE_REGISTRY_BLS_PUBKEY_BYTES = NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES;
 /** Full ML-DSA-65 consensus pubkey width used by register and pending-change calldata. */
 export const NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES = 1952;
 /** ML-DSA-65 self-signature width used as register proof-of-possession. */
@@ -623,7 +625,11 @@ export interface ClusterFormedEvent {
   effectiveEpoch: bigint;
   /** Primary anchor address (`0x` 20 bytes). */
   anchorAddress: string;
-  /** Concatenated legacy 48-byte cluster-member pubkeys (`0x` hex). */
+  /**
+   * Concatenated 48-byte cluster-member references (`0x` hex). PQ
+   * rosters place the 32-byte operator id in the first 32 bytes and
+   * zero-pad the remaining 16 bytes.
+   */
   operatorRoster: string;
 }
 
@@ -719,7 +725,7 @@ export function deriveClusterAnchorAddress(
     throw new NodeRegistryError("threshold must be a uint16");
   }
   const members = roster.map((m, i) =>
-    expectLength(toBytes(m), NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES, `roster[${i}]`),
+    expectLength(toBytes(m), NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES, `roster[${i}]`),
   );
   members.sort(compareBytes);
   const parts: Uint8Array[] = [

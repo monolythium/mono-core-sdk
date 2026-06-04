@@ -4,9 +4,11 @@
  * Decoded `ClusterFormed(uint32,uint64,address,bytes)` event (MB-5).
  *
  * Mirrors `node-registry::events::CLUSTER_FORMED`. `operator_roster`
- * is the concatenation of the cluster members' compressed 48-byte BLS
- * pubkeys (`0x`-prefixed hex). The `anchor_address` is the cluster's
- * primary network anchor (Law §7.13) as `0x`-prefixed 20-byte hex.
+ * is the concatenation of 48-byte cluster-member references
+ * (`0x`-prefixed hex). PQ rosters place the 32-byte operator id in
+ * the first 32 bytes and zero-pad the remaining 16 bytes. The
+ * `anchor_address` is the cluster's primary network anchor (Law
+ * §7.13) as `0x`-prefixed 20-byte hex.
  */
 export type ClusterFormedEvent = {
 /**
@@ -22,6 +24,6 @@ effectiveEpoch: bigint,
  */
 anchorAddress: string,
 /**
- * Concatenated legacy 48-byte cluster-member pubkeys (`0x` hex).
+ * Concatenated 48-byte cluster-member references (`0x` hex).
  */
 operatorRoster: string, };

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   NODE_REGISTRY_BLS_PUBKEY_BYTES,
   NODE_REGISTRY_CAPABILITIES,
+  NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES,
   NODE_REGISTRY_CONSENSUS_POP_BYTES,
   NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
   NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES,
@@ -45,6 +46,7 @@ describe("node-registry helpers", () => {
     expect(NODE_REGISTRY_CAPABILITIES.SERVES_PUBLIC_API).toBe(0x0000_0100);
     expect(NODE_REGISTRY_PUBLIC_SERVICE_MASK).toBe(0x0000_011b);
     expect(nodeRegistryAddressHex()).toBe("0x0000000000000000000000000000000000001005");
+    expect(NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES).toBe(48);
     expect(NODE_REGISTRY_BLS_PUBKEY_BYTES).toBe(48);
     expect(NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES).toBe(48);
     expect(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).toBe(1952);
@@ -288,7 +290,9 @@ describe("node-registry helpers", () => {
     const epochTopic = new Uint8Array(32);
     epochTopic[31] = 0x2a; // epoch = 42
     // data: anchorAddress word, offset word (0x40), roster len word, roster.
-    const roster = new Uint8Array(96).fill(0xab); // two 48-byte pubkeys
+    const roster = new Uint8Array(96);
+    roster.fill(0xab, 0, 32);
+    roster.fill(0xcd, 48, 80);
     const data = new Uint8Array(96 + roster.length);
     data.fill(0x11, 12, 32); // anchorAddress (right-aligned 20 bytes)
     data[63] = 0x40; // offset
@@ -298,11 +302,16 @@ describe("node-registry helpers", () => {
     expect(ev.clusterId).toBe(7);
     expect(ev.effectiveEpoch).toBe(42n);
     expect(ev.anchorAddress).toBe(`0x${"11".repeat(20)}`);
-    expect(ev.operatorRoster).toBe(`0x${"ab".repeat(96)}`);
+    const expectedRoster = `0x${"ab".repeat(32)}${"00".repeat(16)}${"cd".repeat(32)}${"00".repeat(16)}`;
+    expect(ev.operatorRoster).toBe(expectedRoster);
   });
 
   it("derives MB-5 cluster-anchor addresses deterministically + order-insensitively", () => {
-    const roster = Array.from({ length: 10 }, (_, i) => new Uint8Array(48).fill(0x10 + i));
+    const roster = Array.from({ length: 10 }, (_, i) => {
+      const memberRef = new Uint8Array(48);
+      memberRef.fill(0x10 + i, 0, 32);
+      return memberRef;
+    });
     const a = deriveClusterAnchorAddress(roster, 7);
     expect(a).toMatch(/^0x[0-9a-f]{40}$/);
     expect(deriveClusterAnchorAddress(roster, 7)).toBe(a);

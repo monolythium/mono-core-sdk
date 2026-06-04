@@ -147,9 +147,11 @@ pub struct ClusterDiversity {
 /// Decoded `ClusterFormed(uint32,uint64,address,bytes)` event (MB-5).
 ///
 /// Mirrors `node-registry::events::CLUSTER_FORMED`. `operator_roster`
-/// is the concatenation of the cluster members' compressed 48-byte BLS
-/// pubkeys (`0x`-prefixed hex). The `anchor_address` is the cluster's
-/// primary network anchor (Law §7.13) as `0x`-prefixed 20-byte hex.
+/// is the concatenation of 48-byte cluster-member references
+/// (`0x`-prefixed hex). PQ rosters place the 32-byte operator id in
+/// the first 32 bytes and zero-pad the remaining 16 bytes. The
+/// `anchor_address` is the cluster's primary network anchor (Law
+/// §7.13) as `0x`-prefixed 20-byte hex.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
@@ -164,7 +166,7 @@ pub struct ClusterFormedEvent {
     pub effective_epoch: u64,
     /// Primary anchor address (`0x` 20 bytes).
     pub anchor_address: String,
-    /// Concatenated 48-byte compressed BLS pubkeys (`0x` hex).
+    /// Concatenated 48-byte cluster-member references (`0x` hex).
     pub operator_roster: String,
 }
 
@@ -177,7 +179,7 @@ pub struct ClusterFormedEvent {
 /// ADR-0038 payload; surfaces render the human-facing form under the
 /// `monok` cluster HRP.
 ///
-/// `roster` is the full set of cluster-member compressed BLS pubkeys;
+/// `roster` is the full set of 48-byte cluster-member references;
 /// `threshold` is the cluster's `t` (e.g. 5-of-7). Member ordering does
 /// not affect the result.
 #[must_use]
