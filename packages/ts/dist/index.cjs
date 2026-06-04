@@ -4,6 +4,8 @@ var blake3_js = require('@noble/hashes/blake3.js');
 var sha3_js = require('@noble/hashes/sha3.js');
 var mlDsa_js = require('@noble/post-quantum/ml-dsa.js');
 var bls12381_js = require('@noble/curves/bls12-381.js');
+var bip39 = require('@scure/bip39');
+var english_js = require('@scure/bip39/wordlists/english.js');
 require('@noble/post-quantum/ml-kem.js');
 require('@noble/ciphers/chacha.js');
 require('@noble/hashes/utils.js');
@@ -1037,6 +1039,16 @@ function bigintToBeBytes(value, bytes, label) {
   }
   return out;
 }
+function parseBigint(value, label) {
+  if (value === void 0) throw new Error(`${label} missing`);
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${label} must be a non-negative safe integer`);
+    return BigInt(value);
+  }
+  if (value.startsWith("0x") || value.startsWith("0X")) return BigInt(value);
+  return BigInt(value);
+}
 
 // src/crypto/submission.ts
 async function fetchEncryptionKey(client) {
@@ -1057,6 +1069,38 @@ async function buildEncryptedSubmission(_args) {
 }
 async function submitEncryptedEnvelope(client, envelopeWireHex) {
   return client.call("lyth_submitEncrypted", [envelopeWireHex]);
+}
+function buildPlaintextSubmission(args) {
+  const signed = args.backend.signEvmTx(args.tx);
+  return {
+    signedTxWireHex: `0x${signed.wireHex}`,
+    innerTxHashHex: bytesToHex2(signed.txHash),
+    innerSighashHex: bytesToHex2(signed.sighash),
+    innerWireBytes: signed.wireBytes.length
+  };
+}
+async function submitPlaintextTransaction(client, signedTxWireHex, expectedTxHashHex) {
+  const returned = await client.call("mesh_submitTx", [signedTxWireHex]);
+  const returnedBytes = hexToBytes2(returned, "mesh_submitTx tx hash");
+  if (returnedBytes.length !== 32) {
+    throw new Error(
+      `mesh_submitTx tx hash must be 32 bytes, got ${returnedBytes.length}`
+    );
+  }
+  const expectedBytes = hexToBytes2(expectedTxHashHex, "expected tx hash");
+  if (!bytesEqual(returnedBytes, expectedBytes)) {
+    throw new Error(
+      `mesh_submitTx returned tx hash ${bytesToHex2(returnedBytes)} but the locally computed canonical hash is ${bytesToHex2(expectedBytes)}`
+    );
+  }
+  return bytesToHex2(returnedBytes);
+}
+function bytesEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
 }
 
 // src/crypto/bincode.ts
@@ -1975,11 +2019,181 @@ function concatBytes3(...parts) {
 function isIdentifier(value) {
   return /^[a-z][a-z0-9_]*$/.test(value);
 }
+
+// src/crypto/tx.ts
+function encodeTransactionForHash(fields, tag) {
+  const n = normalizeTxFields(fields);
+  return concatBytes2(
+    Uint8Array.of(tag),
+    bigintToBeBytes(n.chainId, 8, "chainId"),
+    bigintToBeBytes(n.nonce, 8, "nonce"),
+    bigintToBeBytes(n.maxPriorityFeePerGas, 32, "maxPriorityFeePerGas"),
+    bigintToBeBytes(n.maxFeePerGas, 32, "maxFeePerGas"),
+    bigintToBeBytes(n.gasLimit, 8, "gasLimit"),
+    n.to === null ? Uint8Array.of(0) : concatBytes2(Uint8Array.of(1), n.to),
+    bigintToBeBytes(n.value, 32, "value"),
+    bigintToBeBytes(BigInt(n.input.length), 4, "input.length"),
+    n.input,
+    new Uint8Array(4),
+    // access_list length
+    encodeExtensionsForHash(n.extensions)
+  );
+}
+function bincodeSignedTransaction(fields, signature, publicKey) {
+  const n = normalizeTxFields(fields);
+  const sig = expectBytes(signature, ML_DSA_65_SIGNATURE_LEN, "ML-DSA-65 signature");
+  const pk = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key");
+  const w = new BincodeWriter();
+  w.u64(n.chainId);
+  w.u64(n.nonce);
+  w.bytes(uint256Be(n.maxPriorityFeePerGas, "maxPriorityFeePerGas"));
+  w.bytes(uint256Be(n.maxFeePerGas, "maxFeePerGas"));
+  w.u64(n.gasLimit);
+  if (n.to === null) {
+    w.u8(0);
+  } else {
+    w.u8(1);
+    w.bytes(n.to);
+  }
+  w.bytes(uint256Be(n.value, "value"));
+  w.bytes(n.input);
+  w.u64(0n);
+  w.u64(BigInt(n.extensions.length));
+  for (const ext of n.extensions) bincodeTypedExtensionInto(w, ext);
+  bincodeMlDsa65OpaqueInto(w, sig);
+  bincodeMlDsa65OpaqueInto(w, pk);
+  return w.toBytes();
+}
+function normalizeTxFields(fields) {
+  return {
+    chainId: parseBigint(fields.chainId, "chainId"),
+    nonce: parseBigint(fields.nonce, "nonce"),
+    maxPriorityFeePerGas: parseBigint(fields.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
+    maxFeePerGas: parseBigint(fields.maxFeePerGas, "maxFeePerGas"),
+    gasLimit: parseBigint(fields.gasLimit, "gasLimit"),
+    to: normalizeTo(fields.to),
+    value: parseBigint(fields.value, "value"),
+    input: normalizeBytes(fields.input ?? new Uint8Array(0), "input"),
+    extensions: normalizeExtensions(fields.extensions)
+  };
+}
+function normalizeTo(value) {
+  if (value === null) return null;
+  const bytes = normalizeBytes(value, "to");
+  return expectBytes(bytes, 20, "to");
+}
+function normalizeBytes(value, label) {
+  if (typeof value === "string") return hexToBytes2(value, label);
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+function normalizeExtensions(value) {
+  if (value === void 0) return [];
+  return value.map((ext, index) => {
+    if (!Number.isInteger(ext.kind) || ext.kind < 0 || ext.kind > 255) {
+      throw new Error(`extensions[${index}].kind out of u8 range`);
+    }
+    const body = normalizeBytes("bodyHex" in ext ? ext.bodyHex : ext.body, `extensions[${index}].body`);
+    if (body.length > 4294967295) {
+      throw new Error(`extensions[${index}].body exceeds u32 length`);
+    }
+    return { kind: ext.kind, body };
+  });
+}
+function encodeExtensionsForHash(extensions) {
+  const chunks = [bigintToBeBytes(BigInt(extensions.length), 4, "extensions.length")];
+  for (const ext of extensions) {
+    chunks.push(
+      Uint8Array.of(ext.kind),
+      bigintToBeBytes(BigInt(ext.body.length), 4, "extension.body.length"),
+      ext.body
+    );
+  }
+  return concatBytes2(...chunks);
+}
+function uint256Be(value, label) {
+  if (value < 0n || value >= 1n << 256n) throw new Error(`${label} out of u256 range`);
+  const out = new Uint8Array(32);
+  let v = value;
+  for (let i = 31; i >= 0; i--) {
+    out[i] = Number(v & 0xffn);
+    v >>= 8n;
+  }
+  return out;
+}
+function bincodeMlDsa65OpaqueInto(w, raw) {
+  w.enumVariant(ENUM_VARIANT_INDEX_ML_DSA_65);
+  w.u16(STANDARD_ALGO_NUMBER_ML_DSA_65);
+  w.bytes(raw);
+}
+function bincodeTypedExtensionInto(w, ext) {
+  w.u8(ext.kind);
+  w.bytes(ext.body);
+}
+
+// src/crypto/ml-dsa.ts
+var ML_DSA_65_SEED_LEN = 32;
+var ML_DSA_65_SIGNING_KEY_LEN = 4032;
 var ML_DSA_65_PUBLIC_KEY_LEN = 1952;
 var ML_DSA_65_SIGNATURE_LEN = 3309;
 var STANDARD_ALGO_NUMBER_ML_DSA_65 = 1001;
+var ENUM_VARIANT_INDEX_ML_DSA_65 = 5;
 var ADDRESS_DERIVATION_DOMAIN = "MONO_ADDRESS_BLAKE3_20_V1";
 var ADDRESS_DERIVATION_DOMAIN_BYTES = new TextEncoder().encode(ADDRESS_DERIVATION_DOMAIN);
+var MlDsa65Backend = class _MlDsa65Backend {
+  #secretKey;
+  #publicKey;
+  #addressBytes;
+  constructor(secretKey, publicKey) {
+    this.#secretKey = expectBytes(secretKey, ML_DSA_65_SIGNING_KEY_LEN, "ML-DSA-65 secret key").slice();
+    this.#publicKey = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key").slice();
+    this.#addressBytes = mlDsa65AddressBytes(this.#publicKey);
+  }
+  static fromSeed(seed) {
+    const kp = mlDsa_js.ml_dsa65.keygen(expectBytes(seed, ML_DSA_65_SEED_LEN, "ML-DSA-65 seed"));
+    return new _MlDsa65Backend(kp.secretKey, kp.publicKey);
+  }
+  publicKey() {
+    return this.#publicKey.slice();
+  }
+  addressBytes() {
+    return this.#addressBytes.slice();
+  }
+  getAddress() {
+    return bytesToHex2(this.#addressBytes);
+  }
+  sign(message) {
+    return mlDsa_js.ml_dsa65.sign(message, this.#secretKey, { extraEntropy: false });
+  }
+  signPrehash(digest) {
+    return this.sign(expectBytes(digest, 32, "prehash"));
+  }
+  verify(message, signature) {
+    return mlDsa_js.ml_dsa65.verify(
+      expectBytes(signature, ML_DSA_65_SIGNATURE_LEN, "ML-DSA-65 signature"),
+      message,
+      this.#publicKey
+    );
+  }
+  signEvmTx(fields) {
+    const txHashPreimage = encodeTransactionForHash(fields, 1);
+    const sighash = sha3_js.keccak_256(txHashPreimage);
+    const signature = this.sign(sighash);
+    const wireBytes = bincodeSignedTransaction(fields, signature, this.#publicKey);
+    const txHash = sha3_js.keccak_256(
+      concatBytes2(
+        encodeTransactionForHash(fields, 2),
+        signature,
+        this.#publicKey
+      )
+    );
+    return {
+      wireHex: bytesToHex2(wireBytes).slice(2),
+      wireBytes,
+      sighash,
+      txHash
+    };
+  }
+};
 function mlDsa65AddressFromPublicKey(publicKey) {
   return bytesToHex2(mlDsa65AddressBytes(publicKey));
 }
@@ -6552,7 +6766,7 @@ function verifyBoundedReceiptProof(proof) {
   }
   const actualRoot = computeNoEvmReceiptsRoot(receipts);
   const expectedRoot = decodeHash(proof.receiptsRoot, "receiptsRoot");
-  if (!bytesEqual(expectedRoot, decodeHash(actualRoot, "computedReceiptsRoot"))) {
+  if (!bytesEqual2(expectedRoot, decodeHash(actualRoot, "computedReceiptsRoot"))) {
     throw new NoEvmReceiptProofError(
       "receipts_root_mismatch",
       `receiptsRoot mismatch: expected ${proof.receiptsRoot}, computed ${actualRoot}`
@@ -6560,7 +6774,7 @@ function verifyBoundedReceiptProof(proof) {
   }
   const actualTargetHash = computeNoEvmTargetReceiptHash(targetReceipt);
   const expectedTargetHash = decodeHash(proof.targetReceiptHash, "targetReceiptHash");
-  if (!bytesEqual(expectedTargetHash, decodeHash(actualTargetHash, "computedTargetReceiptHash"))) {
+  if (!bytesEqual2(expectedTargetHash, decodeHash(actualTargetHash, "computedTargetReceiptHash"))) {
     throw new NoEvmReceiptProofError(
       "target_receipt_hash_mismatch",
       `targetReceiptHash mismatch: expected ${proof.targetReceiptHash}, computed ${actualTargetHash}`
@@ -6617,7 +6831,7 @@ function verifyCompactReceiptProof(proof) {
   const targetReceipt = decodeHexBytes(targetReceiptBytes, "targetReceiptBytes");
   const actualTargetHash = computeNoEvmTargetReceiptHash(targetReceipt);
   const expectedTargetHash = decodeHash(proof.targetReceiptHash, "targetReceiptHash");
-  if (!bytesEqual(expectedTargetHash, decodeHash(actualTargetHash, "computedTargetReceiptHash"))) {
+  if (!bytesEqual2(expectedTargetHash, decodeHash(actualTargetHash, "computedTargetReceiptHash"))) {
     throw new NoEvmReceiptProofError(
       "target_receipt_hash_mismatch",
       `targetReceiptHash mismatch: expected ${proof.targetReceiptHash}, computed ${actualTargetHash}`
@@ -6628,7 +6842,7 @@ function verifyCompactReceiptProof(proof) {
     compactProof.leafHash,
     "compactInclusionProof.leafHash"
   );
-  if (!bytesEqual(expectedLeafHashBytes, actualLeafHashBytes)) {
+  if (!bytesEqual2(expectedLeafHashBytes, actualLeafHashBytes)) {
     throw new NoEvmReceiptProofError(
       "compact_leaf_hash_mismatch",
       `compactInclusionProof.leafHash mismatch: expected ${compactProof.leafHash}, computed ${bytesToHex6(
@@ -6638,7 +6852,7 @@ function verifyCompactReceiptProof(proof) {
   }
   const compactRootBytes = decodeHash(compactProof.root, "compactInclusionProof.root");
   const receiptsRootBytes = decodeHash(proof.receiptsRoot, "receiptsRoot");
-  if (!bytesEqual(receiptsRootBytes, compactRootBytes)) {
+  if (!bytesEqual2(receiptsRootBytes, compactRootBytes)) {
     throw new NoEvmReceiptProofError(
       "compact_root_mismatch",
       `receiptsRoot must equal compactInclusionProof.root: receiptsRoot ${proof.receiptsRoot}, compact root ${compactProof.root}`
@@ -6661,7 +6875,7 @@ function verifyCompactReceiptProof(proof) {
     siblingHashes,
     pathSides
   );
-  if (!bytesEqual(actualRootBytes, compactRootBytes)) {
+  if (!bytesEqual2(actualRootBytes, compactRootBytes)) {
     throw new NoEvmReceiptProofError(
       "compact_path_mismatch",
       `compact inclusion path mismatch: expected ${compactProof.root}, computed ${bytesToHex6(
@@ -6815,7 +7029,7 @@ function validateCoveringSnapshotObject(snapshot, archiveContentHash, proofBlock
       "archiveProof.coveringSnapshot.checkpointTo must match blockHeight"
     );
   }
-  if (!bytesEqual(checkpointContentHash, archiveContentHash)) {
+  if (!bytesEqual2(checkpointContentHash, archiveContentHash)) {
     throw new NoEvmReceiptProofError(
       "invalid_proof_shape",
       "archiveProof.coveringSnapshot.checkpointContentHash must match archiveProof.contentHash"
@@ -7014,7 +7228,7 @@ function validateFinalityBlockReference(blockReference, round, proofBlockHash) {
   );
   if (proofBlockHash !== void 0) {
     const blockHash = decodeHash(proofBlockHash, "blockHash");
-    if (!bytesEqual(digest, blockHash)) {
+    if (!bytesEqual2(digest, blockHash)) {
       throw new NoEvmReceiptProofError(
         "invalid_proof_shape",
         "finalityEvidence.blockReference.digest must match blockHash"
@@ -7364,7 +7578,7 @@ function assertHashBytes(value, field2) {
 function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function bytesEqual(a, b) {
+function bytesEqual2(a, b) {
   if (a.length !== b.length) return false;
   let diff = 0;
   for (let index = 0; index < a.length; index++) {
@@ -7571,6 +7785,251 @@ function assertWholeNumber(field2, value) {
   if (!/^[0-9]+$/.test(value)) {
     throw new Error(`${field2} must be a whole number`);
   }
+}
+var PQM1_ALGO_TAG_MLDSA65 = 1;
+var PQM1_VERSION_V1 = 1;
+var PQM1_PAYLOAD_LEN = 32;
+var PQM1_V1_MNEMONIC_WORDS = 24;
+var PQM1_V1_MLDSA65_DOMAIN_TAG = "monolythium.pqm1.v1.mldsa65";
+var Pqm1Error = class extends Error {
+  constructor(kind, message) {
+    super(message);
+    this.kind = kind;
+    this.name = "Pqm1Error";
+  }
+  kind;
+};
+var DOMAIN_BYTES = new TextEncoder().encode(PQM1_V1_MLDSA65_DOMAIN_TAG);
+function normalizeMnemonic(mnemonic) {
+  return mnemonic.trim().toLowerCase().replace(/\s+/g, " ");
+}
+function ensureSupportedPayload(bytes) {
+  if (bytes.length !== PQM1_PAYLOAD_LEN) {
+    throw new Pqm1Error("badPayloadLength", `PQM-1 payload must be ${PQM1_PAYLOAD_LEN} bytes, got ${bytes.length}`);
+  }
+  if (bytes[0] !== PQM1_ALGO_TAG_MLDSA65) {
+    throw new Pqm1Error("unsupportedAlgorithm", `unsupported PQM-1 algorithm tag 0x${bytes[0].toString(16).padStart(2, "0")}`);
+  }
+  if (bytes[1] !== PQM1_VERSION_V1) {
+    throw new Pqm1Error("unsupportedVersion", `unsupported PQM-1 version 0x${bytes[1].toString(16).padStart(2, "0")}`);
+  }
+}
+function parsePqm1Payload(payload) {
+  const bytes = expectBytes(payload, PQM1_PAYLOAD_LEN, "PQM-1 payload").slice();
+  ensureSupportedPayload(bytes);
+  return {
+    algoTag: PQM1_ALGO_TAG_MLDSA65,
+    version: PQM1_VERSION_V1,
+    entropy: bytes.slice(2),
+    bytes
+  };
+}
+function pqm1MnemonicToPayload(mnemonic) {
+  const normalized = normalizeMnemonic(mnemonic);
+  const words = normalized.length === 0 ? [] : normalized.split(" ");
+  if (words.length !== PQM1_V1_MNEMONIC_WORDS) {
+    throw new Pqm1Error("badWordCount", `PQM-1 mnemonic must be ${PQM1_V1_MNEMONIC_WORDS} words, got ${words.length}`);
+  }
+  let payload;
+  try {
+    payload = bip39.mnemonicToEntropy(normalized, english_js.wordlist);
+  } catch (e) {
+    throw new Pqm1Error("bip39Decode", `invalid PQM-1 mnemonic: ${e.message}`);
+  }
+  return parsePqm1Payload(payload);
+}
+function derivePqm1MlDsa65SeedFromPayload(payload) {
+  const parsed = parsePqm1Payload(payload);
+  return sha3_js.shake256(concatBytes2(DOMAIN_BYTES, parsed.bytes), { dkLen: ML_DSA_65_SEED_LEN });
+}
+function pqm1MnemonicToMlDsa65Seed(mnemonic) {
+  return derivePqm1MlDsa65SeedFromPayload(pqm1MnemonicToPayload(mnemonic).bytes);
+}
+function pqm1MnemonicToMlDsa65Backend(mnemonic) {
+  return MlDsa65Backend.fromSeed(pqm1MnemonicToMlDsa65Seed(mnemonic));
+}
+
+// src/cluster-join.ts
+var DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT = REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT;
+var ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+var MAX_UINT32 = (1n << 32n) - 1n;
+function deriveClusterJoinOperatorId(operatorPubkey) {
+  return bytesToHex2(blake3_js.blake3(normalizeConsensusPubkey(operatorPubkey, "operatorPubkey")));
+}
+function clusterJoinRequestExists(view) {
+  return view.status !== "none" || view.owner.toLowerCase() !== ZERO_ADDRESS || view.bondLythoshi !== 0n;
+}
+async function readClusterJoinRequest(client, args) {
+  const data = encodeGetClusterJoinRequestCalldata({
+    clusterId: args.clusterId,
+    operatorId: normalizeOperatorId(args.operatorId)
+  });
+  const output = await client.call("eth_call", [
+    {
+      to: nodeRegistryAddressHex(),
+      data
+    },
+    "latest"
+  ]);
+  return decodeClusterJoinRequest(output);
+}
+async function preflightClusterJoinRequest(client, args) {
+  try {
+    return await readClusterJoinRequest(client, args);
+  } catch (cause) {
+    throw new Error(
+      `CJ-1 getClusterJoinRequest is not exposed or failed on the connected chain: ${errorMessage(cause)}`
+    );
+  }
+}
+function resolveClusterJoinExecutionFee(quote, options = {}) {
+  const quoted = parseBigint(quote.executionUnitPriceLythoshi, "executionUnitPriceLythoshi");
+  const floor = options.minPriceLythoshi === void 0 ? MIN_EXECUTION_UNIT_PRICE_LYTHOSHI : parseBigint(options.minPriceLythoshi, "minPriceLythoshi");
+  const multiplier = options.safetyMultiplier === void 0 ? EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER : parseBigint(options.safetyMultiplier, "safetyMultiplier");
+  if (multiplier <= 0n) throw new Error("safetyMultiplier must be greater than zero");
+  const base = quoted > floor ? quoted : floor;
+  const maxFeePerGas = base * multiplier;
+  const tip = options.priorityTipLythoshi === void 0 ? maxFeePerGas : clampPriorityTip(options.priorityTipLythoshi, maxFeePerGas);
+  return {
+    maxFeePerGas,
+    maxPriorityFeePerGas: tip,
+    gasLimit: options.executionUnitLimit ?? DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT
+  };
+}
+function buildRequestClusterJoinTxFields(args) {
+  return {
+    chainId: args.chainId,
+    nonce: args.nonce,
+    maxFeePerGas: parseBigint(args.fee.maxFeePerGas, "maxFeePerGas"),
+    maxPriorityFeePerGas: parseBigint(args.fee.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
+    gasLimit: parseBigint(
+      args.fee.gasLimit ?? DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT,
+      "gasLimit"
+    ),
+    to: nodeRegistryAddressHex(),
+    value: parseU256(args.bondLythoshi, "bondLythoshi"),
+    input: encodeRequestClusterJoinCalldata({
+      clusterId: args.clusterId,
+      operatorPubkey: normalizeConsensusPubkey(args.operatorPubkey, "operatorPubkey")
+    })
+  };
+}
+function buildVoteClusterAdmitTxFields(args) {
+  return {
+    chainId: args.chainId,
+    nonce: args.nonce,
+    maxFeePerGas: parseBigint(args.fee.maxFeePerGas, "maxFeePerGas"),
+    maxPriorityFeePerGas: parseBigint(args.fee.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
+    gasLimit: parseBigint(
+      args.fee.gasLimit ?? DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT,
+      "gasLimit"
+    ),
+    to: nodeRegistryAddressHex(),
+    value: 0n,
+    input: encodeVoteClusterAdmitCalldata({
+      clusterId: args.clusterId,
+      operatorId: normalizeOperatorId(args.operatorId),
+      voterPubkey: normalizeConsensusPubkey(args.voterPubkey, "voterPubkey")
+    })
+  };
+}
+async function submitRequestClusterJoin(args) {
+  const clusterId = parseUint32(args.clusterId, "clusterId");
+  const operatorPubkey = normalizeConsensusPubkey(args.operatorPubkey, "operatorPubkey");
+  const operatorIdHex = deriveClusterJoinOperatorId(operatorPubkey);
+  const existing = await preflightClusterJoinRequest(args.client, {
+    clusterId,
+    operatorId: operatorIdHex
+  });
+  if (existing.status === "open") {
+    throw new Error("cluster join request is already open for this operator");
+  }
+  if (existing.status === "admitted") {
+    throw new Error("operator is already admitted for this cluster request");
+  }
+  const backend = pqm1MnemonicToMlDsa65Backend(args.mnemonic);
+  const senderAddress = addressToTypedBech32("user", backend.addressBytes());
+  const [chainId, nonce, quote] = await Promise.all([
+    args.client.ethChainId(),
+    args.client.lythGetTransactionCount(senderAddress),
+    args.client.lythExecutionUnitPrice()
+  ]);
+  const tx = buildRequestClusterJoinTxFields({
+    chainId,
+    nonce,
+    fee: resolveClusterJoinExecutionFee(quote, args),
+    clusterId,
+    operatorPubkey,
+    bondLythoshi: args.bondLythoshi
+  });
+  return submitClusterJoinTx(args.client, backend, tx, clusterId, operatorIdHex);
+}
+async function submitVoteClusterAdmit(args) {
+  const clusterId = parseUint32(args.clusterId, "clusterId");
+  const operatorIdHex = normalizeOperatorId(args.operatorId);
+  const existing = await preflightClusterJoinRequest(args.client, {
+    clusterId,
+    operatorId: operatorIdHex
+  });
+  if (!clusterJoinRequestExists(existing) || existing.status !== "open") {
+    throw new Error("candidate cluster join request is not open for voting");
+  }
+  const backend = pqm1MnemonicToMlDsa65Backend(args.mnemonic);
+  const senderAddress = addressToTypedBech32("user", backend.addressBytes());
+  const [chainId, nonce, quote] = await Promise.all([
+    args.client.ethChainId(),
+    args.client.lythGetTransactionCount(senderAddress),
+    args.client.lythExecutionUnitPrice()
+  ]);
+  const tx = buildVoteClusterAdmitTxFields({
+    chainId,
+    nonce,
+    fee: resolveClusterJoinExecutionFee(quote, args),
+    clusterId,
+    operatorId: operatorIdHex,
+    voterPubkey: args.voterPubkey
+  });
+  return submitClusterJoinTx(args.client, backend, tx, clusterId, operatorIdHex);
+}
+async function submitClusterJoinTx(client, backend, tx, clusterId, operatorIdHex) {
+  const plaintext = buildPlaintextSubmission({ backend, tx });
+  const txHash = await submitPlaintextTransaction(
+    client,
+    plaintext.signedTxWireHex,
+    plaintext.innerTxHashHex
+  );
+  return {
+    txHash,
+    clusterId: clusterId.toString(10),
+    operatorIdHex,
+    innerSighashHex: plaintext.innerSighashHex,
+    signedTxWireBytes: plaintext.innerWireBytes
+  };
+}
+function normalizeConsensusPubkey(value, label) {
+  const bytes = typeof value === "string" ? hexToBytes2(value, label) : value;
+  return expectBytes(bytes, NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES, label).slice();
+}
+function normalizeOperatorId(value) {
+  const bytes = typeof value === "string" ? hexToBytes2(value, "operatorId") : value;
+  return bytesToHex2(expectBytes(bytes, 32, "operatorId"));
+}
+function parseUint32(value, label) {
+  const parsed = parseBigint(value, label);
+  if (parsed < 0n || parsed > MAX_UINT32) {
+    throw new Error(`${label} out of 32-bit range`);
+  }
+  return parsed;
+}
+function parseU256(value, label) {
+  const parsed = parseBigint(value, label);
+  if (parsed < 0n || parsed >= 1n << 256n) {
+    throw new Error(`${label} out of 256-bit range`);
+  }
+  return parsed;
+}
+function errorMessage(cause) {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 var ORACLE_EVENT_SIGS = {
   oracleRoundFinalized: "OracleRoundFinalized(bytes32,uint64,uint256,uint64,uint32)",
@@ -9895,6 +10354,7 @@ exports.CHAIN_REGISTRY_RAW_BASE = CHAIN_REGISTRY_RAW_BASE;
 exports.CLOB_MARKET_ID_DOMAIN_TAG = CLOB_MARKET_ID_DOMAIN_TAG;
 exports.CLOB_SELECTORS = CLOB_SELECTORS;
 exports.CLUSTER_FORMED_EVENT_SIG = CLUSTER_FORMED_EVENT_SIG;
+exports.DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT = DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT;
 exports.DELEGATION_REVERT_TAGS = DELEGATION_REVERT_TAGS;
 exports.DELEGATION_SELECTORS = DELEGATION_SELECTORS;
 exports.DIVERSITY_SCORE_MAX = DIVERSITY_SCORE_MAX;
@@ -10071,6 +10531,8 @@ exports.buildPlaceLimitOrderViaPlan = buildPlaceLimitOrderViaPlan;
 exports.buildPlaceSpotLimitOrderPlan = buildPlaceSpotLimitOrderPlan;
 exports.buildPlaceSpotMarketOrderExPlan = buildPlaceSpotMarketOrderExPlan;
 exports.buildPlaceSpotMarketOrderPlan = buildPlaceSpotMarketOrderPlan;
+exports.buildRequestClusterJoinTxFields = buildRequestClusterJoinTxFields;
+exports.buildVoteClusterAdmitTxFields = buildVoteClusterAdmitTxFields;
 exports.categoryRoot = categoryRoot;
 exports.checkMrvFeeDisplayConformance = checkMrvFeeDisplayConformance;
 exports.checkMrvStructuredFeeConformance = checkMrvStructuredFeeConformance;
@@ -10078,6 +10540,7 @@ exports.checkNativeDevkitCompatibility = checkNativeDevkitCompatibility;
 exports.clampPriorityTip = clampPriorityTip;
 exports.clobAddressHex = clobAddressHex;
 exports.clusterApyPercent = clusterApyPercent;
+exports.clusterJoinRequestExists = clusterJoinRequestExists;
 exports.compareNativeDevVersions = compareNativeDevVersions;
 exports.composeClaimBoundMessage = composeClaimBoundMessage;
 exports.computeNoEvmDacFinalityMessage = computeNoEvmDacFinalityMessage;
@@ -10105,6 +10568,7 @@ exports.delegationAddressHex = delegationAddressHex;
 exports.denyRootFor = denyRootFor;
 exports.deriveClobMarketId = deriveClobMarketId;
 exports.deriveClusterAnchorAddress = deriveClusterAnchorAddress;
+exports.deriveClusterJoinOperatorId = deriveClusterJoinOperatorId;
 exports.deriveFeedId = deriveFeedId;
 exports.deriveMrvContractAddress = deriveMrvContractAddress;
 exports.deriveNativeSpotMarketId = deriveNativeSpotMarketId;
@@ -10260,13 +10724,16 @@ exports.parseNameCategory = parseNameCategory;
 exports.parseNativeDecodedEvent = parseNativeDecodedEvent;
 exports.parseQuantity = parseQuantity;
 exports.parseQuantityBig = parseQuantityBig;
+exports.preflightClusterJoinRequest = preflightClusterJoinRequest;
 exports.proverMarketStateFromByte = proverMarketStateFromByte;
 exports.pubkeyRegistryAddressHex = pubkeyRegistryAddressHex;
 exports.quoteOperatorFee = quoteOperatorFee;
 exports.rankBridgeRoutes = rankBridgeRoutes;
 exports.rankMarketsByVolume = rankMarketsByVolume;
+exports.readClusterJoinRequest = readClusterJoinRequest;
 exports.requestSighash = requestSighash;
 exports.requireTypedAddress = requireTypedAddress;
+exports.resolveClusterJoinExecutionFee = resolveClusterJoinExecutionFee;
 exports.resolveExecutionFee = resolveExecutionFee;
 exports.resolveMaxExecutionUnitPrice = resolveMaxExecutionUnitPrice;
 exports.resolveRegistryExecutionFee = resolveRegistryExecutionFee;
@@ -10278,7 +10745,9 @@ exports.spendingPolicyAddressHex = spendingPolicyAddressHex;
 exports.submitMrvCallNativeTx = submitMrvCallNativeTx;
 exports.submitMrvDeployNativeTx = submitMrvDeployNativeTx;
 exports.submitMrvDeployPayloadNativeTx = submitMrvDeployPayloadNativeTx;
+exports.submitRequestClusterJoin = submitRequestClusterJoin;
 exports.submitSighash = submitSighash;
+exports.submitVoteClusterAdmit = submitVoteClusterAdmit;
 exports.transactionFeeExposure = transactionFeeExposure;
 exports.typedBech32ToAddress = typedBech32ToAddress;
 exports.validateAddress = validateAddress;

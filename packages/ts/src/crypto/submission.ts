@@ -1,8 +1,11 @@
-import { RpcClient } from "../client.js";
 import { bytesToHex, hexToBytes } from "./bytes.js";
 import { MempoolClass } from "./envelope.js";
 import type { MlDsa65Backend } from "./ml-dsa.js";
 import type { NativeEvmTxFields } from "./tx.js";
+
+export interface JsonRpcCallClient {
+  call<T>(method: string, params?: unknown): Promise<T>;
+}
 
 export interface EncryptionKey {
   algo: string;
@@ -41,7 +44,7 @@ export interface PlaintextSubmission {
   innerWireBytes: number;
 }
 
-export async function fetchEncryptionKey(client: RpcClient): Promise<EncryptionKey> {
+export async function fetchEncryptionKey(client: JsonRpcCallClient): Promise<EncryptionKey> {
   const result = await client.call<{ algo?: string; epoch: number | string; encapsulationKey: string }>(
     "lyth_getEncryptionKey",
     [],
@@ -98,7 +101,10 @@ export async function buildEncryptedSubmission(_args: {
   throw new Error(ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE);
 }
 
-export async function submitEncryptedEnvelope(client: RpcClient, envelopeWireHex: string): Promise<string> {
+export async function submitEncryptedEnvelope(
+  client: JsonRpcCallClient,
+  envelopeWireHex: string,
+): Promise<string> {
   return client.call("lyth_submitEncrypted", [envelopeWireHex]);
 }
 
@@ -143,7 +149,7 @@ export function buildPlaintextSubmission(args: {
  * @returns the validated canonical native tx hash (`0x`-prefixed).
  */
 export async function submitPlaintextTransaction(
-  client: RpcClient,
+  client: JsonRpcCallClient,
   signedTxWireHex: string,
   expectedTxHashHex: string,
 ): Promise<string> {
@@ -184,7 +190,7 @@ export async function submitPlaintextTransaction(
  * @throws when `private === true` (encrypted submission unavailable).
  */
 export async function submitTransactionWithPrivacy(args: {
-  client: RpcClient;
+  client: JsonRpcCallClient;
   backend: MlDsa65Backend;
   tx: NativeEvmTxFields;
   private: boolean;

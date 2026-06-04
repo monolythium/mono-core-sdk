@@ -1,7 +1,9 @@
 import { blake3 } from '@noble/hashes/blake3.js';
-import { keccak_256 } from '@noble/hashes/sha3.js';
+import { keccak_256, shake256 } from '@noble/hashes/sha3.js';
 import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js';
 import { bls12_381 } from '@noble/curves/bls12-381.js';
+import { mnemonicToEntropy } from '@scure/bip39';
+import { wordlist } from '@scure/bip39/wordlists/english.js';
 import '@noble/post-quantum/ml-kem.js';
 import '@noble/ciphers/chacha.js';
 import '@noble/hashes/utils.js';
@@ -1035,6 +1037,16 @@ function bigintToBeBytes(value, bytes, label) {
   }
   return out;
 }
+function parseBigint(value, label) {
+  if (value === void 0) throw new Error(`${label} missing`);
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${label} must be a non-negative safe integer`);
+    return BigInt(value);
+  }
+  if (value.startsWith("0x") || value.startsWith("0X")) return BigInt(value);
+  return BigInt(value);
+}
 
 // src/crypto/submission.ts
 async function fetchEncryptionKey(client) {
@@ -1055,6 +1067,38 @@ async function buildEncryptedSubmission(_args) {
 }
 async function submitEncryptedEnvelope(client, envelopeWireHex) {
   return client.call("lyth_submitEncrypted", [envelopeWireHex]);
+}
+function buildPlaintextSubmission(args) {
+  const signed = args.backend.signEvmTx(args.tx);
+  return {
+    signedTxWireHex: `0x${signed.wireHex}`,
+    innerTxHashHex: bytesToHex2(signed.txHash),
+    innerSighashHex: bytesToHex2(signed.sighash),
+    innerWireBytes: signed.wireBytes.length
+  };
+}
+async function submitPlaintextTransaction(client, signedTxWireHex, expectedTxHashHex) {
+  const returned = await client.call("mesh_submitTx", [signedTxWireHex]);
+  const returnedBytes = hexToBytes2(returned, "mesh_submitTx tx hash");
+  if (returnedBytes.length !== 32) {
+    throw new Error(
+      `mesh_submitTx tx hash must be 32 bytes, got ${returnedBytes.length}`
+    );
+  }
+  const expectedBytes = hexToBytes2(expectedTxHashHex, "expected tx hash");
+  if (!bytesEqual(returnedBytes, expectedBytes)) {
+    throw new Error(
+      `mesh_submitTx returned tx hash ${bytesToHex2(returnedBytes)} but the locally computed canonical hash is ${bytesToHex2(expectedBytes)}`
+    );
+  }
+  return bytesToHex2(returnedBytes);
+}
+function bytesEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
 }
 
 // src/crypto/bincode.ts
@@ -1973,11 +2017,181 @@ function concatBytes3(...parts) {
 function isIdentifier(value) {
   return /^[a-z][a-z0-9_]*$/.test(value);
 }
+
+// src/crypto/tx.ts
+function encodeTransactionForHash(fields, tag) {
+  const n = normalizeTxFields(fields);
+  return concatBytes2(
+    Uint8Array.of(tag),
+    bigintToBeBytes(n.chainId, 8, "chainId"),
+    bigintToBeBytes(n.nonce, 8, "nonce"),
+    bigintToBeBytes(n.maxPriorityFeePerGas, 32, "maxPriorityFeePerGas"),
+    bigintToBeBytes(n.maxFeePerGas, 32, "maxFeePerGas"),
+    bigintToBeBytes(n.gasLimit, 8, "gasLimit"),
+    n.to === null ? Uint8Array.of(0) : concatBytes2(Uint8Array.of(1), n.to),
+    bigintToBeBytes(n.value, 32, "value"),
+    bigintToBeBytes(BigInt(n.input.length), 4, "input.length"),
+    n.input,
+    new Uint8Array(4),
+    // access_list length
+    encodeExtensionsForHash(n.extensions)
+  );
+}
+function bincodeSignedTransaction(fields, signature, publicKey) {
+  const n = normalizeTxFields(fields);
+  const sig = expectBytes(signature, ML_DSA_65_SIGNATURE_LEN, "ML-DSA-65 signature");
+  const pk = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key");
+  const w = new BincodeWriter();
+  w.u64(n.chainId);
+  w.u64(n.nonce);
+  w.bytes(uint256Be(n.maxPriorityFeePerGas, "maxPriorityFeePerGas"));
+  w.bytes(uint256Be(n.maxFeePerGas, "maxFeePerGas"));
+  w.u64(n.gasLimit);
+  if (n.to === null) {
+    w.u8(0);
+  } else {
+    w.u8(1);
+    w.bytes(n.to);
+  }
+  w.bytes(uint256Be(n.value, "value"));
+  w.bytes(n.input);
+  w.u64(0n);
+  w.u64(BigInt(n.extensions.length));
+  for (const ext of n.extensions) bincodeTypedExtensionInto(w, ext);
+  bincodeMlDsa65OpaqueInto(w, sig);
+  bincodeMlDsa65OpaqueInto(w, pk);
+  return w.toBytes();
+}
+function normalizeTxFields(fields) {
+  return {
+    chainId: parseBigint(fields.chainId, "chainId"),
+    nonce: parseBigint(fields.nonce, "nonce"),
+    maxPriorityFeePerGas: parseBigint(fields.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
+    maxFeePerGas: parseBigint(fields.maxFeePerGas, "maxFeePerGas"),
+    gasLimit: parseBigint(fields.gasLimit, "gasLimit"),
+    to: normalizeTo(fields.to),
+    value: parseBigint(fields.value, "value"),
+    input: normalizeBytes(fields.input ?? new Uint8Array(0), "input"),
+    extensions: normalizeExtensions(fields.extensions)
+  };
+}
+function normalizeTo(value) {
+  if (value === null) return null;
+  const bytes = normalizeBytes(value, "to");
+  return expectBytes(bytes, 20, "to");
+}
+function normalizeBytes(value, label) {
+  if (typeof value === "string") return hexToBytes2(value, label);
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+function normalizeExtensions(value) {
+  if (value === void 0) return [];
+  return value.map((ext, index) => {
+    if (!Number.isInteger(ext.kind) || ext.kind < 0 || ext.kind > 255) {
+      throw new Error(`extensions[${index}].kind out of u8 range`);
+    }
+    const body = normalizeBytes("bodyHex" in ext ? ext.bodyHex : ext.body, `extensions[${index}].body`);
+    if (body.length > 4294967295) {
+      throw new Error(`extensions[${index}].body exceeds u32 length`);
+    }
+    return { kind: ext.kind, body };
+  });
+}
+function encodeExtensionsForHash(extensions) {
+  const chunks = [bigintToBeBytes(BigInt(extensions.length), 4, "extensions.length")];
+  for (const ext of extensions) {
+    chunks.push(
+      Uint8Array.of(ext.kind),
+      bigintToBeBytes(BigInt(ext.body.length), 4, "extension.body.length"),
+      ext.body
+    );
+  }
+  return concatBytes2(...chunks);
+}
+function uint256Be(value, label) {
+  if (value < 0n || value >= 1n << 256n) throw new Error(`${label} out of u256 range`);
+  const out = new Uint8Array(32);
+  let v = value;
+  for (let i = 31; i >= 0; i--) {
+    out[i] = Number(v & 0xffn);
+    v >>= 8n;
+  }
+  return out;
+}
+function bincodeMlDsa65OpaqueInto(w, raw) {
+  w.enumVariant(ENUM_VARIANT_INDEX_ML_DSA_65);
+  w.u16(STANDARD_ALGO_NUMBER_ML_DSA_65);
+  w.bytes(raw);
+}
+function bincodeTypedExtensionInto(w, ext) {
+  w.u8(ext.kind);
+  w.bytes(ext.body);
+}
+
+// src/crypto/ml-dsa.ts
+var ML_DSA_65_SEED_LEN = 32;
+var ML_DSA_65_SIGNING_KEY_LEN = 4032;
 var ML_DSA_65_PUBLIC_KEY_LEN = 1952;
 var ML_DSA_65_SIGNATURE_LEN = 3309;
 var STANDARD_ALGO_NUMBER_ML_DSA_65 = 1001;
+var ENUM_VARIANT_INDEX_ML_DSA_65 = 5;
 var ADDRESS_DERIVATION_DOMAIN = "MONO_ADDRESS_BLAKE3_20_V1";
 var ADDRESS_DERIVATION_DOMAIN_BYTES = new TextEncoder().encode(ADDRESS_DERIVATION_DOMAIN);
+var MlDsa65Backend = class _MlDsa65Backend {
+  #secretKey;
+  #publicKey;
+  #addressBytes;
+  constructor(secretKey, publicKey) {
+    this.#secretKey = expectBytes(secretKey, ML_DSA_65_SIGNING_KEY_LEN, "ML-DSA-65 secret key").slice();
+    this.#publicKey = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key").slice();
+    this.#addressBytes = mlDsa65AddressBytes(this.#publicKey);
+  }
+  static fromSeed(seed) {
+    const kp = ml_dsa65.keygen(expectBytes(seed, ML_DSA_65_SEED_LEN, "ML-DSA-65 seed"));
+    return new _MlDsa65Backend(kp.secretKey, kp.publicKey);
+  }
+  publicKey() {
+    return this.#publicKey.slice();
+  }
+  addressBytes() {
+    return this.#addressBytes.slice();
+  }
+  getAddress() {
+    return bytesToHex2(this.#addressBytes);
+  }
+  sign(message) {
+    return ml_dsa65.sign(message, this.#secretKey, { extraEntropy: false });
+  }
+  signPrehash(digest) {
+    return this.sign(expectBytes(digest, 32, "prehash"));
+  }
+  verify(message, signature) {
+    return ml_dsa65.verify(
+      expectBytes(signature, ML_DSA_65_SIGNATURE_LEN, "ML-DSA-65 signature"),
+      message,
+      this.#publicKey
+    );
+  }
+  signEvmTx(fields) {
+    const txHashPreimage = encodeTransactionForHash(fields, 1);
+    const sighash = keccak_256(txHashPreimage);
+    const signature = this.sign(sighash);
+    const wireBytes = bincodeSignedTransaction(fields, signature, this.#publicKey);
+    const txHash = keccak_256(
+      concatBytes2(
+        encodeTransactionForHash(fields, 2),
+        signature,
+        this.#publicKey
+      )
+    );
+    return {
+      wireHex: bytesToHex2(wireBytes).slice(2),
+      wireBytes,
+      sighash,
+      txHash
+    };
+  }
+};
 function mlDsa65AddressFromPublicKey(publicKey) {
   return bytesToHex2(mlDsa65AddressBytes(publicKey));
 }
@@ -6550,7 +6764,7 @@ function verifyBoundedReceiptProof(proof) {
   }
   const actualRoot = computeNoEvmReceiptsRoot(receipts);
   const expectedRoot = decodeHash(proof.receiptsRoot, "receiptsRoot");
-  if (!bytesEqual(expectedRoot, decodeHash(actualRoot, "computedReceiptsRoot"))) {
+  if (!bytesEqual2(expectedRoot, decodeHash(actualRoot, "computedReceiptsRoot"))) {
     throw new NoEvmReceiptProofError(
       "receipts_root_mismatch",
       `receiptsRoot mismatch: expected ${proof.receiptsRoot}, computed ${actualRoot}`
@@ -6558,7 +6772,7 @@ function verifyBoundedReceiptProof(proof) {
   }
   const actualTargetHash = computeNoEvmTargetReceiptHash(targetReceipt);
   const expectedTargetHash = decodeHash(proof.targetReceiptHash, "targetReceiptHash");
-  if (!bytesEqual(expectedTargetHash, decodeHash(actualTargetHash, "computedTargetReceiptHash"))) {
+  if (!bytesEqual2(expectedTargetHash, decodeHash(actualTargetHash, "computedTargetReceiptHash"))) {
     throw new NoEvmReceiptProofError(
       "target_receipt_hash_mismatch",
       `targetReceiptHash mismatch: expected ${proof.targetReceiptHash}, computed ${actualTargetHash}`
@@ -6615,7 +6829,7 @@ function verifyCompactReceiptProof(proof) {
   const targetReceipt = decodeHexBytes(targetReceiptBytes, "targetReceiptBytes");
   const actualTargetHash = computeNoEvmTargetReceiptHash(targetReceipt);
   const expectedTargetHash = decodeHash(proof.targetReceiptHash, "targetReceiptHash");
-  if (!bytesEqual(expectedTargetHash, decodeHash(actualTargetHash, "computedTargetReceiptHash"))) {
+  if (!bytesEqual2(expectedTargetHash, decodeHash(actualTargetHash, "computedTargetReceiptHash"))) {
     throw new NoEvmReceiptProofError(
       "target_receipt_hash_mismatch",
       `targetReceiptHash mismatch: expected ${proof.targetReceiptHash}, computed ${actualTargetHash}`
@@ -6626,7 +6840,7 @@ function verifyCompactReceiptProof(proof) {
     compactProof.leafHash,
     "compactInclusionProof.leafHash"
   );
-  if (!bytesEqual(expectedLeafHashBytes, actualLeafHashBytes)) {
+  if (!bytesEqual2(expectedLeafHashBytes, actualLeafHashBytes)) {
     throw new NoEvmReceiptProofError(
       "compact_leaf_hash_mismatch",
       `compactInclusionProof.leafHash mismatch: expected ${compactProof.leafHash}, computed ${bytesToHex6(
@@ -6636,7 +6850,7 @@ function verifyCompactReceiptProof(proof) {
   }
   const compactRootBytes = decodeHash(compactProof.root, "compactInclusionProof.root");
   const receiptsRootBytes = decodeHash(proof.receiptsRoot, "receiptsRoot");
-  if (!bytesEqual(receiptsRootBytes, compactRootBytes)) {
+  if (!bytesEqual2(receiptsRootBytes, compactRootBytes)) {
     throw new NoEvmReceiptProofError(
       "compact_root_mismatch",
       `receiptsRoot must equal compactInclusionProof.root: receiptsRoot ${proof.receiptsRoot}, compact root ${compactProof.root}`
@@ -6659,7 +6873,7 @@ function verifyCompactReceiptProof(proof) {
     siblingHashes,
     pathSides
   );
-  if (!bytesEqual(actualRootBytes, compactRootBytes)) {
+  if (!bytesEqual2(actualRootBytes, compactRootBytes)) {
     throw new NoEvmReceiptProofError(
       "compact_path_mismatch",
       `compact inclusion path mismatch: expected ${compactProof.root}, computed ${bytesToHex6(
@@ -6813,7 +7027,7 @@ function validateCoveringSnapshotObject(snapshot, archiveContentHash, proofBlock
       "archiveProof.coveringSnapshot.checkpointTo must match blockHeight"
     );
   }
-  if (!bytesEqual(checkpointContentHash, archiveContentHash)) {
+  if (!bytesEqual2(checkpointContentHash, archiveContentHash)) {
     throw new NoEvmReceiptProofError(
       "invalid_proof_shape",
       "archiveProof.coveringSnapshot.checkpointContentHash must match archiveProof.contentHash"
@@ -7012,7 +7226,7 @@ function validateFinalityBlockReference(blockReference, round, proofBlockHash) {
   );
   if (proofBlockHash !== void 0) {
     const blockHash = decodeHash(proofBlockHash, "blockHash");
-    if (!bytesEqual(digest, blockHash)) {
+    if (!bytesEqual2(digest, blockHash)) {
       throw new NoEvmReceiptProofError(
         "invalid_proof_shape",
         "finalityEvidence.blockReference.digest must match blockHash"
@@ -7362,7 +7576,7 @@ function assertHashBytes(value, field2) {
 function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function bytesEqual(a, b) {
+function bytesEqual2(a, b) {
   if (a.length !== b.length) return false;
   let diff = 0;
   for (let index = 0; index < a.length; index++) {
@@ -7569,6 +7783,251 @@ function assertWholeNumber(field2, value) {
   if (!/^[0-9]+$/.test(value)) {
     throw new Error(`${field2} must be a whole number`);
   }
+}
+var PQM1_ALGO_TAG_MLDSA65 = 1;
+var PQM1_VERSION_V1 = 1;
+var PQM1_PAYLOAD_LEN = 32;
+var PQM1_V1_MNEMONIC_WORDS = 24;
+var PQM1_V1_MLDSA65_DOMAIN_TAG = "monolythium.pqm1.v1.mldsa65";
+var Pqm1Error = class extends Error {
+  constructor(kind, message) {
+    super(message);
+    this.kind = kind;
+    this.name = "Pqm1Error";
+  }
+  kind;
+};
+var DOMAIN_BYTES = new TextEncoder().encode(PQM1_V1_MLDSA65_DOMAIN_TAG);
+function normalizeMnemonic(mnemonic) {
+  return mnemonic.trim().toLowerCase().replace(/\s+/g, " ");
+}
+function ensureSupportedPayload(bytes) {
+  if (bytes.length !== PQM1_PAYLOAD_LEN) {
+    throw new Pqm1Error("badPayloadLength", `PQM-1 payload must be ${PQM1_PAYLOAD_LEN} bytes, got ${bytes.length}`);
+  }
+  if (bytes[0] !== PQM1_ALGO_TAG_MLDSA65) {
+    throw new Pqm1Error("unsupportedAlgorithm", `unsupported PQM-1 algorithm tag 0x${bytes[0].toString(16).padStart(2, "0")}`);
+  }
+  if (bytes[1] !== PQM1_VERSION_V1) {
+    throw new Pqm1Error("unsupportedVersion", `unsupported PQM-1 version 0x${bytes[1].toString(16).padStart(2, "0")}`);
+  }
+}
+function parsePqm1Payload(payload) {
+  const bytes = expectBytes(payload, PQM1_PAYLOAD_LEN, "PQM-1 payload").slice();
+  ensureSupportedPayload(bytes);
+  return {
+    algoTag: PQM1_ALGO_TAG_MLDSA65,
+    version: PQM1_VERSION_V1,
+    entropy: bytes.slice(2),
+    bytes
+  };
+}
+function pqm1MnemonicToPayload(mnemonic) {
+  const normalized = normalizeMnemonic(mnemonic);
+  const words = normalized.length === 0 ? [] : normalized.split(" ");
+  if (words.length !== PQM1_V1_MNEMONIC_WORDS) {
+    throw new Pqm1Error("badWordCount", `PQM-1 mnemonic must be ${PQM1_V1_MNEMONIC_WORDS} words, got ${words.length}`);
+  }
+  let payload;
+  try {
+    payload = mnemonicToEntropy(normalized, wordlist);
+  } catch (e) {
+    throw new Pqm1Error("bip39Decode", `invalid PQM-1 mnemonic: ${e.message}`);
+  }
+  return parsePqm1Payload(payload);
+}
+function derivePqm1MlDsa65SeedFromPayload(payload) {
+  const parsed = parsePqm1Payload(payload);
+  return shake256(concatBytes2(DOMAIN_BYTES, parsed.bytes), { dkLen: ML_DSA_65_SEED_LEN });
+}
+function pqm1MnemonicToMlDsa65Seed(mnemonic) {
+  return derivePqm1MlDsa65SeedFromPayload(pqm1MnemonicToPayload(mnemonic).bytes);
+}
+function pqm1MnemonicToMlDsa65Backend(mnemonic) {
+  return MlDsa65Backend.fromSeed(pqm1MnemonicToMlDsa65Seed(mnemonic));
+}
+
+// src/cluster-join.ts
+var DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT = REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT;
+var ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+var MAX_UINT32 = (1n << 32n) - 1n;
+function deriveClusterJoinOperatorId(operatorPubkey) {
+  return bytesToHex2(blake3(normalizeConsensusPubkey(operatorPubkey, "operatorPubkey")));
+}
+function clusterJoinRequestExists(view) {
+  return view.status !== "none" || view.owner.toLowerCase() !== ZERO_ADDRESS || view.bondLythoshi !== 0n;
+}
+async function readClusterJoinRequest(client, args) {
+  const data = encodeGetClusterJoinRequestCalldata({
+    clusterId: args.clusterId,
+    operatorId: normalizeOperatorId(args.operatorId)
+  });
+  const output = await client.call("eth_call", [
+    {
+      to: nodeRegistryAddressHex(),
+      data
+    },
+    "latest"
+  ]);
+  return decodeClusterJoinRequest(output);
+}
+async function preflightClusterJoinRequest(client, args) {
+  try {
+    return await readClusterJoinRequest(client, args);
+  } catch (cause) {
+    throw new Error(
+      `CJ-1 getClusterJoinRequest is not exposed or failed on the connected chain: ${errorMessage(cause)}`
+    );
+  }
+}
+function resolveClusterJoinExecutionFee(quote, options = {}) {
+  const quoted = parseBigint(quote.executionUnitPriceLythoshi, "executionUnitPriceLythoshi");
+  const floor = options.minPriceLythoshi === void 0 ? MIN_EXECUTION_UNIT_PRICE_LYTHOSHI : parseBigint(options.minPriceLythoshi, "minPriceLythoshi");
+  const multiplier = options.safetyMultiplier === void 0 ? EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER : parseBigint(options.safetyMultiplier, "safetyMultiplier");
+  if (multiplier <= 0n) throw new Error("safetyMultiplier must be greater than zero");
+  const base = quoted > floor ? quoted : floor;
+  const maxFeePerGas = base * multiplier;
+  const tip = options.priorityTipLythoshi === void 0 ? maxFeePerGas : clampPriorityTip(options.priorityTipLythoshi, maxFeePerGas);
+  return {
+    maxFeePerGas,
+    maxPriorityFeePerGas: tip,
+    gasLimit: options.executionUnitLimit ?? DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT
+  };
+}
+function buildRequestClusterJoinTxFields(args) {
+  return {
+    chainId: args.chainId,
+    nonce: args.nonce,
+    maxFeePerGas: parseBigint(args.fee.maxFeePerGas, "maxFeePerGas"),
+    maxPriorityFeePerGas: parseBigint(args.fee.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
+    gasLimit: parseBigint(
+      args.fee.gasLimit ?? DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT,
+      "gasLimit"
+    ),
+    to: nodeRegistryAddressHex(),
+    value: parseU256(args.bondLythoshi, "bondLythoshi"),
+    input: encodeRequestClusterJoinCalldata({
+      clusterId: args.clusterId,
+      operatorPubkey: normalizeConsensusPubkey(args.operatorPubkey, "operatorPubkey")
+    })
+  };
+}
+function buildVoteClusterAdmitTxFields(args) {
+  return {
+    chainId: args.chainId,
+    nonce: args.nonce,
+    maxFeePerGas: parseBigint(args.fee.maxFeePerGas, "maxFeePerGas"),
+    maxPriorityFeePerGas: parseBigint(args.fee.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
+    gasLimit: parseBigint(
+      args.fee.gasLimit ?? DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT,
+      "gasLimit"
+    ),
+    to: nodeRegistryAddressHex(),
+    value: 0n,
+    input: encodeVoteClusterAdmitCalldata({
+      clusterId: args.clusterId,
+      operatorId: normalizeOperatorId(args.operatorId),
+      voterPubkey: normalizeConsensusPubkey(args.voterPubkey, "voterPubkey")
+    })
+  };
+}
+async function submitRequestClusterJoin(args) {
+  const clusterId = parseUint32(args.clusterId, "clusterId");
+  const operatorPubkey = normalizeConsensusPubkey(args.operatorPubkey, "operatorPubkey");
+  const operatorIdHex = deriveClusterJoinOperatorId(operatorPubkey);
+  const existing = await preflightClusterJoinRequest(args.client, {
+    clusterId,
+    operatorId: operatorIdHex
+  });
+  if (existing.status === "open") {
+    throw new Error("cluster join request is already open for this operator");
+  }
+  if (existing.status === "admitted") {
+    throw new Error("operator is already admitted for this cluster request");
+  }
+  const backend = pqm1MnemonicToMlDsa65Backend(args.mnemonic);
+  const senderAddress = addressToTypedBech32("user", backend.addressBytes());
+  const [chainId, nonce, quote] = await Promise.all([
+    args.client.ethChainId(),
+    args.client.lythGetTransactionCount(senderAddress),
+    args.client.lythExecutionUnitPrice()
+  ]);
+  const tx = buildRequestClusterJoinTxFields({
+    chainId,
+    nonce,
+    fee: resolveClusterJoinExecutionFee(quote, args),
+    clusterId,
+    operatorPubkey,
+    bondLythoshi: args.bondLythoshi
+  });
+  return submitClusterJoinTx(args.client, backend, tx, clusterId, operatorIdHex);
+}
+async function submitVoteClusterAdmit(args) {
+  const clusterId = parseUint32(args.clusterId, "clusterId");
+  const operatorIdHex = normalizeOperatorId(args.operatorId);
+  const existing = await preflightClusterJoinRequest(args.client, {
+    clusterId,
+    operatorId: operatorIdHex
+  });
+  if (!clusterJoinRequestExists(existing) || existing.status !== "open") {
+    throw new Error("candidate cluster join request is not open for voting");
+  }
+  const backend = pqm1MnemonicToMlDsa65Backend(args.mnemonic);
+  const senderAddress = addressToTypedBech32("user", backend.addressBytes());
+  const [chainId, nonce, quote] = await Promise.all([
+    args.client.ethChainId(),
+    args.client.lythGetTransactionCount(senderAddress),
+    args.client.lythExecutionUnitPrice()
+  ]);
+  const tx = buildVoteClusterAdmitTxFields({
+    chainId,
+    nonce,
+    fee: resolveClusterJoinExecutionFee(quote, args),
+    clusterId,
+    operatorId: operatorIdHex,
+    voterPubkey: args.voterPubkey
+  });
+  return submitClusterJoinTx(args.client, backend, tx, clusterId, operatorIdHex);
+}
+async function submitClusterJoinTx(client, backend, tx, clusterId, operatorIdHex) {
+  const plaintext = buildPlaintextSubmission({ backend, tx });
+  const txHash = await submitPlaintextTransaction(
+    client,
+    plaintext.signedTxWireHex,
+    plaintext.innerTxHashHex
+  );
+  return {
+    txHash,
+    clusterId: clusterId.toString(10),
+    operatorIdHex,
+    innerSighashHex: plaintext.innerSighashHex,
+    signedTxWireBytes: plaintext.innerWireBytes
+  };
+}
+function normalizeConsensusPubkey(value, label) {
+  const bytes = typeof value === "string" ? hexToBytes2(value, label) : value;
+  return expectBytes(bytes, NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES, label).slice();
+}
+function normalizeOperatorId(value) {
+  const bytes = typeof value === "string" ? hexToBytes2(value, "operatorId") : value;
+  return bytesToHex2(expectBytes(bytes, 32, "operatorId"));
+}
+function parseUint32(value, label) {
+  const parsed = parseBigint(value, label);
+  if (parsed < 0n || parsed > MAX_UINT32) {
+    throw new Error(`${label} out of 32-bit range`);
+  }
+  return parsed;
+}
+function parseU256(value, label) {
+  const parsed = parseBigint(value, label);
+  if (parsed < 0n || parsed >= 1n << 256n) {
+    throw new Error(`${label} out of 256-bit range`);
+  }
+  return parsed;
+}
+function errorMessage(cause) {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 var ORACLE_EVENT_SIGS = {
   oracleRoundFinalized: "OracleRoundFinalized(bytes32,uint64,uint256,uint64,uint32)",
@@ -9875,6 +10334,6 @@ var MONOLYTHIUM_NETWORKS = {
 // src/index.ts
 var version = "0.3.16";
 
-export { ADDRESS_HRP, ADDRESS_KIND_HRPS, API_STREAM_TOPICS, AddressError, AgentActionError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, CLOB_MARKET_ID_DOMAIN_TAG, CLOB_SELECTORS, CLUSTER_FORMED_EVENT_SIG, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DIVERSITY_SCORE_MAX, DelegationPrecompileError, EMPTY_ROOT, EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER, FEED_ID_DOMAIN_TAG, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES, MAX_NATIVE_RECEIPT_EVENTS, MIN_EXECUTION_UNIT_PRICE_LYTHOSHI, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MULTISIG_ADDRESS_DERIVATION_DOMAIN, MarketActionError, MrvValidationError, NAME_BASE_MULTIPLIER, NAME_FALLBACK_FEE_UNIT_LYTHOSHI, NAME_LABEL_MAX_LEN, NAME_LABEL_MIN_LEN, NAME_MAX_LEN, NAME_REGISTRY_SELECTORS, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE, NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY, NATIVE_CALL_FORWARDER_RESPONSE_OFFSET, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NATIVE_MARKET_MODULE_ADDRESS, NATIVE_MARKET_MODULE_ADDRESS_BYTES, NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, NODE_REGISTRY_BLS_PUBKEY_BYTES, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_CONSENSUS_POP_BYTES, NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES, NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS, NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS, NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES, NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_FINALITY_EVIDENCE_SCHEMA, NO_EVM_FINALITY_EVIDENCE_SOURCE, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NameRegistryError, NoEvmReceiptProofError, NodeRegistryError, OPERATOR_ROUTER_ADDRESS, OPERATOR_ROUTER_EVENT_SIGS, OPERATOR_ROUTER_SELECTORS, OPERATOR_ROUTER_SIGS, ORACLE_EVENT_SIGS, OracleEventError, PENDING_CHANGE_KIND_CODES, PRECOMPILE_ADDRESSES, PROTOCOL_MAX_OPERATOR_FEE_BPS, PROVER_MARKET_ADDRESS, PROVER_MARKET_BID_DOMAIN, PROVER_MARKET_EVENT_SIGS, PROVER_MARKET_REQUEST_DOMAIN, PROVER_MARKET_SELECTORS, PROVER_MARKET_SUBMIT_DOMAIN, PROVER_SLASH_REASON_BAD_PROOF, PROVER_SLASH_REASON_NON_DELIVERY, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, ProverMarketError, PubkeyRegistryError, REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT, RESERVED_ADDRESS_HRPS, RpcClient, SERVES_GPU_PROVE, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT, V1_BRIDGE_ALLOWED_FEE_TOKEN, V1_BRIDGE_ALLOWED_PROTOCOL, addressBytesToHex, addressToBech32, addressToTypedBech32, allowRootFor, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, assertNativeMarketOrderBookStreamPayload, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bidSighash, bridgeAddressHex, bridgeDrainRemaining, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildBridgeRouteCatalogue, buildCancelSpotOrderPlan, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildNativeCallForwarderArtifact, buildNativeMarketModuleCallEnvelope, buildNativeNftBuyListingForwarderInput, buildNativeNftBuyListingModuleCall, buildNativeNftCancelListingForwarderInput, buildNativeNftCancelListingModuleCall, buildNativeNftCreateListingForwarderInput, buildNativeNftCreateListingModuleCall, buildNativeNftPlaceAuctionBidForwarderInput, buildNativeNftPlaceAuctionBidModuleCall, buildNativeNftSettleAuctionForwarderInput, buildNativeNftSettleAuctionModuleCall, buildNativeNftSweepExpiredListingsForwarderInput, buildNativeNftSweepExpiredListingsModuleCall, buildNativeSpotCancelOrderForwarderInput, buildNativeSpotCancelOrderModuleCall, buildNativeSpotCreateMarketForwarderInput, buildNativeSpotCreateMarketModuleCall, buildNativeSpotLimitOrderForwarderInput, buildNativeSpotLimitOrderModuleCall, buildNativeSpotSettleLimitOrderForwarderInput, buildNativeSpotSettleLimitOrderModuleCall, buildNativeSpotSettleRoutedLimitOrderForwarderInput, buildNativeSpotSettleRoutedLimitOrderModuleCall, buildPlaceLimitOrderViaPlan, buildPlaceSpotLimitOrderPlan, buildPlaceSpotMarketOrderExPlan, buildPlaceSpotMarketOrderPlan, categoryRoot, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, clampPriorityTip, clobAddressHex, clusterApyPercent, compareNativeDevVersions, composeClaimBoundMessage, computeNoEvmDacFinalityMessage, computeNoEvmLeaderFinalityMessage, computeNoEvmReceiptsRoot, computeNoEvmRoundFinalityMessage, computeNoEvmTargetReceiptHash, computeQuoteLiquidity, consumeNativeEvents, decodeClusterDiversity, decodeClusterFormedEvent, decodeClusterJoinRequest, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNativeAgentStateResponse, decodeNativeMarketOrderBookDeltasResponse, decodeNativeReceiptResponse, decodeNoEvmReceiptTranscript, decodeOperatorFeeChargedEvent, decodeOperatorNetworkMetadata, decodeOracleEvent, decodeTimeWindow, decodeTxFeedResponse, delegationAddressHex, denyRootFor, deriveClobMarketId, deriveClusterAnchorAddress, deriveFeedId, deriveMrvContractAddress, deriveNativeSpotMarketId, deriveNativeSpotOrderId, destinationRoot, encodeAttestDkgReshareCalldata, encodeBlockSelector, encodeBridgeChallengeCalldata, encodeBridgeClaimCalldata, encodeCancelClusterJoinCalldata, encodeCancelOrderCalldata, encodeCancelPendingChangeCalldata, encodeClaimCalldata, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeCreateRequestCalldata, encodeCreateRequestCanonical, encodeDelegateCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeExpireClusterJoinCalldata, encodeGetClusterJoinRequestCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeNameAcceptTransferCall, encodeNameProposeTransferCall, encodeNameRegisterCall, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeNativeMarketModuleForwarderInput, encodeNativeNftBuyListingCall, encodeNativeNftCancelListingCall, encodeNativeNftCreateListingCall, encodeNativeNftPlaceAuctionBidCall, encodeNativeNftSettleAuctionCall, encodeNativeNftSweepExpiredListingsCall, encodeNativeSpotCancelOrderCall, encodeNativeSpotCreateMarketCall, encodeNativeSpotLimitOrderCall, encodeNativeSpotSettleLimitOrderCall, encodeNativeSpotSettleRoutedLimitOrderCall, encodePlaceLimitOrderCalldata, encodePlaceLimitOrderViaCalldata, encodePlaceMarketOrderCalldata, encodePlaceMarketOrderExCalldata, encodeRecoverOperatorNodeCalldata, encodeRedelegateCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeRequestClusterJoinCalldata, encodeSetAutoCompoundCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetLotSizeCalldata, encodeSetMinNotionalCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, encodeSetTickSizeCalldata, encodeSubmitBridgeProofCalldata, encodeSubmitPendingChangeCalldata, encodeUndelegateCalldata, encodeVoteClusterAdmitCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, formatOraclePrice, getChainInfo, getNoEvmReceiptTrustPolicy, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isNativeMarketOrderBookStreamPayload, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nameLengthModifierX10, nameRegistrationCost, nameRegistryAddressHex, nativeAgentStateFilterParams, nativeDevSchemaFieldNames, nativeDevUiStrings, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nativeMarketStateFilterParams, noEvmReceiptTrustPolicyFromChainInfo, nodeHostingClassFromByte, nodeHostingClassToByte, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, normalizePendingChangeKind, oracleAddressHex, oraclePriceToNumber, packTimeWindow, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseDkgResharePublicKeys, parseLythToLythoshi, parseNameCategory, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, proverMarketStateFromByte, pubkeyRegistryAddressHex, quoteOperatorFee, rankBridgeRoutes, rankMarketsByVolume, requestSighash, requireTypedAddress, resolveExecutionFee, resolveMaxExecutionUnitPrice, resolveRegistryExecutionFee, resolveStudioHostStatus, selectBridgeTransferRoute, serviceProbeStatusLabel, setDestinationRoot, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, submitSighash, transactionFeeExposure, typedBech32ToAddress, validateAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, verifyNoEvmArchiveProofSignatures, verifyNoEvmBlockFinalityEvidenceMultisig, verifyNoEvmBlockFinalityEvidenceThreshold, verifyNoEvmFinalityEvidenceMultisig, verifyNoEvmFinalityEvidenceThreshold, verifyNoEvmReceiptProof, verifyNoEvmReceiptProofTrust, version };
+export { ADDRESS_HRP, ADDRESS_KIND_HRPS, API_STREAM_TOPICS, AddressError, AgentActionError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, CLOB_MARKET_ID_DOMAIN_TAG, CLOB_SELECTORS, CLUSTER_FORMED_EVENT_SIG, DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DIVERSITY_SCORE_MAX, DelegationPrecompileError, EMPTY_ROOT, EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER, FEED_ID_DOMAIN_TAG, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES, MAX_NATIVE_RECEIPT_EVENTS, MIN_EXECUTION_UNIT_PRICE_LYTHOSHI, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MULTISIG_ADDRESS_DERIVATION_DOMAIN, MarketActionError, MrvValidationError, NAME_BASE_MULTIPLIER, NAME_FALLBACK_FEE_UNIT_LYTHOSHI, NAME_LABEL_MAX_LEN, NAME_LABEL_MIN_LEN, NAME_MAX_LEN, NAME_REGISTRY_SELECTORS, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE, NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY, NATIVE_CALL_FORWARDER_RESPONSE_OFFSET, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NATIVE_MARKET_MODULE_ADDRESS, NATIVE_MARKET_MODULE_ADDRESS_BYTES, NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, NODE_REGISTRY_BLS_PUBKEY_BYTES, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_CONSENSUS_POP_BYTES, NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES, NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS, NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS, NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES, NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_FINALITY_EVIDENCE_SCHEMA, NO_EVM_FINALITY_EVIDENCE_SOURCE, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NameRegistryError, NoEvmReceiptProofError, NodeRegistryError, OPERATOR_ROUTER_ADDRESS, OPERATOR_ROUTER_EVENT_SIGS, OPERATOR_ROUTER_SELECTORS, OPERATOR_ROUTER_SIGS, ORACLE_EVENT_SIGS, OracleEventError, PENDING_CHANGE_KIND_CODES, PRECOMPILE_ADDRESSES, PROTOCOL_MAX_OPERATOR_FEE_BPS, PROVER_MARKET_ADDRESS, PROVER_MARKET_BID_DOMAIN, PROVER_MARKET_EVENT_SIGS, PROVER_MARKET_REQUEST_DOMAIN, PROVER_MARKET_SELECTORS, PROVER_MARKET_SUBMIT_DOMAIN, PROVER_SLASH_REASON_BAD_PROOF, PROVER_SLASH_REASON_NON_DELIVERY, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, ProverMarketError, PubkeyRegistryError, REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT, RESERVED_ADDRESS_HRPS, RpcClient, SERVES_GPU_PROVE, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT, V1_BRIDGE_ALLOWED_FEE_TOKEN, V1_BRIDGE_ALLOWED_PROTOCOL, addressBytesToHex, addressToBech32, addressToTypedBech32, allowRootFor, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, assertNativeMarketOrderBookStreamPayload, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bidSighash, bridgeAddressHex, bridgeDrainRemaining, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildBridgeRouteCatalogue, buildCancelSpotOrderPlan, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildNativeCallForwarderArtifact, buildNativeMarketModuleCallEnvelope, buildNativeNftBuyListingForwarderInput, buildNativeNftBuyListingModuleCall, buildNativeNftCancelListingForwarderInput, buildNativeNftCancelListingModuleCall, buildNativeNftCreateListingForwarderInput, buildNativeNftCreateListingModuleCall, buildNativeNftPlaceAuctionBidForwarderInput, buildNativeNftPlaceAuctionBidModuleCall, buildNativeNftSettleAuctionForwarderInput, buildNativeNftSettleAuctionModuleCall, buildNativeNftSweepExpiredListingsForwarderInput, buildNativeNftSweepExpiredListingsModuleCall, buildNativeSpotCancelOrderForwarderInput, buildNativeSpotCancelOrderModuleCall, buildNativeSpotCreateMarketForwarderInput, buildNativeSpotCreateMarketModuleCall, buildNativeSpotLimitOrderForwarderInput, buildNativeSpotLimitOrderModuleCall, buildNativeSpotSettleLimitOrderForwarderInput, buildNativeSpotSettleLimitOrderModuleCall, buildNativeSpotSettleRoutedLimitOrderForwarderInput, buildNativeSpotSettleRoutedLimitOrderModuleCall, buildPlaceLimitOrderViaPlan, buildPlaceSpotLimitOrderPlan, buildPlaceSpotMarketOrderExPlan, buildPlaceSpotMarketOrderPlan, buildRequestClusterJoinTxFields, buildVoteClusterAdmitTxFields, categoryRoot, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, clampPriorityTip, clobAddressHex, clusterApyPercent, clusterJoinRequestExists, compareNativeDevVersions, composeClaimBoundMessage, computeNoEvmDacFinalityMessage, computeNoEvmLeaderFinalityMessage, computeNoEvmReceiptsRoot, computeNoEvmRoundFinalityMessage, computeNoEvmTargetReceiptHash, computeQuoteLiquidity, consumeNativeEvents, decodeClusterDiversity, decodeClusterFormedEvent, decodeClusterJoinRequest, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNativeAgentStateResponse, decodeNativeMarketOrderBookDeltasResponse, decodeNativeReceiptResponse, decodeNoEvmReceiptTranscript, decodeOperatorFeeChargedEvent, decodeOperatorNetworkMetadata, decodeOracleEvent, decodeTimeWindow, decodeTxFeedResponse, delegationAddressHex, denyRootFor, deriveClobMarketId, deriveClusterAnchorAddress, deriveClusterJoinOperatorId, deriveFeedId, deriveMrvContractAddress, deriveNativeSpotMarketId, deriveNativeSpotOrderId, destinationRoot, encodeAttestDkgReshareCalldata, encodeBlockSelector, encodeBridgeChallengeCalldata, encodeBridgeClaimCalldata, encodeCancelClusterJoinCalldata, encodeCancelOrderCalldata, encodeCancelPendingChangeCalldata, encodeClaimCalldata, encodeClaimPolicyByAddressCalldata, encodeCompleteRedemptionCalldata, encodeCreateRequestCalldata, encodeCreateRequestCanonical, encodeDelegateCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeExpireClusterJoinCalldata, encodeGetClusterJoinRequestCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeNameAcceptTransferCall, encodeNameProposeTransferCall, encodeNameRegisterCall, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeNativeMarketModuleForwarderInput, encodeNativeNftBuyListingCall, encodeNativeNftCancelListingCall, encodeNativeNftCreateListingCall, encodeNativeNftPlaceAuctionBidCall, encodeNativeNftSettleAuctionCall, encodeNativeNftSweepExpiredListingsCall, encodeNativeSpotCancelOrderCall, encodeNativeSpotCreateMarketCall, encodeNativeSpotLimitOrderCall, encodeNativeSpotSettleLimitOrderCall, encodeNativeSpotSettleRoutedLimitOrderCall, encodePlaceLimitOrderCalldata, encodePlaceLimitOrderViaCalldata, encodePlaceMarketOrderCalldata, encodePlaceMarketOrderExCalldata, encodeRecoverOperatorNodeCalldata, encodeRedelegateCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeRequestClusterJoinCalldata, encodeSetAutoCompoundCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetLotSizeCalldata, encodeSetMinNotionalCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, encodeSetTickSizeCalldata, encodeSubmitBridgeProofCalldata, encodeSubmitPendingChangeCalldata, encodeUndelegateCalldata, encodeVoteClusterAdmitCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, formatOraclePrice, getChainInfo, getNoEvmReceiptTrustPolicy, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isNativeMarketOrderBookStreamPayload, isRedemptionPrincipalUnavailableRevert, isSinglePublicServiceProbeMask, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nameLengthModifierX10, nameRegistrationCost, nameRegistryAddressHex, nativeAgentStateFilterParams, nativeDevSchemaFieldNames, nativeDevUiStrings, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nativeMarketStateFilterParams, noEvmReceiptTrustPolicyFromChainInfo, nodeHostingClassFromByte, nodeHostingClassToByte, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, normalizePendingChangeKind, oracleAddressHex, oraclePriceToNumber, packTimeWindow, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseDkgResharePublicKeys, parseLythToLythoshi, parseNameCategory, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, preflightClusterJoinRequest, proverMarketStateFromByte, pubkeyRegistryAddressHex, quoteOperatorFee, rankBridgeRoutes, rankMarketsByVolume, readClusterJoinRequest, requestSighash, requireTypedAddress, resolveClusterJoinExecutionFee, resolveExecutionFee, resolveMaxExecutionUnitPrice, resolveRegistryExecutionFee, resolveStudioHostStatus, selectBridgeTransferRoute, serviceProbeStatusLabel, setDestinationRoot, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, submitRequestClusterJoin, submitSighash, submitVoteClusterAdmit, transactionFeeExposure, typedBech32ToAddress, validateAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, verifyNoEvmArchiveProofSignatures, verifyNoEvmBlockFinalityEvidenceMultisig, verifyNoEvmBlockFinalityEvidenceThreshold, verifyNoEvmFinalityEvidenceMultisig, verifyNoEvmFinalityEvidenceThreshold, verifyNoEvmReceiptProof, verifyNoEvmReceiptProofTrust, version };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

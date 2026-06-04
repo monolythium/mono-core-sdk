@@ -85,6 +85,7 @@ export {
 export type {
   EncryptedSubmission,
   EncryptionKey,
+  JsonRpcCallClient,
   PlaintextSubmission,
 } from "./submission.js";
 export {

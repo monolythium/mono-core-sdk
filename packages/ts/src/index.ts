@@ -388,6 +388,29 @@ export {
 } from "./consts.js";
 export type { PrecompileName, PrecompileAddress } from "./consts.js";
 export {
+  DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT,
+  buildRequestClusterJoinTxFields,
+  buildVoteClusterAdmitTxFields,
+  clusterJoinRequestExists,
+  deriveClusterJoinOperatorId,
+  preflightClusterJoinRequest,
+  readClusterJoinRequest,
+  resolveClusterJoinExecutionFee,
+  submitRequestClusterJoin,
+  submitVoteClusterAdmit,
+} from "./cluster-join.js";
+export type {
+  BuildRequestClusterJoinTxFieldsArgs,
+  BuildVoteClusterAdmitTxFieldsArgs,
+  ClusterJoinFeeOptions,
+  ClusterJoinReadClient,
+  ClusterJoinSubmitClient,
+  ClusterJoinSubmitResult,
+  ClusterJoinTxFee,
+  SubmitRequestClusterJoinArgs,
+  SubmitVoteClusterAdmitArgs,
+} from "./cluster-join.js";
+export {
   CLUSTER_FORMED_EVENT_SIG,
   DIVERSITY_SCORE_MAX,
   MULTISIG_ADDRESS_DERIVATION_DOMAIN,
