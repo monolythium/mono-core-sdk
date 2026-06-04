@@ -449,18 +449,26 @@ var NODE_REGISTRY_SELECTORS = {
   /** `expireClusterJoin(uint32,bytes32)` — CJ-1 public reaper/refund. */
   expireClusterJoin: "0x" + selectorHex("expireClusterJoin(uint32,bytes32)"),
   /** `getClusterJoinRequest(uint32,bytes32)` — CJ-1 request status view. */
-  getClusterJoinRequest: "0x" + selectorHex("getClusterJoinRequest(uint32,bytes32)")
+  getClusterJoinRequest: "0x" + selectorHex("getClusterJoinRequest(uint32,bytes32)"),
+  /** `formCluster(bytes,bytes,bytes)` — no-foundation cluster formation by roster consent. */
+  formCluster: "0x" + selectorHex("formCluster(bytes,bytes,bytes)")
 };
 var NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES = 48;
 var NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES = NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES;
 var NODE_REGISTRY_BLS_PUBKEY_BYTES = NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES;
 var NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES = 1952;
+var NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES = 3309;
 var NODE_REGISTRY_CONSENSUS_POP_BYTES = 3309;
 var NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES = 96;
 var NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES = NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES;
 var NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS = 5;
 var NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS = 7;
 var NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID = (1n << 56n) - 1n;
+var NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT = 7;
+var NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT = 3;
+var NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT = NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT + NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT;
+var NODE_REGISTRY_FORM_CLUSTER_THRESHOLD = 7;
+var NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN = "PROTOCORE_NODE_REGISTRY_CLUSTER_FORM_V1\0";
 var PENDING_CHANGE_KIND_CODES = {
   add: 1,
   remove: 2,
@@ -696,6 +704,70 @@ function encodeGetClusterJoinRequestCalldata(args) {
     )
   );
 }
+function formClusterMessage(activePubkeys, standbyPubkeys) {
+  const active = expectLength2(
+    toBytes(activePubkeys),
+    NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "activePubkeys"
+  );
+  const standby = expectLength2(
+    toBytes(standbyPubkeys),
+    NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "standbyPubkeys"
+  );
+  return blake3_js.blake3(
+    concatBytes(
+      new TextEncoder().encode(NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN),
+      u16BeBytes(NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT),
+      u16BeBytes(NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT),
+      u16BeBytes(NODE_REGISTRY_FORM_CLUSTER_THRESHOLD),
+      u32BeBytes(active.length),
+      active,
+      u32BeBytes(standby.length),
+      standby
+    )
+  );
+}
+function formClusterMessageHex(activePubkeys, standbyPubkeys) {
+  return bytesToHex(formClusterMessage(activePubkeys, standbyPubkeys));
+}
+function encodeFormClusterCalldata(args) {
+  const activePubkeys = expectLength2(
+    toBytes(args.activePubkeys),
+    NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "activePubkeys"
+  );
+  const standbyPubkeys = expectLength2(
+    toBytes(args.standbyPubkeys),
+    NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "standbyPubkeys"
+  );
+  const signatures = expectLength2(
+    toBytes(args.signatures),
+    NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT * NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES,
+    "signatures"
+  );
+  const activePadded = padToWord(activePubkeys);
+  const standbyPadded = padToWord(standbyPubkeys);
+  const signaturesPadded = padToWord(signatures);
+  const activeOffset = 3n * 32n;
+  const standbyOffset = activeOffset + 32n + BigInt(activePadded.length);
+  const signaturesOffset = standbyOffset + 32n + BigInt(standbyPadded.length);
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.formCluster),
+      uint64Word(activeOffset, "activePubkeysOffset"),
+      uint64Word(standbyOffset, "standbyPubkeysOffset"),
+      uint64Word(signaturesOffset, "signaturesOffset"),
+      uint64Word(BigInt(activePubkeys.length), "activePubkeysLength"),
+      activePadded,
+      uint64Word(BigInt(standbyPubkeys.length), "standbyPubkeysLength"),
+      standbyPadded,
+      uint64Word(BigInt(signatures.length), "signaturesLength"),
+      signaturesPadded
+    )
+  );
+}
 function decodeClusterJoinRequest(returnData) {
   const bytes = expectLength2(toBytes(returnData), 8 * 32, "clusterJoinRequest");
   const word = (i) => bytes.slice(i * 32, (i + 1) * 32);
@@ -863,6 +935,16 @@ function u64BeBytes(value) {
     n >>= 8n;
   }
   return out;
+}
+function u32BeBytes(value) {
+  const n = expectUint32(value, "uint32");
+  return Uint8Array.from([n >>> 24 & 255, n >>> 16 & 255, n >>> 8 & 255, n & 255]);
+}
+function u16BeBytes(value) {
+  if (!Number.isInteger(value) || value < 0 || value > 65535) {
+    throw new NodeRegistryError("uint16 value out of range");
+  }
+  return Uint8Array.from([value >>> 8 & 255, value & 255]);
 }
 function compareBytes(a, b) {
   const len = Math.min(a.length, b.length);
@@ -10428,10 +10510,16 @@ exports.NODE_REGISTRY_CAPABILITY_MASK = NODE_REGISTRY_CAPABILITY_MASK;
 exports.NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES = NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES;
 exports.NODE_REGISTRY_CONSENSUS_POP_BYTES = NODE_REGISTRY_CONSENSUS_POP_BYTES;
 exports.NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES = NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES;
+exports.NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES = NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES;
 exports.NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES = NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES;
 exports.NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS = NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS;
 exports.NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS = NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS;
 exports.NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES = NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES;
+exports.NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT = NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT;
+exports.NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT = NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT;
+exports.NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN = NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN;
+exports.NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT = NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT;
+exports.NODE_REGISTRY_FORM_CLUSTER_THRESHOLD = NODE_REGISTRY_FORM_CLUSTER_THRESHOLD;
 exports.NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES = NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES;
 exports.NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID = NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID;
 exports.NODE_REGISTRY_PUBLIC_SERVICE_MASK = NODE_REGISTRY_PUBLIC_SERVICE_MASK;
@@ -10609,6 +10697,7 @@ exports.encodeDelegateCalldata = encodeDelegateCalldata;
 exports.encodeDisableCalldata = encodeDisableCalldata;
 exports.encodeEnableCalldata = encodeEnableCalldata;
 exports.encodeExpireClusterJoinCalldata = encodeExpireClusterJoinCalldata;
+exports.encodeFormClusterCalldata = encodeFormClusterCalldata;
 exports.encodeGetClusterJoinRequestCalldata = encodeGetClusterJoinRequestCalldata;
 exports.encodeHasPubkeyCalldata = encodeHasPubkeyCalldata;
 exports.encodeLockBridgeConfigCalldata = encodeLockBridgeConfigCalldata;
@@ -10686,6 +10775,8 @@ exports.encodeVoteClusterAdmitCalldata = encodeVoteClusterAdmitCalldata;
 exports.exportBridgeRouteCatalogueJson = exportBridgeRouteCatalogueJson;
 exports.fetchChainInfoLatest = fetchChainInfoLatest;
 exports.fetchChainRegistryLatest = fetchChainRegistryLatest;
+exports.formClusterMessage = formClusterMessage;
+exports.formClusterMessageHex = formClusterMessageHex;
 exports.formatLyth = formatLyth;
 exports.formatLythoshi = formatLythoshi;
 exports.formatNativeReceiptFeeDisplay = formatNativeReceiptFeeDisplay;

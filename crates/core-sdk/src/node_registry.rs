@@ -49,10 +49,25 @@ pub const NODE_REGISTRY_CAPABILITY_MASK: u32 = 0x0000_FFFF;
 /// score (`node-registry::diversity::DIVERSITY_SCORE_MAX`).
 pub const DIVERSITY_SCORE_MAX: u16 = 10_000;
 
+/// Active operators in a runtime-formed standard cluster.
+pub const FORM_CLUSTER_ACTIVE_COUNT: usize = 7;
+/// Standby operators in a runtime-formed standard cluster.
+pub const FORM_CLUSTER_STANDBY_COUNT: usize = 3;
+/// Total operators in a runtime-formed standard cluster.
+pub const FORM_CLUSTER_MEMBER_COUNT: usize = FORM_CLUSTER_ACTIVE_COUNT + FORM_CLUSTER_STANDBY_COUNT;
+/// Consensus threshold for the standard 7-of-10 topology.
+pub const FORM_CLUSTER_THRESHOLD: u16 = 7;
+/// Full ML-DSA-65 consensus public key width.
+pub const NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES: usize = 1_952;
+/// ML-DSA-65 signature width.
+pub const NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES: usize = 3_309;
+
 /// BLAKE3 multisig address-derivation domain
 /// (`crypto::MULTISIG_ADDRESS_DERIVATION_DOMAIN`). Folded into the
 /// cluster-anchor preimage.
 pub const MULTISIG_ADDRESS_DERIVATION_DOMAIN: &[u8] = b"MONO_MULTISIG_BLAKE3_20_V1";
+
+const FORM_CLUSTER_MESSAGE_DOMAIN: &[u8] = b"PROTOCORE_NODE_REGISTRY_CLUSTER_FORM_V1\x00";
 
 /// Hosting class an operator runs under (PF-6).
 ///
@@ -201,6 +216,26 @@ pub fn derive_cluster_anchor_address(roster: &[[u8; 48]], threshold: u16) -> [u8
     out
 }
 
+/// Build the roster-consent digest all ten operators sign for
+/// `formCluster(bytes,bytes,bytes)`.
+///
+/// `active_pubkeys` is the seven active ML-DSA-65 pubkeys concatenated
+/// in roster order; `standby_pubkeys` is the three standby ML-DSA-65
+/// pubkeys concatenated in roster order.
+#[must_use]
+pub fn form_cluster_message(active_pubkeys: &[u8], standby_pubkeys: &[u8]) -> [u8; 32] {
+    let mut hasher = Hasher::new();
+    hasher.update(FORM_CLUSTER_MESSAGE_DOMAIN);
+    hasher.update(&(FORM_CLUSTER_ACTIVE_COUNT as u16).to_be_bytes());
+    hasher.update(&(FORM_CLUSTER_STANDBY_COUNT as u16).to_be_bytes());
+    hasher.update(&FORM_CLUSTER_THRESHOLD.to_be_bytes());
+    hasher.update(&(active_pubkeys.len() as u32).to_be_bytes());
+    hasher.update(active_pubkeys);
+    hasher.update(&(standby_pubkeys.len() as u32).to_be_bytes());
+    hasher.update(standby_pubkeys);
+    hasher.finalize().into()
+}
+
 /// `true` when all bits set in `flags` lie within
 /// [`NODE_REGISTRY_CAPABILITY_MASK`].
 #[must_use]
@@ -265,5 +300,17 @@ mod tests {
         let mut expected = [0u8; 20];
         expected.copy_from_slice(&hasher.finalize().as_bytes()[..20]);
         assert_eq!(derive_cluster_anchor_address(&roster, 7), expected);
+    }
+
+    #[test]
+    fn form_cluster_message_commits_to_roster() {
+        let active = vec![0x11; FORM_CLUSTER_ACTIVE_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES];
+        let standby = vec![0x22; FORM_CLUSTER_STANDBY_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES];
+        let message = form_cluster_message(&active, &standby);
+        assert_eq!(message, form_cluster_message(&active, &standby));
+
+        let mut changed = active.clone();
+        changed[0] ^= 0x01;
+        assert_ne!(message, form_cluster_message(&changed, &standby));
     }
 }

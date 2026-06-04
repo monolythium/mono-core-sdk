@@ -5,10 +5,15 @@ import {
   NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES,
   NODE_REGISTRY_CONSENSUS_POP_BYTES,
   NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+  NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES,
   NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES,
   NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS,
   NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS,
   NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES,
+  NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT,
+  NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT,
+  NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT,
+  NODE_REGISTRY_FORM_CLUSTER_THRESHOLD,
   NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES,
   NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID,
   NODE_REGISTRY_PUBLIC_SERVICE_MASK,
@@ -24,12 +29,14 @@ import {
   encodeCancelClusterJoinCalldata,
   encodeCancelPendingChangeCalldata,
   encodeExpireClusterJoinCalldata,
+  encodeFormClusterCalldata,
   encodeGetClusterJoinRequestCalldata,
   encodeRecoverOperatorNodeCalldata,
   encodeReportServiceProbeCalldata,
   encodeRequestClusterJoinCalldata,
   encodeSubmitPendingChangeCalldata,
   encodeVoteClusterAdmitCalldata,
+  formClusterMessageHex,
   isConcreteServiceProbeStatus,
   isSinglePublicServiceProbeMask,
   isValidPublicServiceProbeMask,
@@ -50,12 +57,17 @@ describe("node-registry helpers", () => {
     expect(NODE_REGISTRY_BLS_PUBKEY_BYTES).toBe(48);
     expect(NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES).toBe(48);
     expect(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).toBe(1952);
+    expect(NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES).toBe(3309);
     expect(NODE_REGISTRY_CONSENSUS_POP_BYTES).toBe(3309);
     expect(NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES).toBe(96);
     expect(NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES).toBe(96);
     expect(NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS).toBe(5);
     expect(NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS).toBe(7);
     expect(NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID).toBe((1n << 56n) - 1n);
+    expect(NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT).toBe(7);
+    expect(NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT).toBe(3);
+    expect(NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT).toBe(10);
+    expect(NODE_REGISTRY_FORM_CLUSTER_THRESHOLD).toBe(7);
     expect(PENDING_CHANGE_KIND_CODES).toEqual({ add: 1, remove: 2, rotate: 3 });
   });
 
@@ -69,6 +81,7 @@ describe("node-registry helpers", () => {
     expect(NODE_REGISTRY_SELECTORS.cancelClusterJoin).toBe("0x3e2d51c3");
     expect(NODE_REGISTRY_SELECTORS.expireClusterJoin).toBe("0xeeb96895");
     expect(NODE_REGISTRY_SELECTORS.getClusterJoinRequest).toBe("0x224de9bf");
+    expect(NODE_REGISTRY_SELECTORS.formCluster).toBe("0x961a4ced");
   });
 
   it("validates public-service probe masks and concrete statuses", () => {
@@ -238,6 +251,72 @@ describe("node-registry helpers", () => {
       bondLythoshi: 5_000_000_000_000n,
       sealRosterPending: true,
     });
+  });
+
+  it("encodes formCluster calldata and derives the roster consent message", () => {
+    const activePubkeys = concatTestBytes(
+      ...Array.from({ length: NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT }, (_, i) =>
+        new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0x20 + i),
+      ),
+    );
+    const standbyPubkeys = concatTestBytes(
+      ...Array.from({ length: NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT }, (_, i) =>
+        new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0x40 + i),
+      ),
+    );
+    const signatures = concatTestBytes(
+      ...Array.from({ length: NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT }, (_, i) =>
+        new Uint8Array(NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES).fill(0x80 + i),
+      ),
+    );
+
+    const calldata = encodeFormClusterCalldata({
+      activePubkeys,
+      standbyPubkeys,
+      signatures,
+    });
+    const bytes = hexBytes(calldata);
+    const activeLen = NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES;
+    const standbyLen =
+      NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES;
+    const signatureLen =
+      NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT * NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES;
+    const signaturePaddedLen = Math.ceil(signatureLen / 32) * 32;
+    const activeOffset = 3n * 32n;
+    const standbyOffset = activeOffset + 32n + BigInt(activeLen);
+    const signaturesOffset = standbyOffset + 32n + BigInt(standbyLen);
+
+    expect(bytes.slice(0, 4)).toEqual(hexBytes(NODE_REGISTRY_SELECTORS.formCluster));
+    expect(bytes.length).toBe(
+      4 + 3 * 32 + 32 + activeLen + 32 + standbyLen + 32 + signaturePaddedLen,
+    );
+    expect(wordBigint(bytes.slice(4, 36))).toBe(activeOffset);
+    expect(wordBigint(bytes.slice(36, 68))).toBe(standbyOffset);
+    expect(wordBigint(bytes.slice(68, 100))).toBe(signaturesOffset);
+    expect(wordBigint(bytes.slice(100, 132))).toBe(BigInt(activeLen));
+    expect(bytes.slice(132, 132 + activeLen)).toEqual(activePubkeys);
+
+    const standbyLengthWordOffset = 132 + activeLen;
+    expect(wordBigint(bytes.slice(standbyLengthWordOffset, standbyLengthWordOffset + 32))).toBe(
+      BigInt(standbyLen),
+    );
+    const signaturesLengthWordOffset = standbyLengthWordOffset + 32 + standbyLen;
+    expect(
+      wordBigint(bytes.slice(signaturesLengthWordOffset, signaturesLengthWordOffset + 32)),
+    ).toBe(BigInt(signatureLen));
+
+    const message = formClusterMessageHex(activePubkeys, standbyPubkeys);
+    expect(message).toMatch(/^0x[0-9a-f]{64}$/u);
+    const changed = new Uint8Array(activePubkeys);
+    changed[0] ^= 0x01;
+    expect(formClusterMessageHex(changed, standbyPubkeys)).not.toBe(message);
+    expect(() =>
+      encodeFormClusterCalldata({
+        activePubkeys: activePubkeys.slice(1),
+        standbyPubkeys,
+        signatures,
+      }),
+    ).toThrow(/activePubkeys/);
   });
 
   it("exposes the SERVES_GPU_PROVE bit (MB-4) without changing the public-service mask", () => {

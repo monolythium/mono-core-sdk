@@ -74,6 +74,8 @@ export const NODE_REGISTRY_SELECTORS = {
   expireClusterJoin: "0x" + selectorHex("expireClusterJoin(uint32,bytes32)"),
   /** `getClusterJoinRequest(uint32,bytes32)` — CJ-1 request status view. */
   getClusterJoinRequest: "0x" + selectorHex("getClusterJoinRequest(uint32,bytes32)"),
+  /** `formCluster(bytes,bytes,bytes)` — no-foundation cluster formation by roster consent. */
+  formCluster: "0x" + selectorHex("formCluster(bytes,bytes,bytes)"),
 } as const;
 
 /** Cluster-member reference width used by genesis and formation rosters. */
@@ -84,6 +86,8 @@ export const NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES = NODE_REGISTRY_CL
 export const NODE_REGISTRY_BLS_PUBKEY_BYTES = NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES;
 /** Full ML-DSA-65 consensus pubkey width used by register and pending-change calldata. */
 export const NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES = 1952;
+/** ML-DSA-65 consensus signature width. */
+export const NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES = 3309;
 /** ML-DSA-65 self-signature width used as register proof-of-possession. */
 export const NODE_REGISTRY_CONSENSUS_POP_BYTES = 3309;
 /** DKG-reshare attestation signature width. Removal is tracked outside W1. */
@@ -93,6 +97,13 @@ export const NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES = NODE_REGISTRY_DKG_ATTESTATI
 export const NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS = 5;
 export const NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS = 7;
 export const NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID = (1n << 56n) - 1n;
+export const NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT = 7;
+export const NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT = 3;
+export const NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT =
+  NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT + NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT;
+export const NODE_REGISTRY_FORM_CLUSTER_THRESHOLD = 7;
+export const NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN =
+  "PROTOCORE_NODE_REGISTRY_CLUSTER_FORM_V1\0" as const;
 
 export type PendingChangeKind = "add" | "remove" | "rotate";
 
@@ -155,6 +166,12 @@ export interface ExpireClusterJoinCalldataArgs {
 export interface GetClusterJoinRequestCalldataArgs {
   clusterId: bigint | number | string;
   operatorId: string | Uint8Array | readonly number[];
+}
+
+export interface FormClusterCalldataArgs {
+  activePubkeys: string | Uint8Array | readonly number[];
+  standbyPubkeys: string | Uint8Array | readonly number[];
+  signatures: string | Uint8Array | readonly number[];
 }
 
 export type ClusterJoinRequestStatus = "none" | "open" | "admitted" | "cancelled" | "expired" | "unknown";
@@ -447,6 +464,80 @@ export function encodeGetClusterJoinRequestCalldata(
       hexToBytes(NODE_REGISTRY_SELECTORS.getClusterJoinRequest),
       uint32Word(toUint32(args.clusterId, "clusterId")),
       expectLength(toBytes(args.operatorId), 32, "operatorId"),
+    ),
+  );
+}
+
+export function formClusterMessage(
+  activePubkeys: string | Uint8Array | readonly number[],
+  standbyPubkeys: string | Uint8Array | readonly number[],
+): Uint8Array {
+  const active = expectLength(
+    toBytes(activePubkeys),
+    NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "activePubkeys",
+  );
+  const standby = expectLength(
+    toBytes(standbyPubkeys),
+    NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "standbyPubkeys",
+  );
+  return blake3(
+    concatBytes(
+      new TextEncoder().encode(NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN),
+      u16BeBytes(NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT),
+      u16BeBytes(NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT),
+      u16BeBytes(NODE_REGISTRY_FORM_CLUSTER_THRESHOLD),
+      u32BeBytes(active.length),
+      active,
+      u32BeBytes(standby.length),
+      standby,
+    ),
+  );
+}
+
+export function formClusterMessageHex(
+  activePubkeys: string | Uint8Array | readonly number[],
+  standbyPubkeys: string | Uint8Array | readonly number[],
+): string {
+  return bytesToHex(formClusterMessage(activePubkeys, standbyPubkeys));
+}
+
+export function encodeFormClusterCalldata(args: FormClusterCalldataArgs): string {
+  const activePubkeys = expectLength(
+    toBytes(args.activePubkeys),
+    NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "activePubkeys",
+  );
+  const standbyPubkeys = expectLength(
+    toBytes(args.standbyPubkeys),
+    NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "standbyPubkeys",
+  );
+  const signatures = expectLength(
+    toBytes(args.signatures),
+    NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT * NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES,
+    "signatures",
+  );
+  const activePadded = padToWord(activePubkeys);
+  const standbyPadded = padToWord(standbyPubkeys);
+  const signaturesPadded = padToWord(signatures);
+  const activeOffset = 3n * 32n;
+  const standbyOffset = activeOffset + 32n + BigInt(activePadded.length);
+  const signaturesOffset = standbyOffset + 32n + BigInt(standbyPadded.length);
+
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.formCluster),
+      uint64Word(activeOffset, "activePubkeysOffset"),
+      uint64Word(standbyOffset, "standbyPubkeysOffset"),
+      uint64Word(signaturesOffset, "signaturesOffset"),
+      uint64Word(BigInt(activePubkeys.length), "activePubkeysLength"),
+      activePadded,
+      uint64Word(BigInt(standbyPubkeys.length), "standbyPubkeysLength"),
+      standbyPadded,
+      uint64Word(BigInt(signatures.length), "signaturesLength"),
+      signaturesPadded,
     ),
   );
 }
@@ -799,6 +890,18 @@ function u64BeBytes(value: bigint): Uint8Array {
     n >>= 8n;
   }
   return out;
+}
+
+function u32BeBytes(value: number): Uint8Array {
+  const n = expectUint32(value, "uint32");
+  return Uint8Array.from([(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff]);
+}
+
+function u16BeBytes(value: number): Uint8Array {
+  if (!Number.isInteger(value) || value < 0 || value > 0xffff) {
+    throw new NodeRegistryError("uint16 value out of range");
+  }
+  return Uint8Array.from([(value >>> 8) & 0xff, value & 0xff]);
 }
 
 function compareBytes(a: Uint8Array, b: Uint8Array): number {

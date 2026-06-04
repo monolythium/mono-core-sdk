@@ -111,11 +111,14 @@ pub use native_dev::{
     NATIVE_DEV_MANIFEST_SCHEMA_VERSION,
 };
 pub use node_registry::{
-    derive_cluster_anchor_address, is_valid_capabilities as is_valid_node_registry_capabilities,
-    ClusterDiversity, ClusterFormedEvent, NodeHostingClass, OperatorNetworkMetadata,
-    DIVERSITY_SCORE_MAX, MULTISIG_ADDRESS_DERIVATION_DOMAIN, NODE_REGISTRY_CAPABILITY_MASK,
-    SERVES_ARCHIVE, SERVES_BRIDGE_RELAY, SERVES_BROADCASTER, SERVES_GPU_PROVE, SERVES_INDEXER,
-    SERVES_LIGHT_CLIENT, SERVES_ORACLE_WRITER, SERVES_PUBLIC_API, SERVES_RPC, SERVES_WEBSOCKET,
+    derive_cluster_anchor_address, form_cluster_message,
+    is_valid_capabilities as is_valid_node_registry_capabilities, ClusterDiversity,
+    ClusterFormedEvent, NodeHostingClass, OperatorNetworkMetadata, DIVERSITY_SCORE_MAX,
+    FORM_CLUSTER_ACTIVE_COUNT, FORM_CLUSTER_MEMBER_COUNT, FORM_CLUSTER_STANDBY_COUNT,
+    FORM_CLUSTER_THRESHOLD, MULTISIG_ADDRESS_DERIVATION_DOMAIN, NODE_REGISTRY_CAPABILITY_MASK,
+    NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES, NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES, SERVES_ARCHIVE,
+    SERVES_BRIDGE_RELAY, SERVES_BROADCASTER, SERVES_GPU_PROVE, SERVES_INDEXER, SERVES_LIGHT_CLIENT,
+    SERVES_ORACLE_WRITER, SERVES_PUBLIC_API, SERVES_RPC, SERVES_WEBSOCKET,
 };
 pub use operator_router::{
     decode_operator_fee_charged_event, encode_place_limit_order_via_calldata,
