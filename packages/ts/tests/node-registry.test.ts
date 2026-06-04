@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   NODE_REGISTRY_BLS_PUBKEY_BYTES,
   NODE_REGISTRY_CAPABILITIES,
+  NODE_REGISTRY_CONSENSUS_POP_BYTES,
+  NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
   NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS,
   NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS,
   NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES,
@@ -12,13 +14,19 @@ import {
   SERVICE_PROBE_STATUS,
   decodeClusterDiversity,
   decodeClusterFormedEvent,
+  decodeClusterJoinRequest,
   decodeOperatorNetworkMetadata,
   deriveClusterAnchorAddress,
   encodeAttestDkgReshareCalldata,
+  encodeCancelClusterJoinCalldata,
   encodeCancelPendingChangeCalldata,
+  encodeExpireClusterJoinCalldata,
+  encodeGetClusterJoinRequestCalldata,
   encodeRecoverOperatorNodeCalldata,
   encodeReportServiceProbeCalldata,
+  encodeRequestClusterJoinCalldata,
   encodeSubmitPendingChangeCalldata,
+  encodeVoteClusterAdmitCalldata,
   isConcreteServiceProbeStatus,
   isSinglePublicServiceProbeMask,
   isValidPublicServiceProbeMask,
@@ -36,6 +44,8 @@ describe("node-registry helpers", () => {
     expect(NODE_REGISTRY_PUBLIC_SERVICE_MASK).toBe(0x0000_011b);
     expect(nodeRegistryAddressHex()).toBe("0x0000000000000000000000000000000000001005");
     expect(NODE_REGISTRY_BLS_PUBKEY_BYTES).toBe(48);
+    expect(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).toBe(1952);
+    expect(NODE_REGISTRY_CONSENSUS_POP_BYTES).toBe(3309);
     expect(NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES).toBe(96);
     expect(NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS).toBe(5);
     expect(NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS).toBe(7);
@@ -48,6 +58,11 @@ describe("node-registry helpers", () => {
     expect(NODE_REGISTRY_SELECTORS.submitPendingChange).toBe("0x7d09426c");
     expect(NODE_REGISTRY_SELECTORS.cancelPendingChange).toBe("0xdca5b10e");
     expect(NODE_REGISTRY_SELECTORS.attestDkgReshare).toBe("0x36e34030");
+    expect(NODE_REGISTRY_SELECTORS.requestClusterJoin).toBe("0xe1dd13bd");
+    expect(NODE_REGISTRY_SELECTORS.voteClusterAdmit).toBe("0x20519d4f");
+    expect(NODE_REGISTRY_SELECTORS.cancelClusterJoin).toBe("0x3e2d51c3");
+    expect(NODE_REGISTRY_SELECTORS.expireClusterJoin).toBe("0xeeb96895");
+    expect(NODE_REGISTRY_SELECTORS.getClusterJoinRequest).toBe("0x224de9bf");
   });
 
   it("validates public-service probe masks and concrete statuses", () => {
@@ -96,7 +111,7 @@ describe("node-registry helpers", () => {
   });
 
   it("encodes submitPendingChange calldata for rotate intents", () => {
-    const targetPubkey = `0x${"ab".repeat(48)}`;
+    const targetPubkey = `0x${"ab".repeat(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES)}`;
     const calldata = encodeSubmitPendingChangeCalldata({
       kind: "rotate",
       targetPubkey,
@@ -105,37 +120,39 @@ describe("node-registry helpers", () => {
     });
     const bytes = hexBytes(calldata);
     expect(calldata.startsWith(NODE_REGISTRY_SELECTORS.submitPendingChange)).toBe(true);
-    expect(bytes.length).toBe(4 + 7 * 32);
+    expect(bytes.length).toBe(4 + 4 * 32 + 32 + NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES);
     expect(bytes[35]).toBe(3);
     expect(bytes[67]).toBe(0x80);
     expect(bytes[99]).toBe(42);
     expect(bytes[131]).toBe(7);
-    expect(bytes[163]).toBe(48);
-    expect(bytes.slice(164, 196)).toEqual(new Uint8Array(32).fill(0xab));
-    expect(bytes.slice(196, 212)).toEqual(new Uint8Array(16).fill(0xab));
-    expect(bytes.slice(212, 228)).toEqual(new Uint8Array(16));
+    expect(wordBigint(bytes.slice(132, 164))).toBe(BigInt(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES));
+    expect(bytes.slice(164, 164 + NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES)).toEqual(
+      new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0xab),
+    );
     expect(normalizePendingChangeKind(1)).toEqual({ kind: "add", kindCode: 1 });
   });
 
   it("encodes cancelPendingChange calldata", () => {
-    const targetPubkey = `0x${"bc".repeat(48)}`;
+    const targetPubkey = `0x${"bc".repeat(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES)}`;
     const calldata = encodeCancelPendingChangeCalldata({
       epoch: "99",
       targetPubkey,
     });
     const bytes = hexBytes(calldata);
     expect(calldata.startsWith(NODE_REGISTRY_SELECTORS.cancelPendingChange)).toBe(true);
-    expect(bytes.length).toBe(4 + 5 * 32);
+    expect(bytes.length).toBe(4 + 2 * 32 + 32 + NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES);
     expect(bytes[35]).toBe(99);
     expect(bytes[67]).toBe(0x40);
-    expect(bytes[99]).toBe(48);
-    expect(bytes.slice(100, 132)).toEqual(new Uint8Array(32).fill(0xbc));
-    expect(bytes.slice(132, 148)).toEqual(new Uint8Array(16).fill(0xbc));
-    expect(bytes.slice(148, 164)).toEqual(new Uint8Array(16));
+    expect(wordBigint(bytes.slice(68, 100))).toBe(BigInt(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES));
+    expect(bytes.slice(100, 100 + NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES)).toEqual(
+      new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0xbc),
+    );
   });
 
   it("encodes attestDkgReshare calldata with bounded signers", () => {
-    const keys = Array.from({ length: 5 }, (_, i) => new Uint8Array(48).fill(0x10 + i));
+    const keys = Array.from({ length: 5 }, (_, i) =>
+      new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0x10 + i),
+    );
     const blsPublicKeys = concatTestBytes(...keys);
     const thresholdSig = new Uint8Array(96).fill(0xee);
     const calldata = encodeAttestDkgReshareCalldata({
@@ -144,14 +161,70 @@ describe("node-registry helpers", () => {
       thresholdSig,
     });
     const bytes = hexBytes(calldata);
+    const keysLen = 5 * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES;
     expect(calldata.startsWith(NODE_REGISTRY_SELECTORS.attestDkgReshare)).toBe(true);
-    expect(bytes.length).toBe(4 + 3 * 32 + 32 + 256 + 32 + 96);
+    expect(bytes.length).toBe(4 + 3 * 32 + 32 + keysLen + 32 + 96);
     expect(bytes[35]).toBe(7);
     expect(bytes[67]).toBe(0x60);
-    expect(bytes[98]).toBe(0x01);
-    expect(bytes[99]).toBe(0x80);
-    expect(bytes[131]).toBe(240);
+    expect(wordBigint(bytes.slice(68, 100))).toBe(3n * 32n + 32n + BigInt(keysLen));
+    expect(wordBigint(bytes.slice(100, 132))).toBe(BigInt(keysLen));
     expect(parseDkgResharePublicKeys(blsPublicKeys)).toHaveLength(5);
+  });
+
+  it("encodes CJ-1 cluster-join calldata and decodes request status", () => {
+    const operatorPubkey = new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0x44);
+    const voterPubkey = new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0x55);
+    const operatorId = `0x${"11".repeat(32)}`;
+
+    const request = hexBytes(
+      encodeRequestClusterJoinCalldata({ clusterId: 7, operatorPubkey }),
+    );
+    expect(request.slice(0, 4)).toEqual(hexBytes(NODE_REGISTRY_SELECTORS.requestClusterJoin));
+    expect(request.length).toBe(4 + 2 * 32 + 32 + NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES);
+    expect(request[35]).toBe(7);
+    expect(request[67]).toBe(0x40);
+    expect(wordBigint(request.slice(68, 100))).toBe(
+      BigInt(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES),
+    );
+
+    const vote = hexBytes(
+      encodeVoteClusterAdmitCalldata({ clusterId: 7, operatorId, voterPubkey }),
+    );
+    expect(vote.slice(0, 4)).toEqual(hexBytes(NODE_REGISTRY_SELECTORS.voteClusterAdmit));
+    expect(vote.length).toBe(4 + 3 * 32 + 32 + NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES);
+    expect(vote.slice(36, 68)).toEqual(new Uint8Array(32).fill(0x11));
+    expect(vote[99]).toBe(0x60);
+
+    expect(hexBytes(encodeCancelClusterJoinCalldata({ clusterId: 7, operatorId })).length).toBe(
+      4 + 2 * 32,
+    );
+    expect(hexBytes(encodeExpireClusterJoinCalldata({ clusterId: 7, operatorId })).length).toBe(
+      4 + 2 * 32,
+    );
+    expect(
+      hexBytes(encodeGetClusterJoinRequestCalldata({ clusterId: 7, operatorId })).length,
+    ).toBe(4 + 2 * 32);
+
+    const view = new Uint8Array(8 * 32);
+    view.set(new Uint8Array(20).fill(0xaa), 12);
+    setWordU64(view, 1, 123n);
+    setWordU64(view, 2, 7n);
+    setWordU64(view, 3, 10n);
+    setWordU64(view, 4, 6n);
+    setWordU64(view, 5, 1n);
+    setWordU64(view, 6, 5_000_000_000_000n);
+    setWordU64(view, 7, 1n);
+    expect(decodeClusterJoinRequest(view)).toEqual({
+      owner: `0x${"aa".repeat(20)}`,
+      requestEpoch: 123n,
+      snapshotThreshold: 7,
+      snapshotN: 10,
+      voteCount: 6,
+      statusCode: 1,
+      status: "open",
+      bondLythoshi: 5_000_000_000_000n,
+      sealRosterPending: true,
+    });
   });
 
   it("exposes the SERVES_GPU_PROVE bit (MB-4) without changing the public-service mask", () => {
@@ -251,8 +324,12 @@ describe("node-registry helpers", () => {
   });
 
   it("rejects malformed lifecycle calldata inputs", () => {
-    const targetPubkey = `0x${"ab".repeat(48)}`;
-    const keys = concatTestBytes(...Array.from({ length: 5 }, (_, i) => new Uint8Array(48).fill(0x20 + i)));
+    const targetPubkey = `0x${"ab".repeat(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES)}`;
+    const keys = concatTestBytes(
+      ...Array.from({ length: 5 }, (_, i) =>
+        new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0x20 + i),
+      ),
+    );
     const sig = new Uint8Array(96).fill(0xee);
 
     expect(() => encodeRecoverOperatorNodeCalldata("0x1234")).toThrow();
@@ -282,14 +359,21 @@ describe("node-registry helpers", () => {
     expect(() =>
       encodeAttestDkgReshareCalldata({
         intentId: 1n,
-        blsPublicKeys: concatTestBytes(new Uint8Array(48).fill(0x11), new Uint8Array(48).fill(0x12)),
+        blsPublicKeys: concatTestBytes(
+          new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0x11),
+          new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0x12),
+        ),
         thresholdSig: sig,
       }),
     ).toThrow();
     expect(() =>
       encodeAttestDkgReshareCalldata({
         intentId: 1n,
-        blsPublicKeys: concatTestBytes(...Array.from({ length: 5 }, () => new Uint8Array(48).fill(0x11))),
+        blsPublicKeys: concatTestBytes(
+          ...Array.from({ length: 5 }, () =>
+            new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0x11),
+          ),
+        ),
         thresholdSig: sig,
       }),
     ).toThrow();
@@ -320,4 +404,21 @@ function concatTestBytes(...parts: Uint8Array[]): Uint8Array {
     offset += part.length;
   }
   return out;
+}
+
+function wordBigint(word: Uint8Array): bigint {
+  let value = 0n;
+  for (const byte of word) {
+    value = (value << 8n) | BigInt(byte);
+  }
+  return value;
+}
+
+function setWordU64(bytes: Uint8Array, wordIndex: number, value: bigint): void {
+  let rest = value;
+  const offset = wordIndex * 32;
+  for (let i = 31; i >= 24; i--) {
+    bytes[offset + i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
 }

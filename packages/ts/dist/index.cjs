@@ -437,9 +437,21 @@ var NODE_REGISTRY_SELECTORS = {
   /** `getOperatorNetworkMetadata(bytes32)` view (PF-6). */
   getOperatorNetworkMetadata: "0x" + selectorHex("getOperatorNetworkMetadata(bytes32)"),
   /** `getClusterDiversity(uint32)` view (PF-6). */
-  getClusterDiversity: "0x" + selectorHex("getClusterDiversity(uint32)")
+  getClusterDiversity: "0x" + selectorHex("getClusterDiversity(uint32)"),
+  /** `requestClusterJoin(uint32,bytes)` — CJ-1 joining operator posts an admit request. */
+  requestClusterJoin: "0x" + selectorHex("requestClusterJoin(uint32,bytes)"),
+  /** `voteClusterAdmit(uint32,bytes32,bytes)` — CJ-1 current member admit vote. */
+  voteClusterAdmit: "0x" + selectorHex("voteClusterAdmit(uint32,bytes32,bytes)"),
+  /** `cancelClusterJoin(uint32,bytes32)` — CJ-1 requester cancellation/refund. */
+  cancelClusterJoin: "0x" + selectorHex("cancelClusterJoin(uint32,bytes32)"),
+  /** `expireClusterJoin(uint32,bytes32)` — CJ-1 public reaper/refund. */
+  expireClusterJoin: "0x" + selectorHex("expireClusterJoin(uint32,bytes32)"),
+  /** `getClusterJoinRequest(uint32,bytes32)` — CJ-1 request status view. */
+  getClusterJoinRequest: "0x" + selectorHex("getClusterJoinRequest(uint32,bytes32)")
 };
 var NODE_REGISTRY_BLS_PUBKEY_BYTES = 48;
+var NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES = 1952;
+var NODE_REGISTRY_CONSENSUS_POP_BYTES = 3309;
 var NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES = 96;
 var NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS = 5;
 var NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS = 7;
@@ -510,7 +522,7 @@ function encodeSubmitPendingChangeCalldata(args) {
   const { kind, kindCode } = normalizePendingChangeKind(args.kind);
   const targetPubkey = expectLength2(
     toBytes(args.targetPubkey),
-    NODE_REGISTRY_BLS_PUBKEY_BYTES,
+    NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
     "targetPubkey"
   );
   const effectiveEpoch = toUint64(args.effectiveEpoch, "effectiveEpoch");
@@ -524,8 +536,7 @@ function encodeSubmitPendingChangeCalldata(args) {
   if (kind !== "rotate" && intentId !== 0n) {
     throw new NodeRegistryError("only rotate pending changes may carry a non-zero intentId");
   }
-  const targetTail = new Uint8Array(32);
-  targetTail.set(targetPubkey.slice(32, 48), 0);
+  const targetPubkeyPadded = padToWord(targetPubkey);
   return bytesToHex(
     concatBytes(
       hexToBytes(NODE_REGISTRY_SELECTORS.submitPendingChange),
@@ -533,37 +544,36 @@ function encodeSubmitPendingChangeCalldata(args) {
       uint64Word(4n * 32n, "targetPubkeyOffset"),
       uint64Word(effectiveEpoch, "effectiveEpoch"),
       uint64Word(intentId, "intentId"),
-      uint64Word(BigInt(NODE_REGISTRY_BLS_PUBKEY_BYTES), "targetPubkeyLength"),
-      targetPubkey.slice(0, 32),
-      targetTail
+      uint64Word(BigInt(targetPubkey.length), "targetPubkeyLength"),
+      targetPubkeyPadded
     )
   );
 }
 function encodeCancelPendingChangeCalldata(args) {
   const targetPubkey = expectLength2(
     toBytes(args.targetPubkey),
-    NODE_REGISTRY_BLS_PUBKEY_BYTES,
+    NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
     "targetPubkey"
   );
-  const targetTail = new Uint8Array(32);
-  targetTail.set(targetPubkey.slice(32, 48), 0);
+  const targetPubkeyPadded = padToWord(targetPubkey);
   return bytesToHex(
     concatBytes(
       hexToBytes(NODE_REGISTRY_SELECTORS.cancelPendingChange),
       uint64Word(args.epoch, "epoch"),
       uint64Word(2n * 32n, "targetPubkeyOffset"),
-      uint64Word(BigInt(NODE_REGISTRY_BLS_PUBKEY_BYTES), "targetPubkeyLength"),
-      targetPubkey.slice(0, 32),
-      targetTail
+      uint64Word(BigInt(targetPubkey.length), "targetPubkeyLength"),
+      targetPubkeyPadded
     )
   );
 }
 function parseDkgResharePublicKeys(blsPublicKeys) {
   const keys = toBytes(blsPublicKeys);
-  if (keys.length % NODE_REGISTRY_BLS_PUBKEY_BYTES !== 0) {
-    throw new NodeRegistryError("blsPublicKeys length must be a multiple of 48 bytes");
+  if (keys.length % NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES !== 0) {
+    throw new NodeRegistryError(
+      `blsPublicKeys length must be a multiple of ${NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES} bytes`
+    );
   }
-  const signerCount = keys.length / NODE_REGISTRY_BLS_PUBKEY_BYTES;
+  const signerCount = keys.length / NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES;
   if (signerCount < NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS || signerCount > NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS) {
     throw new NodeRegistryError(
       `blsPublicKeys must contain ${NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS}..${NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS} signers`
@@ -571,8 +581,8 @@ function parseDkgResharePublicKeys(blsPublicKeys) {
   }
   const out = [];
   const seen = /* @__PURE__ */ new Set();
-  for (let offset = 0; offset < keys.length; offset += NODE_REGISTRY_BLS_PUBKEY_BYTES) {
-    const key = keys.slice(offset, offset + NODE_REGISTRY_BLS_PUBKEY_BYTES);
+  for (let offset = 0; offset < keys.length; offset += NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES) {
+    const key = keys.slice(offset, offset + NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES);
     const keyHex = bytesToHex(key);
     if (seen.has(keyHex)) {
       throw new NodeRegistryError("blsPublicKeys contains a duplicate signer pubkey");
@@ -612,6 +622,85 @@ function encodeAttestDkgReshareCalldata(args) {
       sigPadded
     )
   );
+}
+function encodeRequestClusterJoinCalldata(args) {
+  const operatorPubkey = expectLength2(
+    toBytes(args.operatorPubkey),
+    NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "operatorPubkey"
+  );
+  const operatorPubkeyPadded = padToWord(operatorPubkey);
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.requestClusterJoin),
+      uint32Word(toUint32(args.clusterId, "clusterId")),
+      uint64Word(2n * 32n, "operatorPubkeyOffset"),
+      uint64Word(BigInt(operatorPubkey.length), "operatorPubkeyLength"),
+      operatorPubkeyPadded
+    )
+  );
+}
+function encodeVoteClusterAdmitCalldata(args) {
+  const operatorId = expectLength2(toBytes(args.operatorId), 32, "operatorId");
+  const voterPubkey = expectLength2(
+    toBytes(args.voterPubkey),
+    NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "voterPubkey"
+  );
+  const voterPubkeyPadded = padToWord(voterPubkey);
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.voteClusterAdmit),
+      uint32Word(toUint32(args.clusterId, "clusterId")),
+      operatorId,
+      uint64Word(3n * 32n, "voterPubkeyOffset"),
+      uint64Word(BigInt(voterPubkey.length), "voterPubkeyLength"),
+      voterPubkeyPadded
+    )
+  );
+}
+function encodeCancelClusterJoinCalldata(args) {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.cancelClusterJoin),
+      uint32Word(toUint32(args.clusterId, "clusterId")),
+      expectLength2(toBytes(args.operatorId), 32, "operatorId")
+    )
+  );
+}
+function encodeExpireClusterJoinCalldata(args) {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.expireClusterJoin),
+      uint32Word(toUint32(args.clusterId, "clusterId")),
+      expectLength2(toBytes(args.operatorId), 32, "operatorId")
+    )
+  );
+}
+function encodeGetClusterJoinRequestCalldata(args) {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.getClusterJoinRequest),
+      uint32Word(toUint32(args.clusterId, "clusterId")),
+      expectLength2(toBytes(args.operatorId), 32, "operatorId")
+    )
+  );
+}
+function decodeClusterJoinRequest(returnData) {
+  const bytes = expectLength2(toBytes(returnData), 8 * 32, "clusterJoinRequest");
+  const word = (i) => bytes.slice(i * 32, (i + 1) * 32);
+  const statusCode = numberFromWord(word(5), "status", 255);
+  return {
+    owner: bytesToHex(word(0).slice(12, 32)),
+    requestEpoch: u64FromWord(word(1)),
+    snapshotThreshold: numberFromWord(word(2), "snapshotThreshold", 65535),
+    snapshotN: numberFromWord(word(3), "snapshotN", 65535),
+    voteCount: numberFromWord(word(4), "voteCount", 65535),
+    statusCode,
+    status: clusterJoinRequestStatusLabel(statusCode),
+    bondLythoshi: uintFromWord(word(6)),
+    sealRosterPending: numberFromWord(word(7), "sealRosterPending", 1) === 1
+  };
 }
 function encodeReportServiceProbeCalldata(args) {
   if (!isValidPublicServiceProbeMask(args.serviceMask)) {
@@ -724,6 +813,36 @@ function u64FromWord(word) {
   }
   return v;
 }
+function uintFromWord(word) {
+  let v = 0n;
+  for (const byte of word) {
+    v = v << 8n | BigInt(byte);
+  }
+  return v;
+}
+function numberFromWord(word, name, max) {
+  const value = uintFromWord(word);
+  if (value > BigInt(max)) {
+    throw new NodeRegistryError(`${name} must be <= ${max}`);
+  }
+  return Number(value);
+}
+function clusterJoinRequestStatusLabel(status) {
+  switch (status) {
+    case 0:
+      return "none";
+    case 1:
+      return "open";
+    case 2:
+      return "admitted";
+    case 3:
+      return "cancelled";
+    case 4:
+      return "expired";
+    default:
+      return "unknown";
+  }
+}
 function u64BeBytes(value) {
   const out = new Uint8Array(8);
   let n = value;
@@ -754,6 +873,27 @@ function expectUint32(value, name) {
     throw new NodeRegistryError(`${name} must be a uint32`);
   }
   return value;
+}
+function toUint32(value, name) {
+  let parsed;
+  if (typeof value === "bigint") {
+    parsed = value;
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) {
+      throw new NodeRegistryError(`${name} must be a safe integer`);
+    }
+    parsed = BigInt(value);
+  } else {
+    const trimmed = value.trim();
+    if (!/^\d+$/u.test(trimmed)) {
+      throw new NodeRegistryError(`${name} must be a decimal uint32`);
+    }
+    parsed = BigInt(trimmed);
+  }
+  if (parsed < 0n || parsed > 0xffffffffn) {
+    throw new NodeRegistryError(`${name} must fit uint32`);
+  }
+  return Number(parsed);
 }
 function uint32Word(value) {
   const out = new Uint8Array(32);
@@ -9809,6 +9949,8 @@ exports.NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC = NATIVE_MARKET_ORDER_BOOK_STREAM_
 exports.NODE_REGISTRY_BLS_PUBKEY_BYTES = NODE_REGISTRY_BLS_PUBKEY_BYTES;
 exports.NODE_REGISTRY_CAPABILITIES = NODE_REGISTRY_CAPABILITIES;
 exports.NODE_REGISTRY_CAPABILITY_MASK = NODE_REGISTRY_CAPABILITY_MASK;
+exports.NODE_REGISTRY_CONSENSUS_POP_BYTES = NODE_REGISTRY_CONSENSUS_POP_BYTES;
+exports.NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES = NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES;
 exports.NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS = NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS;
 exports.NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS = NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS;
 exports.NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES = NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES;
@@ -9947,6 +10089,7 @@ exports.computeQuoteLiquidity = computeQuoteLiquidity;
 exports.consumeNativeEvents = consumeNativeEvents;
 exports.decodeClusterDiversity = decodeClusterDiversity;
 exports.decodeClusterFormedEvent = decodeClusterFormedEvent;
+exports.decodeClusterJoinRequest = decodeClusterJoinRequest;
 exports.decodeHasPubkeyReturn = decodeHasPubkeyReturn;
 exports.decodeLookupPubkeyReturn = decodeLookupPubkeyReturn;
 exports.decodeNativeAgentStateResponse = decodeNativeAgentStateResponse;
@@ -9971,6 +10114,7 @@ exports.encodeAttestDkgReshareCalldata = encodeAttestDkgReshareCalldata;
 exports.encodeBlockSelector = encodeBlockSelector;
 exports.encodeBridgeChallengeCalldata = encodeBridgeChallengeCalldata;
 exports.encodeBridgeClaimCalldata = encodeBridgeClaimCalldata;
+exports.encodeCancelClusterJoinCalldata = encodeCancelClusterJoinCalldata;
 exports.encodeCancelOrderCalldata = encodeCancelOrderCalldata;
 exports.encodeCancelPendingChangeCalldata = encodeCancelPendingChangeCalldata;
 exports.encodeClaimCalldata = encodeClaimCalldata;
@@ -9981,6 +10125,8 @@ exports.encodeCreateRequestCanonical = encodeCreateRequestCanonical;
 exports.encodeDelegateCalldata = encodeDelegateCalldata;
 exports.encodeDisableCalldata = encodeDisableCalldata;
 exports.encodeEnableCalldata = encodeEnableCalldata;
+exports.encodeExpireClusterJoinCalldata = encodeExpireClusterJoinCalldata;
+exports.encodeGetClusterJoinRequestCalldata = encodeGetClusterJoinRequestCalldata;
 exports.encodeHasPubkeyCalldata = encodeHasPubkeyCalldata;
 exports.encodeLockBridgeConfigCalldata = encodeLockBridgeConfigCalldata;
 exports.encodeLookupPubkeyCalldata = encodeLookupPubkeyCalldata;
@@ -10041,6 +10187,7 @@ exports.encodeRecoverOperatorNodeCalldata = encodeRecoverOperatorNodeCalldata;
 exports.encodeRedelegateCalldata = encodeRedelegateCalldata;
 exports.encodeRegisterPubkeyCalldata = encodeRegisterPubkeyCalldata;
 exports.encodeReportServiceProbeCalldata = encodeReportServiceProbeCalldata;
+exports.encodeRequestClusterJoinCalldata = encodeRequestClusterJoinCalldata;
 exports.encodeSetAutoCompoundCalldata = encodeSetAutoCompoundCalldata;
 exports.encodeSetBridgeResumeCooldownCalldata = encodeSetBridgeResumeCooldownCalldata;
 exports.encodeSetBridgeRouteFinalityCalldata = encodeSetBridgeRouteFinalityCalldata;
@@ -10052,6 +10199,7 @@ exports.encodeSetTickSizeCalldata = encodeSetTickSizeCalldata;
 exports.encodeSubmitBridgeProofCalldata = encodeSubmitBridgeProofCalldata;
 exports.encodeSubmitPendingChangeCalldata = encodeSubmitPendingChangeCalldata;
 exports.encodeUndelegateCalldata = encodeUndelegateCalldata;
+exports.encodeVoteClusterAdmitCalldata = encodeVoteClusterAdmitCalldata;
 exports.exportBridgeRouteCatalogueJson = exportBridgeRouteCatalogueJson;
 exports.fetchChainInfoLatest = fetchChainInfoLatest;
 exports.fetchChainRegistryLatest = fetchChainRegistryLatest;
