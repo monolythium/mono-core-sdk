@@ -451,10 +451,12 @@ var NODE_REGISTRY_SELECTORS = {
   /** `getClusterJoinRequest(uint32,bytes32)` — CJ-1 request status view. */
   getClusterJoinRequest: "0x" + selectorHex("getClusterJoinRequest(uint32,bytes32)")
 };
-var NODE_REGISTRY_BLS_PUBKEY_BYTES = 48;
+var NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES = 48;
+var NODE_REGISTRY_BLS_PUBKEY_BYTES = NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES;
 var NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES = 1952;
 var NODE_REGISTRY_CONSENSUS_POP_BYTES = 3309;
-var NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES = 96;
+var NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES = 96;
+var NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES = NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES;
 var NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS = 5;
 var NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS = 7;
 var NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID = (1n << 56n) - 1n;
@@ -568,17 +570,17 @@ function encodeCancelPendingChangeCalldata(args) {
     )
   );
 }
-function parseDkgResharePublicKeys(blsPublicKeys) {
-  const keys = toBytes(blsPublicKeys);
+function parseDkgResharePublicKeys(consensusPublicKeys) {
+  const keys = toBytes(consensusPublicKeys);
   if (keys.length % NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES !== 0) {
     throw new NodeRegistryError(
-      `blsPublicKeys length must be a multiple of ${NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES} bytes`
+      `consensusPublicKeys length must be a multiple of ${NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES} bytes`
     );
   }
   const signerCount = keys.length / NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES;
   if (signerCount < NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS || signerCount > NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS) {
     throw new NodeRegistryError(
-      `blsPublicKeys must contain ${NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS}..${NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS} signers`
+      `consensusPublicKeys must contain ${NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS}..${NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS} signers`
     );
   }
   const out = [];
@@ -587,12 +589,17 @@ function parseDkgResharePublicKeys(blsPublicKeys) {
     const key = keys.slice(offset, offset + NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES);
     const keyHex = bytesToHex(key);
     if (seen.has(keyHex)) {
-      throw new NodeRegistryError("blsPublicKeys contains a duplicate signer pubkey");
+      throw new NodeRegistryError("consensusPublicKeys contains a duplicate signer pubkey");
     }
     seen.add(keyHex);
     out.push(key);
   }
   return out;
+}
+function dkgReshareConsensusPublicKeys(args) {
+  if (args.consensusPublicKeys !== void 0) return args.consensusPublicKeys;
+  if (args.blsPublicKeys !== void 0) return args.blsPublicKeys;
+  throw new NodeRegistryError("consensusPublicKeys is required");
 }
 function encodeAttestDkgReshareCalldata(args) {
   const intentId = toUint64(args.intentId, "intentId");
@@ -602,10 +609,10 @@ function encodeAttestDkgReshareCalldata(args) {
   if (intentId > NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID) {
     throw new NodeRegistryError("intentId must be <= 2^56-1");
   }
-  const publicKeys = concatBytes(...parseDkgResharePublicKeys(args.blsPublicKeys));
+  const publicKeys = concatBytes(...parseDkgResharePublicKeys(dkgReshareConsensusPublicKeys(args)));
   const thresholdSig = expectLength2(
     toBytes(args.thresholdSig),
-    NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES,
+    NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES,
     "thresholdSig"
   );
   const keysPadded = padToWord(publicKeys);
@@ -616,9 +623,9 @@ function encodeAttestDkgReshareCalldata(args) {
     concatBytes(
       hexToBytes(NODE_REGISTRY_SELECTORS.attestDkgReshare),
       uint64Word(intentId, "intentId"),
-      uint64Word(offsetKeys, "blsPublicKeysOffset"),
+      uint64Word(offsetKeys, "consensusPublicKeysOffset"),
       uint64Word(offsetSig, "thresholdSigOffset"),
-      uint64Word(BigInt(publicKeys.length), "blsPublicKeysLength"),
+      uint64Word(BigInt(publicKeys.length), "consensusPublicKeysLength"),
       keysPadded,
       uint64Word(BigInt(thresholdSig.length), "thresholdSigLength"),
       sigPadded
@@ -790,7 +797,9 @@ function deriveClusterAnchorAddress(roster, threshold) {
   if (!Number.isInteger(threshold) || threshold < 0 || threshold > 65535) {
     throw new NodeRegistryError("threshold must be a uint16");
   }
-  const members = roster.map((m, i) => expectLength2(toBytes(m), 48, `roster[${i}]`));
+  const members = roster.map(
+    (m, i) => expectLength2(toBytes(m), NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES, `roster[${i}]`)
+  );
   members.sort(compareBytes);
   const parts = [
     new TextEncoder().encode(MULTISIG_ADDRESS_DERIVATION_DOMAIN),
@@ -3801,11 +3810,15 @@ var RpcClient = class _RpcClient {
     const params = status === void 0 ? operator == null ? [] : [operator] : [operator ?? null, status];
     return this.call("lyth_getClusterResignations", params);
   }
-  /** `lyth_getBlsRoundCertificate` — round-advancement BLS aggregate. */
-  async lythGetBlsRoundCertificate(round) {
-    return this.call("lyth_getBlsRoundCertificate", [encodeRpcInteger(round)]);
+  /** `lyth_getRoundCertificate` — round-advancement certificate. */
+  async lythGetRoundCertificate(round) {
+    return this.call("lyth_getRoundCertificate", [encodeRpcInteger(round)]);
   }
-  /** `lyth_getLeaderCertificate` — leader-vote BLS aggregate for a block ref. */
+  /** @deprecated Use lythGetRoundCertificate. */
+  async lythGetBlsRoundCertificate(round) {
+    return this.lythGetRoundCertificate(round);
+  }
+  /** `lyth_getLeaderCertificate` — leader-vote certificate for a block ref. */
   async lythGetLeaderCertificate(round, authority, digest) {
     return this.call("lyth_getLeaderCertificate", [encodeRpcInteger(round), authority, digest]);
   }
@@ -4403,7 +4416,9 @@ function normalizeOperatorInfo(value) {
       (v, i) => parseRpcNumber(v, `operator info activeClusterIds[${i}]`)
     ),
     operatorKeyFingerprint: parseStringNullable(row["operatorKeyFingerprint"]),
-    blsKeyFingerprint: parseStringNullable(row["blsKeyFingerprint"]),
+    consensusKeyFingerprint: parseStringNullable(
+      row["consensusKeyFingerprint"] ?? row["blsKeyFingerprint"]
+    ),
     lifecycleState: String(row["lifecycleState"]),
     capability: capability && typeof capability === "object" && !Array.isArray(capability) ? capability : {}
   };
@@ -4412,7 +4427,7 @@ function normalizeClusterMember(value, label) {
   const row = expectObject(value, label);
   return {
     operatorId: String(row["operatorId"]),
-    blsPubkey: String(row["blsPubkey"]),
+    consensusPubkey: String(row["consensusPubkey"] ?? row["blsPubkey"]),
     state: String(row["state"])
   };
 }
@@ -4478,7 +4493,7 @@ function normalizeOperatorAuthority(value) {
     schemaVersion: parseRpcNumber(row["schemaVersion"], "operator authority schemaVersion"),
     operatorId: String(row["operatorId"]),
     authorityIndex: parseRpcNumber(row["authorityIndex"], "operator authority authorityIndex"),
-    blsPubkey: String(row["blsPubkey"]),
+    consensusPubkey: String(row["consensusPubkey"] ?? row["blsPubkey"]),
     active: Boolean(row["active"])
   };
 }
@@ -6224,7 +6239,7 @@ var NO_EVM_COMPACT_INCLUSION_TREE_ALGORITHM = "binary-keccak-receipt-tree";
 var NO_EVM_ARCHIVE_PROOF_SCHEMA = "mono.no_evm_receipt_archive_binding.v1";
 var NO_EVM_ARCHIVE_SIGNATURE_SCHEME = "mono.snapshot.sig.v1";
 var NO_EVM_FINALITY_EVIDENCE_SCHEMA = "mono.no_evm_receipt_finality.v1";
-var NO_EVM_FINALITY_EVIDENCE_SOURCE = "blsRoundCertificate";
+var NO_EVM_FINALITY_EVIDENCE_SOURCE = "roundCertificate";
 var EMPTY_ROOT_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPTS_ROOT_DOMAIN);
 var LEAF_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPT_LEAF_DOMAIN);
 var NODE_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPT_NODE_DOMAIN);
@@ -10411,9 +10426,11 @@ exports.NODE_REGISTRY_CAPABILITIES = NODE_REGISTRY_CAPABILITIES;
 exports.NODE_REGISTRY_CAPABILITY_MASK = NODE_REGISTRY_CAPABILITY_MASK;
 exports.NODE_REGISTRY_CONSENSUS_POP_BYTES = NODE_REGISTRY_CONSENSUS_POP_BYTES;
 exports.NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES = NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES;
+exports.NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES = NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES;
 exports.NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS = NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS;
 exports.NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS = NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS;
 exports.NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES = NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES;
+exports.NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES = NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES;
 exports.NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID = NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID;
 exports.NODE_REGISTRY_PUBLIC_SERVICE_MASK = NODE_REGISTRY_PUBLIC_SERVICE_MASK;
 exports.NODE_REGISTRY_SELECTORS = NODE_REGISTRY_SELECTORS;

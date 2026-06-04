@@ -76,14 +76,18 @@ export const NODE_REGISTRY_SELECTORS = {
   getClusterJoinRequest: "0x" + selectorHex("getClusterJoinRequest(uint32,bytes32)"),
 } as const;
 
-/** Legacy cluster-member/BLS pubkey width. Kept for genesis-roster and finality surfaces. */
-export const NODE_REGISTRY_BLS_PUBKEY_BYTES = 48;
+/** Legacy cluster-member pubkey width. Kept for genesis-roster and finality surfaces. */
+export const NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES = 48;
+/** @deprecated Use NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES. */
+export const NODE_REGISTRY_BLS_PUBKEY_BYTES = NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES;
 /** Full ML-DSA-65 consensus pubkey width used by register and pending-change calldata. */
 export const NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES = 1952;
 /** ML-DSA-65 self-signature width used as register proof-of-possession. */
 export const NODE_REGISTRY_CONSENSUS_POP_BYTES = 3309;
-/** Legacy DKG-reshare threshold signature width. Removal is tracked outside W1. */
-export const NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES = 96;
+/** DKG-reshare attestation signature width. Removal is tracked outside W1. */
+export const NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES = 96;
+/** @deprecated Use NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES. */
+export const NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES = NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES;
 export const NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS = 5;
 export const NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS = 7;
 export const NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID = (1n << 56n) - 1n;
@@ -119,7 +123,9 @@ export interface CancelPendingChangeCalldataArgs {
 
 export interface AttestDkgReshareCalldataArgs {
   intentId: bigint | number | string;
-  blsPublicKeys: string | Uint8Array | readonly number[];
+  consensusPublicKeys?: string | Uint8Array | readonly number[];
+  /** @deprecated Use consensusPublicKeys. */
+  blsPublicKeys?: string | Uint8Array | readonly number[];
   thresholdSig: string | Uint8Array | readonly number[];
 }
 
@@ -299,12 +305,12 @@ export function encodeCancelPendingChangeCalldata(
 }
 
 export function parseDkgResharePublicKeys(
-  blsPublicKeys: string | Uint8Array | readonly number[],
+  consensusPublicKeys: string | Uint8Array | readonly number[],
 ): Uint8Array[] {
-  const keys = toBytes(blsPublicKeys);
+  const keys = toBytes(consensusPublicKeys);
   if (keys.length % NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES !== 0) {
     throw new NodeRegistryError(
-      `blsPublicKeys length must be a multiple of ${NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES} bytes`,
+      `consensusPublicKeys length must be a multiple of ${NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES} bytes`,
     );
   }
   const signerCount = keys.length / NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES;
@@ -313,7 +319,7 @@ export function parseDkgResharePublicKeys(
     signerCount > NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS
   ) {
     throw new NodeRegistryError(
-      `blsPublicKeys must contain ${NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS}..${NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS} signers`,
+      `consensusPublicKeys must contain ${NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS}..${NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS} signers`,
     );
   }
   const out: Uint8Array[] = [];
@@ -322,12 +328,20 @@ export function parseDkgResharePublicKeys(
     const key = keys.slice(offset, offset + NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES);
     const keyHex = bytesToHex(key);
     if (seen.has(keyHex)) {
-      throw new NodeRegistryError("blsPublicKeys contains a duplicate signer pubkey");
+      throw new NodeRegistryError("consensusPublicKeys contains a duplicate signer pubkey");
     }
     seen.add(keyHex);
     out.push(key);
   }
   return out;
+}
+
+function dkgReshareConsensusPublicKeys(
+  args: AttestDkgReshareCalldataArgs,
+): string | Uint8Array | readonly number[] {
+  if (args.consensusPublicKeys !== undefined) return args.consensusPublicKeys;
+  if (args.blsPublicKeys !== undefined) return args.blsPublicKeys;
+  throw new NodeRegistryError("consensusPublicKeys is required");
 }
 
 export function encodeAttestDkgReshareCalldata(
@@ -340,10 +354,10 @@ export function encodeAttestDkgReshareCalldata(
   if (intentId > NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID) {
     throw new NodeRegistryError("intentId must be <= 2^56-1");
   }
-  const publicKeys = concatBytes(...parseDkgResharePublicKeys(args.blsPublicKeys));
+  const publicKeys = concatBytes(...parseDkgResharePublicKeys(dkgReshareConsensusPublicKeys(args)));
   const thresholdSig = expectLength(
     toBytes(args.thresholdSig),
-    NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES,
+    NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES,
     "thresholdSig",
   );
   const keysPadded = padToWord(publicKeys);
@@ -355,9 +369,9 @@ export function encodeAttestDkgReshareCalldata(
     concatBytes(
       hexToBytes(NODE_REGISTRY_SELECTORS.attestDkgReshare),
       uint64Word(intentId, "intentId"),
-      uint64Word(offsetKeys, "blsPublicKeysOffset"),
+      uint64Word(offsetKeys, "consensusPublicKeysOffset"),
       uint64Word(offsetSig, "thresholdSigOffset"),
-      uint64Word(BigInt(publicKeys.length), "blsPublicKeysLength"),
+      uint64Word(BigInt(publicKeys.length), "consensusPublicKeysLength"),
       keysPadded,
       uint64Word(BigInt(thresholdSig.length), "thresholdSigLength"),
       sigPadded,
@@ -609,7 +623,7 @@ export interface ClusterFormedEvent {
   effectiveEpoch: bigint;
   /** Primary anchor address (`0x` 20 bytes). */
   anchorAddress: string;
-  /** Concatenated 48-byte compressed BLS pubkeys (`0x` hex). */
+  /** Concatenated legacy 48-byte cluster-member pubkeys (`0x` hex). */
   operatorRoster: string;
 }
 
@@ -704,7 +718,9 @@ export function deriveClusterAnchorAddress(
   if (!Number.isInteger(threshold) || threshold < 0 || threshold > 0xffff) {
     throw new NodeRegistryError("threshold must be a uint16");
   }
-  const members = roster.map((m, i) => expectLength(toBytes(m), 48, `roster[${i}]`));
+  const members = roster.map((m, i) =>
+    expectLength(toBytes(m), NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES, `roster[${i}]`),
+  );
   members.sort(compareBytes);
   const parts: Uint8Array[] = [
     new TextEncoder().encode(MULTISIG_ADDRESS_DERIVATION_DOMAIN),

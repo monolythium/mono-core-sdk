@@ -1962,7 +1962,7 @@ describe("lyth_* methods", () => {
         extensions: [{ kind: 0x30, kindHex: "0x30", bodyHex: "0x01", body: "0x01" }],
         round: 12,
         clusterId: null,
-        blsAttestation: null,
+        roundAttestation: null,
         pqAttestation: null,
         finalityProof: null,
         logs: [],
@@ -2511,11 +2511,11 @@ describe("lyth_* methods", () => {
     const digest = `0x${"11".repeat(32)}`;
     const { fetch, calls } = mockFetchSequence([null, null, null]);
     const client = new RpcClient("http://x", { fetch });
-    await client.lythGetBlsRoundCertificate(42n);
+    await client.lythGetRoundCertificate(42n);
     await client.lythGetLeaderCertificate(43n, 2, digest);
     await client.lythGetDacCertificate(44n, 3, digest);
     expect(calls.map((c) => c.method)).toEqual([
-      "lyth_getBlsRoundCertificate",
+      "lyth_getRoundCertificate",
       "lyth_getLeaderCertificate",
       "lyth_getDacCertificate",
     ]);
@@ -2528,13 +2528,13 @@ describe("lyth_* methods", () => {
 
   it("operator monitoring helpers normalize typed live windows", async () => {
     const operatorId = `0x${"aa".repeat(32)}`;
-    const blsPubkey = `0x${"bb".repeat(48)}`;
+    const consensusPubkey = `0x${"bb".repeat(1952)}`;
     const { fetch, calls } = mockFetchSequence([
       {
         schemaVersion: 1,
         operatorId,
         authorityIndex: 2,
-        blsPubkey,
+        consensusPubkey,
         active: true,
       },
       {
@@ -2597,7 +2597,7 @@ describe("lyth_* methods", () => {
       schemaVersion: 1,
       operatorId,
       authorityIndex: 2,
-      blsPubkey,
+      consensusPubkey,
       active: true,
     });
     expect(activity.currentRound).toBe(1042n);
@@ -2636,7 +2636,7 @@ describe("lyth_* methods", () => {
 
   it("operator and cluster directory helpers use forward RPC surfaces", async () => {
     const operatorId = `0x${"12".repeat(32)}`;
-    const blsPubkey = `0x${"34".repeat(48)}`;
+    const consensusPubkey = `0x${"34".repeat(1952)}`;
     const { fetch, calls } = mockFetchSequence([
       {
         operatorId,
@@ -2649,7 +2649,7 @@ describe("lyth_* methods", () => {
         bondedAmount: "50000000000000000000",
         activeClusterIds: [0, "0x2"],
         operatorKeyFingerprint: null,
-        blsKeyFingerprint: `bls12-381:${blsPubkey}`,
+        consensusKeyFingerprint: `mldsa65:${consensusPubkey.slice(2, 18)}`,
         lifecycleState: "active",
         capability: { bondedAmount: "stable", moniker: "planned" },
       },
@@ -2661,7 +2661,7 @@ describe("lyth_* methods", () => {
         lagging: 0,
         offline: 0,
         maintenance: 0,
-        members: [{ operatorId, blsPubkey, state: "active" }],
+        members: [{ operatorId, consensusPubkey, state: "active" }],
         epoch: "0x10",
         round: "42",
         quorum: "ok",
@@ -2693,10 +2693,15 @@ describe("lyth_* methods", () => {
 
     expect(operator.activeClusterIds).toEqual([0, 2]);
     expect(operator.alias).toBe("volans");
+    expect(operator.consensusKeyFingerprint).toBe(`mldsa65:${consensusPubkey.slice(2, 18)}`);
     expect(cluster.epoch).toBe(16n);
     expect(cluster.round).toBe(42n);
     expect(cluster.lastUpdateHeight).toBe(256n);
-    expect(cluster.members[0]).toEqual({ operatorId, blsPubkey, state: "active" });
+    expect(cluster.members[0]).toEqual({
+      operatorId,
+      consensusPubkey,
+      state: "active",
+    });
     expect(directory.totalClusters).toBe(100);
     expect(directory.clusters[0].aggregateHealth).toBe("ok");
 
@@ -2706,6 +2711,64 @@ describe("lyth_* methods", () => {
       "lyth_clusterDirectory",
     ]);
     expect(calls.map((c) => c.params)).toEqual([[operatorId], [0], [0, 25]]);
+  });
+
+  it("accepts legacy consensus-key JSON field aliases", async () => {
+    const operatorId = `0x${"56".repeat(32)}`;
+    const legacyPubkey = `0x${"78".repeat(48)}`;
+    const { fetch } = mockFetchSequence([
+      {
+        operatorId,
+        moniker: null,
+        alias: null,
+        chainAddress: "0x1111111111111111111111111111111111111111",
+        bonded: true,
+        commissionBps: null,
+        delegationCount: null,
+        bondedAmount: "1",
+        activeClusterIds: [],
+        operatorKeyFingerprint: null,
+        blsKeyFingerprint: `legacy:${legacyPubkey}`,
+        lifecycleState: "active",
+        capability: {},
+      },
+      {
+        clusterId: 0,
+        threshold: 5,
+        size: 7,
+        live: 7,
+        lagging: 0,
+        offline: 0,
+        maintenance: 0,
+        members: [{ operatorId, blsPubkey: legacyPubkey, state: "active" }],
+        epoch: null,
+        round: null,
+        quorum: "ok",
+        reputationScore: null,
+        livenessScore: null,
+        lastUpdateHeight: "0",
+      },
+      {
+        schemaVersion: 1,
+        operatorId,
+        authorityIndex: 2,
+        blsPubkey: legacyPubkey,
+        active: true,
+      },
+    ]);
+    const client = new RpcClient("http://x", { fetch });
+
+    const operator = await client.lythOperatorInfo(operatorId);
+    const cluster = await client.lythClusterStatus(0);
+    const authority = await client.lythResolveOperatorAuthority(operatorId);
+
+    expect(operator.consensusKeyFingerprint).toBe(`legacy:${legacyPubkey}`);
+    expect(cluster.members[0]).toEqual({
+      operatorId,
+      consensusPubkey: legacyPubkey,
+      state: "active",
+    });
+    expect(authority.consensusPubkey).toBe(legacyPubkey);
   });
 
   it("wraps public-service probe read and signed report transport", async () => {

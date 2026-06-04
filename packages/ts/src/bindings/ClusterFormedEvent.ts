@@ -22,6 +22,6 @@ effectiveEpoch: bigint,
  */
 anchorAddress: string,
 /**
- * Concatenated 48-byte compressed BLS pubkeys (`0x` hex).
+ * Concatenated legacy 48-byte cluster-member pubkeys (`0x` hex).
  */
 operatorRoster: string, };

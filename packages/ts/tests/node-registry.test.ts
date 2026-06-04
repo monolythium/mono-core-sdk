@@ -4,9 +4,11 @@ import {
   NODE_REGISTRY_CAPABILITIES,
   NODE_REGISTRY_CONSENSUS_POP_BYTES,
   NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+  NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES,
   NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS,
   NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS,
   NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES,
+  NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES,
   NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID,
   NODE_REGISTRY_PUBLIC_SERVICE_MASK,
   NODE_REGISTRY_SELECTORS,
@@ -44,8 +46,10 @@ describe("node-registry helpers", () => {
     expect(NODE_REGISTRY_PUBLIC_SERVICE_MASK).toBe(0x0000_011b);
     expect(nodeRegistryAddressHex()).toBe("0x0000000000000000000000000000000000001005");
     expect(NODE_REGISTRY_BLS_PUBKEY_BYTES).toBe(48);
+    expect(NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES).toBe(48);
     expect(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).toBe(1952);
     expect(NODE_REGISTRY_CONSENSUS_POP_BYTES).toBe(3309);
+    expect(NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES).toBe(96);
     expect(NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES).toBe(96);
     expect(NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS).toBe(5);
     expect(NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS).toBe(7);
@@ -153,11 +157,11 @@ describe("node-registry helpers", () => {
     const keys = Array.from({ length: 5 }, (_, i) =>
       new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0x10 + i),
     );
-    const blsPublicKeys = concatTestBytes(...keys);
+    const consensusPublicKeys = concatTestBytes(...keys);
     const thresholdSig = new Uint8Array(96).fill(0xee);
     const calldata = encodeAttestDkgReshareCalldata({
       intentId: 7n,
-      blsPublicKeys,
+      consensusPublicKeys,
       thresholdSig,
     });
     const bytes = hexBytes(calldata);
@@ -168,7 +172,14 @@ describe("node-registry helpers", () => {
     expect(bytes[67]).toBe(0x60);
     expect(wordBigint(bytes.slice(68, 100))).toBe(3n * 32n + 32n + BigInt(keysLen));
     expect(wordBigint(bytes.slice(100, 132))).toBe(BigInt(keysLen));
-    expect(parseDkgResharePublicKeys(blsPublicKeys)).toHaveLength(5);
+    expect(parseDkgResharePublicKeys(consensusPublicKeys)).toHaveLength(5);
+    expect(
+      encodeAttestDkgReshareCalldata({
+        intentId: 7n,
+        blsPublicKeys: consensusPublicKeys,
+        thresholdSig,
+      }),
+    ).toBe(calldata);
   });
 
   it("encodes CJ-1 cluster-join calldata and decodes request status", () => {
@@ -352,14 +363,14 @@ describe("node-registry helpers", () => {
     expect(() =>
       encodeAttestDkgReshareCalldata({
         intentId: 0n,
-        blsPublicKeys: keys,
+        consensusPublicKeys: keys,
         thresholdSig: sig,
       }),
     ).toThrow();
     expect(() =>
       encodeAttestDkgReshareCalldata({
         intentId: 1n,
-        blsPublicKeys: concatTestBytes(
+        consensusPublicKeys: concatTestBytes(
           new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0x11),
           new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0x12),
         ),
@@ -369,7 +380,7 @@ describe("node-registry helpers", () => {
     expect(() =>
       encodeAttestDkgReshareCalldata({
         intentId: 1n,
-        blsPublicKeys: concatTestBytes(
+        consensusPublicKeys: concatTestBytes(
           ...Array.from({ length: 5 }, () =>
             new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0x11),
           ),
@@ -380,7 +391,7 @@ describe("node-registry helpers", () => {
     expect(() =>
       encodeAttestDkgReshareCalldata({
         intentId: 1n,
-        blsPublicKeys: keys,
+        consensusPublicKeys: keys,
         thresholdSig: new Uint8Array(95),
       }),
     ).toThrow();

@@ -36,7 +36,7 @@ export const NO_EVM_COMPACT_INCLUSION_TREE_ALGORITHM = "binary-keccak-receipt-tr
 export const NO_EVM_ARCHIVE_PROOF_SCHEMA = "mono.no_evm_receipt_archive_binding.v1";
 export const NO_EVM_ARCHIVE_SIGNATURE_SCHEME = "mono.snapshot.sig.v1";
 export const NO_EVM_FINALITY_EVIDENCE_SCHEMA = "mono.no_evm_receipt_finality.v1";
-export const NO_EVM_FINALITY_EVIDENCE_SOURCE = "blsRoundCertificate";
+export const NO_EVM_FINALITY_EVIDENCE_SOURCE = "roundCertificate";
 
 const EMPTY_ROOT_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPTS_ROOT_DOMAIN);
 const LEAF_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPT_LEAF_DOMAIN);
@@ -152,6 +152,9 @@ export interface NoEvmBlockBlsFinalityVerification {
   verified: boolean;
 }
 
+export type NoEvmRoundFinalityVerification = NoEvmBlsFinalityVerification;
+export type NoEvmBlockRoundFinalityVerification = NoEvmBlockBlsFinalityVerification;
+
 export type NoEvmReceiptFinalityTrustPolicy =
   | {
       mode: "cluster";
@@ -170,6 +173,8 @@ export type NoEvmReceiptFinalityTrustPolicy =
       validFromRound?: number | bigint;
       validToRound?: number | bigint;
     };
+
+export type NoEvmReceiptTrustedSigner = NoEvmReceiptTrustedBlsSigner;
 
 export interface NoEvmReceiptTrustPolicy {
   chainId?: number | bigint;

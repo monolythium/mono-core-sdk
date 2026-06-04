@@ -5,7 +5,7 @@
  */
 export type ClusterResignationRow = {
 /**
- * `0x`-prefixed 48-byte BLS-G1 operator public key.
+ * `0x`-prefixed legacy 48-byte cluster-member public key.
  */
 operator: string,
 /**

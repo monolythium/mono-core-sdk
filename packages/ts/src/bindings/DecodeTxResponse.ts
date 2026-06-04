@@ -81,9 +81,9 @@ round: bigint | null,
  */
 clusterId: number | null,
 /**
- * Opaque BLS attestation payload.
+ * Opaque round attestation payload.
  */
-blsAttestation: unknown | null,
+roundAttestation: unknown | null,
 /**
  * PQ-finality attestation payload.
  */

@@ -123,7 +123,7 @@ function blsFinalityEvidence(args: {
   const certificate = blsFinalityCertificate(args);
   return {
     schema: "mono.no_evm_receipt_finality.v1",
-    source: "blsRoundCertificate",
+    source: "roundCertificate",
     round: args.round,
     certificate,
     blockReference: args.blockReference,
@@ -588,7 +588,7 @@ describe("no-EVM receipt proof helpers", () => {
       ...base,
       finalityEvidence: {
         schema: "mono.no_evm_receipt_finality.v1",
-        source: "blsRoundCertificate",
+        source: "roundCertificate",
         round: 57,
         certificate: {
           round: 57,
@@ -625,7 +625,7 @@ describe("no-EVM receipt proof helpers", () => {
     const verified = verifyNoEvmReceiptProof(proof);
 
     expect(verified?.proofKind).toBe("compactInclusion");
-    expect(proof.finalityEvidence?.source).toBe("blsRoundCertificate");
+    expect(proof.finalityEvidence?.source).toBe("roundCertificate");
     expect(proof.finalityEvidence?.certificate.signerIndices).toEqual([1, 3]);
     expect(proof.finalityEvidence?.blockReference?.digest).toBe(base.blockHash);
   });
@@ -636,7 +636,7 @@ describe("no-EVM receipt proof helpers", () => {
         ...compactNoEvmProof(),
         finalityEvidence: {
           schema: "mono.no_evm_receipt_finality.v1",
-          source: "blsRoundCertificate",
+          source: "roundCertificate",
           round: 57,
           certificate: {
             round: 58,

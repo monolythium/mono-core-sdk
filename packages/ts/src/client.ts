@@ -116,6 +116,8 @@ import type {
   TypedNativeReceiptEvent,
 } from "./native-events.js";
 
+export type RoundCertificateResponse = BlsCertificateResponse;
+
 /** Optional per-client configuration. */
 export interface RpcClientOptions {
   /** Override `fetch`. Useful for tests or non-Node environments. */
@@ -255,7 +257,7 @@ export interface NoEvmFinalityBlockReference {
 
 export interface NoEvmFinalityEvidence {
   schema: "mono.no_evm_receipt_finality.v1";
-  source: "blsRoundCertificate" | string;
+  source: "roundCertificate" | string;
   round: number;
   certificate: NoEvmFinalityCertificate;
   blockReference?: NoEvmFinalityBlockReference | null;
@@ -833,14 +835,14 @@ export interface OperatorInfoResponse {
   bondedAmount: string;
   activeClusterIds: number[];
   operatorKeyFingerprint: string | null;
-  blsKeyFingerprint: string | null;
+  consensusKeyFingerprint: string | null;
   lifecycleState: string;
   capability: Record<string, unknown>;
 }
 
 export interface ClusterMemberResponse {
   operatorId: string;
-  blsPubkey: string;
+  consensusPubkey: string;
   state: string;
 }
 
@@ -899,7 +901,7 @@ export interface OperatorAuthorityResponse {
   schemaVersion: number;
   operatorId: string;
   authorityIndex: number;
-  blsPubkey: string;
+  consensusPubkey: string;
   active: boolean;
 }
 
@@ -2390,17 +2392,22 @@ export class RpcClient {
     return this.call("lyth_getClusterResignations", params);
   }
 
-  /** `lyth_getBlsRoundCertificate` — round-advancement BLS aggregate. */
-  async lythGetBlsRoundCertificate(round: number | bigint | string): Promise<BlsCertificateResponse | null> {
-    return this.call("lyth_getBlsRoundCertificate", [encodeRpcInteger(round)]);
+  /** `lyth_getRoundCertificate` — round-advancement certificate. */
+  async lythGetRoundCertificate(round: number | bigint | string): Promise<RoundCertificateResponse | null> {
+    return this.call("lyth_getRoundCertificate", [encodeRpcInteger(round)]);
   }
 
-  /** `lyth_getLeaderCertificate` — leader-vote BLS aggregate for a block ref. */
+  /** @deprecated Use lythGetRoundCertificate. */
+  async lythGetBlsRoundCertificate(round: number | bigint | string): Promise<RoundCertificateResponse | null> {
+    return this.lythGetRoundCertificate(round);
+  }
+
+  /** `lyth_getLeaderCertificate` — leader-vote certificate for a block ref. */
   async lythGetLeaderCertificate(
     round: number | bigint | string,
     authority: number,
     digest: string,
-  ): Promise<BlsCertificateResponse | null> {
+  ): Promise<RoundCertificateResponse | null> {
     return this.call("lyth_getLeaderCertificate", [encodeRpcInteger(round), authority, digest]);
   }
 
@@ -2409,7 +2416,7 @@ export class RpcClient {
     round: number | bigint | string,
     authority: number,
     digest: string,
-  ): Promise<BlsCertificateResponse | null> {
+  ): Promise<RoundCertificateResponse | null> {
     return this.call("lyth_getDacCertificate", [encodeRpcInteger(round), authority, digest]);
   }
 
@@ -3167,7 +3174,9 @@ function normalizeOperatorInfo(value: unknown): OperatorInfoResponse {
       parseRpcNumber(v, `operator info activeClusterIds[${i}]`),
     ),
     operatorKeyFingerprint: parseStringNullable(row["operatorKeyFingerprint"]),
-    blsKeyFingerprint: parseStringNullable(row["blsKeyFingerprint"]),
+    consensusKeyFingerprint: parseStringNullable(
+      row["consensusKeyFingerprint"] ?? row["blsKeyFingerprint"],
+    ),
     lifecycleState: String(row["lifecycleState"]),
     capability:
       capability && typeof capability === "object" && !Array.isArray(capability)
@@ -3180,7 +3189,7 @@ function normalizeClusterMember(value: unknown, label: string): ClusterMemberRes
   const row = expectObject(value, label);
   return {
     operatorId: String(row["operatorId"]),
-    blsPubkey: String(row["blsPubkey"]),
+    consensusPubkey: String(row["consensusPubkey"] ?? row["blsPubkey"]),
     state: String(row["state"]),
   };
 }
@@ -3250,7 +3259,7 @@ function normalizeOperatorAuthority(value: unknown): OperatorAuthorityResponse {
     schemaVersion: parseRpcNumber(row["schemaVersion"], "operator authority schemaVersion"),
     operatorId: String(row["operatorId"]),
     authorityIndex: parseRpcNumber(row["authorityIndex"], "operator authority authorityIndex"),
-    blsPubkey: String(row["blsPubkey"]),
+    consensusPubkey: String(row["consensusPubkey"] ?? row["blsPubkey"]),
     active: Boolean(row["active"]),
   };
 }

@@ -215,6 +215,7 @@ export type {
   PrecompileCatalogueResponse,
   QuoteLiquidity,
   ResolveNameResponse,
+  RoundCertificateResponse,
   RpcClientOptions,
   RuntimeBuildProvenance,
   RuntimeProvenanceResponse,
@@ -289,7 +290,9 @@ export {
 } from "./receipt-proof.js";
 export type {
   NoEvmBlockBlsFinalityVerification,
+  NoEvmBlockRoundFinalityVerification,
   NoEvmBlsFinalityVerification,
+  NoEvmRoundFinalityVerification,
   NoEvmArchiveSignatureVerification,
   NoEvmArchiveSignatureVerificationIssue,
   NoEvmArchiveSignatureVerificationIssueCode,
@@ -302,6 +305,7 @@ export type {
   NoEvmReceiptTrustPolicy,
   NoEvmReceiptTrustVerification,
   NoEvmReceiptTrustedBlsSigner,
+  NoEvmReceiptTrustedSigner,
 } from "./receipt-proof.js";
 export {
   NATIVE_MARKET_EVENT_FAMILY,
@@ -417,11 +421,13 @@ export {
   NODE_REGISTRY_BLS_PUBKEY_BYTES,
   NODE_REGISTRY_CAPABILITIES,
   NODE_REGISTRY_CAPABILITY_MASK,
+  NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES,
   NODE_REGISTRY_CONSENSUS_POP_BYTES,
   NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
   NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS,
   NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS,
   NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES,
+  NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES,
   NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID,
   NODE_REGISTRY_PUBLIC_SERVICE_MASK,
   NODE_REGISTRY_SELECTORS,

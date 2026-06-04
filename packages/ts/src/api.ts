@@ -351,7 +351,7 @@ export interface ApiClusterDirectoryPage {
 
 export interface ApiClusterMember {
   operatorId: string;
-  blsPubkey: string;
+  consensusPubkey: string;
   state: string;
 }
 
@@ -393,7 +393,7 @@ export interface ApiOperatorInfo {
   bondedAmount: string;
   activeClusterIds: number[];
   operatorKeyFingerprint: string | null;
-  blsKeyFingerprint: string | null;
+  consensusKeyFingerprint: string | null;
   lifecycleState: string;
   capability: Record<string, unknown>;
 }
