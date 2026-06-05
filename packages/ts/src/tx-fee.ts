@@ -12,9 +12,9 @@
  * max_execution_unit_price` (a `FeeMismatch` revert otherwise). Two
  * footguns motivated these helpers:
  *
- *  1. The registry `register_op` BLS proof-of-possession pairing verify
- *     burns ~151k execution units; a 100k limit reverts. Registry /
- *     register writes therefore default to a higher limit.
+ *  1. Registry writes and encrypted ML-DSA-65 submissions have higher
+ *     intrinsic execution-unit floors than the legacy 100k default.
+ *     Registry / register writes therefore default to a higher limit.
  *  2. `priority_tip_lythoshi` is a PER-UNIT price, not a total tip. The
  *     legacy registry default of `1e10` dwarfed the live per-unit cap
  *     (~2000-6000 lythoshi) and made the chain reject every registry
@@ -28,20 +28,20 @@ import { SdkError } from "./error.js";
 /**
  * Default execution-unit limit for registry / register writes.
  *
- * The `register_op` BLS-PoP pairing verify uses ~151k execution units,
- * so the prior 100k default reverted. Pinned above the observed cost
- * with headroom. Mirrors the corrected
- * `REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT` in the Rust CLI.
+ * Register and cluster-onboarding writes carry large PQ key/proof
+ * payloads and pay the encrypted-submit intrinsic floor. Pinned above
+ * observed public-preview costs with headroom.
  */
-export const REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT = 250_000n;
+export const REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT = 1_000_000n;
 
 /**
  * Default execution-unit limit for a bare native transfer.
  *
- * The 21000 intrinsic floor plus calldata + signature-byte units; a
- * round 100k covers an ML-DSA-65-signed transfer with margin.
+ * Public-preview encrypted ML-DSA-65 transfers currently have an
+ * intrinsic floor a little above 305k execution units. A 500k default
+ * keeps ordinary sealed transfers comfortably above that floor.
  */
-export const TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT = 100_000n;
+export const TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT = 500_000n;
 
 /**
  * Per-unit price floor used when the node quote is unexpectedly low or

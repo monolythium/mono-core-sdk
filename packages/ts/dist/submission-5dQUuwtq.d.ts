@@ -5964,7 +5964,7 @@ declare const ML_DSA_65_SIGNING_KEY_LEN = 4032;
 declare const ML_DSA_65_PUBLIC_KEY_LEN = 1952;
 declare const ML_DSA_65_SIGNATURE_LEN = 3309;
 declare const STANDARD_ALGO_NUMBER_ML_DSA_65 = 1001;
-declare const ENUM_VARIANT_INDEX_ML_DSA_65 = 2;
+declare const ENUM_VARIANT_INDEX_ML_DSA_65 = 3;
 declare const ADDRESS_DERIVATION_DOMAIN = "MONO_ADDRESS_BLAKE3_20_V1";
 declare class MlDsa65Backend {
     #private;
