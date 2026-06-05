@@ -10884,7 +10884,7 @@ var MONOLYTHIUM_NETWORKS = {
 };
 
 // src/index.ts
-var version = "0.4.1";
+var version = "0.4.2";
 
 exports.ADDRESS_HRP = ADDRESS_HRP;
 exports.ADDRESS_KIND_HRPS = ADDRESS_KIND_HRPS;
