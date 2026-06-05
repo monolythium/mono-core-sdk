@@ -1,6 +1,12 @@
-import { bytesToHex, hexToBytes } from "./bytes.js";
-import { MempoolClass } from "./envelope.js";
+import { bytesToHex, hexToBytes, parseBigint } from "./bytes.js";
+import { MempoolClass, type NonceAad } from "./envelope.js";
 import type { MlDsa65Backend } from "./ml-dsa.js";
+import {
+  parseClusterSealKeys,
+  sealTransaction,
+  type ClusterSealKeys,
+  type ClusterSealKeysSource,
+} from "./seal.js";
 import type { NativeEvmTxFields } from "./tx.js";
 
 export interface JsonRpcCallClient {
@@ -59,46 +65,48 @@ export async function fetchEncryptionKey(client: JsonRpcCallClient): Promise<Enc
 /**
  * Error message returned when an encrypted-mempool submission is attempted.
  *
- * The encrypted-submit path is gated OFF until the chain's MB-3 Ferveo
- * threshold decryption is live (see {@link buildEncryptedSubmission}).
+ * Scheme-3 encrypted submission needs a cluster seal roster. Public node
+ * profiles may keep `lyth_getClusterSealKeys` disabled, in which case callers
+ * should pass a roster source from the pinned genesis/chain registry.
  */
 export const ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE =
-  "encrypted mempool submission unavailable until MB-3 threshold decryption is active";
+  "private submission requires cluster seal keys; pass clusterSealKeysSource or enable lyth_getClusterSealKeys";
 
 /**
- * Encrypted-mempool submission is GATED OFF.
+ * Build a scheme-3 LythiumSeal encrypted-mempool submission.
  *
- * The single-key ML-KEM-768 `scheme: 0` envelope this used to build is the
- * RETIRED scheme: a single operator holding the cluster decryption key could
- * decrypt the inner transaction, violating the threshold-privacy guarantee
- * the encrypted mempool promises. The live chain runs with plaintext
- * submission as the default and does NOT run threshold decryption yet, so
- * there is no safe encrypted path to emit.
- *
- * This helper therefore refuses to build any envelope and throws. It never
- * produces a `scheme: 0` (or any) envelope, so a wallet can never be tricked
- * into believing its transaction is privately decryptable by a threshold of
- * operators when it is in fact decryptable by one.
- *
- * Use {@link buildPlaintextSubmission} / {@link submitPlaintextTransaction}
- * (the unaffected default path) for transaction submission.
- *
- * TODO(MB-3): when the chain activates MB-3 threshold decryption, port the
- * chain's Ferveo `scheme = 2` path here — the `ThresholdPubkey` is a 96-byte
- * BLS12-381 G1 element fetched from `lyth_getEncryptionKey`, and the inner tx
- * is encrypted to that threshold public key (not a single ML-KEM-768
- * encapsulation key). Only then may an envelope be emitted again.
- *
- * @throws always — the encrypted path is unavailable.
+ * The caller may pass already parsed cluster keys, a JSON roster source, or
+ * allow the SDK to fetch `lyth_getClusterSealKeys(clusterId)`. The single-key
+ * envelope path stays retired; this function only emits the threshold
+ * cluster-sealed envelope accepted by `lyth_submitEncrypted`.
  */
-export async function buildEncryptedSubmission(_args: {
+export async function buildEncryptedSubmission(args: {
+  client?: JsonRpcCallClient;
   backend: MlDsa65Backend;
   tx: NativeEvmTxFields;
-  encryptionKey: EncryptionKey;
+  encryptionKey?: EncryptionKey;
+  clusterId?: number;
+  clusterSealKeys?: ClusterSealKeys;
+  clusterSealKeysSource?: ClusterSealKeysSource;
   class?: MempoolClass;
 }): Promise<EncryptedSubmission> {
-  await Promise.resolve();
-  throw new Error(ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE);
+  const signed = args.backend.signEvmTx(args.tx);
+  const clusterSealKeys = await resolveClusterSealKeys(args);
+  const aad = nonceAadForTx(args.tx, args.backend.addressBytes(), args.class);
+  const sealed = await sealTransaction({
+    signedTxBincode: signed.wireBytes,
+    clusterSealKeys,
+    aad,
+    senderAddress: args.backend.addressBytes(),
+    senderPubkey: args.backend.publicKey(),
+    signOuterDigest: (digest) => args.backend.signPrehash(digest),
+  });
+  return {
+    envelopeWireHex: sealed.envelopeWireHex,
+    innerSighashHex: bytesToHex(signed.sighash),
+    innerTxHashHex: bytesToHex(signed.txHash),
+    innerWireBytes: signed.wireBytes.length,
+  };
 }
 
 export async function submitEncryptedEnvelope(
@@ -171,23 +179,15 @@ export async function submitPlaintextTransaction(
 
 /**
  * Build, sign, and submit a native transaction with an explicit
- * encryption toggle. `private == false` (the default for the RC testnet
- * / operator posture) routes through the plaintext `mesh_submitTx`
- * path; `private == true` routes through the encrypted pipeline.
- * Wallets wire a UI privacy toggle straight onto `private`.
+ * encryption toggle. `private == false` routes through the plaintext
+ * `mesh_submitTx` path; `private == true` routes through the scheme-3
+ * LythiumSeal encrypted pipeline.
  *
  * Mirrors `TxClient::build_sign_submit_with_privacy` in the Rust SDK.
- * The default is PLAINTEXT and is fully supported.
- *
- * MB-3 gate: `private === true` is currently UNAVAILABLE — the encrypted
- * path throws {@link ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE} via
- * {@link buildEncryptedSubmission} because the chain does not yet run
- * Ferveo threshold decryption and the retired single-key scheme is unsafe.
- * Keep wallet privacy toggles disabled until MB-3 activates.
  *
  * @returns for the plaintext path, the node-echoed-and-validated canonical
- *   native tx hash (`0x`-prefixed).
- * @throws when `private === true` (encrypted submission unavailable).
+ *   native tx hash (`0x`-prefixed); for the private path, the locally computed
+ *   inner native tx hash after the encrypted envelope is admitted.
  */
 export async function submitTransactionWithPrivacy(args: {
   client: JsonRpcCallClient;
@@ -195,21 +195,24 @@ export async function submitTransactionWithPrivacy(args: {
   tx: NativeEvmTxFields;
   private: boolean;
   encryptionKey?: EncryptionKey;
+  clusterId?: number;
+  clusterSealKeys?: ClusterSealKeys;
+  clusterSealKeysSource?: ClusterSealKeysSource;
   class?: MempoolClass;
 }): Promise<string> {
   if (args.private) {
-    if (args.encryptionKey === undefined) {
-      throw new Error(
-        "private submission requires an encryptionKey; fetch it via fetchEncryptionKey()",
-      );
-    }
     const built = await buildEncryptedSubmission({
+      client: args.client,
       backend: args.backend,
       tx: args.tx,
       encryptionKey: args.encryptionKey,
+      clusterId: args.clusterId,
+      clusterSealKeys: args.clusterSealKeys,
+      clusterSealKeysSource: args.clusterSealKeysSource,
       class: args.class,
     });
-    await submitEncryptedEnvelope(args.client, built.envelopeWireHex);
+    const returned = await submitEncryptedEnvelope(args.client, built.envelopeWireHex);
+    assertRpcHash(returned, "lyth_submitEncrypted tx hash");
     return built.innerTxHashHex;
   }
   const plaintext = buildPlaintextSubmission({ backend: args.backend, tx: args.tx });
@@ -226,4 +229,62 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
     if (a[i] !== b[i]) return false;
   }
   return true;
+}
+
+async function resolveClusterSealKeys(args: {
+  client?: JsonRpcCallClient;
+  clusterId?: number;
+  clusterSealKeys?: ClusterSealKeys;
+  clusterSealKeysSource?: ClusterSealKeysSource;
+}): Promise<ClusterSealKeys> {
+  if (args.clusterSealKeys !== undefined) return args.clusterSealKeys;
+  if (args.clusterSealKeysSource !== undefined) {
+    return parseClusterSealKeys(args.clusterSealKeysSource);
+  }
+  if (args.client === undefined) {
+    throw new Error(ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE);
+  }
+  const clusterId = args.clusterId ?? 0;
+  const result = await args.client.call<ClusterSealKeysSource & { clusterId?: number }>(
+    "lyth_getClusterSealKeys",
+    [clusterId],
+  );
+  return parseClusterSealKeys({ ...result, clusterId: result.clusterId ?? clusterId });
+}
+
+function nonceAadForTx(
+  tx: NativeEvmTxFields,
+  sender: Uint8Array,
+  mempoolClass?: MempoolClass,
+): NonceAad {
+  return {
+    sender,
+    nonce: parseBigint(tx.nonce, "nonce"),
+    chainId: parseBigint(tx.chainId, "chainId"),
+    class: mempoolClass ?? inferMempoolClass(tx),
+    maxFeePerGas: parseBigint(tx.maxFeePerGas, "maxFeePerGas"),
+    maxPriorityFeePerGas: parseBigint(tx.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
+    gasLimit: parseBigint(tx.gasLimit, "gasLimit"),
+  };
+}
+
+function inferMempoolClass(tx: NativeEvmTxFields): MempoolClass {
+  if (tx.to === null || hasInput(tx.input)) return MempoolClass.ContractCall;
+  return MempoolClass.Transfer;
+}
+
+function hasInput(input: NativeEvmTxFields["input"]): boolean {
+  if (input === undefined) return false;
+  if (typeof input === "string") {
+    const stripped = input.startsWith("0x") || input.startsWith("0X") ? input.slice(2) : input;
+    return stripped.length > 0;
+  }
+  return input.length > 0;
+}
+
+function assertRpcHash(value: string, label: string): void {
+  const bytes = hexToBytes(value, label);
+  if (bytes.length !== 32) {
+    throw new Error(`${label} must be 32 bytes, got ${bytes.length}`);
+  }
 }

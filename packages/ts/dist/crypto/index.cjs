@@ -501,82 +501,6 @@ function bincodeMlDsa65OpaqueInto2(w, raw) {
   w.u16(STANDARD_ALGO_NUMBER_ML_DSA_65);
   w.bytes(raw);
 }
-
-// src/crypto/submission.ts
-async function fetchEncryptionKey(client) {
-  const result = await client.call(
-    "lyth_getEncryptionKey",
-    []
-  );
-  return {
-    algo: result.algo ?? "ml-kem-768",
-    epoch: typeof result.epoch === "string" ? BigInt(result.epoch) : BigInt(result.epoch),
-    encapsulationKey: hexToBytes(result.encapsulationKey, "encapsulationKey")
-  };
-}
-var ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE = "encrypted mempool submission unavailable until MB-3 threshold decryption is active";
-async function buildEncryptedSubmission(_args) {
-  await Promise.resolve();
-  throw new Error(ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE);
-}
-async function submitEncryptedEnvelope(client, envelopeWireHex) {
-  return client.call("lyth_submitEncrypted", [envelopeWireHex]);
-}
-function buildPlaintextSubmission(args) {
-  const signed = args.backend.signEvmTx(args.tx);
-  return {
-    signedTxWireHex: `0x${signed.wireHex}`,
-    innerTxHashHex: bytesToHex(signed.txHash),
-    innerSighashHex: bytesToHex(signed.sighash),
-    innerWireBytes: signed.wireBytes.length
-  };
-}
-async function submitPlaintextTransaction(client, signedTxWireHex, expectedTxHashHex) {
-  const returned = await client.call("mesh_submitTx", [signedTxWireHex]);
-  const returnedBytes = hexToBytes(returned, "mesh_submitTx tx hash");
-  if (returnedBytes.length !== 32) {
-    throw new Error(
-      `mesh_submitTx tx hash must be 32 bytes, got ${returnedBytes.length}`
-    );
-  }
-  const expectedBytes = hexToBytes(expectedTxHashHex, "expected tx hash");
-  if (!bytesEqual(returnedBytes, expectedBytes)) {
-    throw new Error(
-      `mesh_submitTx returned tx hash ${bytesToHex(returnedBytes)} but the locally computed canonical hash is ${bytesToHex(expectedBytes)}`
-    );
-  }
-  return bytesToHex(returnedBytes);
-}
-async function submitTransactionWithPrivacy(args) {
-  if (args.private) {
-    if (args.encryptionKey === void 0) {
-      throw new Error(
-        "private submission requires an encryptionKey; fetch it via fetchEncryptionKey()"
-      );
-    }
-    const built = await buildEncryptedSubmission({
-      backend: args.backend,
-      tx: args.tx,
-      encryptionKey: args.encryptionKey,
-      class: args.class
-    });
-    await submitEncryptedEnvelope(args.client, built.envelopeWireHex);
-    return built.innerTxHashHex;
-  }
-  const plaintext = buildPlaintextSubmission({ backend: args.backend, tx: args.tx });
-  return submitPlaintextTransaction(
-    args.client,
-    plaintext.signedTxWireHex,
-    plaintext.innerTxHashHex
-  );
-}
-function bytesEqual(a, b) {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i]) return false;
-  }
-  return true;
-}
 var SEAL_EK_LEN = 1184;
 var SEAL_DK_LEN = 2400;
 var SEAL_KEM_CT_LEN = 1088;
@@ -787,6 +711,8 @@ function sealToCluster(args) {
     recipients
   };
 }
+
+// src/crypto/seal.ts
 var CLUSTER_MLKEM_SHAMIR_ALGO = "cluster-mlkem768-shamir";
 function parseClusterSealKeys(source) {
   const n = source.roster.length;
@@ -816,7 +742,7 @@ function parseClusterSealKeys(source) {
   const recomputed = sealRosterHash(keccak256, source.clusterId, source.t, n, hashInput);
   if (source.rosterHash !== void 0) {
     const supplied = expectBytes(hexToBytes(source.rosterHash, "rosterHash"), 32, "rosterHash");
-    if (!bytesEqual2(supplied, recomputed)) {
+    if (!bytesEqual(supplied, recomputed)) {
       throw new Error(
         `cluster seal roster hash mismatch: source ${bytesToHex(supplied)} != recomputed ${bytesToHex(recomputed)} (the roster hash does not commit to this ek set)`
       );
@@ -885,12 +811,147 @@ function toBigInt(value) {
   if (typeof value === "bigint") return value;
   return BigInt(value);
 }
+function bytesEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+// src/crypto/submission.ts
+async function fetchEncryptionKey(client) {
+  const result = await client.call(
+    "lyth_getEncryptionKey",
+    []
+  );
+  return {
+    algo: result.algo ?? "ml-kem-768",
+    epoch: typeof result.epoch === "string" ? BigInt(result.epoch) : BigInt(result.epoch),
+    encapsulationKey: hexToBytes(result.encapsulationKey, "encapsulationKey")
+  };
+}
+var ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE = "private submission requires cluster seal keys; pass clusterSealKeysSource or enable lyth_getClusterSealKeys";
+async function buildEncryptedSubmission(args) {
+  const signed = args.backend.signEvmTx(args.tx);
+  const clusterSealKeys = await resolveClusterSealKeys(args);
+  const aad = nonceAadForTx(args.tx, args.backend.addressBytes(), args.class);
+  const sealed = await sealTransaction({
+    signedTxBincode: signed.wireBytes,
+    clusterSealKeys,
+    aad,
+    senderAddress: args.backend.addressBytes(),
+    senderPubkey: args.backend.publicKey(),
+    signOuterDigest: (digest) => args.backend.signPrehash(digest)
+  });
+  return {
+    envelopeWireHex: sealed.envelopeWireHex,
+    innerSighashHex: bytesToHex(signed.sighash),
+    innerTxHashHex: bytesToHex(signed.txHash),
+    innerWireBytes: signed.wireBytes.length
+  };
+}
+async function submitEncryptedEnvelope(client, envelopeWireHex) {
+  return client.call("lyth_submitEncrypted", [envelopeWireHex]);
+}
+function buildPlaintextSubmission(args) {
+  const signed = args.backend.signEvmTx(args.tx);
+  return {
+    signedTxWireHex: `0x${signed.wireHex}`,
+    innerTxHashHex: bytesToHex(signed.txHash),
+    innerSighashHex: bytesToHex(signed.sighash),
+    innerWireBytes: signed.wireBytes.length
+  };
+}
+async function submitPlaintextTransaction(client, signedTxWireHex, expectedTxHashHex) {
+  const returned = await client.call("mesh_submitTx", [signedTxWireHex]);
+  const returnedBytes = hexToBytes(returned, "mesh_submitTx tx hash");
+  if (returnedBytes.length !== 32) {
+    throw new Error(
+      `mesh_submitTx tx hash must be 32 bytes, got ${returnedBytes.length}`
+    );
+  }
+  const expectedBytes = hexToBytes(expectedTxHashHex, "expected tx hash");
+  if (!bytesEqual2(returnedBytes, expectedBytes)) {
+    throw new Error(
+      `mesh_submitTx returned tx hash ${bytesToHex(returnedBytes)} but the locally computed canonical hash is ${bytesToHex(expectedBytes)}`
+    );
+  }
+  return bytesToHex(returnedBytes);
+}
+async function submitTransactionWithPrivacy(args) {
+  if (args.private) {
+    const built = await buildEncryptedSubmission({
+      client: args.client,
+      backend: args.backend,
+      tx: args.tx,
+      encryptionKey: args.encryptionKey,
+      clusterId: args.clusterId,
+      clusterSealKeys: args.clusterSealKeys,
+      clusterSealKeysSource: args.clusterSealKeysSource,
+      class: args.class
+    });
+    const returned = await submitEncryptedEnvelope(args.client, built.envelopeWireHex);
+    assertRpcHash(returned, "lyth_submitEncrypted tx hash");
+    return built.innerTxHashHex;
+  }
+  const plaintext = buildPlaintextSubmission({ backend: args.backend, tx: args.tx });
+  return submitPlaintextTransaction(
+    args.client,
+    plaintext.signedTxWireHex,
+    plaintext.innerTxHashHex
+  );
+}
 function bytesEqual2(a, b) {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
     if (a[i] !== b[i]) return false;
   }
   return true;
+}
+async function resolveClusterSealKeys(args) {
+  if (args.clusterSealKeys !== void 0) return args.clusterSealKeys;
+  if (args.clusterSealKeysSource !== void 0) {
+    return parseClusterSealKeys(args.clusterSealKeysSource);
+  }
+  if (args.client === void 0) {
+    throw new Error(ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE);
+  }
+  const clusterId = args.clusterId ?? 0;
+  const result = await args.client.call(
+    "lyth_getClusterSealKeys",
+    [clusterId]
+  );
+  return parseClusterSealKeys({ ...result, clusterId: result.clusterId ?? clusterId });
+}
+function nonceAadForTx(tx, sender, mempoolClass) {
+  return {
+    sender,
+    nonce: parseBigint(tx.nonce, "nonce"),
+    chainId: parseBigint(tx.chainId, "chainId"),
+    class: mempoolClass ?? inferMempoolClass(tx),
+    maxFeePerGas: parseBigint(tx.maxFeePerGas, "maxFeePerGas"),
+    maxPriorityFeePerGas: parseBigint(tx.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
+    gasLimit: parseBigint(tx.gasLimit, "gasLimit")
+  };
+}
+function inferMempoolClass(tx) {
+  if (tx.to === null || hasInput(tx.input)) return MempoolClass.ContractCall;
+  return MempoolClass.Transfer;
+}
+function hasInput(input) {
+  if (input === void 0) return false;
+  if (typeof input === "string") {
+    const stripped = input.startsWith("0x") || input.startsWith("0X") ? input.slice(2) : input;
+    return stripped.length > 0;
+  }
+  return input.length > 0;
+}
+function assertRpcHash(value, label) {
+  const bytes = hexToBytes(value, label);
+  if (bytes.length !== 32) {
+    throw new Error(`${label} must be 32 bytes, got ${bytes.length}`);
+  }
 }
 
 exports.ADDRESS_DERIVATION_DOMAIN = ADDRESS_DERIVATION_DOMAIN;
