@@ -451,7 +451,9 @@ var NODE_REGISTRY_SELECTORS = {
   /** `getClusterJoinRequest(uint32,bytes32)` — CJ-1 request status view. */
   getClusterJoinRequest: "0x" + selectorHex("getClusterJoinRequest(uint32,bytes32)"),
   /** `formCluster(bytes,bytes,bytes)` — no-foundation cluster formation by roster consent. */
-  formCluster: "0x" + selectorHex("formCluster(bytes,bytes,bytes)")
+  formCluster: "0x" + selectorHex("formCluster(bytes,bytes,bytes)"),
+  /** `setOperatorDisplay(bytes32,string,string)` — owner-callable public display metadata. */
+  setOperatorDisplay: "0x" + selectorHex("setOperatorDisplay(bytes32,string,string)")
 };
 var NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES = 48;
 var NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES = NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES;
@@ -469,6 +471,8 @@ var NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT = 3;
 var NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT = NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT + NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT;
 var NODE_REGISTRY_FORM_CLUSTER_THRESHOLD = 7;
 var NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN = "PROTOCORE_NODE_REGISTRY_CLUSTER_FORM_V1\0";
+var NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES = 128;
+var NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES = 64;
 var PENDING_CHANGE_KIND_CODES = {
   add: 1,
   remove: 2,
@@ -674,6 +678,31 @@ function encodeVoteClusterAdmitCalldata(args) {
       uint64Word(3n * 32n, "voterPubkeyOffset"),
       uint64Word(BigInt(voterPubkey.length), "voterPubkeyLength"),
       voterPubkeyPadded
+    )
+  );
+}
+function encodeSetOperatorDisplayCalldata(args) {
+  const peerId = expectLength2(toBytes(args.peerId), 32, "peerId");
+  const moniker = displayTextBytes(
+    args.moniker,
+    NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES,
+    "moniker"
+  );
+  const alias = displayTextBytes(args.alias, NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES, "alias");
+  const monikerPadded = padToWord(moniker);
+  const aliasPadded = padToWord(alias);
+  const monikerOffset = 3n * 32n;
+  const aliasOffset = monikerOffset + 32n + BigInt(monikerPadded.length);
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.setOperatorDisplay),
+      peerId,
+      uint64Word(monikerOffset, "monikerOffset"),
+      uint64Word(aliasOffset, "aliasOffset"),
+      uint64Word(BigInt(moniker.length), "monikerLength"),
+      monikerPadded,
+      uint64Word(BigInt(alias.length), "aliasLength"),
+      aliasPadded
     )
   );
 }
@@ -1049,6 +1078,19 @@ function toBytes(value) {
     return hexToBytes(value);
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+function displayTextBytes(value, maxBytes, name) {
+  for (const ch of value) {
+    const code = ch.codePointAt(0);
+    if (code !== void 0 && (code >= 0 && code <= 31 || code >= 127 && code <= 159)) {
+      throw new NodeRegistryError(`${name} must not contain control characters`);
+    }
+  }
+  const bytes = new TextEncoder().encode(value);
+  if (bytes.length > maxBytes) {
+    throw new NodeRegistryError(`${name} must be <= ${maxBytes} UTF-8 bytes`);
+  }
+  return bytes;
 }
 function hexToBytes(hex) {
   const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
@@ -11003,6 +11045,8 @@ exports.NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN = NODE_REGISTRY_FORM_CLUSTER_M
 exports.NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT = NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT;
 exports.NODE_REGISTRY_FORM_CLUSTER_THRESHOLD = NODE_REGISTRY_FORM_CLUSTER_THRESHOLD;
 exports.NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES = NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES;
+exports.NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES = NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES;
+exports.NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES = NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES;
 exports.NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID = NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID;
 exports.NODE_REGISTRY_PUBLIC_SERVICE_MASK = NODE_REGISTRY_PUBLIC_SERVICE_MASK;
 exports.NODE_REGISTRY_SELECTORS = NODE_REGISTRY_SELECTORS;
@@ -11247,6 +11291,7 @@ exports.encodeSetBridgeResumeCooldownCalldata = encodeSetBridgeResumeCooldownCal
 exports.encodeSetBridgeRouteFinalityCalldata = encodeSetBridgeRouteFinalityCalldata;
 exports.encodeSetLotSizeCalldata = encodeSetLotSizeCalldata;
 exports.encodeSetMinNotionalCalldata = encodeSetMinNotionalCalldata;
+exports.encodeSetOperatorDisplayCalldata = encodeSetOperatorDisplayCalldata;
 exports.encodeSetPolicyCalldata = encodeSetPolicyCalldata;
 exports.encodeSetPolicyClaimCalldata = encodeSetPolicyClaimCalldata;
 exports.encodeSetTickSizeCalldata = encodeSetTickSizeCalldata;

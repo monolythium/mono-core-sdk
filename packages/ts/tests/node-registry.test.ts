@@ -15,6 +15,8 @@ import {
   NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT,
   NODE_REGISTRY_FORM_CLUSTER_THRESHOLD,
   NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES,
+  NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES,
+  NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES,
   NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID,
   NODE_REGISTRY_PUBLIC_SERVICE_MASK,
   NODE_REGISTRY_SELECTORS,
@@ -34,6 +36,7 @@ import {
   encodeRecoverOperatorNodeCalldata,
   encodeReportServiceProbeCalldata,
   encodeRequestClusterJoinCalldata,
+  encodeSetOperatorDisplayCalldata,
   encodeSubmitPendingChangeCalldata,
   encodeVoteClusterAdmitCalldata,
   formClusterMessageHex,
@@ -64,6 +67,8 @@ describe("node-registry helpers", () => {
     expect(NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS).toBe(5);
     expect(NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS).toBe(7);
     expect(NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID).toBe((1n << 56n) - 1n);
+    expect(NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES).toBe(128);
+    expect(NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES).toBe(64);
     expect(NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT).toBe(7);
     expect(NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT).toBe(3);
     expect(NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT).toBe(10);
@@ -82,6 +87,7 @@ describe("node-registry helpers", () => {
     expect(NODE_REGISTRY_SELECTORS.expireClusterJoin).toBe("0xeeb96895");
     expect(NODE_REGISTRY_SELECTORS.getClusterJoinRequest).toBe("0x224de9bf");
     expect(NODE_REGISTRY_SELECTORS.formCluster).toBe("0x961a4ced");
+    expect(NODE_REGISTRY_SELECTORS.setOperatorDisplay).toBe("0x7a2ac986");
   });
 
   it("validates public-service probe masks and concrete statuses", () => {
@@ -251,6 +257,42 @@ describe("node-registry helpers", () => {
       bondLythoshi: 5_000_000_000_000n,
       sealRosterPending: true,
     });
+  });
+
+  it("encodes setOperatorDisplay calldata with bounded UTF-8 strings", () => {
+    const peerId = `0x${"66".repeat(32)}`;
+    const calldata = encodeSetOperatorDisplayCalldata({
+      peerId,
+      moniker: "Monolythium Foundation",
+      alias: "foundation-01",
+    });
+    const bytes = hexBytes(calldata);
+    const moniker = new TextEncoder().encode("Monolythium Foundation");
+    const alias = new TextEncoder().encode("foundation-01");
+
+    expect(calldata.startsWith(NODE_REGISTRY_SELECTORS.setOperatorDisplay)).toBe(true);
+    expect(bytes.slice(4, 36)).toEqual(new Uint8Array(32).fill(0x66));
+    expect(wordBigint(bytes.slice(36, 68))).toBe(96n);
+    expect(wordBigint(bytes.slice(68, 100))).toBe(160n);
+    expect(wordBigint(bytes.slice(100, 132))).toBe(BigInt(moniker.length));
+    expect(bytes.slice(132, 132 + moniker.length)).toEqual(moniker);
+    expect(wordBigint(bytes.slice(164, 196))).toBe(BigInt(alias.length));
+    expect(bytes.slice(196, 196 + alias.length)).toEqual(alias);
+
+    expect(() =>
+      encodeSetOperatorDisplayCalldata({
+        peerId,
+        moniker: "line\nbreak",
+        alias: "foundation-01",
+      }),
+    ).toThrow(/control characters/);
+    expect(() =>
+      encodeSetOperatorDisplayCalldata({
+        peerId,
+        moniker: "ok",
+        alias: "a".repeat(NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES + 1),
+      }),
+    ).toThrow(/alias must be <= 64 UTF-8 bytes/);
   });
 
   it("encodes formCluster calldata and derives the roster consent message", () => {

@@ -2651,7 +2651,7 @@ describe("lyth_* methods", () => {
         operatorKeyFingerprint: null,
         consensusKeyFingerprint: `mldsa65:${consensusPubkey.slice(2, 18)}`,
         lifecycleState: "active",
-        capability: { bondedAmount: "stable", moniker: "planned" },
+        capability: { bondedAmount: "stable", moniker: "stable", alias: "stable" },
       },
       {
         clusterId: 0,

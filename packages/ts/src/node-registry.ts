@@ -76,6 +76,8 @@ export const NODE_REGISTRY_SELECTORS = {
   getClusterJoinRequest: "0x" + selectorHex("getClusterJoinRequest(uint32,bytes32)"),
   /** `formCluster(bytes,bytes,bytes)` — no-foundation cluster formation by roster consent. */
   formCluster: "0x" + selectorHex("formCluster(bytes,bytes,bytes)"),
+  /** `setOperatorDisplay(bytes32,string,string)` — owner-callable public display metadata. */
+  setOperatorDisplay: "0x" + selectorHex("setOperatorDisplay(bytes32,string,string)"),
 } as const;
 
 /** Cluster-member reference width used by genesis and formation rosters. */
@@ -104,6 +106,8 @@ export const NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT =
 export const NODE_REGISTRY_FORM_CLUSTER_THRESHOLD = 7;
 export const NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN =
   "PROTOCORE_NODE_REGISTRY_CLUSTER_FORM_V1\0" as const;
+export const NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES = 128;
+export const NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES = 64;
 
 export type PendingChangeKind = "add" | "remove" | "rotate";
 
@@ -166,6 +170,12 @@ export interface ExpireClusterJoinCalldataArgs {
 export interface GetClusterJoinRequestCalldataArgs {
   clusterId: bigint | number | string;
   operatorId: string | Uint8Array | readonly number[];
+}
+
+export interface SetOperatorDisplayCalldataArgs {
+  peerId: string | Uint8Array | readonly number[];
+  moniker: string;
+  alias: string;
 }
 
 export interface FormClusterCalldataArgs {
@@ -433,6 +443,33 @@ export function encodeVoteClusterAdmitCalldata(args: VoteClusterAdmitCalldataArg
       uint64Word(3n * 32n, "voterPubkeyOffset"),
       uint64Word(BigInt(voterPubkey.length), "voterPubkeyLength"),
       voterPubkeyPadded,
+    ),
+  );
+}
+
+export function encodeSetOperatorDisplayCalldata(args: SetOperatorDisplayCalldataArgs): string {
+  const peerId = expectLength(toBytes(args.peerId), 32, "peerId");
+  const moniker = displayTextBytes(
+    args.moniker,
+    NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES,
+    "moniker",
+  );
+  const alias = displayTextBytes(args.alias, NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES, "alias");
+  const monikerPadded = padToWord(moniker);
+  const aliasPadded = padToWord(alias);
+  const monikerOffset = 3n * 32n;
+  const aliasOffset = monikerOffset + 32n + BigInt(monikerPadded.length);
+
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.setOperatorDisplay),
+      peerId,
+      uint64Word(monikerOffset, "monikerOffset"),
+      uint64Word(aliasOffset, "aliasOffset"),
+      uint64Word(BigInt(moniker.length), "monikerLength"),
+      monikerPadded,
+      uint64Word(BigInt(alias.length), "aliasLength"),
+      aliasPadded,
     ),
   );
 }
@@ -1017,6 +1054,20 @@ function toBytes(value: string | Uint8Array | readonly number[]): Uint8Array {
     return hexToBytes(value);
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+
+function displayTextBytes(value: string, maxBytes: number, name: string): Uint8Array {
+  for (const ch of value) {
+    const code = ch.codePointAt(0);
+    if (code !== undefined && ((code >= 0 && code <= 0x1f) || (code >= 0x7f && code <= 0x9f))) {
+      throw new NodeRegistryError(`${name} must not contain control characters`);
+    }
+  }
+  const bytes = new TextEncoder().encode(value);
+  if (bytes.length > maxBytes) {
+    throw new NodeRegistryError(`${name} must be <= ${maxBytes} UTF-8 bytes`);
+  }
+  return bytes;
 }
 
 function hexToBytes(hex: string): Uint8Array {
