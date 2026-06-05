@@ -604,7 +604,7 @@ describe("MRV/RISC-V SDK helpers", () => {
     expect(() => assertMrvDeployNativeSubmissionPlan(tooLargeFee)).toThrow(/u128/);
   });
 
-  it("gates MRV encrypted-submit helpers off (MB-3) without emitting a scheme-0 envelope", async () => {
+  it("requires a cluster seal roster for MRV encrypted-submit helpers", async () => {
     const backend = MlDsa65Backend.fromSeed(new Uint8Array(ML_DSA_65_SEED_LEN).fill(0x41));
     const user = addressToTypedBech32("user", backend.getAddress());
     const contract = addressToTypedBech32("contract", "0x2222222222222222222222222222222222222222");
@@ -613,10 +613,9 @@ describe("MRV/RISC-V SDK helpers", () => {
       epoch: 9n,
       encapsulationKey: new Uint8Array(ML_KEM_768_ENCAPSULATION_KEY_LEN).fill(0x33),
     };
-    // The encrypted-submit helpers route through buildEncryptedSubmission,
-    // which is gated OFF until MB-3 Ferveo threshold decryption is live. They
-    // must reject (never build/submit a scheme-0 envelope) — but plan
-    // validation still runs first, so a valid plan reaches the gate.
+    // The encrypted-submit helpers route through buildEncryptedSubmission.
+    // Passing only the legacy single-key encryptionKey must reject before any
+    // scheme-0 envelope can be built; callers must supply cluster seal keys.
     const { fetch, calls } = mockFetchSequence([
       {
         algo: encryptionKey.algo,
@@ -637,7 +636,7 @@ describe("MRV/RISC-V SDK helpers", () => {
         class: MempoolClass.ContractCall,
         encryptionKey,
       }),
-    ).rejects.toThrow(/encrypted mempool submission unavailable until MB-3/);
+    ).rejects.toThrow(/private submission requires cluster seal keys/);
 
     await expect(
       submitMrvDeployPayloadNativeTx(client, backend, "0x13000000", {
@@ -649,7 +648,7 @@ describe("MRV/RISC-V SDK helpers", () => {
         constructorInput: [0x01, 0x02],
         encryptionKey,
       }),
-    ).rejects.toThrow(/encrypted mempool submission unavailable until MB-3/);
+    ).rejects.toThrow(/private submission requires cluster seal keys/);
 
     await expect(
       submitMrvCallNativeTx(client, backend, contract, [0x01, 0x02], {
@@ -661,7 +660,7 @@ describe("MRV/RISC-V SDK helpers", () => {
         valueLythoshi: "3",
         encryptionKey,
       }),
-    ).rejects.toThrow(/encrypted mempool submission unavailable until MB-3/);
+    ).rejects.toThrow(/private submission requires cluster seal keys/);
 
     // Guard: with an explicit encryptionKey supplied, no encrypted envelope is
     // ever submitted to the node (lyth_submitEncrypted never called).

@@ -241,7 +241,7 @@ describe("crypto subpath", () => {
     expect(outerSigDigest(nonceAad, built.envelope.ciphertext, decryptionHint, backend.publicKey())).toHaveLength(32);
   });
 
-  it("gates encrypted submission off (MB-3) and never emits a scheme-0 envelope", async () => {
+  it("requires a cluster seal roster and never emits a scheme-0 envelope", async () => {
     const backend = MlDsa65Backend.fromSeed(new Uint8Array(ML_DSA_65_SEED_LEN).fill(0x12));
     const encryptionKey = {
       algo: "ml-kem-768",
@@ -249,10 +249,9 @@ describe("crypto subpath", () => {
       encapsulationKey: new Uint8Array(ML_KEM_768_ENCAPSULATION_KEY_LEN).fill(0x34),
     };
 
-    // The retired single-key ML-KEM-768 scheme-0 envelope is unsafe (one
-    // operator could decrypt). Until MB-3 Ferveo threshold decryption is
-    // live, buildEncryptedSubmission must refuse to build ANY envelope and
-    // throw — never returning a scheme-0 (or any) envelope.
+    // The retired single-key ML-KEM-768 scheme-0 envelope is unsafe. Passing
+    // the legacy encryptionKey alone must not build an envelope; callers must
+    // supply a scheme-3 cluster seal roster or use the cluster-key RPC.
     const promise = buildEncryptedSubmission({
       backend,
       encryptionKey,
@@ -268,7 +267,7 @@ describe("crypto subpath", () => {
         extensions: [{ kind: 0x30, bodyHex: "0x01" }],
       },
     });
-    await expect(promise).rejects.toThrow(/encrypted mempool submission unavailable until MB-3/);
+    await expect(promise).rejects.toThrow(/private submission requires cluster seal keys/);
     // Hard guard: the call rejected, so no envelope object exists to inspect.
     let envelope: unknown;
     try {
