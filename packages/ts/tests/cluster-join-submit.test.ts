@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT,
   NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
@@ -16,9 +18,12 @@ import {
 } from "../src/index.js";
 import {
   assemblePqm1Payload,
+  MempoolClass,
+  buildEncryptedSubmission,
   buildPlaintextSubmission,
   pqm1MnemonicToMlDsa65Backend,
   pqm1PayloadToMnemonic,
+  type ClusterSealKeysSource,
 } from "../src/crypto/index.js";
 
 interface CapturedCall {
@@ -37,6 +42,18 @@ const quote = {
   blockNumber: 1,
   source: "test",
 };
+
+interface LythiumSealVector {
+  cluster_id: number;
+  epoch: number;
+  t: number;
+  n: number;
+  roster_hash_hex: string;
+  roster_eks_hex: string[];
+}
+
+const vectorsPath = fileURLToPath(new URL("./lythiumseal-vectors.json", import.meta.url));
+const sealVectors = JSON.parse(readFileSync(vectorsPath, "utf8")) as LythiumSealVector[];
 
 function mockFetchByMethod(
   replies: Record<string, unknown | ((params: unknown) => unknown)>,
@@ -99,7 +116,22 @@ function preview(
   };
 }
 
-function expectedRequestTxHash(): string {
+function clusterSealKeysSource(): ClusterSealKeysSource {
+  const v = sealVectors[0]!;
+  return {
+    clusterId: v.cluster_id,
+    epoch: v.epoch,
+    rosterHash: `0x${v.roster_hash_hex}`,
+    t: v.t,
+    n: v.n,
+    roster: v.roster_eks_hex.map((mlKemEk, i) => ({
+      operatorIndex: i + 1,
+      mlKemEk: `0x${mlKemEk}`,
+    })),
+  };
+}
+
+async function expectedRequestTxHash(): Promise<string> {
   const backend = pqm1MnemonicToMlDsa65Backend(mnemonic);
   const tx = buildRequestClusterJoinTxFields({
     chainId: 69_420n,
@@ -109,10 +141,15 @@ function expectedRequestTxHash(): string {
     operatorPubkey,
     bondLythoshi: 9000n,
   });
-  return buildPlaintextSubmission({ backend, tx }).innerTxHashHex;
+  return (await buildEncryptedSubmission({
+    backend,
+    tx,
+    clusterSealKeysSource: clusterSealKeysSource(),
+    class: MempoolClass.ContractCall,
+  })).innerTxHashHex;
 }
 
-function expectedVoteTxHash(): string {
+async function expectedVoteTxHash(): Promise<string> {
   const backend = pqm1MnemonicToMlDsa65Backend(mnemonic);
   const tx = buildVoteClusterAdmitTxFields({
     chainId: 69_420n,
@@ -121,6 +158,24 @@ function expectedVoteTxHash(): string {
     clusterId: 7,
     operatorId,
     voterPubkey,
+  });
+  return (await buildEncryptedSubmission({
+    backend,
+    tx,
+    clusterSealKeysSource: clusterSealKeysSource(),
+    class: MempoolClass.ContractCall,
+  })).innerTxHashHex;
+}
+
+function expectedRequestPlaintextTxHash(): string {
+  const backend = pqm1MnemonicToMlDsa65Backend(mnemonic);
+  const tx = buildRequestClusterJoinTxFields({
+    chainId: 69_420n,
+    nonce: 18n,
+    fee: resolveClusterJoinExecutionFee(quote),
+    clusterId: 7,
+    operatorPubkey,
+    bondLythoshi: 9000n,
   });
   return buildPlaintextSubmission({ backend, tx }).innerTxHashHex;
 }
@@ -171,13 +226,14 @@ describe("CJ-1 cluster-admission submit helpers", () => {
     expect(String(vote.input).startsWith(NODE_REGISTRY_SELECTORS.voteClusterAdmit)).toBe(true);
   });
 
-  it("submits requestClusterJoin after preflight and before any broadcast", async () => {
+  it("submits requestClusterJoin as a sealed transaction after preflight", async () => {
+    const expectedHash = await expectedRequestTxHash();
     const { fetch, calls } = mockFetchByMethod({
       lyth_previewRequestClusterJoin: preview("requestClusterJoin"),
       eth_chainId: "0x10f2c",
       lyth_getTransactionCount: 18,
       lyth_executionUnitPrice: quote,
-      mesh_submitTx: expectedRequestTxHash(),
+      lyth_submitEncrypted: `0x${"44".repeat(32)}`,
     });
     const client = new RpcClient("http://x", { fetch });
 
@@ -187,11 +243,43 @@ describe("CJ-1 cluster-admission submit helpers", () => {
       clusterId: 7,
       operatorPubkey,
       bondLythoshi: 9000n,
+      clusterSealKeysSource: clusterSealKeysSource(),
     });
 
-    expect(res.txHash).toBe(expectedRequestTxHash());
+    expect(res.txHash).toBe(expectedHash);
     expect(res.operatorIdHex).toBe(operatorId);
     expect(res.signedTxWireBytes).toBeGreaterThan(0);
+    expect(res.envelopeWireBytes).toBeGreaterThan(res.signedTxWireBytes);
+    expect(calls.map((c) => c.method)).toEqual([
+      "lyth_previewRequestClusterJoin",
+      "eth_chainId",
+      "lyth_getTransactionCount",
+      "lyth_executionUnitPrice",
+      "lyth_submitEncrypted",
+    ]);
+    expect((calls.at(-1)?.params as string[])[0]?.startsWith("0x")).toBe(true);
+  });
+
+  it("can opt out to plaintext submit for dev chains", async () => {
+    const { fetch, calls } = mockFetchByMethod({
+      lyth_previewRequestClusterJoin: preview("requestClusterJoin"),
+      eth_chainId: "0x10f2c",
+      lyth_getTransactionCount: 18,
+      lyth_executionUnitPrice: quote,
+      mesh_submitTx: expectedRequestPlaintextTxHash(),
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const res = await submitRequestClusterJoin({
+      client,
+      mnemonic,
+      clusterId: 7,
+      operatorPubkey,
+      bondLythoshi: 9000n,
+      private: false,
+    });
+
+    expect(res.txHash).toBe(expectedRequestPlaintextTxHash());
     expect(calls.map((c) => c.method)).toEqual([
       "lyth_previewRequestClusterJoin",
       "eth_chainId",
@@ -202,12 +290,13 @@ describe("CJ-1 cluster-admission submit helpers", () => {
   });
 
   it("submits voteClusterAdmit only when the candidate request is open", async () => {
+    const expectedHash = await expectedVoteTxHash();
     const { fetch, calls } = mockFetchByMethod({
       lyth_previewVoteClusterAdmit: preview("voteClusterAdmit"),
       eth_chainId: "0x10f2c",
       lyth_getTransactionCount: 18,
       lyth_executionUnitPrice: quote,
-      mesh_submitTx: expectedVoteTxHash(),
+      lyth_submitEncrypted: `0x${"44".repeat(32)}`,
     });
     const client = new RpcClient("http://x", { fetch });
 
@@ -217,11 +306,12 @@ describe("CJ-1 cluster-admission submit helpers", () => {
       clusterId: "7",
       operatorId,
       voterPubkey,
+      clusterSealKeysSource: clusterSealKeysSource(),
     });
 
     expect(res.clusterId).toBe("7");
-    expect(res.txHash).toBe(expectedVoteTxHash());
-    expect(calls.at(-1)?.method).toBe("mesh_submitTx");
+    expect(res.txHash).toBe(expectedHash);
+    expect(calls.at(-1)?.method).toBe("lyth_submitEncrypted");
   });
 
   it("fails before nonce reads, signing, or broadcast when CJ-1 is unavailable", async () => {
@@ -232,7 +322,7 @@ describe("CJ-1 cluster-admission submit helpers", () => {
       eth_chainId: "0x10f2c",
       lyth_getTransactionCount: 18,
       lyth_executionUnitPrice: quote,
-      mesh_submitTx: expectedRequestTxHash(),
+      lyth_submitEncrypted: `0x${"44".repeat(32)}`,
     });
     const client = new RpcClient("http://x", { fetch });
 
@@ -260,7 +350,7 @@ describe("CJ-1 cluster-admission submit helpers", () => {
       eth_chainId: "0x10f2c",
       lyth_getTransactionCount: 18,
       lyth_executionUnitPrice: quote,
-      mesh_submitTx: expectedVoteTxHash(),
+      lyth_submitEncrypted: `0x${"44".repeat(32)}`,
     });
     const client = new RpcClient("http://x", { fetch });
 

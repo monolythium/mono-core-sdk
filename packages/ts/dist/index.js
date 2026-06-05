@@ -8481,7 +8481,7 @@ async function submitRequestClusterJoin(args) {
     operatorPubkey,
     bondLythoshi: args.bondLythoshi
   });
-  return submitClusterJoinTx(args.client, backend, tx, clusterId, operatorIdHex);
+  return submitClusterJoinTx(args.client, backend, tx, clusterId, operatorIdHex, args);
 }
 async function submitVoteClusterAdmit(args) {
   const clusterId = parseUint32(args.clusterId, "clusterId");
@@ -8508,9 +8508,29 @@ async function submitVoteClusterAdmit(args) {
     operatorId: operatorIdHex,
     voterPubkey: args.voterPubkey
   });
-  return submitClusterJoinTx(args.client, backend, tx, clusterId, operatorIdHex);
+  return submitClusterJoinTx(args.client, backend, tx, clusterId, operatorIdHex, args);
 }
-async function submitClusterJoinTx(client, backend, tx, clusterId, operatorIdHex) {
+async function submitClusterJoinTx(client, backend, tx, clusterId, operatorIdHex, options) {
+  if (options.private !== false) {
+    const encrypted = await buildEncryptedSubmission({
+      client,
+      backend,
+      tx,
+      clusterId: Number(clusterId),
+      clusterSealKeys: options.clusterSealKeys,
+      clusterSealKeysSource: options.clusterSealKeysSource,
+      class: MempoolClass.ContractCall
+    });
+    assertRpcHash(await submitEncryptedEnvelope(client, encrypted.envelopeWireHex));
+    return {
+      txHash: encrypted.innerTxHashHex,
+      clusterId: clusterId.toString(10),
+      operatorIdHex,
+      innerSighashHex: encrypted.innerSighashHex,
+      signedTxWireBytes: encrypted.innerWireBytes,
+      envelopeWireBytes: hexByteLength(encrypted.envelopeWireHex)
+    };
+  }
   const plaintext = buildPlaintextSubmission({ backend, tx });
   const txHash = await submitPlaintextTransaction(
     client,
@@ -8524,6 +8544,16 @@ async function submitClusterJoinTx(client, backend, tx, clusterId, operatorIdHex
     innerSighashHex: plaintext.innerSighashHex,
     signedTxWireBytes: plaintext.innerWireBytes
   };
+}
+function hexByteLength(value) {
+  const clean = value.startsWith("0x") || value.startsWith("0X") ? value.slice(2) : value;
+  return clean.length / 2;
+}
+function assertRpcHash(value) {
+  const bytes = hexToBytes2(value, "lyth_submitEncrypted tx hash");
+  if (bytes.length !== 32) {
+    throw new Error(`lyth_submitEncrypted tx hash must be 32 bytes, got ${bytes.length}`);
+  }
 }
 function adaptNativeClusterJoinRequest(request) {
   return {
