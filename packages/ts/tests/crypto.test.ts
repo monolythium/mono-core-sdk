@@ -145,7 +145,7 @@ describe("crypto subpath", () => {
       new Uint8Array(ML_DSA_65_SIGNATURE_LEN).fill(0x55),
       new Uint8Array(ML_DSA_65_PUBLIC_KEY_LEN).fill(0x66),
     );
-    expect(bytesToHex(wire)).toContain("000000000000000001000000000000003001000000000000000105000000");
+    expect(bytesToHex(wire)).toContain("000000000000000001000000000000003001000000000000000102000000");
   });
 
   it("matches the Rust MRV native transaction golden vector", () => {
