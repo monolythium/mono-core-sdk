@@ -2506,11 +2506,11 @@ where
     // `scheme: 0` (or any) `MrvEncryptedDecryptHint`. Use the plaintext path
     // ([`build_mrv_native_signed_submission`]) instead.
     //
-    // TODO(MB-3): when the chain activates MB-3 threshold decryption, port the
-    // chain's Ferveo `scheme = 2` path here — the `ThresholdPubkey` is a
-    // 96-byte BLS12-381 G1 element fetched from `lyth_getEncryptionKey`, and
-    // the inner tx is encrypted to that threshold public key (not a single
-    // ML-KEM-768 encapsulation key). Only then may an envelope be emitted.
+    // TODO(MB-3): when the chain activates threshold decryption for MRV
+    // submissions, port the live LythiumSeal scheme-3 path here — the inner
+    // tx is sealed to the per-cluster ML-KEM-768 + Shamir roster fetched from
+    // `lyth_getEncryptionKey` (the deleted Ferveo/BLS12-381 threshold path is
+    // not used). Only then may an envelope be emitted.
     Err(MrvValidationError::EncryptedSubmissionUnavailable)
 }
 

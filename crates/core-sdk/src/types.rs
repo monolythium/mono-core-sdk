@@ -4864,7 +4864,10 @@ pub struct CheckpointRecord {
     ts(export, export_to = "ClusterResignationRow.ts")
 )]
 pub struct ClusterResignationRow {
-    /// `0x`-prefixed 48-byte BLS-G1 operator public key.
+    /// `0x`-prefixed legacy 48-byte cluster-member reference. On a PQ
+    /// roster the leading 32 bytes hold the BLAKE3 operator id and the
+    /// remaining 16 bytes are zero pad; the width is the genesis/roster
+    /// member-ref ABI, not a real public key.
     pub operator: Hex,
     /// `wire_pending`, `pending`, or `applied`.
     pub status: String,
