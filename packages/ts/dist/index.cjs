@@ -2814,8 +2814,8 @@ var TESTNET_69420 = {
   network: "testnet-69420",
   display_name: "Monolythium Testnet",
   description: "Public Monolythium testnet. Testnet state may reset without notice; do not store value on this network.",
-  genesis_hash: "0xd24750ca765e702af7cbf3c6a3b479da9fafbc56fadd2168b22d035a23e29421",
-  binary_sha: "a34fd09f5210",
+  genesis_hash: "0xe9a2a956f8f05a73a5abaa30fda2716eccb53b719efa4871b8ca6fd4a0e9c7a6",
+  binary_sha: "d91510a10c87",
   rpc: [
     {
       url: "http://178.105.12.9:8545",
@@ -2918,59 +2918,59 @@ var TESTNET_69420 = {
   ],
   p2p: [
     {
-      multiaddr: "/ip4/178.105.12.9/tcp/29898/p2p/12D3KooWKZuaJJckHYroD3G7q9MC1ayMA1iBpdd792igSLCdahYx",
+      multiaddr: "/ip4/178.105.12.9/tcp/29898/p2p/12D3KooWFVYTypRqMkDbTaCZZ6UyeEQQxmgGLhWmPuTuh1m12UYZ",
       region: "fsn1"
     },
     {
-      multiaddr: "/ip4/178.105.15.216/tcp/29898/p2p/12D3KooWGC4ydGvUtDgQPEQFxYovUkkEXeUD41Cg9KtGJL2sKEDo",
+      multiaddr: "/ip4/178.105.15.216/tcp/29898/p2p/12D3KooWC5Jz9WMfhxhQHdhymK7C8GBodUvzFHg5PLpsathSTsh1",
       region: "fsn1"
     },
     {
-      multiaddr: "/ip4/178.104.233.182/tcp/29898/p2p/12D3KooWGLguBhRuqXQaBSKcWnEYuNK6T4mW82CAEtkGFfwxDke3",
+      multiaddr: "/ip4/178.104.233.182/tcp/29898/p2p/12D3KooWMXotBeVQiwGD1k9JmHZSyuPmqEKkkWVWYrkduXqZW5eb",
       region: "nbg1"
     },
     {
-      multiaddr: "/ip4/65.108.94.1/tcp/29898/p2p/12D3KooWGVmDhZCBgN6o3fX3r1LbzwZCBzkQinS4hjnthT4Uxm35",
+      multiaddr: "/ip4/65.108.94.1/tcp/29898/p2p/12D3KooWPprZknjzEFkRwgwCBx8wHvbWitAtDfioGvZce2biTsLF",
       region: "hel1"
     },
     {
-      multiaddr: "/ip4/95.216.154.155/tcp/29898/p2p/12D3KooWN3u926NdWutd8GM766ByyLWM6rWfzzyapeQVw1JJxkEY",
+      multiaddr: "/ip4/95.216.154.155/tcp/29898/p2p/12D3KooWQsbkpvpY9muf41g1fXgKxhMFZMXh4Nqb4NoeLtuJ1PqL",
       region: "hel1"
     },
     {
-      multiaddr: "/ip4/87.99.145.48/tcp/29898/p2p/12D3KooWCKd4DPShBDCgdyJsuKHYGqKnkWDruFcfHPzp2FZLnnsA",
+      multiaddr: "/ip4/87.99.145.48/tcp/29898/p2p/12D3KooWRiCmotyFgrgKWrtnA9vw5MHpHVyjyaKMP27AmxgSZxHH",
       region: "ash"
     },
     {
-      multiaddr: "/ip4/5.223.85.76/tcp/29898/p2p/12D3KooWQKWb1HWC7jH8Rh9eJ2ze1SZZu1vWj3sS73BUFCX8VZk6",
+      multiaddr: "/ip4/5.223.85.76/tcp/29898/p2p/12D3KooWGesi6E6fcwvd2dLUcUm8L73mmb2FmeXTnNNVbLJ5p992",
       region: "sin"
     },
     {
-      multiaddr: "/ip4/142.132.180.99/tcp/29898/p2p/12D3KooWR5tXuKqnS2vHarkc8x3wkYM3FghSx4J9TrxHJw9o7nJh",
+      multiaddr: "/ip4/142.132.180.99/tcp/29898/p2p/12D3KooWSQY4tDSrbz4dzy3NZyEfdzAD8Ew9kMgSB4mnqPcNKZRu",
       region: "fsn1"
     },
     {
-      multiaddr: "/ip4/95.217.156.190/tcp/29898/p2p/12D3KooWQdKFLySn2bSsuu1F5qG1BHXDVmBQfGoG9At683iLy5ff",
+      multiaddr: "/ip4/95.217.156.190/tcp/29898/p2p/12D3KooWJxpdNjbcc9K9MF1on2mMcykWLV3en5iG9k3w2kn9gEXg",
       region: "hel1"
     },
     {
-      multiaddr: "/ip4/5.223.65.201/tcp/29898/p2p/12D3KooWRjNqV4ewvo8Q6ABEq2GtMAkGbar1PHcBexEtpDpf7Pwe",
+      multiaddr: "/ip4/5.223.65.201/tcp/29898/p2p/12D3KooWS23LUDLRhpizxgD73xTiEaGAsYMqP5Bi155ceqf45k6M",
       region: "sin"
     },
     {
-      multiaddr: "/ip4/162.55.54.198/tcp/29898/p2p/12D3KooWHCW8sFnBLd9etNXsfQo7RB5NBvmVeTNwtodycBbfUDTz",
+      multiaddr: "/ip4/162.55.54.198/tcp/29898/p2p/12D3KooWAhiPjSE3ZMDPHeNswPdDRh6Df3r9MmANGhitT4C4yS1d",
       region: "fsn1"
     },
     {
-      multiaddr: "/ip4/128.140.125.5/tcp/29898/p2p/12D3KooWPv2XRkQz5FvkC4tipbbzKMUY6JucfsReuscpcbt2vfK5",
+      multiaddr: "/ip4/128.140.125.5/tcp/29898/p2p/12D3KooWBvyCgGWDeJSN2mUQkoK8PoLaHukJ3Z41Auh7cDSjBzxw",
       region: "fsn1"
     },
     {
-      multiaddr: "/ip4/178.105.45.210/tcp/29898/p2p/12D3KooWRkdEuva54VMUZH8qUfexFP9bGu9NXZGKASAmGrUGWX2Q",
+      multiaddr: "/ip4/178.105.45.210/tcp/29898/p2p/12D3KooWHYXWuY2X8pKY3zB7CLHbYSaxpFyXwGF9GHF2bKQEF5ZU",
       region: "fsn1"
     },
     {
-      multiaddr: "/ip4/65.21.252.34/tcp/29898/p2p/12D3KooWSAGYEN5Mn8U7svUestdWdqJSJmCR3s3x8Ph5hY2wAacX",
+      multiaddr: "/ip4/65.21.252.34/tcp/29898/p2p/12D3KooWNP63pwBuyQsiVTv716RdjYeE2NjyKpMehMaQ1CAtbYn3",
       region: "hel1"
     }
   ]
@@ -11086,7 +11086,7 @@ var MONOLYTHIUM_NETWORKS = {
 };
 
 // src/index.ts
-var version = "0.4.4";
+var version = "0.4.6";
 
 exports.ADDRESS_HRP = ADDRESS_HRP;
 exports.ADDRESS_KIND_HRPS = ADDRESS_KIND_HRPS;
