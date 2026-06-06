@@ -1055,32 +1055,6 @@ type BlockHeader = {
 type BlockTag = "latest" | "earliest" | "finalized" | "safe" | "pending";
 
 /**
- * Round certificate response used by the certificate RPCs.
- */
-type BlsCertificateResponse = {
-    /**
-     * Round at which the certificate sealed.
-     */
-    round: bigint;
-    /**
-     * `0x`-prefixed aggregate BLS signature.
-     */
-    signature: string;
-    /**
-     * Signer-set bitmap as `0x`-hex bytes.
-     */
-    signers_bitmap: string;
-    /**
-     * Operator indices decoded from the signer bitmap.
-     */
-    signer_indices: Array<number>;
-    /**
-     * Number of signing operators.
-     */
-    signer_count: number;
-};
-
-/**
  * Legacy compatibility call/estimate request shape.
  *
  * New v4.1 no-EVM app flows should prefer native MRV/RISC-V builders and
@@ -1271,7 +1245,10 @@ type ClusterEntityResponse = {
  */
 type ClusterResignationRow = {
     /**
-     * `0x`-prefixed legacy 48-byte cluster-member public key.
+     * `0x`-prefixed legacy 48-byte cluster-member reference. On a PQ
+     * roster the leading 32 bytes hold the BLAKE3 operator id and the
+     * remaining 16 bytes are zero pad; the width is the genesis/roster
+     * member-ref ABI, not a real public key.
      */
     operator: string;
     /**
@@ -2073,6 +2050,41 @@ type RichListResponse = {
 };
 
 /**
+ * Round-advancement certificate response used by the AUD-0074
+ * certificate RPCs (`lyth_getRoundCertificate` /
+ * `lyth_getLeaderCertificate` / `lyth_getDacCertificate`).
+ *
+ * On the post-quantum chain the `signature` field is the ML-DSA-65
+ * leader-seed digest — the BLAKE3 hash over the ML-DSA quorum
+ * certificate that seeds the historical leader beacon. It is also the
+ * value the VRF precompile (`0x1101`) reads as the historical
+ * randomness for a finalized round.
+ */
+type RoundCertificateResponse$1 = {
+    /**
+     * Round at which the certificate sealed.
+     */
+    round: bigint;
+    /**
+     * `0x`-prefixed leader-seed digest (ML-DSA-65 quorum-cert hash).
+     * The JSON wire field stays `signature` for compatibility.
+     */
+    signature: string;
+    /**
+     * Signer-set bitmap as `0x`-hex bytes.
+     */
+    signers_bitmap: string;
+    /**
+     * Operator indices decoded from the signer bitmap.
+     */
+    signer_indices: Array<number>;
+    /**
+     * Number of signing operators.
+     */
+    signer_count: number;
+};
+
+/**
  * `lyth_currentRound` round shape.
  */
 type RoundInfo = {
@@ -2425,6 +2437,19 @@ declare function decodeNativeMarketOrderBookDeltasResponse(value: unknown): Nati
  * `protocore-node-registry::abi`. They are exported for wallets,
  * service probers, faucets, and operator dashboards that need to build
  * canonical registry transactions without retyping low-level values.
+ *
+ * TODO(monolythium-vision): the operator-lifecycle BASE ops are not yet
+ * encoded in either SDK — `register(bytes32,string,bytes32,uint32,uint32,
+ * bytes,bytes,bytes)`, `unregister`, `withdrawBond`, `updateEndpoint`,
+ * `updateCapabilities`, `heartbeat`, `unjail`, `setNetworkMetadata`,
+ * `claimOperatorName`, `releaseOperatorName`. Today `register` is driven by
+ * the `protocore registry register` CLI (operator-spine-register-reality);
+ * SDK encoders are only needed once the Monarch operator-onboarding UX
+ * (roadmap #54) drives registration from a UI. That call is unresolved, and
+ * `register` carries three dynamic byte-array tails (1952-byte consensus
+ * pubkey, 3309-byte PoP, 1184-byte seal EK) whose ABI layout must be pinned
+ * against mono-core with golden vectors before it is hand-rolled here. Add
+ * the encoders to TS first, then mirror in Rust (`node_registry.rs`).
  */
 declare const NODE_REGISTRY_CAPABILITIES: {
     readonly SERVES_RPC: 1;
@@ -4420,7 +4445,9 @@ declare function encodeNameAcceptTransferCall(name: string): string;
  * sends the same `lyth_*` / `eth_*` / `debug_*` JSON-RPC method strings.
  */
 
-type RoundCertificateResponse = BlsCertificateResponse;
+type RoundCertificateResponse = RoundCertificateResponse$1;
+/** @deprecated Use {@link RoundCertificateResponse}. The JSON wire is identical. */
+type BlsCertificateResponse = RoundCertificateResponse;
 type EthCallRequest = CallRequest & {
     /** Alias accepted by `eth_call` / `eth_estimateGas`; `data` is canonical. */
     input?: string;
