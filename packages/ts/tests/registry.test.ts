@@ -34,9 +34,9 @@ describe("chain registry snapshot", () => {
   it("vendors the public testnet RPC endpoints", () => {
     expect(TESTNET_69420.chain_id).toBe(69420);
     expect(TESTNET_69420.genesis_hash).toBe(
-      "0x3b5fe6c9394c67661ddabd4aca3f883b4570c435c912412ef1d7e83b386e461c",
+      "0xd24750ca765e702af7cbf3c6a3b479da9fafbc56fadd2168b22d035a23e29421",
     );
-    expect(TESTNET_69420.binary_sha).toBe("f07aadd3fb4c");
+    expect(TESTNET_69420.binary_sha).toBe("a34fd09f5210");
     expect(getRpcEndpoints("testnet-69420").map((r) => r.url)).toEqual([
       "http://178.105.12.9:8545",
       "http://178.105.15.216:8545",
@@ -46,16 +46,16 @@ describe("chain registry snapshot", () => {
       "http://87.99.145.48:8545",
       "http://5.223.85.76:8545",
       "http://142.132.180.99:8545",
-      "http://162.55.54.198:8545",
       "http://95.217.156.190:8545",
       "http://5.223.65.201:8545",
+      "http://162.55.54.198:8545",
       "http://128.140.125.5:8545",
       "http://178.105.45.210:8545",
       "http://65.21.252.34:8545",
     ]);
-    expect(getP2pSeeds("testnet-69420")).toHaveLength(12);
+    expect(getP2pSeeds("testnet-69420")).toHaveLength(14);
     expect(getP2pSeeds("testnet-69420")[0]?.multiaddr).toBe(
-      "/ip4/178.105.12.9/tcp/29898/p2p/12D3KooWPv4ctqZX9faHicr8dJifyBwrpPA4oBev7w2WZStejMKa",
+      "/ip4/178.105.12.9/tcp/29898/p2p/12D3KooWKZuaJJckHYroD3G7q9MC1ayMA1iBpdd792igSLCdahYx",
     );
   });
 
