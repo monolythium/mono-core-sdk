@@ -523,6 +523,13 @@ function cryptoRandomSource() {
     }
   };
 }
+function generateOperatorSealKeypair() {
+  const { publicKey, secretKey } = ml_kem768.keygen();
+  return {
+    encapsulationKey: expectBytes(publicKey, SEAL_EK_LEN, "encapsulationKey").slice(),
+    decapsulationKey: expectBytes(secretKey, SEAL_DK_LEN, "decapsulationKey").slice()
+  };
+}
 function u32le(n) {
   const out = new Uint8Array(4);
   out[0] = n & 255;
@@ -952,6 +959,6 @@ function assertRpcHash(value, label) {
   }
 }
 
-export { ADDRESS_DERIVATION_DOMAIN, BincodeWriter, CLUSTER_MLKEM_SHAMIR, CLUSTER_MLKEM_SHAMIR_ALGO, DKG_AEAD_TAG_LEN, DKG_NONCE_LEN, ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE, ENUM_VARIANT_INDEX_ML_DSA_65, ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SEED_LEN, ML_DSA_65_SIGNATURE_LEN, ML_DSA_65_SIGNING_KEY_LEN, ML_KEM_768_CIPHERTEXT_LEN, ML_KEM_768_ENCAPSULATION_KEY_LEN, ML_KEM_768_SHARED_SECRET_LEN, MempoolClass, MlDsa65Backend, PQM1_ALGO_TAG_FALCON512_RESERVED, PQM1_ALGO_TAG_MLDSA65, PQM1_ALGO_TAG_MLDSA87_RESERVED, PQM1_ALGO_TAG_SLHDSA128S_RESERVED, PQM1_ENTROPY_LEN, PQM1_PAYLOAD_LEN, PQM1_V1_MLDSA65_DOMAIN_TAG, PQM1_V1_MNEMONIC_WORDS, PQM1_VERSION_V1, Pqm1Error, SEAL_COMMIT_LEN, SEAL_DK_LEN, SEAL_EK_LEN, SEAL_KEM_CT_LEN, SEAL_KEM_SEED_LEN, SEAL_KEY_LEN, SEAL_NONCE_LEN, SEAL_SHARE_LEN, SEAL_TAG_LEN, STANDARD_ALGO_NUMBER_ML_DSA_65, assemblePqm1Payload, bincodeDecryptHint, bincodeEncryptedEnvelope, bincodeNonceAad, bincodeSignedTransaction, buildEncryptedEnvelope, buildEncryptedSubmission, buildPlaintextSubmission, bytesToHex, concatBytes, cryptoRandomSource, derivePqm1MlDsa65SeedFromPayload, encodeMlDsa65Opaque, encodeSealEnvelope, encodeTransactionForHash, encryptInnerTx, expectBytes, fetchEncryptionKey, generatePqm1Mnemonic, getClusterSealKeys, hexToBytes, mlDsa65AddressBytes, mlDsa65AddressFromPublicKey, outerSigDigest, parseClusterSealKeys, parsePqm1Payload, pqm1MnemonicToAddress, pqm1MnemonicToMlDsa65Backend, pqm1MnemonicToMlDsa65Seed, pqm1MnemonicToPayload, pqm1PayloadToMnemonic, sealRosterHash, sealToCluster, sealTransaction, submitEncryptedEnvelope, submitPlaintextTransaction, submitSealedTransaction, submitTransactionWithPrivacy };
+export { ADDRESS_DERIVATION_DOMAIN, BincodeWriter, CLUSTER_MLKEM_SHAMIR, CLUSTER_MLKEM_SHAMIR_ALGO, DKG_AEAD_TAG_LEN, DKG_NONCE_LEN, ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE, ENUM_VARIANT_INDEX_ML_DSA_65, ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SEED_LEN, ML_DSA_65_SIGNATURE_LEN, ML_DSA_65_SIGNING_KEY_LEN, ML_KEM_768_CIPHERTEXT_LEN, ML_KEM_768_ENCAPSULATION_KEY_LEN, ML_KEM_768_SHARED_SECRET_LEN, MempoolClass, MlDsa65Backend, PQM1_ALGO_TAG_FALCON512_RESERVED, PQM1_ALGO_TAG_MLDSA65, PQM1_ALGO_TAG_MLDSA87_RESERVED, PQM1_ALGO_TAG_SLHDSA128S_RESERVED, PQM1_ENTROPY_LEN, PQM1_PAYLOAD_LEN, PQM1_V1_MLDSA65_DOMAIN_TAG, PQM1_V1_MNEMONIC_WORDS, PQM1_VERSION_V1, Pqm1Error, SEAL_COMMIT_LEN, SEAL_DK_LEN, SEAL_EK_LEN, SEAL_KEM_CT_LEN, SEAL_KEM_SEED_LEN, SEAL_KEY_LEN, SEAL_NONCE_LEN, SEAL_SHARE_LEN, SEAL_TAG_LEN, STANDARD_ALGO_NUMBER_ML_DSA_65, assemblePqm1Payload, bincodeDecryptHint, bincodeEncryptedEnvelope, bincodeNonceAad, bincodeSignedTransaction, buildEncryptedEnvelope, buildEncryptedSubmission, buildPlaintextSubmission, bytesToHex, concatBytes, cryptoRandomSource, derivePqm1MlDsa65SeedFromPayload, encodeMlDsa65Opaque, encodeSealEnvelope, encodeTransactionForHash, encryptInnerTx, expectBytes, fetchEncryptionKey, generateOperatorSealKeypair, generatePqm1Mnemonic, getClusterSealKeys, hexToBytes, mlDsa65AddressBytes, mlDsa65AddressFromPublicKey, outerSigDigest, parseClusterSealKeys, parsePqm1Payload, pqm1MnemonicToAddress, pqm1MnemonicToMlDsa65Backend, pqm1MnemonicToMlDsa65Seed, pqm1MnemonicToPayload, pqm1PayloadToMnemonic, sealRosterHash, sealToCluster, sealTransaction, submitEncryptedEnvelope, submitPlaintextTransaction, submitSealedTransaction, submitTransactionWithPrivacy };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

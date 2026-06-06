@@ -525,6 +525,13 @@ function cryptoRandomSource() {
     }
   };
 }
+function generateOperatorSealKeypair() {
+  const { publicKey, secretKey } = mlKem_js.ml_kem768.keygen();
+  return {
+    encapsulationKey: expectBytes(publicKey, SEAL_EK_LEN, "encapsulationKey").slice(),
+    decapsulationKey: expectBytes(secretKey, SEAL_DK_LEN, "decapsulationKey").slice()
+  };
+}
 function u32le(n) {
   const out = new Uint8Array(4);
   out[0] = n & 255;
@@ -1009,6 +1016,7 @@ exports.encodeTransactionForHash = encodeTransactionForHash;
 exports.encryptInnerTx = encryptInnerTx;
 exports.expectBytes = expectBytes;
 exports.fetchEncryptionKey = fetchEncryptionKey;
+exports.generateOperatorSealKeypair = generateOperatorSealKeypair;
 exports.generatePqm1Mnemonic = generatePqm1Mnemonic;
 exports.getClusterSealKeys = getClusterSealKeys;
 exports.hexToBytes = hexToBytes;

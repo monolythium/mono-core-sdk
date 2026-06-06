@@ -453,7 +453,11 @@ var NODE_REGISTRY_SELECTORS = {
   /** `formCluster(bytes,bytes,bytes)` — no-foundation cluster formation by roster consent. */
   formCluster: "0x" + selectorHex("formCluster(bytes,bytes,bytes)"),
   /** `setOperatorDisplay(bytes32,string,string)` — owner-callable public display metadata. */
-  setOperatorDisplay: "0x" + selectorHex("setOperatorDisplay(bytes32,string,string)")
+  setOperatorDisplay: "0x" + selectorHex("setOperatorDisplay(bytes32,string,string)"),
+  /** `publishOperatorSealKey(bytes32,bytes)` — owner-callable LythiumSeal EK publication. */
+  publishOperatorSealKey: "0x" + selectorHex("publishOperatorSealKey(bytes32,bytes)"),
+  /** `getOperatorSealKey(bytes32)` view — returns the operator's published LythiumSeal EK. */
+  getOperatorSealKey: "0x" + selectorHex("getOperatorSealKey(bytes32)")
 };
 var NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES = 48;
 var NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES = NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES;
@@ -461,6 +465,7 @@ var NODE_REGISTRY_BLS_PUBKEY_BYTES = NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES;
 var NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES = 1952;
 var NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES = 3309;
 var NODE_REGISTRY_CONSENSUS_POP_BYTES = 3309;
+var NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES = 1184;
 var NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES = 96;
 var NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES = NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES;
 var NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS = 5;
@@ -705,6 +710,43 @@ function encodeSetOperatorDisplayCalldata(args) {
       aliasPadded
     )
   );
+}
+function encodePublishOperatorSealKeyCalldata(args) {
+  const peerId = expectLength2(toBytes(args.peerId), 32, "peerId");
+  const sealEk = expectNonZeroBytes(
+    expectLength2(toBytes(args.sealEk), NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES, "sealEk"),
+    "sealEk"
+  );
+  const sealEkPadded = padToWord(sealEk);
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.publishOperatorSealKey),
+      peerId,
+      uint64Word(2n * 32n, "sealEkOffset"),
+      uint64Word(BigInt(sealEk.length), "sealEkLength"),
+      sealEkPadded
+    )
+  );
+}
+function encodeGetOperatorSealKeyCalldata(args) {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.getOperatorSealKey),
+      expectLength2(toBytes(args.operatorId), 32, "operatorId")
+    )
+  );
+}
+function decodeOperatorSealKey(returnData) {
+  const bytes = toBytes(returnData);
+  if (bytes.length === NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES) {
+    return bytesToHex(expectNonZeroBytes(bytes, "operatorSealKey"));
+  }
+  const sealEk = decodeDynamicBytesResult(
+    bytes,
+    NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES,
+    "operatorSealKey"
+  );
+  return bytesToHex(expectNonZeroBytes(sealEk, "operatorSealKey"));
 }
 function encodeCancelClusterJoinCalldata(args) {
   return bytesToHex(
@@ -1120,6 +1162,30 @@ function expectLength2(value, len, name) {
     throw new NodeRegistryError(`${name} must be ${len} bytes, got ${value.length}`);
   }
   return value;
+}
+function expectNonZeroBytes(value, name) {
+  if (value.every((byte) => byte === 0)) {
+    throw new NodeRegistryError(`${name} must not be all-zero`);
+  }
+  return value;
+}
+function decodeDynamicBytesResult(bytes, expectedLength, label) {
+  if (bytes.length < 64) {
+    throw new NodeRegistryError(`${label} return must be ABI-encoded dynamic bytes`);
+  }
+  const offset = uintFromWord(bytes.slice(0, 32));
+  if (offset !== 32n) {
+    throw new NodeRegistryError(`${label} return offset must be 0x20`);
+  }
+  const len = uintFromWord(bytes.slice(32, 64));
+  if (len !== BigInt(expectedLength)) {
+    throw new NodeRegistryError(`${label} must be ${expectedLength} bytes, got ${len}`);
+  }
+  const paddedLen = Math.ceil(expectedLength / 32) * 32;
+  if (bytes.length < 64 + paddedLen) {
+    throw new NodeRegistryError(`${label} body is truncated`);
+  }
+  return bytes.slice(64, 64 + expectedLength);
 }
 
 // src/crypto/bytes.ts
@@ -2748,8 +2814,8 @@ var TESTNET_69420 = {
   network: "testnet-69420",
   display_name: "Monolythium Testnet",
   description: "Public Monolythium testnet. Testnet state may reset without notice; do not store value on this network.",
-  genesis_hash: "0x6a2bb3c8a6701bedcddc0447583bb24f34b77310e3aa77c62ca303a453e9f7ba",
-  binary_sha: "c283c75d",
+  genesis_hash: "0x3b5fe6c9394c67661ddabd4aca3f883b4570c435c912412ef1d7e83b386e461c",
+  binary_sha: "f07aadd3fb4c",
   rpc: [
     {
       url: "http://178.105.12.9:8545",
@@ -8392,6 +8458,7 @@ function pqm1MnemonicToMlDsa65Backend(mnemonic) {
 
 // src/cluster-join.ts
 var DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT = REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT;
+var DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT = REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT;
 var ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 var MAX_UINT32 = (1n << 32n) - 1n;
 function deriveClusterJoinOperatorId(operatorPubkey) {
@@ -8499,6 +8566,24 @@ function buildVoteClusterAdmitTxFields(args) {
     })
   };
 }
+function buildPublishOperatorSealKeyTxFields(args) {
+  return {
+    chainId: args.chainId,
+    nonce: args.nonce,
+    maxFeePerGas: parseBigint(args.fee.maxFeePerGas, "maxFeePerGas"),
+    maxPriorityFeePerGas: parseBigint(args.fee.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
+    gasLimit: parseBigint(
+      args.fee.gasLimit ?? DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT,
+      "gasLimit"
+    ),
+    to: nodeRegistryAddressHex(),
+    value: 0n,
+    input: encodePublishOperatorSealKeyCalldata({
+      peerId: normalizeOperatorId(args.peerId),
+      sealEk: normalizeOperatorSealEk(args.sealEk)
+    })
+  };
+}
 async function submitRequestClusterJoin(args) {
   const clusterId = parseUint32(args.clusterId, "clusterId");
   const operatorPubkey = normalizeConsensusPubkey(args.operatorPubkey, "operatorPubkey");
@@ -8553,6 +8638,39 @@ async function submitVoteClusterAdmit(args) {
     voterPubkey: args.voterPubkey
   });
   return submitClusterJoinTx(args.client, backend, tx, clusterId, operatorIdHex, args);
+}
+async function submitPublishOperatorSealKey(args) {
+  const operatorIdHex = normalizeOperatorId(args.peerId);
+  const sealEk = normalizeOperatorSealEk(args.sealEk);
+  const backend = pqm1MnemonicToMlDsa65Backend(args.mnemonic);
+  const senderAddress = addressToTypedBech32("user", backend.addressBytes());
+  const [chainId, nonce, quote] = await Promise.all([
+    args.client.ethChainId(),
+    args.client.lythGetTransactionCount(senderAddress),
+    args.client.lythExecutionUnitPrice()
+  ]);
+  const tx = buildPublishOperatorSealKeyTxFields({
+    chainId,
+    nonce,
+    fee: resolveClusterJoinExecutionFee(quote, {
+      ...args,
+      executionUnitLimit: args.executionUnitLimit ?? DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT
+    }),
+    peerId: operatorIdHex,
+    sealEk
+  });
+  const plaintext = buildPlaintextSubmission({ backend, tx });
+  const txHash = await submitPlaintextTransaction(
+    args.client,
+    plaintext.signedTxWireHex,
+    plaintext.innerTxHashHex
+  );
+  return {
+    txHash,
+    operatorIdHex,
+    innerSighashHex: plaintext.innerSighashHex,
+    signedTxWireBytes: plaintext.innerWireBytes
+  };
 }
 async function submitClusterJoinTx(client, backend, tx, clusterId, operatorIdHex, options) {
   if (options.private !== false) {
@@ -8640,6 +8758,10 @@ function normalizeConsensusPubkey(value, label) {
 function normalizeOperatorId(value) {
   const bytes = typeof value === "string" ? hexToBytes2(value, "operatorId") : value;
   return bytesToHex2(expectBytes(bytes, 32, "operatorId"));
+}
+function normalizeOperatorSealEk(value) {
+  const bytes = typeof value === "string" ? hexToBytes2(value, "sealEk") : value;
+  return expectBytes(bytes, NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES, "sealEk").slice();
 }
 function parseUint32(value, label) {
   const parsed = parseBigint(value, label);
@@ -10977,6 +11099,7 @@ exports.CLOB_MARKET_ID_DOMAIN_TAG = CLOB_MARKET_ID_DOMAIN_TAG;
 exports.CLOB_SELECTORS = CLOB_SELECTORS;
 exports.CLUSTER_FORMED_EVENT_SIG = CLUSTER_FORMED_EVENT_SIG;
 exports.DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT = DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT;
+exports.DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT = DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT;
 exports.DELEGATION_REVERT_TAGS = DELEGATION_REVERT_TAGS;
 exports.DELEGATION_SELECTORS = DELEGATION_SELECTORS;
 exports.DIVERSITY_SCORE_MAX = DIVERSITY_SCORE_MAX;
@@ -11047,6 +11170,7 @@ exports.NODE_REGISTRY_FORM_CLUSTER_THRESHOLD = NODE_REGISTRY_FORM_CLUSTER_THRESH
 exports.NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES = NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES;
 exports.NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES = NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES;
 exports.NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES = NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES;
+exports.NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES = NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES;
 exports.NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID = NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID;
 exports.NODE_REGISTRY_PUBLIC_SERVICE_MASK = NODE_REGISTRY_PUBLIC_SERVICE_MASK;
 exports.NODE_REGISTRY_SELECTORS = NODE_REGISTRY_SELECTORS;
@@ -11164,6 +11288,7 @@ exports.buildPlaceLimitOrderViaPlan = buildPlaceLimitOrderViaPlan;
 exports.buildPlaceSpotLimitOrderPlan = buildPlaceSpotLimitOrderPlan;
 exports.buildPlaceSpotMarketOrderExPlan = buildPlaceSpotMarketOrderExPlan;
 exports.buildPlaceSpotMarketOrderPlan = buildPlaceSpotMarketOrderPlan;
+exports.buildPublishOperatorSealKeyTxFields = buildPublishOperatorSealKeyTxFields;
 exports.buildRequestClusterJoinTxFields = buildRequestClusterJoinTxFields;
 exports.buildVoteClusterAdmitTxFields = buildVoteClusterAdmitTxFields;
 exports.categoryRoot = categoryRoot;
@@ -11194,6 +11319,7 @@ exports.decodeNativeReceiptResponse = decodeNativeReceiptResponse;
 exports.decodeNoEvmReceiptTranscript = decodeNoEvmReceiptTranscript;
 exports.decodeOperatorFeeChargedEvent = decodeOperatorFeeChargedEvent;
 exports.decodeOperatorNetworkMetadata = decodeOperatorNetworkMetadata;
+exports.decodeOperatorSealKey = decodeOperatorSealKey;
 exports.decodeOracleEvent = decodeOracleEvent;
 exports.decodeTimeWindow = decodeTimeWindow;
 exports.decodeTxFeedResponse = decodeTxFeedResponse;
@@ -11225,6 +11351,7 @@ exports.encodeEnableCalldata = encodeEnableCalldata;
 exports.encodeExpireClusterJoinCalldata = encodeExpireClusterJoinCalldata;
 exports.encodeFormClusterCalldata = encodeFormClusterCalldata;
 exports.encodeGetClusterJoinRequestCalldata = encodeGetClusterJoinRequestCalldata;
+exports.encodeGetOperatorSealKeyCalldata = encodeGetOperatorSealKeyCalldata;
 exports.encodeHasPubkeyCalldata = encodeHasPubkeyCalldata;
 exports.encodeLockBridgeConfigCalldata = encodeLockBridgeConfigCalldata;
 exports.encodeLookupPubkeyCalldata = encodeLookupPubkeyCalldata;
@@ -11281,6 +11408,7 @@ exports.encodePlaceLimitOrderCalldata = encodePlaceLimitOrderCalldata;
 exports.encodePlaceLimitOrderViaCalldata = encodePlaceLimitOrderViaCalldata;
 exports.encodePlaceMarketOrderCalldata = encodePlaceMarketOrderCalldata;
 exports.encodePlaceMarketOrderExCalldata = encodePlaceMarketOrderExCalldata;
+exports.encodePublishOperatorSealKeyCalldata = encodePublishOperatorSealKeyCalldata;
 exports.encodeRecoverOperatorNodeCalldata = encodeRecoverOperatorNodeCalldata;
 exports.encodeRedelegateCalldata = encodeRedelegateCalldata;
 exports.encodeRegisterPubkeyCalldata = encodeRegisterPubkeyCalldata;
@@ -11384,6 +11512,7 @@ exports.spendingPolicyAddressHex = spendingPolicyAddressHex;
 exports.submitMrvCallNativeTx = submitMrvCallNativeTx;
 exports.submitMrvDeployNativeTx = submitMrvDeployNativeTx;
 exports.submitMrvDeployPayloadNativeTx = submitMrvDeployPayloadNativeTx;
+exports.submitPublishOperatorSealKey = submitPublishOperatorSealKey;
 exports.submitRequestClusterJoin = submitRequestClusterJoin;
 exports.submitSighash = submitSighash;
 exports.submitVoteClusterAdmit = submitVoteClusterAdmit;
