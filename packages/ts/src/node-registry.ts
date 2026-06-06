@@ -5,6 +5,19 @@
  * `protocore-node-registry::abi`. They are exported for wallets,
  * service probers, faucets, and operator dashboards that need to build
  * canonical registry transactions without retyping low-level values.
+ *
+ * TODO(monolythium-vision): the operator-lifecycle BASE ops are not yet
+ * encoded in either SDK — `register(bytes32,string,bytes32,uint32,uint32,
+ * bytes,bytes,bytes)`, `unregister`, `withdrawBond`, `updateEndpoint`,
+ * `updateCapabilities`, `heartbeat`, `unjail`, `setNetworkMetadata`,
+ * `claimOperatorName`, `releaseOperatorName`. Today `register` is driven by
+ * the `protocore registry register` CLI (operator-spine-register-reality);
+ * SDK encoders are only needed once the Monarch operator-onboarding UX
+ * (roadmap #54) drives registration from a UI. That call is unresolved, and
+ * `register` carries three dynamic byte-array tails (1952-byte consensus
+ * pubkey, 3309-byte PoP, 1184-byte seal EK) whose ABI layout must be pinned
+ * against mono-core with golden vectors before it is hand-rolled here. Add
+ * the encoders to TS first, then mirror in Rust (`node_registry.rs`).
  */
 
 import { blake3 } from "@noble/hashes/blake3.js";

@@ -6,6 +6,12 @@
 //! decoder that turns one EVM log (topics + data) into a typed
 //! [`OracleEvent`]. The decoder is the exact inverse of the chain-side
 //! `emit_*` helpers.
+//!
+//! The oracle WRITE path (feed config / price submission) is intentionally
+//! operator/CLI-only and is NOT exposed as a calldata encoder here. This
+//! matches the TypeScript SDK (`packages/ts/src/oracle.ts`), which is also
+//! read/decode-only — so the missing oracle write encoder is not a
+//! Rust-vs-TS drift gap, it is a deliberate symmetric omission.
 
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
