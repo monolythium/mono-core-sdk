@@ -92,6 +92,7 @@ export {
   CLUSTER_MLKEM_SHAMIR,
   cryptoRandomSource,
   encodeSealEnvelope,
+  generateOperatorSealKeypair,
   SEAL_COMMIT_LEN,
   SEAL_DK_LEN,
   SEAL_EK_LEN,
@@ -106,6 +107,7 @@ export {
 } from "./lythiumseal.js";
 export type {
   LythiumSealEnvelope,
+  OperatorSealKeypair,
   SealRandomSource,
   SealRecipient,
 } from "./lythiumseal.js";

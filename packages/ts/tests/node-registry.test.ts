@@ -17,6 +17,7 @@ import {
   NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES,
   NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES,
   NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES,
+  NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES,
   NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID,
   NODE_REGISTRY_PUBLIC_SERVICE_MASK,
   NODE_REGISTRY_SELECTORS,
@@ -26,6 +27,7 @@ import {
   decodeClusterFormedEvent,
   decodeClusterJoinRequest,
   decodeOperatorNetworkMetadata,
+  decodeOperatorSealKey,
   deriveClusterAnchorAddress,
   encodeAttestDkgReshareCalldata,
   encodeCancelClusterJoinCalldata,
@@ -33,6 +35,8 @@ import {
   encodeExpireClusterJoinCalldata,
   encodeFormClusterCalldata,
   encodeGetClusterJoinRequestCalldata,
+  encodeGetOperatorSealKeyCalldata,
+  encodePublishOperatorSealKeyCalldata,
   encodeRecoverOperatorNodeCalldata,
   encodeReportServiceProbeCalldata,
   encodeRequestClusterJoinCalldata,
@@ -62,6 +66,7 @@ describe("node-registry helpers", () => {
     expect(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).toBe(1952);
     expect(NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES).toBe(3309);
     expect(NODE_REGISTRY_CONSENSUS_POP_BYTES).toBe(3309);
+    expect(NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES).toBe(1184);
     expect(NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES).toBe(96);
     expect(NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES).toBe(96);
     expect(NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS).toBe(5);
@@ -88,6 +93,8 @@ describe("node-registry helpers", () => {
     expect(NODE_REGISTRY_SELECTORS.getClusterJoinRequest).toBe("0x224de9bf");
     expect(NODE_REGISTRY_SELECTORS.formCluster).toBe("0x961a4ced");
     expect(NODE_REGISTRY_SELECTORS.setOperatorDisplay).toBe("0x7a2ac986");
+    expect(NODE_REGISTRY_SELECTORS.publishOperatorSealKey).toBe("0x0490b9a8");
+    expect(NODE_REGISTRY_SELECTORS.getOperatorSealKey).toBe("0xfcbb69a6");
   });
 
   it("validates public-service probe masks and concrete statuses", () => {
@@ -133,6 +140,47 @@ describe("node-registry helpers", () => {
     const calldata = encodeRecoverOperatorNodeCalldata(peerId);
     expect(calldata).toBe(`${NODE_REGISTRY_SELECTORS.recoverOperatorNode}${"a5".repeat(32)}`);
     expect((calldata.length - 2) / 2).toBe(4 + 32);
+  });
+
+  it("encodes and decodes operator LythiumSeal EK calldata", () => {
+    const peerId = `0x${"a5".repeat(32)}`;
+    const sealEk = new Uint8Array(NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES).fill(0x42);
+    const publish = hexBytes(encodePublishOperatorSealKeyCalldata({ peerId, sealEk }));
+
+    expect(publish.slice(0, 4)).toEqual(hexBytes(NODE_REGISTRY_SELECTORS.publishOperatorSealKey));
+    expect(publish.length).toBe(4 + 2 * 32 + 32 + NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES);
+    expect(publish.slice(4, 36)).toEqual(new Uint8Array(32).fill(0xa5));
+    expect(publish[67]).toBe(0x40);
+    expect(wordBigint(publish.slice(68, 100))).toBe(
+      BigInt(NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES),
+    );
+    expect(publish.slice(100)).toEqual(sealEk);
+
+    const get = hexBytes(encodeGetOperatorSealKeyCalldata({ operatorId: `0x${"11".repeat(32)}` }));
+    expect(get.slice(0, 4)).toEqual(hexBytes(NODE_REGISTRY_SELECTORS.getOperatorSealKey));
+    expect(get.length).toBe(4 + 32);
+    expect(get.slice(4)).toEqual(new Uint8Array(32).fill(0x11));
+
+    const sealEkResult = concatTestBytes(
+      u256Word(32n),
+      u256Word(BigInt(NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES)),
+      sealEk,
+    );
+    expect(decodeOperatorSealKey(sealEkResult)).toBe(
+      `0x${"42".repeat(NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES)}`,
+    );
+    expect(decodeOperatorSealKey(sealEk)).toBe(
+      `0x${"42".repeat(NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES)}`,
+    );
+    expect(() =>
+      encodePublishOperatorSealKeyCalldata({
+        peerId,
+        sealEk: new Uint8Array(NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES),
+      }),
+    ).toThrow(/all-zero/u);
+    expect(() => decodeOperatorSealKey(new Uint8Array(NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES))).toThrow(
+      /all-zero/u,
+    );
   });
 
   it("encodes submitPendingChange calldata for rotate intents", () => {
@@ -553,6 +601,16 @@ function wordBigint(word: Uint8Array): bigint {
     value = (value << 8n) | BigInt(byte);
   }
   return value;
+}
+
+function u256Word(value: bigint): Uint8Array {
+  const out = new Uint8Array(32);
+  let rest = value;
+  for (let i = 31; i >= 0; i--) {
+    out[i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  return out;
 }
 
 function setWordU64(bytes: Uint8Array, wordIndex: number, value: bigint): void {

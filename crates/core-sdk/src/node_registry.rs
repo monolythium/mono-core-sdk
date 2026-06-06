@@ -61,6 +61,8 @@ pub const FORM_CLUSTER_THRESHOLD: u16 = 7;
 pub const NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES: usize = 1_952;
 /// ML-DSA-65 signature width.
 pub const NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES: usize = 3_309;
+/// ML-KEM-768 encapsulation key width published for LythiumSeal operator rosters.
+pub const NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES: usize = 1_184;
 
 /// BLAKE3 multisig address-derivation domain
 /// (`crypto::MULTISIG_ADDRESS_DERIVATION_DOMAIN`). Folded into the
@@ -253,6 +255,7 @@ mod tests {
         assert_eq!(SERVES_PUBLIC_API, 1u32 << 8);
         assert_eq!(SERVES_GPU_PROVE, 1u32 << 9);
         assert_eq!(SERVES_GPU_PROVE, 0x0000_0200);
+        assert_eq!(NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES, 1_184);
         assert!(is_valid_capabilities(SERVES_GPU_PROVE));
         assert!(!is_valid_capabilities(0x0001_0000));
     }

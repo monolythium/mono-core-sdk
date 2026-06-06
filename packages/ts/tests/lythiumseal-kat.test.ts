@@ -5,6 +5,7 @@ import { ml_kem768 } from "@noble/post-quantum/ml-kem.js";
 import {
   CLUSTER_MLKEM_SHAMIR,
   encodeSealEnvelope,
+  generateOperatorSealKeypair,
   SEAL_DK_LEN,
   SEAL_EK_LEN,
   SEAL_KEM_SEED_LEN,
@@ -100,6 +101,14 @@ function mintRoster(rng: KatRng, n: number): { ek: Uint8Array; dk: Uint8Array }[
 }
 
 describe("LythiumSeal scheme-3 cross-language KAT", () => {
+  it("generates operator seal keypairs with canonical ML-KEM-768 sizes", () => {
+    const kp = generateOperatorSealKeypair();
+    expect(kp.encapsulationKey.length).toBe(SEAL_EK_LEN);
+    expect(kp.decapsulationKey.length).toBe(SEAL_DK_LEN);
+    expect(kp.encapsulationKey.some((byte) => byte !== 0)).toBe(true);
+    expect(kp.decapsulationKey.some((byte) => byte !== 0)).toBe(true);
+  });
+
   for (const v of vectors) {
     describe(v.description, () => {
       const seed = BigInt(v.seed_hex);

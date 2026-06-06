@@ -24,7 +24,9 @@ import type { NativeEvmTxFields } from "./crypto/tx.js";
 import { pqm1MnemonicToMlDsa65Backend } from "./crypto/pqm1.js";
 import {
   NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+  NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES,
   type ClusterJoinRequestView,
+  encodePublishOperatorSealKeyCalldata,
   encodeRequestClusterJoinCalldata,
   encodeVoteClusterAdmitCalldata,
   nodeRegistryAddressHex,
@@ -37,6 +39,8 @@ import {
 } from "./tx-fee.js";
 
 export const DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT =
+  REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT;
+export const DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT =
   REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT;
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -89,6 +93,14 @@ export interface BuildVoteClusterAdmitTxFieldsArgs {
   voterPubkey: string | Uint8Array | readonly number[];
 }
 
+export interface BuildPublishOperatorSealKeyTxFieldsArgs {
+  chainId: bigint | number | string;
+  nonce: bigint | number | string;
+  fee: ClusterJoinTxFee;
+  peerId: string | Uint8Array | readonly number[];
+  sealEk: string | Uint8Array | readonly number[];
+}
+
 export interface SubmitRequestClusterJoinArgs
   extends ClusterJoinFeeOptions, ClusterJoinPrivacyOptions {
   client: ClusterJoinSubmitClient;
@@ -107,6 +119,13 @@ export interface SubmitVoteClusterAdmitArgs
   voterPubkey: string | Uint8Array | readonly number[];
 }
 
+export interface SubmitPublishOperatorSealKeyArgs extends ClusterJoinFeeOptions {
+  client: ClusterJoinSubmitClient;
+  mnemonic: string;
+  peerId: string | Uint8Array | readonly number[];
+  sealEk: string | Uint8Array | readonly number[];
+}
+
 export interface ClusterJoinSubmitResult {
   txHash: string;
   clusterId: string;
@@ -114,6 +133,13 @@ export interface ClusterJoinSubmitResult {
   innerSighashHex: string;
   signedTxWireBytes: number;
   envelopeWireBytes?: number;
+}
+
+export interface OperatorSealKeySubmitResult {
+  txHash: string;
+  operatorIdHex: string;
+  innerSighashHex: string;
+  signedTxWireBytes: number;
 }
 
 export interface OperatorOnboardingPreview {
@@ -311,6 +337,27 @@ export function buildVoteClusterAdmitTxFields(
   };
 }
 
+export function buildPublishOperatorSealKeyTxFields(
+  args: BuildPublishOperatorSealKeyTxFieldsArgs,
+): NativeEvmTxFields {
+  return {
+    chainId: args.chainId,
+    nonce: args.nonce,
+    maxFeePerGas: parseBigint(args.fee.maxFeePerGas, "maxFeePerGas"),
+    maxPriorityFeePerGas: parseBigint(args.fee.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
+    gasLimit: parseBigint(
+      args.fee.gasLimit ?? DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT,
+      "gasLimit",
+    ),
+    to: nodeRegistryAddressHex(),
+    value: 0n,
+    input: encodePublishOperatorSealKeyCalldata({
+      peerId: normalizeOperatorId(args.peerId),
+      sealEk: normalizeOperatorSealEk(args.sealEk),
+    }),
+  };
+}
+
 export async function submitRequestClusterJoin(
   args: SubmitRequestClusterJoinArgs,
 ): Promise<ClusterJoinSubmitResult> {
@@ -372,6 +419,42 @@ export async function submitVoteClusterAdmit(
     voterPubkey: args.voterPubkey,
   });
   return submitClusterJoinTx(args.client, backend, tx, clusterId, operatorIdHex, args);
+}
+
+export async function submitPublishOperatorSealKey(
+  args: SubmitPublishOperatorSealKeyArgs,
+): Promise<OperatorSealKeySubmitResult> {
+  const operatorIdHex = normalizeOperatorId(args.peerId);
+  const sealEk = normalizeOperatorSealEk(args.sealEk);
+  const backend = pqm1MnemonicToMlDsa65Backend(args.mnemonic);
+  const senderAddress = addressToTypedBech32("user", backend.addressBytes());
+  const [chainId, nonce, quote] = await Promise.all([
+    args.client.ethChainId(),
+    args.client.lythGetTransactionCount(senderAddress),
+    args.client.lythExecutionUnitPrice(),
+  ]);
+  const tx = buildPublishOperatorSealKeyTxFields({
+    chainId,
+    nonce,
+    fee: resolveClusterJoinExecutionFee(quote, {
+      ...args,
+      executionUnitLimit: args.executionUnitLimit ?? DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT,
+    }),
+    peerId: operatorIdHex,
+    sealEk,
+  });
+  const plaintext = buildPlaintextSubmission({ backend, tx });
+  const txHash = await submitPlaintextTransaction(
+    args.client,
+    plaintext.signedTxWireHex,
+    plaintext.innerTxHashHex,
+  );
+  return {
+    txHash,
+    operatorIdHex,
+    innerSighashHex: plaintext.innerSighashHex,
+    signedTxWireBytes: plaintext.innerWireBytes,
+  };
 }
 
 async function submitClusterJoinTx(
@@ -482,6 +565,11 @@ function normalizeConsensusPubkey(
 function normalizeOperatorId(value: string | Uint8Array | readonly number[]): string {
   const bytes = typeof value === "string" ? hexToBytes(value, "operatorId") : value;
   return bytesToHex(expectBytes(bytes, 32, "operatorId"));
+}
+
+function normalizeOperatorSealEk(value: string | Uint8Array | readonly number[]): Uint8Array {
+  const bytes = typeof value === "string" ? hexToBytes(value, "sealEk") : value;
+  return expectBytes(bytes, NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES, "sealEk").slice();
 }
 
 function parseUint32(value: bigint | number | string, label: string): bigint {

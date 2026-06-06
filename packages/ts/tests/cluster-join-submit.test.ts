@@ -3,15 +3,19 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT,
+  DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT,
   NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+  NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES,
   NODE_REGISTRY_SELECTORS,
   RpcClient,
+  buildPublishOperatorSealKeyTxFields,
   buildRequestClusterJoinTxFields,
   buildVoteClusterAdmitTxFields,
   clusterJoinRequestExists,
   deriveClusterJoinOperatorId,
   readClusterJoinRequest,
   resolveClusterJoinExecutionFee,
+  submitPublishOperatorSealKey,
   submitRequestClusterJoin,
   submitVoteClusterAdmit,
   type OperatorOnboardingPreview,
@@ -34,6 +38,7 @@ interface CapturedCall {
 const mnemonic = pqm1PayloadToMnemonic(assemblePqm1Payload(new Uint8Array(30).fill(0x31)));
 const operatorPubkey = new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0x44);
 const voterPubkey = new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0x55);
+const sealEk = new Uint8Array(NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES).fill(0x66);
 const operatorId = deriveClusterJoinOperatorId(operatorPubkey);
 const quote = {
   executionUnitPriceLythoshi: "800",
@@ -180,6 +185,18 @@ function expectedRequestPlaintextTxHash(): string {
   return buildPlaintextSubmission({ backend, tx }).innerTxHashHex;
 }
 
+function expectedPublishSealKeyPlaintextTxHash(): string {
+  const backend = pqm1MnemonicToMlDsa65Backend(mnemonic);
+  const tx = buildPublishOperatorSealKeyTxFields({
+    chainId: 69_420n,
+    nonce: 18n,
+    fee: resolveClusterJoinExecutionFee(quote),
+    peerId: operatorId,
+    sealEk,
+  });
+  return buildPlaintextSubmission({ backend, tx }).innerTxHashHex;
+}
+
 describe("CJ-1 cluster-admission submit helpers", () => {
   it("reads and decodes the cluster join request view", async () => {
     const { fetch, calls } = mockFetchByMethod({ lyth_getClusterJoinRequest: requestView(1) });
@@ -201,6 +218,9 @@ describe("CJ-1 cluster-admission submit helpers", () => {
       maxPriorityFeePerGas: 6000n,
       gasLimit: DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT,
     });
+    expect(DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT).toBe(
+      DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT,
+    );
 
     const request = buildRequestClusterJoinTxFields({
       chainId: 69_420n,
@@ -224,6 +244,18 @@ describe("CJ-1 cluster-admission submit helpers", () => {
     });
     expect(vote.value).toBe(0n);
     expect(String(vote.input).startsWith(NODE_REGISTRY_SELECTORS.voteClusterAdmit)).toBe(true);
+
+    const publish = buildPublishOperatorSealKeyTxFields({
+      chainId: 69_420n,
+      nonce: 3n,
+      fee,
+      peerId: operatorId,
+      sealEk,
+    });
+    expect(publish.value).toBe(0n);
+    expect(String(publish.input).startsWith(NODE_REGISTRY_SELECTORS.publishOperatorSealKey)).toBe(
+      true,
+    );
   });
 
   it("submits requestClusterJoin as a sealed transaction after preflight", async () => {
@@ -282,6 +314,34 @@ describe("CJ-1 cluster-admission submit helpers", () => {
     expect(res.txHash).toBe(expectedRequestPlaintextTxHash());
     expect(calls.map((c) => c.method)).toEqual([
       "lyth_previewRequestClusterJoin",
+      "eth_chainId",
+      "lyth_getTransactionCount",
+      "lyth_executionUnitPrice",
+      "mesh_submitTx",
+    ]);
+  });
+
+  it("submits publishOperatorSealKey as a plaintext registry transaction", async () => {
+    const expectedHash = expectedPublishSealKeyPlaintextTxHash();
+    const { fetch, calls } = mockFetchByMethod({
+      eth_chainId: "0x10f2c",
+      lyth_getTransactionCount: 18,
+      lyth_executionUnitPrice: quote,
+      mesh_submitTx: expectedHash,
+    });
+    const client = new RpcClient("http://x", { fetch });
+
+    const res = await submitPublishOperatorSealKey({
+      client,
+      mnemonic,
+      peerId: operatorId,
+      sealEk,
+    });
+
+    expect(res.txHash).toBe(expectedHash);
+    expect(res.operatorIdHex).toBe(operatorId);
+    expect(res.signedTxWireBytes).toBeGreaterThan(0);
+    expect(calls.map((c) => c.method)).toEqual([
       "eth_chainId",
       "lyth_getTransactionCount",
       "lyth_executionUnitPrice",

@@ -90,6 +90,22 @@ export function cryptoRandomSource(): SealRandomSource {
   };
 }
 
+export interface OperatorSealKeypair {
+  /** ML-KEM-768 encapsulation key, published to node-registry. */
+  encapsulationKey: Uint8Array;
+  /** ML-KEM-768 decapsulation key, retained by the operator node only. */
+  decapsulationKey: Uint8Array;
+}
+
+/** Generate one independent ML-KEM-768 keypair for LythiumSeal operator use. */
+export function generateOperatorSealKeypair(): OperatorSealKeypair {
+  const { publicKey, secretKey } = ml_kem768.keygen();
+  return {
+    encapsulationKey: expectBytes(publicKey, SEAL_EK_LEN, "encapsulationKey").slice(),
+    decapsulationKey: expectBytes(secretKey, SEAL_DK_LEN, "decapsulationKey").slice(),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // SHAKE-based derivations (byte-identical to lythiumseal/src/aead.rs).
 
