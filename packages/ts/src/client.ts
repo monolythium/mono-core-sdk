@@ -60,7 +60,7 @@ import type {
   AddressActivityKindResponse,
   AddressLabelRecord,
   AssetPolicy,
-  BlsCertificateResponse,
+  RoundCertificateResponse as RoundCertificateResponseBinding,
   BlockHeader,
   CapabilitiesResponse,
   CheckpointRecord,
@@ -117,7 +117,10 @@ import type {
   TypedNativeReceiptEvent,
 } from "./native-events.js";
 
-export type RoundCertificateResponse = BlsCertificateResponse;
+export type RoundCertificateResponse = RoundCertificateResponseBinding;
+
+/** @deprecated Use {@link RoundCertificateResponse}. The JSON wire is identical. */
+export type BlsCertificateResponse = RoundCertificateResponse;
 
 export type EthCallRequest = RpcCallRequest & {
   /** Alias accepted by `eth_call` / `eth_estimateGas`; `data` is canonical. */

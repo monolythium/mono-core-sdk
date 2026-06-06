@@ -217,6 +217,7 @@ export type {
   QuoteLiquidity,
   ResolveNameResponse,
   RoundCertificateResponse,
+  BlsCertificateResponse,
   RpcClientOptions,
   RuntimeBuildProvenance,
   RuntimeProvenanceResponse,

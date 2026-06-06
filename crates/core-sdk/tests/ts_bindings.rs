@@ -34,7 +34,7 @@ use monolythium_core_sdk::types::{
     AccountPolicy, AccountProofResponse, AddressActivityArchiveRedirect, AddressActivityEntry,
     AddressActivityKindResponse, AddressActivityKindRetention, AddressLabelRecord,
     AgentReputationCategoryScope, AgentReputationRecord, AgentReputationResponse, AssetPolicy,
-    BlockHeader, BlockTag, BlsCertificateResponse, CallRequest, CapabilitiesResponse,
+    BlockHeader, BlockTag, CallRequest, CapabilitiesResponse,
     CapabilityDescriptor, CheckpointRecord, ClobMarketRecord, ClobMarketResponse,
     ClusterDelegatorsResponse, ClusterEntityResponse, ClusterResignationRow,
     ClusterResignationsResponse, DagParent, DagParentsResponse, DagSyncStatus, DecodeTxExtension,
@@ -55,7 +55,8 @@ use monolythium_core_sdk::types::{
     NativeReceiptFee, NativeSpotMarketStateRecord, NativeSpotOrderStateRecord, PeerSummary,
     PendingRewardsResponse, PendingRewardsRow, PendingTxSummary, PrecompileDescriptor,
     RedemptionQueueResponse, RedemptionQueueTicket, RegistryRecord, RichListHolder,
-    RichListResponse, RoundInfo, StorageProofBatch, SyncStatus, TokenBalanceMrcIdentity,
+    RichListResponse, RoundCertificateResponse, RoundInfo, StorageProofBatch, SyncStatus,
+    TokenBalanceMrcIdentity,
     TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt, TransactionView,
 };
 use ts_rs::TS;
@@ -109,7 +110,7 @@ fn export_bindings() {
     ProverMarketState::export_all_to(&out).expect("ProverMarketState");
     ProofRequestView::export_all_to(&out).expect("ProofRequestView");
     ProverBidView::export_all_to(&out).expect("ProverBidView");
-    BlsCertificateResponse::export_all_to(&out).expect("BlsCertificateResponse");
+    RoundCertificateResponse::export_all_to(&out).expect("RoundCertificateResponse");
     BlockHeader::export_all_to(&out).expect("BlockHeader");
     BlockTag::export_all_to(&out).expect("BlockTag");
     CallRequest::export_all_to(&out).expect("CallRequest");

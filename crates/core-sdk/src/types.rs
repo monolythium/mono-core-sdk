@@ -4897,17 +4897,26 @@ pub struct ClusterResignationsResponse {
     pub rows: Vec<ClusterResignationRow>,
 }
 
-/// BLS aggregate certificate response used by the AUD-0074 certificate RPCs.
+/// Round-advancement certificate response used by the AUD-0074
+/// certificate RPCs (`lyth_getRoundCertificate` /
+/// `lyth_getLeaderCertificate` / `lyth_getDacCertificate`).
+///
+/// On the post-quantum chain the `signature` field is the ML-DSA-65
+/// leader-seed digest — the BLAKE3 hash over the ML-DSA quorum
+/// certificate that seeds the historical leader beacon. It is also the
+/// value the VRF precompile (`0x1101`) reads as the historical
+/// randomness for a finalized round.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
 #[cfg_attr(
     feature = "ts-bindings",
-    ts(export, export_to = "BlsCertificateResponse.ts")
+    ts(export, export_to = "RoundCertificateResponse.ts")
 )]
-pub struct BlsCertificateResponse {
+pub struct RoundCertificateResponse {
     /// Round at which the certificate sealed.
     pub round: u64,
-    /// `0x`-prefixed aggregate BLS signature.
+    /// `0x`-prefixed leader-seed digest (ML-DSA-65 quorum-cert hash).
+    /// The JSON wire field stays `signature` for compatibility.
     pub signature: Hex,
     /// Signer-set bitmap as `0x`-hex bytes.
     #[serde(rename = "signers_bitmap", alias = "signersBitmap")]
@@ -4919,6 +4928,11 @@ pub struct BlsCertificateResponse {
     #[serde(rename = "signer_count", alias = "signerCount")]
     pub signer_count: u16,
 }
+
+/// Deprecated alias for [`RoundCertificateResponse`]; retained so existing
+/// callers keep compiling. The JSON wire is identical.
+#[deprecated(note = "use RoundCertificateResponse")]
+pub type BlsCertificateResponse = RoundCertificateResponse;
 
 /// Log row included in `lyth_decodeTx`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

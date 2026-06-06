@@ -24,7 +24,7 @@ use crate::types::{
     native_events_from_receipt, native_market_events_filter, native_market_events_from_receipt,
     typed_native_events_from_response, AccountPolicy, AccountProofResponse, AddressActivityEntry,
     AddressActivityKindResponse, AddressFlowResponse, AddressLabelRecord, AddressProfileResponse,
-    AgentReputationResponse, AssetPolicy, BlockHeader, BlockSelector, BlsCertificateResponse,
+    AgentReputationResponse, AssetPolicy, BlockHeader, BlockSelector,
     CapabilitiesResponse, ChainStatsResponse, CheckpointRecord, ClobMarketResponse,
     ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse, ClobTradesResponse,
     ClusterDelegatorsResponse, ClusterEntityResponse, ClusterResignationsResponse,
@@ -38,7 +38,8 @@ use crate::types::{
     NativeMarketStateFilter, NativeMarketStateResponse, NativeReceiptResponse,
     OperatorCapabilitiesResponse, PeerSummary, PeerSummaryAggregate, PendingRewardsResponse,
     PendingTxSummary, PrecompileDescriptor, RedemptionQueueResponse, RegistryRecord,
-    RichListResponse, RoundInfo, SearchResponse, StorageProofBatch, SyncStatus, TokenBalanceRecord,
+    RichListResponse, RoundCertificateResponse, RoundInfo, SearchResponse, StorageProofBatch,
+    SyncStatus, TokenBalanceRecord,
     TpmAttestationResponse, TransactionReceipt, TransactionView, TxFeedResponse, TxStatusResponse,
     TypedNativeEventsResponse, TypedNativeReceiptEvent, VerticesAtRoundResponse,
 };
@@ -1223,22 +1224,34 @@ impl RpcClient {
         self.call("lyth_getClusterResignations", params).await
     }
 
-    /// `lyth_getBlsRoundCertificate` — round-advancement BLS aggregate.
+    /// `lyth_getRoundCertificate` — round-advancement certificate. On the
+    /// post-quantum chain `signature` is the ML-DSA-65 leader-seed digest,
+    /// which doubles as the historical randomness for the round.
+    pub async fn lyth_get_round_certificate(
+        &self,
+        round: u64,
+    ) -> Result<Option<RoundCertificateResponse>, SdkError> {
+        self.call("lyth_getRoundCertificate", json!([round])).await
+    }
+
+    /// `lyth_getBlsRoundCertificate` — deprecated alias for
+    /// [`Self::lyth_get_round_certificate`].
+    #[deprecated(note = "use lyth_get_round_certificate")]
     pub async fn lyth_get_bls_round_certificate(
         &self,
         round: u64,
-    ) -> Result<Option<BlsCertificateResponse>, SdkError> {
+    ) -> Result<Option<RoundCertificateResponse>, SdkError> {
         self.call("lyth_getBlsRoundCertificate", json!([round]))
             .await
     }
 
-    /// `lyth_getLeaderCertificate` — leader-vote BLS aggregate for a block ref.
+    /// `lyth_getLeaderCertificate` — leader-vote certificate for a block ref.
     pub async fn lyth_get_leader_certificate(
         &self,
         round: u64,
         authority: u16,
         digest: &str,
-    ) -> Result<Option<BlsCertificateResponse>, SdkError> {
+    ) -> Result<Option<RoundCertificateResponse>, SdkError> {
         self.call(
             "lyth_getLeaderCertificate",
             json!([round, authority, digest]),
@@ -1252,7 +1265,7 @@ impl RpcClient {
         round: u64,
         authority: u16,
         digest: &str,
-    ) -> Result<Option<BlsCertificateResponse>, SdkError> {
+    ) -> Result<Option<RoundCertificateResponse>, SdkError> {
         self.call("lyth_getDacCertificate", json!([round, authority, digest]))
             .await
     }

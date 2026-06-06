@@ -209,6 +209,50 @@ const lookup = encodeLookupPubkeyCalldata(account);
 const decoded = decodeLookupPubkeyReturn(returnData);
 ```
 
+### VRF / on-chain randomness
+
+The VRF precompile at `0x1101` exposes per-round randomness. There are two
+ways to read it:
+
+- The **selectorless precompile call**: calldata is a 32-byte big-endian
+  finalized block height followed by a caller-chosen domain tag (up to 256
+  bytes). Successful return data is exactly 32 bytes. Calling it for a height
+  that has not yet finalized reverts with `vrf: height not finalized`.
+- The **historical leader seed**: `lythGetRoundCertificate(round).signature`
+  is the ML-DSA-65 leader-seed digest (a BLAKE3 hash over the round's
+  ML-DSA quorum certificate) that seeded that round's leader beacon.
+
+```ts
+import {
+  RpcClient,
+  encodeVrfEvaluateCalldata,
+  decodeVrfOutput,
+  vrfAddressHex,
+  VRF_HEIGHT_NOT_FINALIZED_REVERT,
+} from "@monolythium/core-sdk";
+
+const client = await RpcClient.forNetwork("testnet-69420");
+
+// (a) Read the historical leader seed for a finalized round.
+const cert = await client.lythGetRoundCertificate(1_000n);
+const leaderSeed = cert?.signature; // 0x-prefixed leader-seed digest
+
+// (b) Encode + decode a 0x1101 eth_call for a finalized height. The domain
+//     tag namespaces the randomness per consumer.
+const height = await client.ethBlockNumber();
+const data = encodeVrfEvaluateCalldata(height, "dice-roll");
+try {
+  const ret = await client.ethCall({ to: vrfAddressHex(), data });
+  const randomness = decodeVrfOutput(ret); // 32 bytes
+  console.log(leaderSeed, randomness);
+} catch (err) {
+  // Calling at an unfinalized height reverts with this message.
+  if (String(err).includes(VRF_HEIGHT_NOT_FINALIZED_REVERT)) {
+    console.warn("requested height has not finalized yet");
+  }
+}
+```
+
 ### Node-registry lifecycle helpers
 
 Operator tooling can build canonical node-registry calldata for Monarch
@@ -230,7 +274,7 @@ const pending = encodeSubmitPendingChangeCalldata({
   intentId: 7n,
 });
 const cancel = encodeCancelPendingChangeCalldata({ epoch: 42n, targetPubkey });
-const dkg = encodeAttestDkgReshareCalldata({ intentId: 7n, blsPublicKeys, thresholdSig });
+const dkg = encodeAttestDkgReshareCalldata({ intentId: 7n, consensusPublicKeys, thresholdSig });
 ```
 
 ### Bridge route readiness
