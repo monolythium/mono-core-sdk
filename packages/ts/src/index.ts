@@ -10,7 +10,7 @@
  * subpath so native SDK consumers do not import that peer dependency.
  */
 
-export const version = "0.4.7";
+export const version = "0.4.8";
 
 export { ApiClient, apiEndpointFromRpcEndpoint } from "./api.js";
 export {
@@ -153,6 +153,7 @@ export type {
   ClusterNameResponse,
   ClusterStatusResponse,
   DutyAbsence,
+  EthCallRequest,
   ExecutionUnitPriceResponse,
   JailStatusWindow,
   KeyRotationWindow,
@@ -545,6 +546,56 @@ export {
   parseNameCategory,
 } from "./name-registry.js";
 export type { NameCategory, NameRegistrationQuote, ParsedName } from "./name-registry.js";
+export {
+  TOKEN_FACTORY_CREATE_DEPOSIT_LYTHOSHI,
+  TOKEN_FACTORY_FLAGS,
+  TOKEN_FACTORY_KNOWN_FLAG_MASK,
+  TOKEN_FACTORY_MAX_CREATOR_FEE_BPS,
+  TOKEN_FACTORY_MAX_DECIMALS,
+  TOKEN_FACTORY_NAME_MAX_BYTES,
+  TOKEN_FACTORY_SELECTORS,
+  TOKEN_FACTORY_SIGS,
+  TOKEN_FACTORY_SYMBOL_MAX_BYTES,
+  TOKEN_FACTORY_TOKEN_ID_DOMAIN_TAG,
+  TokenFactoryError,
+  decodeTokenFactoryTokenId,
+  deriveTokenFactoryTokenId,
+  encodeCreateFixedSupplyMrc20Calldata,
+  encodeCreateTokenCalldata,
+  encodeTokenFactoryAllowanceCalldata,
+  encodeTokenFactoryApproveCalldata,
+  encodeTokenFactoryBalanceOfCalldata,
+  encodeTokenFactoryBurnCalldata,
+  encodeTokenFactoryDecreaseAllowanceCalldata,
+  encodeTokenFactoryDestroyCalldata,
+  encodeTokenFactoryIncreaseAllowanceCalldata,
+  encodeTokenFactoryMetadataCalldata,
+  encodeTokenFactoryMintCalldata,
+  encodeTokenFactorySetPausedCalldata,
+  encodeTokenFactoryTotalSupplyCalldata,
+  encodeTokenFactoryTransferCalldata,
+  encodeTokenFactoryTransferFromCalldata,
+  encodeTokenFactoryTransferOwnershipCalldata,
+  tokenFactoryAddressHex,
+  validateTokenFactoryFlags,
+} from "./token-factory.js";
+export type {
+  CreateFixedSupplyMrc20CalldataArgs,
+  CreateTokenCalldataArgs,
+  TokenFactoryAddressInput,
+  TokenFactoryBytes32Input,
+  TokenFactoryUintInput,
+} from "./token-factory.js";
+export {
+  VRF_DOMAIN_TAG_MAX_BYTES,
+  VRF_HEIGHT_NOT_FINALIZED_REVERT,
+  VRF_OUTPUT_BYTES,
+  VrfCallError,
+  decodeVrfOutput,
+  encodeVrfEvaluateCalldata,
+  vrfAddressHex,
+} from "./vrf.js";
+export type { VrfDomainTagInput } from "./vrf.js";
 export {
   PROVER_MARKET_ADDRESS,
   PROVER_MARKET_BID_DOMAIN,

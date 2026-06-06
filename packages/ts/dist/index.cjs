@@ -3768,6 +3768,16 @@ var RpcClient = class _RpcClient {
   async ethGetCode(address, block = "latest") {
     return this.call("eth_getCode", [address, encodeBlockSelector(block)]);
   }
+  /** `eth_call` — read-only execution against committed state. */
+  async ethCall(request, block = "latest") {
+    return this.call("eth_call", [request, encodeBlockSelector(block)]);
+  }
+  /** `eth_estimateGas` — read-only execution-unit estimate for a call object. */
+  async ethEstimateGas(request, block = "latest") {
+    return parseQuantityBig(
+      await this.call("eth_estimateGas", [request, encodeBlockSelector(block)])
+    );
+  }
   /** Compatibility block-header read by height/tag. */
   async ethGetBlockByNumber(block = "latest") {
     return normalizeBlockHeader(await this.call(ethCompatMethod("getBlockByNumber"), [encodeBlockSelector(block)]));
@@ -8985,15 +8995,405 @@ function expectLength4(value, len, name) {
   }
   return value;
 }
+var TokenFactoryError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "TokenFactoryError";
+  }
+};
+var TOKEN_FACTORY_CREATE_DEPOSIT_LYTHOSHI = 3000000000000000n;
+var TOKEN_FACTORY_NAME_MAX_BYTES = 256;
+var TOKEN_FACTORY_SYMBOL_MAX_BYTES = 256;
+var TOKEN_FACTORY_MAX_DECIMALS = 30;
+var TOKEN_FACTORY_MAX_CREATOR_FEE_BPS = 1e4;
+var TOKEN_FACTORY_TOKEN_ID_DOMAIN_TAG = 250;
+var TOKEN_FACTORY_FLAGS = {
+  MINTABLE: 1 << 0,
+  BURNABLE: 1 << 1,
+  PAUSABLE: 1 << 2,
+  FIXED_SUPPLY: 1 << 3,
+  CREATOR_FEE_OPT_IN: 1 << 4,
+  DESTRUCTIBLE: 1 << 5
+};
+var TOKEN_FACTORY_KNOWN_FLAG_MASK = TOKEN_FACTORY_FLAGS.MINTABLE | TOKEN_FACTORY_FLAGS.BURNABLE | TOKEN_FACTORY_FLAGS.PAUSABLE | TOKEN_FACTORY_FLAGS.FIXED_SUPPLY | TOKEN_FACTORY_FLAGS.CREATOR_FEE_OPT_IN | TOKEN_FACTORY_FLAGS.DESTRUCTIBLE;
+var TOKEN_FACTORY_SIGS = {
+  createToken: "createToken(string,string,uint8,uint256,uint256,uint32,uint16)",
+  transfer: "transfer(bytes32,address,uint256)",
+  transferFrom: "transferFrom(bytes32,address,address,uint256)",
+  approve: "approve(bytes32,address,uint256)",
+  increaseAllowance: "increaseAllowance(bytes32,address,uint256)",
+  decreaseAllowance: "decreaseAllowance(bytes32,address,uint256)",
+  balanceOf: "balanceOf(bytes32,address)",
+  allowance: "allowance(bytes32,address,address)",
+  totalSupply: "totalSupply(bytes32)",
+  metadata: "metadata(bytes32)",
+  mint: "mint(bytes32,address,uint256)",
+  burn: "burn(bytes32,uint256)",
+  setPaused: "setPaused(bytes32,bool)",
+  transferOwnership: "transferOwnership(bytes32,address)",
+  destroyToken: "destroyToken(bytes32)"
+};
+var TOKEN_FACTORY_SELECTORS = {
+  createToken: selectorHex3(TOKEN_FACTORY_SIGS.createToken),
+  transfer: selectorHex3(TOKEN_FACTORY_SIGS.transfer),
+  transferFrom: selectorHex3(TOKEN_FACTORY_SIGS.transferFrom),
+  approve: selectorHex3(TOKEN_FACTORY_SIGS.approve),
+  increaseAllowance: selectorHex3(TOKEN_FACTORY_SIGS.increaseAllowance),
+  decreaseAllowance: selectorHex3(TOKEN_FACTORY_SIGS.decreaseAllowance),
+  balanceOf: selectorHex3(TOKEN_FACTORY_SIGS.balanceOf),
+  allowance: selectorHex3(TOKEN_FACTORY_SIGS.allowance),
+  totalSupply: selectorHex3(TOKEN_FACTORY_SIGS.totalSupply),
+  metadata: selectorHex3(TOKEN_FACTORY_SIGS.metadata),
+  mint: selectorHex3(TOKEN_FACTORY_SIGS.mint),
+  burn: selectorHex3(TOKEN_FACTORY_SIGS.burn),
+  setPaused: selectorHex3(TOKEN_FACTORY_SIGS.setPaused),
+  transferOwnership: selectorHex3(TOKEN_FACTORY_SIGS.transferOwnership),
+  destroyToken: selectorHex3(TOKEN_FACTORY_SIGS.destroyToken)
+};
+function tokenFactoryAddressHex() {
+  return PRECOMPILE_ADDRESSES.TOKEN_FACTORY.toLowerCase();
+}
+function deriveTokenFactoryTokenId(creator, creatorTokenNonce) {
+  const nonce = parseUint(creatorTokenNonce, "creatorTokenNonce", 64);
+  return bytesToHex2(
+    sha3_js.keccak_256(
+      concatBytes2(
+        new Uint8Array([TOKEN_FACTORY_TOKEN_ID_DOMAIN_TAG]),
+        addressBytes(creator, "creator"),
+        uint64Be(nonce)
+      )
+    )
+  );
+}
+function encodeCreateTokenCalldata(args) {
+  const name = textBytes(args.name, "name", TOKEN_FACTORY_NAME_MAX_BYTES);
+  const symbol = textBytes(args.symbol, "symbol", TOKEN_FACTORY_SYMBOL_MAX_BYTES);
+  const decimals = parseSmallUint(args.decimals, "decimals", TOKEN_FACTORY_MAX_DECIMALS);
+  const initialSupply = parseUint(args.initialSupply, "initialSupply");
+  const maxSupply = parseUint(args.maxSupply, "maxSupply");
+  const flags = args.flags ?? 0;
+  validateTokenFactoryFlags(flags, args.creatorFeeBps ?? 0);
+  const creatorFeeBps = parseSmallUint(
+    args.creatorFeeBps ?? 0,
+    "creatorFeeBps",
+    TOKEN_FACTORY_MAX_CREATOR_FEE_BPS
+  );
+  const headLen = 7 * 32;
+  const nameTail = dynamicBytesTail(name);
+  const symbolOffset = BigInt(headLen + nameTail.length);
+  return bytesToHex2(
+    concatBytes2(
+      hexToBytes2(TOKEN_FACTORY_SELECTORS.createToken, "createToken selector"),
+      uint256Word2(BigInt(headLen), "nameOffset"),
+      uint256Word2(symbolOffset, "symbolOffset"),
+      uint256Word2(BigInt(decimals), "decimals"),
+      uint256Word2(initialSupply, "initialSupply"),
+      uint256Word2(maxSupply, "maxSupply"),
+      uint256Word2(BigInt(flags), "flags"),
+      uint256Word2(BigInt(creatorFeeBps), "creatorFeeBps"),
+      nameTail,
+      dynamicBytesTail(symbol)
+    )
+  );
+}
+function encodeCreateFixedSupplyMrc20Calldata(args) {
+  let flags = TOKEN_FACTORY_FLAGS.FIXED_SUPPLY;
+  if (args.burnable) flags |= TOKEN_FACTORY_FLAGS.BURNABLE;
+  if (args.pausable) flags |= TOKEN_FACTORY_FLAGS.PAUSABLE;
+  if (args.destructible) flags |= TOKEN_FACTORY_FLAGS.DESTRUCTIBLE;
+  return encodeCreateTokenCalldata({
+    name: args.name,
+    symbol: args.symbol,
+    decimals: args.decimals,
+    initialSupply: args.supply,
+    maxSupply: args.supply,
+    flags,
+    creatorFeeBps: 0
+  });
+}
+function encodeTokenFactoryTransferCalldata(tokenId, to, amount) {
+  return encodeBytes32AddressUint(TOKEN_FACTORY_SELECTORS.transfer, tokenId, to, amount);
+}
+function encodeTokenFactoryTransferFromCalldata(tokenId, from, to, amount) {
+  return bytesToHex2(
+    concatBytes2(
+      hexToBytes2(TOKEN_FACTORY_SELECTORS.transferFrom, "transferFrom selector"),
+      bytes32(tokenId, "tokenId"),
+      addressWord3(from, "from"),
+      addressWord3(to, "to"),
+      uint256Word2(parseUint(amount, "amount"), "amount")
+    )
+  );
+}
+function encodeTokenFactoryApproveCalldata(tokenId, spender, amount) {
+  return encodeBytes32AddressUint(TOKEN_FACTORY_SELECTORS.approve, tokenId, spender, amount);
+}
+function encodeTokenFactoryIncreaseAllowanceCalldata(tokenId, spender, delta) {
+  return encodeBytes32AddressUint(TOKEN_FACTORY_SELECTORS.increaseAllowance, tokenId, spender, delta);
+}
+function encodeTokenFactoryDecreaseAllowanceCalldata(tokenId, spender, delta) {
+  return encodeBytes32AddressUint(TOKEN_FACTORY_SELECTORS.decreaseAllowance, tokenId, spender, delta);
+}
+function encodeTokenFactoryBalanceOfCalldata(tokenId, holder) {
+  return encodeBytes32Address(TOKEN_FACTORY_SELECTORS.balanceOf, tokenId, holder);
+}
+function encodeTokenFactoryAllowanceCalldata(tokenId, owner, spender) {
+  return bytesToHex2(
+    concatBytes2(
+      hexToBytes2(TOKEN_FACTORY_SELECTORS.allowance, "allowance selector"),
+      bytes32(tokenId, "tokenId"),
+      addressWord3(owner, "owner"),
+      addressWord3(spender, "spender")
+    )
+  );
+}
+function encodeTokenFactoryTotalSupplyCalldata(tokenId) {
+  return encodeBytes32(TOKEN_FACTORY_SELECTORS.totalSupply, tokenId);
+}
+function encodeTokenFactoryMetadataCalldata(tokenId) {
+  return encodeBytes32(TOKEN_FACTORY_SELECTORS.metadata, tokenId);
+}
+function encodeTokenFactoryMintCalldata(tokenId, to, amount) {
+  return encodeBytes32AddressUint(TOKEN_FACTORY_SELECTORS.mint, tokenId, to, amount);
+}
+function encodeTokenFactoryBurnCalldata(tokenId, amount) {
+  return encodeBytes32Uint(TOKEN_FACTORY_SELECTORS.burn, tokenId, amount);
+}
+function encodeTokenFactorySetPausedCalldata(tokenId, paused) {
+  return bytesToHex2(
+    concatBytes2(
+      hexToBytes2(TOKEN_FACTORY_SELECTORS.setPaused, "setPaused selector"),
+      bytes32(tokenId, "tokenId"),
+      boolWord(paused)
+    )
+  );
+}
+function encodeTokenFactoryTransferOwnershipCalldata(tokenId, newOwner) {
+  return encodeBytes32Address(TOKEN_FACTORY_SELECTORS.transferOwnership, tokenId, newOwner);
+}
+function encodeTokenFactoryDestroyCalldata(tokenId) {
+  return encodeBytes32(TOKEN_FACTORY_SELECTORS.destroyToken, tokenId);
+}
+function decodeTokenFactoryTokenId(output) {
+  return bytesToHex2(bytes32(output, "output"));
+}
+function validateTokenFactoryFlags(flags, creatorFeeBps = 0) {
+  if (!Number.isInteger(flags) || flags < 0 || flags > 4294967295) {
+    throw new TokenFactoryError("flags must be a uint32");
+  }
+  if ((flags & ~TOKEN_FACTORY_KNOWN_FLAG_MASK) !== 0) {
+    throw new TokenFactoryError("flags contain an unknown bit");
+  }
+  if ((flags & TOKEN_FACTORY_FLAGS.MINTABLE) !== 0 && (flags & TOKEN_FACTORY_FLAGS.FIXED_SUPPLY) !== 0) {
+    throw new TokenFactoryError("MINTABLE and FIXED_SUPPLY are mutually exclusive");
+  }
+  if ((flags & TOKEN_FACTORY_FLAGS.CREATOR_FEE_OPT_IN) !== 0) {
+    if (creatorFeeBps <= 0) throw new TokenFactoryError("CREATOR_FEE_OPT_IN requires non-zero creatorFeeBps");
+  } else if (creatorFeeBps !== 0) {
+    throw new TokenFactoryError("creatorFeeBps must be 0 when CREATOR_FEE_OPT_IN is unset");
+  }
+}
+function encodeBytes32(selector, value) {
+  return bytesToHex2(concatBytes2(hexToBytes2(selector, "selector"), bytes32(value, "tokenId")));
+}
+function encodeBytes32Uint(selector, tokenId, amount) {
+  return bytesToHex2(
+    concatBytes2(
+      hexToBytes2(selector, "selector"),
+      bytes32(tokenId, "tokenId"),
+      uint256Word2(parseUint(amount, "amount"), "amount")
+    )
+  );
+}
+function encodeBytes32Address(selector, tokenId, address) {
+  return bytesToHex2(
+    concatBytes2(
+      hexToBytes2(selector, "selector"),
+      bytes32(tokenId, "tokenId"),
+      addressWord3(address, "address")
+    )
+  );
+}
+function encodeBytes32AddressUint(selector, tokenId, address, amount) {
+  return bytesToHex2(
+    concatBytes2(
+      hexToBytes2(selector, "selector"),
+      bytes32(tokenId, "tokenId"),
+      addressWord3(address, "address"),
+      uint256Word2(parseUint(amount, "amount"), "amount")
+    )
+  );
+}
+function selectorHex3(signature) {
+  const sel = sha3_js.keccak_256(new TextEncoder().encode(signature)).slice(0, 4);
+  return bytesToHex2(sel);
+}
+function textBytes(value, label, maxBytes) {
+  const bytes = new TextEncoder().encode(value);
+  if (bytes.length === 0 || bytes.length > maxBytes) {
+    throw new TokenFactoryError(`${label} must be 1..=${maxBytes} UTF-8 bytes`);
+  }
+  return bytes;
+}
+function dynamicBytesTail(bytes) {
+  return concatBytes2(uint256Word2(BigInt(bytes.length), "length"), padTo323(bytes));
+}
+function padTo323(bytes) {
+  const padded = Math.ceil(bytes.length / 32) * 32;
+  if (padded === bytes.length) return bytes;
+  const out = new Uint8Array(padded);
+  out.set(bytes);
+  return out;
+}
+function addressWord3(value, label) {
+  const out = new Uint8Array(32);
+  out.set(addressBytes(value, label), 12);
+  return out;
+}
+function addressBytes(value, label) {
+  const bytes = toBytes5(value, label);
+  if (bytes.length !== 20) {
+    throw new TokenFactoryError(`${label} must be 20 bytes, got ${bytes.length}`);
+  }
+  return bytes;
+}
+function bytes32(value, label) {
+  const bytes = toBytes5(value, label);
+  if (bytes.length !== 32) {
+    throw new TokenFactoryError(`${label} must be 32 bytes, got ${bytes.length}`);
+  }
+  return bytes;
+}
+function boolWord(value) {
+  const out = new Uint8Array(32);
+  out[31] = value ? 1 : 0;
+  return out;
+}
+function uint256Word2(value, label) {
+  if (value < 0n || value > (1n << 256n) - 1n) {
+    throw new TokenFactoryError(`${label} out of uint256 range`);
+  }
+  const out = new Uint8Array(32);
+  let rest = value;
+  for (let i = 31; i >= 0 && rest > 0n; i--) {
+    out[i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  return out;
+}
+function uint64Be(value) {
+  const out = new Uint8Array(8);
+  let rest = value;
+  for (let i = 7; i >= 0; i--) {
+    out[i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  return out;
+}
+function parseSmallUint(value, label, max) {
+  if (!Number.isInteger(value) || value < 0 || value > max) {
+    throw new TokenFactoryError(`${label} must be an integer in 0..=${max}`);
+  }
+  return value;
+}
+function parseUint(value, label, bits = 256) {
+  let parsed;
+  if (typeof value === "bigint") {
+    parsed = value;
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) throw new TokenFactoryError(`${label} must be a safe integer`);
+    parsed = BigInt(value);
+  } else if (value.startsWith("0x") || value.startsWith("0X")) {
+    parsed = BigInt(value);
+  } else {
+    if (!/^[0-9]+$/.test(value)) throw new TokenFactoryError(`${label} must be a non-negative integer`);
+    parsed = BigInt(value);
+  }
+  if (parsed < 0n || parsed > (1n << BigInt(bits)) - 1n) {
+    throw new TokenFactoryError(`${label} out of uint${bits} range`);
+  }
+  return parsed;
+}
+function toBytes5(value, label) {
+  if (typeof value === "string") return hexToBytes2(value, label);
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+
+// src/vrf.ts
+var VrfCallError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "VrfCallError";
+  }
+};
+var VRF_OUTPUT_BYTES = 32;
+var VRF_DOMAIN_TAG_MAX_BYTES = 256;
+var VRF_HEIGHT_NOT_FINALIZED_REVERT = "vrf: height not finalized";
+function vrfAddressHex() {
+  return PRECOMPILE_ADDRESSES.VRF.toLowerCase();
+}
+function encodeVrfEvaluateCalldata(blockHeight, domainTag = new Uint8Array()) {
+  const height = parseUint64(blockHeight, "blockHeight");
+  const tag = normalizeDomainTag(domainTag);
+  if (tag.length > VRF_DOMAIN_TAG_MAX_BYTES) {
+    throw new VrfCallError(`domainTag exceeds ${VRF_DOMAIN_TAG_MAX_BYTES} bytes`);
+  }
+  return bytesToHex2(concatBytes2(uint256Word3(height), tag));
+}
+function decodeVrfOutput(output) {
+  const bytes = toBytes6(output, "output");
+  if (bytes.length !== VRF_OUTPUT_BYTES) {
+    throw new VrfCallError(`VRF output must be ${VRF_OUTPUT_BYTES} bytes, got ${bytes.length}`);
+  }
+  return bytes;
+}
+function normalizeDomainTag(value) {
+  if (typeof value === "string") {
+    if (value.startsWith("0x") || value.startsWith("0X")) return hexToBytes2(value, "domainTag");
+    return new TextEncoder().encode(value);
+  }
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+function parseUint64(value, label) {
+  let parsed;
+  if (typeof value === "bigint") {
+    parsed = value;
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) throw new VrfCallError(`${label} must be a safe integer`);
+    parsed = BigInt(value);
+  } else if (value.startsWith("0x") || value.startsWith("0X")) {
+    parsed = BigInt(value);
+  } else {
+    if (!/^[0-9]+$/.test(value)) throw new VrfCallError(`${label} must be a non-negative integer`);
+    parsed = BigInt(value);
+  }
+  if (parsed < 0n || parsed > (1n << 64n) - 1n) {
+    throw new VrfCallError(`${label} out of uint64 range`);
+  }
+  return parsed;
+}
+function uint256Word3(value) {
+  const out = new Uint8Array(32);
+  let rest = value;
+  for (let i = 31; i >= 0 && rest > 0n; i--) {
+    out[i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  return out;
+}
+function toBytes6(value, label) {
+  if (typeof value === "string") return hexToBytes2(value, label);
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
 var PROVER_MARKET_ADDRESS = PRECOMPILE_ADDRESSES.PROVER_MARKET;
 var SERVES_GPU_PROVE = 512;
 var PROVER_MARKET_SELECTORS = {
-  createRequest: "0x" + selectorHex3("createRequest(bytes)"),
-  submitBid: "0x" + selectorHex3("submitBid(bytes)"),
-  closeRequest: "0x" + selectorHex3("closeRequest(bytes)"),
-  submitProof: "0x" + selectorHex3("submitProof(bytes)"),
-  settle: "0x" + selectorHex3("settle(bytes)"),
-  slash: "0x" + selectorHex3("slash(bytes)")
+  createRequest: "0x" + selectorHex4("createRequest(bytes)"),
+  submitBid: "0x" + selectorHex4("submitBid(bytes)"),
+  closeRequest: "0x" + selectorHex4("closeRequest(bytes)"),
+  submitProof: "0x" + selectorHex4("submitProof(bytes)"),
+  settle: "0x" + selectorHex4("settle(bytes)"),
+  slash: "0x" + selectorHex4("slash(bytes)")
 };
 var PROVER_MARKET_EVENT_SIGS = {
   proofRequested: "ProofRequested(bytes32,address,bytes32,uint128,uint64)",
@@ -9035,8 +9435,8 @@ function requestSighash(vkeyHash, inputsHash, maxFee, deadline, nonce) {
     sha3_js.keccak_256(
       concatBytes7(
         new TextEncoder().encode(PROVER_MARKET_REQUEST_DOMAIN),
-        expectLength5(toBytes5(vkeyHash), 32, "vkeyHash"),
-        expectLength5(toBytes5(inputsHash), 32, "inputsHash"),
+        expectLength5(toBytes7(vkeyHash), 32, "vkeyHash"),
+        expectLength5(toBytes7(inputsHash), 32, "inputsHash"),
         u128Bytes(maxFee, "maxFee"),
         u64Bytes(deadline, "deadline"),
         u64Bytes(nonce, "nonce")
@@ -9049,7 +9449,7 @@ function bidSighash(requestId, fee) {
     sha3_js.keccak_256(
       concatBytes7(
         new TextEncoder().encode(PROVER_MARKET_BID_DOMAIN),
-        expectLength5(toBytes5(requestId), 32, "requestId"),
+        expectLength5(toBytes7(requestId), 32, "requestId"),
         u128Bytes(fee, "fee")
       )
     )
@@ -9060,16 +9460,16 @@ function submitSighash(requestId, proofHash) {
     sha3_js.keccak_256(
       concatBytes7(
         new TextEncoder().encode(PROVER_MARKET_SUBMIT_DOMAIN),
-        expectLength5(toBytes5(requestId), 32, "requestId"),
-        expectLength5(toBytes5(proofHash), 32, "proofHash")
+        expectLength5(toBytes7(requestId), 32, "requestId"),
+        expectLength5(toBytes7(proofHash), 32, "proofHash")
       )
     )
   );
 }
 function encodeCreateRequestCanonical(args) {
-  const buyer = expectLength5(toBytes5(args.buyer), 20, "buyer");
-  const buyerPubkey = toBytes5(args.buyerPubkey);
-  const sig = toBytes5(args.sig);
+  const buyer = expectLength5(toBytes7(args.buyer), 20, "buyer");
+  const buyerPubkey = toBytes7(args.buyerPubkey);
+  const sig = toBytes7(args.sig);
   if (buyerPubkey.length === 0 || buyerPubkey.length > 65535) {
     throw new ProverMarketError("buyerPubkey length out of range (1..=65535)");
   }
@@ -9081,8 +9481,8 @@ function encodeCreateRequestCanonical(args) {
       buyer,
       u16Bytes(buyerPubkey.length),
       buyerPubkey,
-      expectLength5(toBytes5(args.vkeyHash), 32, "vkeyHash"),
-      expectLength5(toBytes5(args.inputsHash), 32, "inputsHash"),
+      expectLength5(toBytes7(args.vkeyHash), 32, "vkeyHash"),
+      expectLength5(toBytes7(args.inputsHash), 32, "inputsHash"),
       u128Bytes(args.maxFee, "maxFee"),
       u64Bytes(args.deadline, "deadline"),
       u64Bytes(args.nonce, "nonce"),
@@ -9092,7 +9492,7 @@ function encodeCreateRequestCanonical(args) {
   );
 }
 function encodeCreateRequestCalldata(args) {
-  const canonical = toBytes5(encodeCreateRequestCanonical(args));
+  const canonical = toBytes7(encodeCreateRequestCanonical(args));
   const offset = new Uint8Array(32);
   offset[31] = 32;
   const lenWord = new Uint8Array(32);
@@ -9106,10 +9506,10 @@ function encodeCreateRequestCalldata(args) {
     concatBytes7(hexToBytes7(PROVER_MARKET_SELECTORS.createRequest), offset, lenWord, canonical, new Uint8Array(pad))
   );
 }
-function selectorHex3(sig) {
+function selectorHex4(sig) {
   return [...sha3_js.keccak_256(new TextEncoder().encode(sig)).slice(0, 4)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
-function toBytes5(value) {
+function toBytes7(value) {
   if (typeof value === "string") return hexToBytes7(value);
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
 }
@@ -9247,7 +9647,7 @@ function encodeSetAutoCompoundCalldata(enabled) {
   );
 }
 function isRedemptionPrincipalUnavailableRevert(data) {
-  return bytesToHex9(toBytes6(data)).toLowerCase() === DELEGATION_REVERT_TAGS.redemptionPrincipalUnavailable;
+  return bytesToHex9(toBytes8(data)).toLowerCase() === DELEGATION_REVERT_TAGS.redemptionPrincipalUnavailable;
 }
 function uint64Word3(value, name) {
   const n = toBigint3(value, name);
@@ -9301,7 +9701,7 @@ function toBigint3(value, name) {
   }
   return BigInt(value);
 }
-function toBytes6(value) {
+function toBytes8(value) {
   if (typeof value === "string") {
     return hexToBytes8(value);
   }
@@ -9415,8 +9815,8 @@ function encodeSetPolicyCalldata(args) {
 }
 function encodeSetPolicyClaimCalldata(args, subAccountPubkey, subAccountSig) {
   const normalized = normalizeArgs(args);
-  const pubkey = toBytes7(subAccountPubkey);
-  const sig = toBytes7(subAccountSig);
+  const pubkey = toBytes9(subAccountPubkey);
+  const sig = toBytes9(subAccountSig);
   if (pubkey.length !== ML_DSA_65_PUBLIC_KEY_LEN2) {
     throw new SpendingPolicyError(
       `subAccountPubkey must be ${ML_DSA_65_PUBLIC_KEY_LEN2} bytes, got ${pubkey.length}`
@@ -9438,7 +9838,7 @@ function encodeSetPolicyClaimCalldata(args, subAccountPubkey, subAccountSig) {
 }
 function encodeClaimPolicyByAddressCalldata(args, subAccountSig) {
   const normalized = normalizeArgs(args);
-  const sig = toBytes7(subAccountSig);
+  const sig = toBytes9(subAccountSig);
   if (sig.length !== ML_DSA_65_SIGNATURE_LEN2) {
     throw new SpendingPolicyError(
       `subAccountSig must be ${ML_DSA_65_SIGNATURE_LEN2} bytes, got ${sig.length}`
@@ -9465,12 +9865,12 @@ function normalizeArgs(args) {
     principal: toUserAddressBytes(args.principal, "principal"),
     dailyCapLythoshi: toBigint4(args.dailyCapLythoshi, "dailyCapLythoshi"),
     perTxCapLythoshi: toBigint4(args.perTxCapLythoshi, "perTxCapLythoshi"),
-    allowRoot: expectLength6(toBytes7(args.allowRoot), 32, "allowRoot"),
-    denyRoot: expectLength6(toBytes7(args.denyRoot), 32, "denyRoot"),
+    allowRoot: expectLength6(toBytes9(args.allowRoot), 32, "allowRoot"),
+    denyRoot: expectLength6(toBytes9(args.denyRoot), 32, "denyRoot"),
     weeklyCapLythoshi: toBigint4(args.weeklyCapLythoshi ?? 0n, "weeklyCapLythoshi"),
     monthlyCapLythoshi: toBigint4(args.monthlyCapLythoshi ?? 0n, "monthlyCapLythoshi"),
-    categoryAllowRoot: args.categoryAllowRoot == null ? ZERO_WORD : expectLength6(toBytes7(args.categoryAllowRoot), 32, "categoryAllowRoot"),
-    timeWindow: args.timeWindow == null ? ZERO_WORD : expectLength6(toBytes7(args.timeWindow), 32, "timeWindow"),
+    categoryAllowRoot: args.categoryAllowRoot == null ? ZERO_WORD : expectLength6(toBytes9(args.categoryAllowRoot), 32, "categoryAllowRoot"),
+    timeWindow: args.timeWindow == null ? ZERO_WORD : expectLength6(toBytes9(args.timeWindow), 32, "timeWindow"),
     policyExpiry: toBigint4(args.policyExpiry ?? 0n, "policyExpiry")
   };
 }
@@ -9500,7 +9900,7 @@ function packTimeWindow(enabled, startHour, endHour) {
   return out;
 }
 function decodeTimeWindow(word) {
-  const bytes = expectLength6(toBytes7(word), 32, "timeWindow");
+  const bytes = expectLength6(toBytes9(word), 32, "timeWindow");
   if (bytes.every((b) => b === 0)) return null;
   if (bytes[29] === 0) return null;
   return [Math.min(bytes[30], 23), Math.min(bytes[31], 23)];
@@ -9543,7 +9943,7 @@ function toRawAddressBytes(value) {
   }
   return expectLength6(value instanceof Uint8Array ? value : Uint8Array.from(value), 20, "address");
 }
-function toBytes7(value) {
+function toBytes9(value) {
   if (typeof value === "string") {
     return hexToBytes9(value);
   }
@@ -9625,7 +10025,7 @@ function pubkeyRegistryAddressHex() {
   return PRECOMPILE_ADDRESSES.PUBKEY_REGISTRY.toLowerCase();
 }
 function encodeRegisterPubkeyCalldata(pubkey) {
-  const bytes = toBytes8(pubkey);
+  const bytes = toBytes10(pubkey);
   if (bytes.length !== PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN) {
     throw new PubkeyRegistryError(
       `pubkey must be ${PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN} bytes, got ${bytes.length}`
@@ -9634,8 +10034,8 @@ function encodeRegisterPubkeyCalldata(pubkey) {
   return bytesToHex11(
     concatBytes10(
       hexToBytes10(PUBKEY_REGISTRY_SELECTORS.registerPubkey),
-      uint256Word2(32n),
-      uint256Word2(BigInt(bytes.length)),
+      uint256Word4(32n),
+      uint256Word4(BigInt(bytes.length)),
       bytes
     )
   );
@@ -9647,7 +10047,7 @@ function encodeHasPubkeyCalldata(address) {
   return encodeSingleAddressCall2(PUBKEY_REGISTRY_SELECTORS.hasPubkey, address);
 }
 function decodeLookupPubkeyReturn(data) {
-  const bytes = toBytes8(data);
+  const bytes = toBytes10(data);
   if (bytes.length < 96) {
     throw new PubkeyRegistryError("lookup return must be at least 96 bytes");
   }
@@ -9672,7 +10072,7 @@ function decodeLookupPubkeyReturn(data) {
   };
 }
 function decodeHasPubkeyReturn(data) {
-  const bytes = toBytes8(data);
+  const bytes = toBytes10(data);
   if (bytes.length !== 32) {
     throw new PubkeyRegistryError("hasPubkey return must be 32 bytes");
   }
@@ -9686,9 +10086,9 @@ function decodeHasPubkeyReturn(data) {
   throw new PubkeyRegistryError("hasPubkey bool must be 0 or 1");
 }
 function encodeSingleAddressCall2(selector, address) {
-  return bytesToHex11(concatBytes10(hexToBytes10(selector), addressWord3(toAddressBytes(address))));
+  return bytesToHex11(concatBytes10(hexToBytes10(selector), addressWord4(toAddressBytes(address))));
 }
-function addressWord3(address) {
+function addressWord4(address) {
   return concatBytes10(new Uint8Array(12), address);
 }
 function toAddressBytes(value) {
@@ -9705,7 +10105,7 @@ function toAddressBytes(value) {
     throw new PubkeyRegistryError(`address must be a typed mono bech32m address${detail}`);
   }
 }
-function toBytes8(value) {
+function toBytes10(value) {
   if (typeof value === "string") {
     return hexToBytes10(value);
   }
@@ -9734,7 +10134,7 @@ function concatBytes10(...parts) {
   }
   return out;
 }
-function uint256Word2(value) {
+function uint256Word4(value) {
   if (value < 0n || value > (1n << 256n) - 1n) {
     throw new PubkeyRegistryError("uint256 value out of range");
   }
@@ -9882,8 +10282,8 @@ function encodePlaceLimitOrderCalldata(args) {
       normalized.baseTokenId,
       normalized.quoteTokenId,
       uint8Word2(normalized.side),
-      uint256Word3(normalized.price, "price"),
-      uint256Word3(normalized.quantity, "quantity"),
+      uint256Word5(normalized.price, "price"),
+      uint256Word5(normalized.quantity, "quantity"),
       uint64Word4(normalized.expiryBlock, "expiryBlock")
     )
   );
@@ -9896,7 +10296,7 @@ function encodePlaceMarketOrderCalldata(args) {
       normalized.baseTokenId,
       normalized.quoteTokenId,
       uint8Word2(normalized.side),
-      uint256Word3(normalized.quantity, "quantity"),
+      uint256Word5(normalized.quantity, "quantity"),
       uint16Word2(normalized.maxSlippageBps, "maxSlippageBps")
     )
   );
@@ -9909,7 +10309,7 @@ function encodePlaceMarketOrderExCalldata(args) {
       normalized.baseTokenId,
       normalized.quoteTokenId,
       uint8Word2(normalized.side),
-      uint256Word3(normalized.quantity, "quantity"),
+      uint256Word5(normalized.quantity, "quantity"),
       uint16Word2(normalized.maxSlippageBps, "maxSlippageBps"),
       uint8Word2(normalized.mode)
     )
@@ -9929,7 +10329,7 @@ function encodeMarketGridTuneCalldata(selector, label, args) {
       hexToBytes2(selector, `${label} selector`),
       bytes32FromHex(args.baseTokenId, "baseTokenId"),
       bytes32FromHex(args.quoteTokenId, "quoteTokenId"),
-      uint256Word3(BigInt(args.newValue), "newValue")
+      uint256Word5(BigInt(args.newValue), "newValue")
     )
   );
 }
@@ -10217,12 +10617,12 @@ function encodePlaceLimitOrderViaCalldata(args) {
   return bytesToHex2(
     concatBytes2(
       hexToBytes2(OPERATOR_ROUTER_SELECTORS.placeLimitOrderVia, "placeLimitOrderVia selector"),
-      addressWord4(operator.bytes),
+      addressWord5(operator.bytes),
       bytes32FromHex(args.base, "base"),
       bytes32FromHex(args.quote, "quote"),
       uint8Word2(side),
-      uint256Word3(price, "price"),
-      uint256Word3(amount, "amount"),
+      uint256Word5(price, "price"),
+      uint256Word5(amount, "amount"),
       uint64Word4(expiresAtBlock, "expiresAtBlock")
     )
   );
@@ -10534,7 +10934,7 @@ function uint16Word2(value, name) {
   out[31] = Number(value & 0xffn);
   return out;
 }
-function uint256Word3(value, name) {
+function uint256Word5(value, name) {
   if (value < 0n || value >= 1n << 256n) {
     throw new MarketActionError(`${name} must fit uint256`);
   }
@@ -10546,7 +10946,7 @@ function uint256Word3(value, name) {
   }
   return out;
 }
-function addressWord4(addr) {
+function addressWord5(addr) {
   if (addr.length !== 20) {
     throw new MarketActionError("address must be 20 bytes");
   }
@@ -11086,7 +11486,7 @@ var MONOLYTHIUM_NETWORKS = {
 };
 
 // src/index.ts
-var version = "0.4.7";
+var version = "0.4.8";
 
 exports.ADDRESS_HRP = ADDRESS_HRP;
 exports.ADDRESS_KIND_HRPS = ADDRESS_KIND_HRPS;
@@ -11225,9 +11625,24 @@ exports.SPENDING_POLICY_SELECTORS = SPENDING_POLICY_SELECTORS;
 exports.SdkError = SdkError;
 exports.SpendingPolicyError = SpendingPolicyError;
 exports.TESTNET_69420 = TESTNET_69420;
+exports.TOKEN_FACTORY_CREATE_DEPOSIT_LYTHOSHI = TOKEN_FACTORY_CREATE_DEPOSIT_LYTHOSHI;
+exports.TOKEN_FACTORY_FLAGS = TOKEN_FACTORY_FLAGS;
+exports.TOKEN_FACTORY_KNOWN_FLAG_MASK = TOKEN_FACTORY_KNOWN_FLAG_MASK;
+exports.TOKEN_FACTORY_MAX_CREATOR_FEE_BPS = TOKEN_FACTORY_MAX_CREATOR_FEE_BPS;
+exports.TOKEN_FACTORY_MAX_DECIMALS = TOKEN_FACTORY_MAX_DECIMALS;
+exports.TOKEN_FACTORY_NAME_MAX_BYTES = TOKEN_FACTORY_NAME_MAX_BYTES;
+exports.TOKEN_FACTORY_SELECTORS = TOKEN_FACTORY_SELECTORS;
+exports.TOKEN_FACTORY_SIGS = TOKEN_FACTORY_SIGS;
+exports.TOKEN_FACTORY_SYMBOL_MAX_BYTES = TOKEN_FACTORY_SYMBOL_MAX_BYTES;
+exports.TOKEN_FACTORY_TOKEN_ID_DOMAIN_TAG = TOKEN_FACTORY_TOKEN_ID_DOMAIN_TAG;
 exports.TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT = TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT;
+exports.TokenFactoryError = TokenFactoryError;
 exports.V1_BRIDGE_ALLOWED_FEE_TOKEN = V1_BRIDGE_ALLOWED_FEE_TOKEN;
 exports.V1_BRIDGE_ALLOWED_PROTOCOL = V1_BRIDGE_ALLOWED_PROTOCOL;
+exports.VRF_DOMAIN_TAG_MAX_BYTES = VRF_DOMAIN_TAG_MAX_BYTES;
+exports.VRF_HEIGHT_NOT_FINALIZED_REVERT = VRF_HEIGHT_NOT_FINALIZED_REVERT;
+exports.VRF_OUTPUT_BYTES = VRF_OUTPUT_BYTES;
+exports.VrfCallError = VrfCallError;
 exports.addressBytesToHex = addressBytesToHex;
 exports.addressToBech32 = addressToBech32;
 exports.addressToTypedBech32 = addressToTypedBech32;
@@ -11330,7 +11745,9 @@ exports.decodeOperatorNetworkMetadata = decodeOperatorNetworkMetadata;
 exports.decodeOperatorSealKey = decodeOperatorSealKey;
 exports.decodeOracleEvent = decodeOracleEvent;
 exports.decodeTimeWindow = decodeTimeWindow;
+exports.decodeTokenFactoryTokenId = decodeTokenFactoryTokenId;
 exports.decodeTxFeedResponse = decodeTxFeedResponse;
+exports.decodeVrfOutput = decodeVrfOutput;
 exports.delegationAddressHex = delegationAddressHex;
 exports.denyRootFor = denyRootFor;
 exports.deriveClobMarketId = deriveClobMarketId;
@@ -11340,6 +11757,7 @@ exports.deriveFeedId = deriveFeedId;
 exports.deriveMrvContractAddress = deriveMrvContractAddress;
 exports.deriveNativeSpotMarketId = deriveNativeSpotMarketId;
 exports.deriveNativeSpotOrderId = deriveNativeSpotOrderId;
+exports.deriveTokenFactoryTokenId = deriveTokenFactoryTokenId;
 exports.destinationRoot = destinationRoot;
 exports.encodeAttestDkgReshareCalldata = encodeAttestDkgReshareCalldata;
 exports.encodeBlockSelector = encodeBlockSelector;
@@ -11351,8 +11769,10 @@ exports.encodeCancelPendingChangeCalldata = encodeCancelPendingChangeCalldata;
 exports.encodeClaimCalldata = encodeClaimCalldata;
 exports.encodeClaimPolicyByAddressCalldata = encodeClaimPolicyByAddressCalldata;
 exports.encodeCompleteRedemptionCalldata = encodeCompleteRedemptionCalldata;
+exports.encodeCreateFixedSupplyMrc20Calldata = encodeCreateFixedSupplyMrc20Calldata;
 exports.encodeCreateRequestCalldata = encodeCreateRequestCalldata;
 exports.encodeCreateRequestCanonical = encodeCreateRequestCanonical;
+exports.encodeCreateTokenCalldata = encodeCreateTokenCalldata;
 exports.encodeDelegateCalldata = encodeDelegateCalldata;
 exports.encodeDisableCalldata = encodeDisableCalldata;
 exports.encodeEnableCalldata = encodeEnableCalldata;
@@ -11433,8 +11853,23 @@ exports.encodeSetPolicyClaimCalldata = encodeSetPolicyClaimCalldata;
 exports.encodeSetTickSizeCalldata = encodeSetTickSizeCalldata;
 exports.encodeSubmitBridgeProofCalldata = encodeSubmitBridgeProofCalldata;
 exports.encodeSubmitPendingChangeCalldata = encodeSubmitPendingChangeCalldata;
+exports.encodeTokenFactoryAllowanceCalldata = encodeTokenFactoryAllowanceCalldata;
+exports.encodeTokenFactoryApproveCalldata = encodeTokenFactoryApproveCalldata;
+exports.encodeTokenFactoryBalanceOfCalldata = encodeTokenFactoryBalanceOfCalldata;
+exports.encodeTokenFactoryBurnCalldata = encodeTokenFactoryBurnCalldata;
+exports.encodeTokenFactoryDecreaseAllowanceCalldata = encodeTokenFactoryDecreaseAllowanceCalldata;
+exports.encodeTokenFactoryDestroyCalldata = encodeTokenFactoryDestroyCalldata;
+exports.encodeTokenFactoryIncreaseAllowanceCalldata = encodeTokenFactoryIncreaseAllowanceCalldata;
+exports.encodeTokenFactoryMetadataCalldata = encodeTokenFactoryMetadataCalldata;
+exports.encodeTokenFactoryMintCalldata = encodeTokenFactoryMintCalldata;
+exports.encodeTokenFactorySetPausedCalldata = encodeTokenFactorySetPausedCalldata;
+exports.encodeTokenFactoryTotalSupplyCalldata = encodeTokenFactoryTotalSupplyCalldata;
+exports.encodeTokenFactoryTransferCalldata = encodeTokenFactoryTransferCalldata;
+exports.encodeTokenFactoryTransferFromCalldata = encodeTokenFactoryTransferFromCalldata;
+exports.encodeTokenFactoryTransferOwnershipCalldata = encodeTokenFactoryTransferOwnershipCalldata;
 exports.encodeUndelegateCalldata = encodeUndelegateCalldata;
 exports.encodeVoteClusterAdmitCalldata = encodeVoteClusterAdmitCalldata;
+exports.encodeVrfEvaluateCalldata = encodeVrfEvaluateCalldata;
 exports.exportBridgeRouteCatalogueJson = exportBridgeRouteCatalogueJson;
 exports.fetchChainInfoLatest = fetchChainInfoLatest;
 exports.fetchChainRegistryLatest = fetchChainRegistryLatest;
@@ -11524,6 +11959,7 @@ exports.submitPublishOperatorSealKey = submitPublishOperatorSealKey;
 exports.submitRequestClusterJoin = submitRequestClusterJoin;
 exports.submitSighash = submitSighash;
 exports.submitVoteClusterAdmit = submitVoteClusterAdmit;
+exports.tokenFactoryAddressHex = tokenFactoryAddressHex;
 exports.transactionFeeExposure = transactionFeeExposure;
 exports.typedBech32ToAddress = typedBech32ToAddress;
 exports.validateAddress = validateAddress;
@@ -11531,6 +11967,7 @@ exports.validateBridgeRouteCatalogue = validateBridgeRouteCatalogue;
 exports.validateMrvArtifactMetadata = validateMrvArtifactMetadata;
 exports.validateMrvCallRequest = validateMrvCallRequest;
 exports.validateMrvDeployRequest = validateMrvDeployRequest;
+exports.validateTokenFactoryFlags = validateTokenFactoryFlags;
 exports.verifyNoEvmArchiveProofSignatures = verifyNoEvmArchiveProofSignatures;
 exports.verifyNoEvmBlockFinalityEvidenceMultisig = verifyNoEvmBlockFinalityEvidenceMultisig;
 exports.verifyNoEvmBlockFinalityEvidenceThreshold = verifyNoEvmBlockFinalityEvidenceThreshold;
@@ -11539,5 +11976,6 @@ exports.verifyNoEvmFinalityEvidenceThreshold = verifyNoEvmFinalityEvidenceThresh
 exports.verifyNoEvmReceiptProof = verifyNoEvmReceiptProof;
 exports.verifyNoEvmReceiptProofTrust = verifyNoEvmReceiptProofTrust;
 exports.version = version;
+exports.vrfAddressHex = vrfAddressHex;
 //# sourceMappingURL=index.cjs.map
 //# sourceMappingURL=index.cjs.map

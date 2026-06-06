@@ -174,6 +174,34 @@ describe("eth_* methods", () => {
     expect(calls[0].method).toBe("eth_blockNumber");
   });
 
+  it("eth_call sends a standard call object and encoded block selector", async () => {
+    const { fetch, calls } = mockFetch("0xabcd");
+    const client = new RpcClient("http://x", { fetch });
+    const request = {
+      from: "0x0000000000000000000000000000000000000042",
+      to: "0x0000000000000000000000000000000000001101",
+      input: "0x1234",
+      maxFeePerGas: "0x1",
+    };
+    const output = await client.ethCall(request, 256);
+    expect(output).toBe("0xabcd");
+    expect(calls[0].method).toBe("eth_call");
+    expect(calls[0].params).toEqual([request, "0x100"]);
+  });
+
+  it("eth_estimateGas decodes a hex quantity", async () => {
+    const { fetch, calls } = mockFetch("0x5208");
+    const client = new RpcClient("http://x", { fetch });
+    const request = {
+      to: "0x0000000000000000000000000000000000001000",
+      data: "0x",
+    };
+    const gas = await client.ethEstimateGas(request);
+    expect(gas).toBe(21_000n);
+    expect(calls[0].method).toBe("eth_estimateGas");
+    expect(calls[0].params).toEqual([request, "latest"]);
+  });
+
   it("eth_getBlockByNumber sends the encoded selector", async () => {
     const reply = {
       number: 256,

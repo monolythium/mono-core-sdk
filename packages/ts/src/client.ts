@@ -11,6 +11,7 @@ import {
   type AddressKind,
 } from "./address.js";
 import { SdkError } from "./error.js";
+import type { CallRequest as RpcCallRequest } from "./bindings/CallRequest.js";
 import type {
   BridgeDrainStatus,
   BridgeHealthResponse,
@@ -117,6 +118,13 @@ import type {
 } from "./native-events.js";
 
 export type RoundCertificateResponse = BlsCertificateResponse;
+
+export type EthCallRequest = RpcCallRequest & {
+  /** Alias accepted by `eth_call` / `eth_estimateGas`; `data` is canonical. */
+  input?: string;
+  /** EIP-1559-style fee alias accepted by the compatibility parser. */
+  maxFeePerGas?: string;
+};
 
 /** Optional per-client configuration. */
 export interface RpcClientOptions {
@@ -1480,6 +1488,24 @@ export class RpcClient {
   /** `eth_getCode` — deployed bytecode (`0x` for an EOA, `0xfe` for a precompile). */
   async ethGetCode(address: string, block: BlockSelector = "latest"): Promise<string> {
     return this.call("eth_getCode", [address, encodeBlockSelector(block)]);
+  }
+
+  /** `eth_call` — read-only execution against committed state. */
+  async ethCall(
+    request: EthCallRequest,
+    block: BlockSelector = "latest",
+  ): Promise<string> {
+    return this.call("eth_call", [request, encodeBlockSelector(block)]);
+  }
+
+  /** `eth_estimateGas` — read-only execution-unit estimate for a call object. */
+  async ethEstimateGas(
+    request: EthCallRequest,
+    block: BlockSelector = "latest",
+  ): Promise<bigint> {
+    return parseQuantityBig(
+      await this.call<string>("eth_estimateGas", [request, encodeBlockSelector(block)]),
+    );
   }
 
   /** Compatibility block-header read by height/tag. */
