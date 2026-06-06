@@ -291,7 +291,7 @@ pub fn check_mrv_fee_display_conformance(
                 input.expected_total_lythoshi
             )),
             Err(_) => failures
-                .push("default_fee_text fee must be a canonical 8-decimal LYTH amount".to_owned()),
+                .push("default_fee_text fee must be a canonical 18-decimal LYTH amount".to_owned()),
         }
     }
 
