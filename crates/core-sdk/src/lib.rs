@@ -25,10 +25,12 @@ pub mod address;
 pub mod api;
 pub mod bridge;
 pub mod client;
+pub mod clob;
 pub mod consts;
 pub mod delegation;
 pub mod error;
 pub mod mrv;
+pub mod name_registry;
 pub mod native_dev;
 pub mod node_registry;
 pub mod operator_router;
@@ -36,7 +38,9 @@ pub mod oracle;
 pub mod prover_market;
 pub mod pubkey_registry;
 pub mod spending_policy;
+pub mod token_factory;
 pub mod types;
+pub mod vrf;
 
 pub use address::{
     address_to_bech32, address_to_hex, address_to_typed_bech32, bech32_to_address, hex_to_address,
@@ -69,6 +73,12 @@ pub use bridge::{
 pub use client::{
     MrvCallNativeEncryptedSubmitResult, MrvDeployNativeEncryptedSubmitResult, RpcClient,
 };
+pub use clob::{
+    clob_address_hex, derive_clob_market_id, encode_cancel_order_calldata,
+    encode_place_limit_order_calldata, encode_place_market_order_calldata,
+    encode_place_market_order_ex_calldata, MarketOrderMode, PlaceLimitOrderArgs,
+    PlaceMarketOrderArgs, SpotSide, CLOB_ADDRESS, CLOB_MARKET_ID_DOMAIN_TAG,
+};
 pub use consts::{burn_addr_hex, BURN_ADDR};
 pub use delegation::{
     calldata_to_hex as delegation_calldata_to_hex, delegation_address_hex,
@@ -98,6 +108,12 @@ pub use mrv::{
     LYTHOSHI_PER_LYTH, LYTH_DECIMALS, ML_KEM_768_CIPHERTEXT_LEN, ML_KEM_768_ENCAPSULATION_KEY_LEN,
     ML_KEM_768_SHARED_SECRET_LEN, MRV_DEPLOY_PAYLOAD_VERSION, MRV_ENCRYPTION_ALGO_ML_KEM_768,
     MRV_STRUCTURED_FEE_FIELDS, NATIVE_LYTH_DECIMALS,
+};
+pub use name_registry::{
+    encode_name_accept_transfer_call, encode_name_propose_transfer_call, encode_name_register_call,
+    name_length_modifier_x10, name_registration_cost, name_registry_address_hex,
+    parse_name_category, NameCategory, NameRegistryError, ParsedName,
+    NAME_FALLBACK_FEE_UNIT_LYTHOSHI, NAME_REGISTRY_ADDRESS,
 };
 pub use native_dev::{
     check_native_devkit_compatibility, native_dev_ui_strings, resolve_studio_host_status,
@@ -141,6 +157,18 @@ pub use prover_market::{
     ProverMarketStatusResponse, PROVER_MARKET_ADDRESS, PROVER_MARKET_SELECTORS,
     SERVES_GPU_PROVE_BIT,
 };
+pub use token_factory::{
+    derive_token_id as derive_token_factory_token_id, encode_allowance_calldata,
+    encode_approve_calldata, encode_balance_of_calldata, encode_burn_calldata,
+    encode_create_token_calldata, encode_decrease_allowance_calldata, encode_destroy_calldata,
+    encode_increase_allowance_calldata, encode_metadata_calldata, encode_mint_calldata,
+    encode_set_paused_calldata, encode_total_supply_calldata, encode_transfer_calldata,
+    encode_transfer_from_calldata, encode_transfer_ownership_calldata, token_factory_address_hex,
+    validate_flags as validate_token_factory_flags, CreateTokenArgs, TokenFactoryError,
+    TOKEN_FACTORY_ADDRESS, TOKEN_FACTORY_CREATE_DEPOSIT_LYTHOSHI,
+    TOKEN_FACTORY_MAX_CREATOR_FEE_BPS, TOKEN_FACTORY_MAX_DECIMALS, TOKEN_FACTORY_NAME_MAX_BYTES,
+    TOKEN_FACTORY_SYMBOL_MAX_BYTES,
+};
 pub use types::{
     compute_no_evm_dac_finality_message, compute_no_evm_leader_finality_message,
     compute_no_evm_receipts_root, compute_no_evm_target_receipt_hash,
@@ -172,6 +200,11 @@ pub use types::{
     NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_FINALITY_EVIDENCE_SCHEMA,
     NO_EVM_RECEIPT_FINALITY_EVIDENCE_SOURCE, NO_EVM_RECEIPT_PROOF_SCHEMA,
     NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM,
+};
+pub use vrf::{
+    decode_vrf_output, encode_vrf_evaluate_calldata, encode_vrf_evaluate_calldata_hex,
+    vrf_address_hex, VrfCallError, VRF_ADDRESS, VRF_DOMAIN_TAG_MAX_BYTES,
+    VRF_HEIGHT_NOT_FINALIZED_REVERT, VRF_OUTPUT_BYTES,
 };
 
 /// Crate version, sourced from `Cargo.toml`.
