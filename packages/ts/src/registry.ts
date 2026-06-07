@@ -99,8 +99,8 @@ export const TESTNET_69420: ChainInfo = {
   description:
     "Public Monolythium testnet. Testnet state may reset without notice; do not store value on this network.",
   genesis_hash:
-    "0xcb14e03313ffa63e0315c6619ed26bce82a90d6859de76e013c0759c62b3d4c8",
-  binary_sha: "ef059410ed81",
+    "0xb9bcc577fa7256664364518f2943fe298b50973b0e43831a081b4dca3d2d5a6a",
+  binary_sha: "a5d5b299a0bf",
   rpc: [
     {
       url: "http://178.105.12.9:8545",
