@@ -18,6 +18,7 @@ export class MlDsa65Backend {
   readonly #secretKey: Uint8Array;
   readonly #publicKey: Uint8Array;
   readonly #addressBytes: Uint8Array;
+  #disposed = false;
 
   private constructor(secretKey: Uint8Array, publicKey: Uint8Array) {
     this.#secretKey = expectBytes(secretKey, ML_DSA_65_SIGNING_KEY_LEN, "ML-DSA-65 secret key").slice();
@@ -43,7 +44,37 @@ export class MlDsa65Backend {
   }
 
   sign(message: Uint8Array): Uint8Array {
+    if (this.#disposed) {
+      throw new Error("MlDsa65Backend disposed");
+    }
     return ml_dsa65.sign(message, this.#secretKey, { extraEntropy: false });
+  }
+
+  /**
+   * Best-effort deterministic wipe of the in-memory secret key. Zeroes the
+   * SDK-held `#secretKey` copy and makes any subsequent `sign()` /
+   * `signPrehash()` / `signEvmTx()` throw `"MlDsa65Backend disposed"` rather
+   * than signing with a zeroed key. Idempotent. Public material
+   * (`publicKey()` / `getAddress()` / `verify()`) stays usable.
+   *
+   * Defense-in-depth (S1-01): narrows the post-lock residency window of the
+   * ML-DSA-65 secret in the JS heap. `@noble/post-quantum`'s internal
+   * transient keygen/sign buffers are out of scope; the SDK-held copy is the
+   * meaningful residency win.
+   */
+  dispose(): void {
+    this.#secretKey.fill(0);
+    this.#disposed = true;
+  }
+
+  /** Alias for {@link dispose}. */
+  zeroize(): void {
+    this.dispose();
+  }
+
+  /** Whether {@link dispose} has been called (the secret key is wiped). */
+  get disposed(): boolean {
+    return this.#disposed;
   }
 
   signPrehash(digest: Uint8Array): Uint8Array {

@@ -99,6 +99,28 @@ describe("crypto subpath", () => {
     expect(a.verify(new Uint8Array([1, 2, 4]), sigA)).toBe(false);
   });
 
+  it("dispose() wipes the secret key and makes signing throw (S1-01)", () => {
+    const seed = new Uint8Array(ML_DSA_65_SEED_LEN).fill(0x42);
+    const a = MlDsa65Backend.fromSeed(seed);
+    const msg = new Uint8Array([1, 2, 3]);
+    const sig = a.sign(msg);
+    expect(a.verify(msg, sig)).toBe(true);
+    expect(a.disposed).toBe(false);
+
+    a.dispose();
+    expect(a.disposed).toBe(true);
+    // Signing throws after dispose instead of signing with a zeroed key.
+    expect(() => a.sign(msg)).toThrow("MlDsa65Backend disposed");
+    expect(() => a.signPrehash(new Uint8Array(32))).toThrow("MlDsa65Backend disposed");
+    // Idempotent; zeroize() is an alias.
+    expect(() => a.dispose()).not.toThrow();
+    expect(() => a.zeroize()).not.toThrow();
+    expect(a.disposed).toBe(true);
+    // Public material stays usable and still matches a fresh derivation.
+    expect(a.getAddress()).toBe(MlDsa65Backend.fromSeed(seed).getAddress());
+    expect(a.verify(msg, sig)).toBe(true);
+  });
+
   it("encodes native tx hash preimages with signed-over field changes", () => {
     const base = {
       chainId: 69420n,
