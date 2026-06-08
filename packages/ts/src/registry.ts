@@ -99,8 +99,8 @@ export const TESTNET_69420: ChainInfo = {
   description:
     "Public Monolythium testnet. Testnet state may reset without notice; do not store value on this network.",
   genesis_hash:
-    "0xb9bcc577fa7256664364518f2943fe298b50973b0e43831a081b4dca3d2d5a6a",
-  binary_sha: "a5d5b299a0bf",
+    "0x4327b7e8d1c06eed00194152f8235acaec5ba84a01487c885d9933840dc36fa5",
+  binary_sha: "898cf29081ec",
   rpc: [
     {
       url: "http://178.105.12.9:8545",
@@ -159,6 +159,13 @@ export const TESTNET_69420: ChainInfo = {
       notes: "operator-8",
     },
     {
+      url: "http://162.55.54.198:8545",
+      provider: "monolythium-foundation",
+      region: "fsn1",
+      tier: "official",
+      notes: "operator-9",
+    },
+    {
       url: "http://95.217.156.190:8545",
       provider: "monolythium-foundation",
       region: "hel1",
@@ -166,39 +173,18 @@ export const TESTNET_69420: ChainInfo = {
       notes: "operator-10",
     },
     {
-      url: "http://5.223.65.201:8545",
-      provider: "monolythium-foundation",
-      region: "sin",
-      tier: "official",
-      notes: "operator-11",
-    },
-    {
-      url: "http://162.55.54.198:8545",
-      provider: "monolythium-foundation",
-      region: "fsn1",
-      tier: "official",
-      notes: "operator-9 preview operator",
-    },
-    {
-      url: "http://128.140.125.5:8545",
+      url: "http://178.105.45.210:8545",
       provider: "monolythium-foundation",
       region: "fsn1",
       tier: "official",
       notes: "relay-1",
     },
     {
-      url: "http://178.105.45.210:8545",
-      provider: "monolythium-foundation",
-      region: "fsn1",
-      tier: "official",
-      notes: "relay-2",
-    },
-    {
       url: "http://65.21.252.34:8545",
       provider: "monolythium-foundation",
       region: "hel1",
       tier: "official",
-      notes: "relay-3",
+      notes: "relay-2",
     },
   ],
   p2p: [
@@ -244,23 +230,13 @@ export const TESTNET_69420: ChainInfo = {
     },
     {
       multiaddr:
-        "/ip4/95.217.156.190/tcp/29898/p2p/12D3KooWPBr8guuWoZT59AobZEBHDZqKgwHWAP3aKUzKWeGTa7Z6",
-      region: "hel1",
-    },
-    {
-      multiaddr:
-        "/ip4/5.223.65.201/tcp/29898/p2p/12D3KooWGk3fQcDxD3uPKEe56G89X6m4ksrPKCfq6LMA952HVwbs",
-      region: "sin",
-    },
-    {
-      multiaddr:
         "/ip4/162.55.54.198/tcp/29898/p2p/12D3KooWRBA5Wzs619GuMY2NrDD6fGoLYCK2tkXff2JAZyXn7RvR",
       region: "fsn1",
     },
     {
       multiaddr:
-        "/ip4/128.140.125.5/tcp/29898/p2p/12D3KooWAxWQueEVut82vNNbi1ncBrcnPbbHNyp5RZs7KSJBmu19",
-      region: "fsn1",
+        "/ip4/95.217.156.190/tcp/29898/p2p/12D3KooWPBr8guuWoZT59AobZEBHDZqKgwHWAP3aKUzKWeGTa7Z6",
+      region: "hel1",
     },
     {
       multiaddr:

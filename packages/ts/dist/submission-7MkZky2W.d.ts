@@ -6075,6 +6075,23 @@ declare class MlDsa65Backend {
     addressBytes(): Uint8Array;
     getAddress(): string;
     sign(message: Uint8Array): Uint8Array;
+    /**
+     * Best-effort deterministic wipe of the in-memory secret key. Zeroes the
+     * SDK-held `#secretKey` copy and makes any subsequent `sign()` /
+     * `signPrehash()` / `signEvmTx()` throw `"MlDsa65Backend disposed"` rather
+     * than signing with a zeroed key. Idempotent. Public material
+     * (`publicKey()` / `getAddress()` / `verify()`) stays usable.
+     *
+     * Defense-in-depth (S1-01): narrows the post-lock residency window of the
+     * ML-DSA-65 secret in the JS heap. `@noble/post-quantum`'s internal
+     * transient keygen/sign buffers are out of scope; the SDK-held copy is the
+     * meaningful residency win.
+     */
+    dispose(): void;
+    /** Alias for {@link dispose}. */
+    zeroize(): void;
+    /** Whether {@link dispose} has been called (the secret key is wiped). */
+    get disposed(): boolean;
     signPrehash(digest: Uint8Array): Uint8Array;
     verify(message: Uint8Array, signature: Uint8Array): boolean;
     signEvmTx(fields: NativeEvmTxFields): {

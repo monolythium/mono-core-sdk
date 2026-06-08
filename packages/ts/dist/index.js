@@ -1430,6 +1430,7 @@ var MlDsa65Backend = class _MlDsa65Backend {
   #secretKey;
   #publicKey;
   #addressBytes;
+  #disposed = false;
   constructor(secretKey, publicKey) {
     this.#secretKey = expectBytes(secretKey, ML_DSA_65_SIGNING_KEY_LEN, "ML-DSA-65 secret key").slice();
     this.#publicKey = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key").slice();
@@ -1449,7 +1450,34 @@ var MlDsa65Backend = class _MlDsa65Backend {
     return bytesToHex2(this.#addressBytes);
   }
   sign(message) {
+    if (this.#disposed) {
+      throw new Error("MlDsa65Backend disposed");
+    }
     return ml_dsa65.sign(message, this.#secretKey, { extraEntropy: false });
+  }
+  /**
+   * Best-effort deterministic wipe of the in-memory secret key. Zeroes the
+   * SDK-held `#secretKey` copy and makes any subsequent `sign()` /
+   * `signPrehash()` / `signEvmTx()` throw `"MlDsa65Backend disposed"` rather
+   * than signing with a zeroed key. Idempotent. Public material
+   * (`publicKey()` / `getAddress()` / `verify()`) stays usable.
+   *
+   * Defense-in-depth (S1-01): narrows the post-lock residency window of the
+   * ML-DSA-65 secret in the JS heap. `@noble/post-quantum`'s internal
+   * transient keygen/sign buffers are out of scope; the SDK-held copy is the
+   * meaningful residency win.
+   */
+  dispose() {
+    this.#secretKey.fill(0);
+    this.#disposed = true;
+  }
+  /** Alias for {@link dispose}. */
+  zeroize() {
+    this.dispose();
+  }
+  /** Whether {@link dispose} has been called (the secret key is wiped). */
+  get disposed() {
+    return this.#disposed;
   }
   signPrehash(digest) {
     return this.sign(expectBytes(digest, 32, "prehash"));
@@ -2812,8 +2840,8 @@ var TESTNET_69420 = {
   network: "testnet-69420",
   display_name: "Monolythium Testnet",
   description: "Public Monolythium testnet. Testnet state may reset without notice; do not store value on this network.",
-  genesis_hash: "0xb9bcc577fa7256664364518f2943fe298b50973b0e43831a081b4dca3d2d5a6a",
-  binary_sha: "a5d5b299a0bf",
+  genesis_hash: "0x4327b7e8d1c06eed00194152f8235acaec5ba84a01487c885d9933840dc36fa5",
+  binary_sha: "898cf29081ec",
   rpc: [
     {
       url: "http://178.105.12.9:8545",
@@ -2872,6 +2900,13 @@ var TESTNET_69420 = {
       notes: "operator-8"
     },
     {
+      url: "http://162.55.54.198:8545",
+      provider: "monolythium-foundation",
+      region: "fsn1",
+      tier: "official",
+      notes: "operator-9"
+    },
+    {
       url: "http://95.217.156.190:8545",
       provider: "monolythium-foundation",
       region: "hel1",
@@ -2879,39 +2914,18 @@ var TESTNET_69420 = {
       notes: "operator-10"
     },
     {
-      url: "http://5.223.65.201:8545",
-      provider: "monolythium-foundation",
-      region: "sin",
-      tier: "official",
-      notes: "operator-11"
-    },
-    {
-      url: "http://162.55.54.198:8545",
-      provider: "monolythium-foundation",
-      region: "fsn1",
-      tier: "official",
-      notes: "operator-9 preview operator"
-    },
-    {
-      url: "http://128.140.125.5:8545",
+      url: "http://178.105.45.210:8545",
       provider: "monolythium-foundation",
       region: "fsn1",
       tier: "official",
       notes: "relay-1"
     },
     {
-      url: "http://178.105.45.210:8545",
-      provider: "monolythium-foundation",
-      region: "fsn1",
-      tier: "official",
-      notes: "relay-2"
-    },
-    {
       url: "http://65.21.252.34:8545",
       provider: "monolythium-foundation",
       region: "hel1",
       tier: "official",
-      notes: "relay-3"
+      notes: "relay-2"
     }
   ],
   p2p: [
@@ -2948,20 +2962,12 @@ var TESTNET_69420 = {
       region: "fsn1"
     },
     {
-      multiaddr: "/ip4/95.217.156.190/tcp/29898/p2p/12D3KooWPBr8guuWoZT59AobZEBHDZqKgwHWAP3aKUzKWeGTa7Z6",
-      region: "hel1"
-    },
-    {
-      multiaddr: "/ip4/5.223.65.201/tcp/29898/p2p/12D3KooWGk3fQcDxD3uPKEe56G89X6m4ksrPKCfq6LMA952HVwbs",
-      region: "sin"
-    },
-    {
       multiaddr: "/ip4/162.55.54.198/tcp/29898/p2p/12D3KooWRBA5Wzs619GuMY2NrDD6fGoLYCK2tkXff2JAZyXn7RvR",
       region: "fsn1"
     },
     {
-      multiaddr: "/ip4/128.140.125.5/tcp/29898/p2p/12D3KooWAxWQueEVut82vNNbi1ncBrcnPbbHNyp5RZs7KSJBmu19",
-      region: "fsn1"
+      multiaddr: "/ip4/95.217.156.190/tcp/29898/p2p/12D3KooWPBr8guuWoZT59AobZEBHDZqKgwHWAP3aKUzKWeGTa7Z6",
+      region: "hel1"
     },
     {
       multiaddr: "/ip4/178.105.45.210/tcp/29898/p2p/12D3KooWQRpCMLezJmvqqpbpEu8ixGHgonqianG1aVZjw6GiStbd",
