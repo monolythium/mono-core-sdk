@@ -2840,8 +2840,8 @@ var TESTNET_69420 = {
   network: "testnet-69420",
   display_name: "Monolythium Testnet",
   description: "Public Monolythium testnet. Testnet state may reset without notice; do not store value on this network.",
-  genesis_hash: "0x78e9773372156285cd4a26db73b61f3ab4865e9e29cd3489e27beb030d9f1eca",
-  binary_sha: "d4306a4163e0",
+  genesis_hash: "0x991543a385b5c4fcf1e7b1598a0d78d97e9f51397b27db232238c76f39b0f726",
+  binary_sha: "a2dafcd31cd9",
   rpc: [
     {
       url: "http://178.105.12.9:8545",
