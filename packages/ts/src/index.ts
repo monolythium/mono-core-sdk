@@ -673,12 +673,11 @@ export {
   DelegationPrecompileError,
   delegationAddressHex,
   encodeClaimCalldata,
-  encodeCompleteRedemptionCalldata,
   encodeDelegateCalldata,
   encodeRedelegateCalldata,
   encodeSetAutoCompoundCalldata,
   encodeUndelegateCalldata,
-  isRedemptionPrincipalUnavailableRevert,
+  isUnexpectedValueRevert,
 } from "./delegation.js";
 export {
   ML_DSA_65_PUBLIC_KEY_LEN,

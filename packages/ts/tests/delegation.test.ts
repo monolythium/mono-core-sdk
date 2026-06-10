@@ -6,15 +6,14 @@ import {
   PRECOMPILE_ADDRESSES,
   delegationAddressHex,
   encodeClaimCalldata,
-  encodeCompleteRedemptionCalldata,
   encodeDelegateCalldata,
   encodeRedelegateCalldata,
   encodeSetAutoCompoundCalldata,
   encodeUndelegateCalldata,
-  isRedemptionPrincipalUnavailableRevert,
+  isUnexpectedValueRevert,
 } from "../src/index.js";
 
-describe("delegation precompile ABI helpers", () => {
+describe("delegation precompile ABI helpers (non-custodial)", () => {
   it("exports selectors pinned to mono-core", () => {
     expect(DELEGATION_SELECTORS).toEqual({
       delegate: "0x662337de",
@@ -22,11 +21,12 @@ describe("delegation precompile ABI helpers", () => {
       redelegate: "0xa06ac18f",
       claim: "0x4e71d92d",
       setAutoCompound: "0x86593454",
-      completeRedemption: "0x26169d0a",
     });
   });
 
   it("encodes delegate / undelegate / redelegate / claim calldata", () => {
+    // delegate carries no native value — `weightBps` is a fraction of the
+    // caller's live balance (max 10_000 = 100%); the tx is sent with value = 0.
     expect(encodeDelegateCalldata(0, 10_000)).toBe(
       "0x662337de" +
         "0000000000000000000000000000000000000000000000000000000000000000" +
@@ -59,16 +59,13 @@ describe("delegation precompile ABI helpers", () => {
     expect(() => encodeDelegateCalldata(0xffff_ffff_ffffn, 100)).toThrow(DelegationPrecompileError);
   });
 
-  it("exports redemption revert tags pinned to mono-core", () => {
+  it("exports the unexpected-value revert tag pinned to mono-core", () => {
     expect(DELEGATION_REVERT_TAGS).toEqual({
-      redemptionQueueFull: "0x020e",
-      redemptionTicketNotFound: "0x020f",
-      redemptionNotMature: "0x0210",
-      redemptionPrincipalUnavailable: "0x0211",
+      unexpectedValue: "0x020e",
     });
-    expect(isRedemptionPrincipalUnavailableRevert("0x0211")).toBe(true);
-    expect(isRedemptionPrincipalUnavailableRevert(new Uint8Array([0x02, 0x11]))).toBe(true);
-    expect(isRedemptionPrincipalUnavailableRevert("0x0210")).toBe(false);
+    expect(isUnexpectedValueRevert("0x020e")).toBe(true);
+    expect(isUnexpectedValueRevert(new Uint8Array([0x02, 0x0e]))).toBe(true);
+    expect(isUnexpectedValueRevert("0x0210")).toBe(false);
   });
 
   it("exports the delegation precompile address", () => {
@@ -76,25 +73,5 @@ describe("delegation precompile ABI helpers", () => {
       "0x000000000000000000000000000000000000100A",
     );
     expect(delegationAddressHex()).toBe("0x000000000000000000000000000000000000100a");
-  });
-
-  it("encodes completeRedemption(uint64) calldata", () => {
-    expect(encodeCompleteRedemptionCalldata(42)).toBe(
-      "0x26169d0a000000000000000000000000000000000000000000000000000000000000002a",
-    );
-    expect(encodeCompleteRedemptionCalldata("0x2a")).toBe(
-      encodeCompleteRedemptionCalldata(42n),
-    );
-  });
-
-  it("rejects invalid redemption ticket indexes", () => {
-    expect(() => encodeCompleteRedemptionCalldata(-1)).toThrow(DelegationPrecompileError);
-    expect(() => encodeCompleteRedemptionCalldata(Number.MAX_SAFE_INTEGER + 1)).toThrow(
-      DelegationPrecompileError,
-    );
-    expect(() => encodeCompleteRedemptionCalldata("nope")).toThrow(DelegationPrecompileError);
-    expect(() => encodeCompleteRedemptionCalldata(0x1_0000_0000_0000_0000n)).toThrow(
-      DelegationPrecompileError,
-    );
   });
 });

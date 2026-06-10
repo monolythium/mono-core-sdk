@@ -9745,14 +9745,12 @@ var DELEGATION_SELECTORS = {
   undelegate: "0x914f3ca8",
   redelegate: "0xa06ac18f",
   claim: "0x4e71d92d",
-  setAutoCompound: "0x86593454",
-  completeRedemption: "0x26169d0a"
+  setAutoCompound: "0x86593454"
 };
 var DELEGATION_REVERT_TAGS = {
-  redemptionQueueFull: "0x020e",
-  redemptionTicketNotFound: "0x020f",
-  redemptionNotMature: "0x0210",
-  redemptionPrincipalUnavailable: "0x0211"
+  /** `delegate(...)` carried native value — delegation is non-custodial and
+   *  must be sent with `value = 0`. */
+  unexpectedValue: "0x020e"
 };
 var DelegationPrecompileError = class extends Error {
   constructor(message) {
@@ -9762,14 +9760,6 @@ var DelegationPrecompileError = class extends Error {
 };
 function delegationAddressHex() {
   return PRECOMPILE_ADDRESSES.DELEGATION.toLowerCase();
-}
-function encodeCompleteRedemptionCalldata(index) {
-  return bytesToHex9(
-    concatBytes8(
-      hexToBytes8(DELEGATION_SELECTORS.completeRedemption),
-      uint64Word3(index, "index")
-    )
-  );
 }
 function encodeDelegateCalldata(cluster, weightBps) {
   return bytesToHex9(
@@ -9808,21 +9798,8 @@ function encodeSetAutoCompoundCalldata(enabled) {
     concatBytes8(hexToBytes8(DELEGATION_SELECTORS.setAutoCompound), flag)
   );
 }
-function isRedemptionPrincipalUnavailableRevert(data) {
-  return bytesToHex9(toBytes8(data)).toLowerCase() === DELEGATION_REVERT_TAGS.redemptionPrincipalUnavailable;
-}
-function uint64Word3(value, name) {
-  const n = toBigint3(value, name);
-  if (n < 0n || n > 0xffffffffffffffffn) {
-    throw new DelegationPrecompileError(`${name} must fit uint64`);
-  }
-  const out = new Uint8Array(32);
-  let rest = n;
-  for (let i = 31; i >= 24; i--) {
-    out[i] = Number(rest & 0xffn);
-    rest >>= 8n;
-  }
-  return out;
+function isUnexpectedValueRevert(data) {
+  return bytesToHex9(toBytes8(data)).toLowerCase() === DELEGATION_REVERT_TAGS.unexpectedValue;
 }
 function uint32Word2(value, name) {
   const n = toBigint3(value, name);
@@ -10446,7 +10423,7 @@ function encodePlaceLimitOrderCalldata(args) {
       uint8Word2(normalized.side),
       uint256Word5(normalized.price, "price"),
       uint256Word5(normalized.quantity, "quantity"),
-      uint64Word4(normalized.expiryBlock, "expiryBlock")
+      uint64Word3(normalized.expiryBlock, "expiryBlock")
     )
   );
 }
@@ -10785,7 +10762,7 @@ function encodePlaceLimitOrderViaCalldata(args) {
       uint8Word2(side),
       uint256Word5(price, "price"),
       uint256Word5(amount, "amount"),
-      uint64Word4(expiresAtBlock, "expiresAtBlock")
+      uint64Word3(expiresAtBlock, "expiresAtBlock")
     )
   );
 }
@@ -11075,7 +11052,7 @@ function uint8Word2(value) {
   out[31] = value;
   return out;
 }
-function uint64Word4(value, name) {
+function uint64Word3(value, name) {
   if (value < 0n || value > 0xffffffffffffffffn) {
     throw new MarketActionError(`${name} must fit uint64`);
   }
@@ -11941,7 +11918,6 @@ exports.encodeCancelOrderCalldata = encodeCancelOrderCalldata;
 exports.encodeCancelPendingChangeCalldata = encodeCancelPendingChangeCalldata;
 exports.encodeClaimCalldata = encodeClaimCalldata;
 exports.encodeClaimPolicyByAddressCalldata = encodeClaimPolicyByAddressCalldata;
-exports.encodeCompleteRedemptionCalldata = encodeCompleteRedemptionCalldata;
 exports.encodeCreateFixedSupplyMrc20Calldata = encodeCreateFixedSupplyMrc20Calldata;
 exports.encodeCreateRequestCalldata = encodeCreateRequestCalldata;
 exports.encodeCreateRequestCanonical = encodeCreateRequestCanonical;
@@ -12065,8 +12041,8 @@ exports.isBridgeResumeCooldownActiveRevert = isBridgeResumeCooldownActiveRevert;
 exports.isConcreteServiceProbeStatus = isConcreteServiceProbeStatus;
 exports.isNativeDecodedEvent = isNativeDecodedEvent;
 exports.isNativeMarketOrderBookStreamPayload = isNativeMarketOrderBookStreamPayload;
-exports.isRedemptionPrincipalUnavailableRevert = isRedemptionPrincipalUnavailableRevert;
 exports.isSinglePublicServiceProbeMask = isSinglePublicServiceProbeMask;
+exports.isUnexpectedValueRevert = isUnexpectedValueRevert;
 exports.isValidNodeRegistryCapabilities = isValidNodeRegistryCapabilities;
 exports.isValidPublicServiceProbeMask = isValidPublicServiceProbeMask;
 exports.mrvAddressToBech32 = mrvAddressToBech32;

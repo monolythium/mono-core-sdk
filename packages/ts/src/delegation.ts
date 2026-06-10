@@ -1,9 +1,15 @@
 /**
- * Delegation precompile ABI helpers.
+ * Delegation precompile ABI helpers (non-custodial ARK staking).
  *
- * The V4.1 redemption completion call prunes a matured redemption
- * queue ticket. It does not imply principal payout until mono-core adds
- * stake-vault/redemption-escrow accounting.
+ * Delegation is **balance-weighted** and **non-custodial**: a wallet never
+ * escrows tokens. A delegation row records a `weightBps` fraction of the
+ * caller's *live* balance; the wallet's contribution to a cluster is the
+ * effective weight `floor(balance × weightBps / 10000)`, re-evaluated at each
+ * settlement. Tokens stay fully liquid and spendable in the wallet.
+ *
+ * Because nothing is escrowed there is no redemption queue: `undelegate` is
+ * instant. The legacy `completeRedemption` selector was removed from the chain
+ * (calling it now reverts).
  */
 
 import { PRECOMPILE_ADDRESSES } from "./consts.js";
@@ -14,14 +20,12 @@ export const DELEGATION_SELECTORS = {
   redelegate: "0xa06ac18f",
   claim: "0x4e71d92d",
   setAutoCompound: "0x86593454",
-  completeRedemption: "0x26169d0a",
 } as const;
 
 export const DELEGATION_REVERT_TAGS = {
-  redemptionQueueFull: "0x020e",
-  redemptionTicketNotFound: "0x020f",
-  redemptionNotMature: "0x0210",
-  redemptionPrincipalUnavailable: "0x0211",
+  /** `delegate(...)` carried native value — delegation is non-custodial and
+   *  must be sent with `value = 0`. */
+  unexpectedValue: "0x020e",
 } as const;
 
 export class DelegationPrecompileError extends Error {
@@ -35,18 +39,15 @@ export function delegationAddressHex(): string {
   return PRECOMPILE_ADDRESSES.DELEGATION.toLowerCase();
 }
 
-export function encodeCompleteRedemptionCalldata(index: bigint | number | string): string {
-  return bytesToHex(
-    concatBytes(
-      hexToBytes(DELEGATION_SELECTORS.completeRedemption),
-      uint64Word(index, "index"),
-    ),
-  );
-}
-
-/** `delegate(uint32 cluster, uint16 weightBps)` — caller sends LYTH as msg.value
- *  to set their principal stake for `cluster`; `weightBps` is the fraction
- *  of voting power (max 10_000 = 100%). */
+/** `delegate(uint32 cluster, uint16 weightBps)` — records a balance-weighted,
+ *  **non-custodial** delegation to `cluster`. `weightBps` is the fraction of
+ *  the caller's *live* balance to contribute (max 10_000 = 100%); the
+ *  effective weight is `floor(balance × weightBps / 10000)` and tracks the
+ *  balance over time. No principal is escrowed — tokens stay liquid.
+ *
+ *  IMPORTANT: the delegate tx MUST be sent with `value = 0`. Any native value
+ *  makes the chain revert with the `unexpectedValue` tag (`0x020e`). `value`
+ *  is a transaction field, not calldata, so this encoder is unchanged. */
 export function encodeDelegateCalldata(
   cluster: bigint | number | string,
   weightBps: bigint | number | string,
@@ -60,9 +61,9 @@ export function encodeDelegateCalldata(
   );
 }
 
-/** `undelegate(uint32 cluster)` — removes the caller's row + appends a
- *  redemption ticket. Principal becomes claimable through
- *  `completeRedemption(uint64 index)` once the ticket matures. */
+/** `undelegate(uint32 cluster)` — instantly removes the caller's delegation
+ *  row for `cluster`. There is no redemption queue or cooldown; nothing was
+ *  escrowed, so there is nothing to redeem. */
 export function encodeUndelegateCalldata(cluster: bigint | number | string): string {
   return bytesToHex(
     concatBytes(
@@ -103,22 +104,10 @@ export function encodeSetAutoCompoundCalldata(enabled: boolean): string {
   );
 }
 
-export function isRedemptionPrincipalUnavailableRevert(data: string | Uint8Array | readonly number[]): boolean {
-  return bytesToHex(toBytes(data)).toLowerCase() === DELEGATION_REVERT_TAGS.redemptionPrincipalUnavailable;
-}
-
-function uint64Word(value: bigint | number | string, name: string): Uint8Array {
-  const n = toBigint(value, name);
-  if (n < 0n || n > 0xffff_ffff_ffff_ffffn) {
-    throw new DelegationPrecompileError(`${name} must fit uint64`);
-  }
-  const out = new Uint8Array(32);
-  let rest = n;
-  for (let i = 31; i >= 24; i--) {
-    out[i] = Number(rest & 0xffn);
-    rest >>= 8n;
-  }
-  return out;
+/** `true` when revert `data` is the `unexpectedValue` tag — i.e. a
+ *  `delegate(...)` tx was (incorrectly) sent with native value. */
+export function isUnexpectedValueRevert(data: string | Uint8Array | readonly number[]): boolean {
+  return bytesToHex(toBytes(data)).toLowerCase() === DELEGATION_REVERT_TAGS.unexpectedValue;
 }
 
 function uint32Word(value: bigint | number | string, name: string): Uint8Array {
