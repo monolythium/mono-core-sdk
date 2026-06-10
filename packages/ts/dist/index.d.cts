@@ -1933,6 +1933,161 @@ declare function encodeVrfEvaluateCalldata(blockHeight: bigint | number | string
 declare function decodeVrfOutput(output: string | Uint8Array | readonly number[]): Uint8Array;
 
 /**
+ * Native `monom` M-of-N multisig witness assembly.
+ *
+ * Monolythium v2 has a **native** (precompile-free, protocol-level) multisig
+ * spend path: a `monom…` address is `BLAKE3("MONO_MULTISIG_BLAKE3_20_V1" ||
+ * threshold_be16 || (member_len_be8 || member)*sorted)[..20]`, and value is
+ * moved *from* it by attaching a self-describing M-of-N witness as a typed
+ * transaction extension (kind `0x40`). No on-chain registry is consulted —
+ * the verifier reconstructs the address from the witness alone.
+ *
+ * This module is wire-critical: every byte here mirrors the Rust source of
+ * truth exactly (`mono-core/crates/execution/tx/src/multisig.rs` for the
+ * witness body + framing, `crates/crypto/crypto/src/address.rs` for the
+ * address rule, and `crates/core/sdk/src/tx.rs` for
+ * `multisig_base_sighash` / `assemble_multisig_signed`). Parity is pinned in
+ * `tests/multisig.test.ts` against ground-truth bytes emitted by the Rust
+ * crate.
+ *
+ * Design notes mirrored from Rust:
+ * - Members are stored **sorted ascending by raw pubkey bytes**; the same
+ *   canonicalisation the address derivation applies. `member_index` in a
+ *   signature is an index into the sorted roster.
+ * - Members sign the **base sighash**: the envelope's keccak-256 sighash with
+ *   the multisig witness extension removed. Because every extension is part
+ *   of the sighash preimage, members cannot sign over a preimage that already
+ *   contains their own signatures — the witness is appended afterward.
+ * - The witness body is `0x01 || "MONO_MULTISIG_WITNESS_V1" || bincode(witness)`.
+ *   `bincode` here is bincode 1.x defaults: little-endian fixints, `u64`
+ *   length prefixes on every `Vec`. The struct serialises in field order:
+ *   `threshold: u16`, `members: Vec<MultisigMember>`,
+ *   `signatures: Vec<MultisigMemberSignature>`, where `MultisigMember` is
+ *   `{ algo_id: u16, pubkey: Vec<u8> }` and `MultisigMemberSignature` is
+ *   `{ member_index: u16, signature: Vec<u8> }`.
+ */
+
+/** Typed-extension kind byte for a native multisig spend witness (Rust `TX_EXTENSION_KIND_MULTISIG`). */
+declare const TX_EXTENSION_KIND_MULTISIG: 64;
+/** Witness body version byte — first byte of the extension body (Rust `TX_EXTENSION_MULTISIG_V1`). */
+declare const TX_EXTENSION_MULTISIG_V1: 1;
+/** Domain tag mixed into the witness body version line (Rust `MULTISIG_WITNESS_DOMAIN`). */
+declare const MULTISIG_WITNESS_DOMAIN: "MONO_MULTISIG_WITNESS_V1";
+/** BLAKE3 multisig address-derivation domain (Rust `MULTISIG_ADDRESS_DERIVATION_DOMAIN`). */
+declare const MULTISIG_ADDRESS_DERIVATION_DOMAIN: "MONO_MULTISIG_BLAKE3_20_V1";
+/** Lower bound on roster size (Rust `MIN_MEMBERS`). */
+declare const MIN_MULTISIG_MEMBERS: 1;
+/** Upper bound on roster size (Rust `MAX_MULTISIG_MEMBERS`). */
+declare const MAX_MULTISIG_MEMBERS: 64;
+declare class MultisigError extends Error {
+    constructor(message: string);
+}
+/** A single roster member: an ML-DSA-65 public key. */
+interface MultisigMember {
+    /** Signature algorithm id. Must be ML-DSA-65 (`1001`). */
+    algoId: number;
+    /** Canonical ML-DSA-65 public-key bytes (1952 B). */
+    pubkey: Uint8Array;
+}
+/** A member signature tagged with its index in the sorted roster. */
+interface MultisigMemberSignature {
+    /** Index into the **sorted** member roster. */
+    memberIndex: number;
+    /** Canonical ML-DSA-65 signature bytes over the base sighash (3309 B). */
+    signature: Uint8Array;
+}
+/** A self-describing multisig spend witness with a canonically-sorted roster. */
+interface MultisigWitness {
+    /** Quorum threshold: `1 <= threshold <= members.length`. */
+    threshold: number;
+    /** Full roster, sorted ascending by raw `pubkey` bytes. */
+    members: MultisigMember[];
+    /** Collected member signatures over the base sighash. */
+    signatures: MultisigMemberSignature[];
+}
+/** Accepts a member pubkey as raw bytes / number[] / hex (delegated to {@link expectBytes}). */
+type MemberPubkeyInput = Uint8Array | readonly number[];
+/**
+ * Sort + dedupe-check a roster of ML-DSA-65 public keys into canonical
+ * (ascending raw-byte) order, mirroring `address_from_multisig_members` and
+ * `MultisigWitness::new`'s `members.sort_by(pubkey.cmp)`.
+ *
+ * Returns a fresh array sorted ascending; the input is not mutated.
+ */
+declare function sortMultisigMembers(members: readonly MemberPubkeyInput[]): Uint8Array[];
+/**
+ * Derive the `monom…` bech32m multisig address for a roster + threshold.
+ *
+ * Mirrors `protocore_crypto::address_from_multisig_members`:
+ * `BLAKE3("MONO_MULTISIG_BLAKE3_20_V1" || threshold_be16 ||
+ * (member_len_be8 || member)*sorted)[..20]`, rendered with the `monom` HRP.
+ *
+ * The address rule itself is order-insensitive and imposes no roster-size
+ * policy (matching Rust); use {@link assembleMultisigWitness} when you need
+ * the roster-shape validation enforced.
+ */
+declare function deriveMultisigAddressBytes(threshold: number, members: readonly MemberPubkeyInput[]): Uint8Array;
+/** {@link deriveMultisigAddressBytes} rendered as a `monom…` bech32m string. */
+declare function deriveMultisigAddress(threshold: number, members: readonly MemberPubkeyInput[]): string;
+/**
+ * Validate the static roster shape, mirroring Rust `validate_roster`.
+ *
+ * Enforces: 1..=64 members; `1 <= threshold <= members.length`;
+ * `signatures.length <= members.length`; every member ML-DSA-65 with a
+ * 1952-byte pubkey; the roster sorted ascending and duplicate-free.
+ */
+declare function validateMultisigRoster(witness: MultisigWitness): void;
+/**
+ * Build a {@link MultisigWitness} from a roster + threshold + collected
+ * member signatures, sorting the roster into canonical order and validating
+ * the roster shape — mirrors `MultisigWitness::new`.
+ *
+ * Callers supply `signatures` already keyed to the **sorted** roster
+ * (`memberIndex` is the index into the sorted member list). Use
+ * {@link multisigMemberIndex} to find a member's sorted index.
+ */
+declare function assembleMultisigWitness(threshold: number, members: readonly MemberPubkeyInput[], signatures?: readonly MultisigMemberSignature[]): MultisigWitness;
+/**
+ * Find the index of `pubkey` in the canonically-sorted roster, or `-1` if it
+ * is not a member. Use this to key a {@link MultisigMemberSignature}'s
+ * `memberIndex` when collecting signatures.
+ */
+declare function multisigMemberIndex(members: readonly MemberPubkeyInput[], pubkey: MemberPubkeyInput): number;
+/**
+ * Canonical witness extension body bytes — mirrors `MultisigWitness::encode_body`.
+ *
+ * Layout: `0x01 || "MONO_MULTISIG_WITNESS_V1" || bincode(witness)`.
+ */
+declare function encodeMultisigWitnessBody(witness: MultisigWitness): Uint8Array;
+/**
+ * Compute the **base sighash** each multisig member signs for this tx —
+ * mirrors `multisig_base_sighash` / `Transaction::base_sighash`.
+ *
+ * This is keccak-256 over the envelope's `TAG_SIGHASH` encoding with any
+ * multisig witness extension removed. When no multisig extension is present
+ * (the normal case — you pass the plain transfer envelope) it equals the
+ * ordinary sighash. Every member signs these same 32 bytes.
+ */
+declare function multisigBaseSighash(fields: NativeEvmTxFields): Uint8Array;
+/**
+ * Attach a multisig witness to a transfer envelope, returning the envelope
+ * fields with the `0x40` witness extension appended — mirrors the extension
+ * step of `assemble_multisig_signed`.
+ *
+ * The returned fields carry the witness as the last extension. The witness's
+ * member signatures must each be over `multisigBaseSighash(fields)` of the
+ * **input** (witness-free) envelope; appending the witness does not change
+ * the base sighash (`base_sighash` strips it).
+ *
+ * The caller still signs the outer envelope over the base sighash with one
+ * of the roster members' keys (the chain verifies the outer signer is a
+ * member). Pass the resulting `wireBytes` from a single-signer wire encode of
+ * these fields, or use the lower-level `bincodeSignedTransaction` from
+ * `@monolythium/core-sdk/crypto` with the outer member signature + pubkey.
+ */
+declare function assembleMultisigSigned(fields: NativeEvmTxFields, witness: MultisigWitness): NativeEvmTxFields;
+
+/**
  * Delegation precompile ABI helpers.
  *
  * The V4.1 redemption completion call prunes a matured redemption
@@ -2236,4 +2391,4 @@ interface MonolythiumNetworkConfig {
  */
 declare const version = "0.4.8";
 
-export { AddressFlowResponse, AddressKind, AddressProfileResponse, AgentActionError, type ApiAddressActivityData, type ApiAddressActivityEntry, type ApiAddressActivityKind, type ApiAddressActivityKindData, type ApiAddressActivityKindSummary, type ApiBlockData, type ApiBlockHeader, type ApiBlockTransactionsData, type ApiCapabilitiesResponse, ApiClient, type ApiClientOptions, type ApiClusterData, type ApiClusterDirectoryEntry, type ApiClusterDirectoryPage, type ApiClusterMember, type ApiClusterStatus, type ApiClustersData, type ApiEnvelope, type ApiErrorEnvelope, type ApiHealthResponse, type ApiIndexerStatus, type ApiLatestAnchor, type ApiLogEntry, type ApiOperatorData, type ApiOperatorInfo, type ApiQueryValue, type ApiRuntimeProvenanceData, type ApiServiceProbeData, ApiStreamsIndexResponse, type ApiTransactionData, type ApiTransactionNativeReceiptData, type ApiTransactionReceipt, type ApiTransactionReceiptData, type ApiTransactionView, type ApiUpgradePlanStatus, type ApiUpgradeStatus, type ApiUpgradeStatusData, BURN_ADDR, BlockSelector, BridgeRoutesRequest, BridgeRoutesResponse, type BuildPublishOperatorSealKeyTxFieldsArgs, type BuildRequestClusterJoinTxFieldsArgs, type BuildVoteClusterAdmitTxFieldsArgs, ChainStatsResponse, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse, ClobTradesResponse, type ClusterJoinFeeOptions, type ClusterJoinReadClient, ClusterJoinRequestView, type ClusterJoinSubmitClient, type ClusterJoinSubmitResult, type ClusterJoinTxFee, type CreateFixedSupplyMrc20CalldataArgs, type CreateTokenCalldataArgs, DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT, DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DelegationPrecompileError, EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER, type EncodeNativeAgentAvailabilitySlotArgs, type EncodeNativeAgentCounterEscrowArgs, type EncodeNativeAgentCreateEscrowArgs, type EncodeNativeAgentDeactivateServiceArgs, type EncodeNativeAgentEscrowActorArgs, type EncodeNativeAgentGrantConsentArgs, type EncodeNativeAgentIssueAttestationArgs, type EncodeNativeAgentListServiceArgs, type EncodeNativeAgentRecordPolicySpendArgs, type EncodeNativeAgentRecordReputationArgs, type EncodeNativeAgentRegisterArbiterArgs, type EncodeNativeAgentRegisterIssuerArgs, type EncodeNativeAgentResolveEscrowArgs, type EncodeNativeAgentRevokeAttestationArgs, type EncodeNativeAgentRevokeConsentArgs, type EncodeNativeAgentSetAvailabilityArgs, type EncodeNativeAgentSetSpendingPolicyArgs, type EncodeNativeAgentStartEscrowArgs, type EncodeNativeAgentSubmitEscrowArgs, ExecutionUnitPriceResponse, type HealthSummary, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, type LatencyBands, type LythFormatOptions, MIN_EXECUTION_UNIT_PRICE_LYTHOSHI, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, type MonolythiumNetworkConfig, type MrcAccountRequest, MrcAccountResponse, type MrcHoldersRequest, MrcHoldersResponse, MrcMetadataResponse, type MrvAbiManifest, type MrvAbiParam, type MrvAbiSymbol, type MrvAbiSymbolKind, type MrvAbiType, type MrvAddressKind, type MrvArtifactMetadata, type MrvBuildMetadata, type MrvBytesLike, type MrvCallNativeTxOptions, type MrvCallNativeTxPlan, type MrvCallPlan, type MrvCallRequest, type MrvCallResponse, type MrvCallStatus, type MrvCallSubmission, type MrvCallSubmitOptions, type MrvDecimalLike, type MrvDeployNativeTxOptions, type MrvDeployNativeTxPlan, type MrvDeployPayload, type MrvDeployPayloadNativeTxOptions, type MrvDeployPayloadPlanOptions, type MrvDeployPayloadRequestOptions, type MrvDeployPayloadSubmission, type MrvDeployPayloadSubmitOptions, type MrvDeployPlan, type MrvDeployPlanOptions, type MrvDeployRequest, type MrvDeployResponse, type MrvDeploySubmission, type MrvDeploySubmitOptions, type MrvEncryptedSubmissionResult, type MrvEventRecord, type MrvExecutionReceipt, type MrvFeeDisplayConformanceInput, type MrvFeeDisplayConformanceReport, type MrvMemoryLimits, type MrvMeterCounters, type MrvNativeFeePreview, type MrvNativeStateDelta, type MrvNativeTxFacade, type MrvRequestBuildOptions, type MrvResolvedSyscall, type MrvRevertPayload, type MrvRiscvProfile, type MrvStorageNamespace, type MrvStructuredFeeConformanceOptions, type MrvStructuredFeeConformanceReport, type MrvSyscallImport, type MrvTransactionExtension, type MrvTypedAddress, type MrvValidatedArtifactMetadata, MrvValidationError, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, type NativeAgentAddressInput, type NativeAgentAddressKind, type NativeAgentEscrowResolution, type NativeAgentForwarderInput, type NativeAgentModuleCallEnvelope, type NativeAgentModuleContractCall, type NativeAgentReputationScores, NativeAgentStateFilter, NativeAgentStateResponse, NativeDecodedEvent, type NativeDevApprovalKind, type NativeDevCommandName, type NativeDevContractPassport, type NativeDevHostApprovalResultMessage, type NativeDevHostCommandMessage, type NativeDevHostContextMessage, type NativeDevIpcMessage, type NativeDevMrcAllocation, type NativeDevMrcAssetKind, type NativeDevMrcTokenPlan, type NativeDevMrvDeployPlan, type NativeDevRiskLabel, type NativeDevRiskSeverity, type NativeDevSidecarApprovalRequestMessage, type NativeDevSidecarCommandResultMessage, type NativeDevSidecarProjectEventMessage, type NativeDevSidecarReadyMessage, type NativeDevVerificationBundle, type NativeDevWalletApprovalRequest, type NativeDevkitArchive, type NativeDevkitChannel, type NativeDevkitCompatibility, type NativeDevkitManifest, type NativeDevkitSidecarManifest, type NativeDevkitSidecarStatus, type NativeDevkitStatus, NativeEventFilter, NativeEventsFilter, NativeEventsResponse, NativeMarketOrderBookDeltasRequest, NativeMarketOrderBookDeltasResponse, NativeMarketStateFilter, NativeMarketStateResponse, NativeReceiptFee, type NativeReceiptFeeDisplay, NativeReceiptResponse, OPERATOR_ROUTER_ADDRESS, OperatorCapabilitiesResponse, type OperatorOnboardingPreview, type OperatorSealKeySubmitResult, PRECOMPILE_ADDRESSES, PROTOCOL_MAX_OPERATOR_FEE_BPS, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PendingRewardsResponse, type PrecompileAddress, type PrecompileName, type PubkeyLookup, PubkeyRegistryError, REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT, RedemptionQueueResponse, type ResolvedExecutionFee, RpcClient, RuntimeBuildProvenance, RuntimeUpgradeStatus, SdkError, SearchResponse, ServiceProbeResponse, type StudioHostState, type StudioHostStatus, type SubmitPublishOperatorSealKeyArgs, type SubmitRequestClusterJoinArgs, type SubmitVoteClusterAdmitArgs, TOKEN_FACTORY_CREATE_DEPOSIT_LYTHOSHI, TOKEN_FACTORY_FLAGS, TOKEN_FACTORY_KNOWN_FLAG_MASK, TOKEN_FACTORY_MAX_CREATOR_FEE_BPS, TOKEN_FACTORY_MAX_DECIMALS, TOKEN_FACTORY_NAME_MAX_BYTES, TOKEN_FACTORY_SELECTORS, TOKEN_FACTORY_SIGS, TOKEN_FACTORY_SYMBOL_MAX_BYTES, TOKEN_FACTORY_TOKEN_ID_DOMAIN_TAG, TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT, type TokenFactoryAddressInput, type TokenFactoryBytes32Input, TokenFactoryError, type TokenFactoryUintInput, type TransactionFeeExposure, TxFeedResponse, TypedAddress, TypedNativeReceiptEvent, VRF_DOMAIN_TAG_MAX_BYTES, VRF_HEIGHT_NOT_FINALIZED_REVERT, VRF_OUTPUT_BYTES, VrfCallError, type VrfDomainTagInput, apiEndpointFromRpcEndpoint, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildPublishOperatorSealKeyTxFields, buildRequestClusterJoinTxFields, buildVoteClusterAdmitTxFields, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, clampPriorityTip, clusterJoinRequestExists, compareNativeDevVersions, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeTokenFactoryTokenId, decodeVrfOutput, delegationAddressHex, deriveClusterJoinOperatorId, deriveMrvContractAddress, deriveTokenFactoryTokenId, encodeClaimCalldata, encodeCompleteRedemptionCalldata, encodeCreateFixedSupplyMrc20Calldata, encodeCreateTokenCalldata, encodeDelegateCalldata, encodeHasPubkeyCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeRedelegateCalldata, encodeRegisterPubkeyCalldata, encodeSetAutoCompoundCalldata, encodeTokenFactoryAllowanceCalldata, encodeTokenFactoryApproveCalldata, encodeTokenFactoryBalanceOfCalldata, encodeTokenFactoryBurnCalldata, encodeTokenFactoryDecreaseAllowanceCalldata, encodeTokenFactoryDestroyCalldata, encodeTokenFactoryIncreaseAllowanceCalldata, encodeTokenFactoryMetadataCalldata, encodeTokenFactoryMintCalldata, encodeTokenFactorySetPausedCalldata, encodeTokenFactoryTotalSupplyCalldata, encodeTokenFactoryTransferCalldata, encodeTokenFactoryTransferFromCalldata, encodeTokenFactoryTransferOwnershipCalldata, encodeUndelegateCalldata, encodeVrfEvaluateCalldata, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, isRedemptionPrincipalUnavailableRevert, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, nativeDevSchemaFieldNames, nativeDevUiStrings, parseLythToLythoshi, preflightClusterJoinRequest, previewRequestClusterJoin, previewVoteClusterAdmit, pubkeyRegistryAddressHex, readClusterJoinRequest, resolveClusterJoinExecutionFee, resolveExecutionFee, resolveMaxExecutionUnitPrice, resolveRegistryExecutionFee, resolveStudioHostStatus, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, submitPublishOperatorSealKey, submitRequestClusterJoin, submitVoteClusterAdmit, tokenFactoryAddressHex, transactionFeeExposure, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, validateTokenFactoryFlags, version, vrfAddressHex };
+export { AddressFlowResponse, AddressKind, AddressProfileResponse, AgentActionError, type ApiAddressActivityData, type ApiAddressActivityEntry, type ApiAddressActivityKind, type ApiAddressActivityKindData, type ApiAddressActivityKindSummary, type ApiBlockData, type ApiBlockHeader, type ApiBlockTransactionsData, type ApiCapabilitiesResponse, ApiClient, type ApiClientOptions, type ApiClusterData, type ApiClusterDirectoryEntry, type ApiClusterDirectoryPage, type ApiClusterMember, type ApiClusterStatus, type ApiClustersData, type ApiEnvelope, type ApiErrorEnvelope, type ApiHealthResponse, type ApiIndexerStatus, type ApiLatestAnchor, type ApiLogEntry, type ApiOperatorData, type ApiOperatorInfo, type ApiQueryValue, type ApiRuntimeProvenanceData, type ApiServiceProbeData, ApiStreamsIndexResponse, type ApiTransactionData, type ApiTransactionNativeReceiptData, type ApiTransactionReceipt, type ApiTransactionReceiptData, type ApiTransactionView, type ApiUpgradePlanStatus, type ApiUpgradeStatus, type ApiUpgradeStatusData, BURN_ADDR, BlockSelector, BridgeRoutesRequest, BridgeRoutesResponse, type BuildPublishOperatorSealKeyTxFieldsArgs, type BuildRequestClusterJoinTxFieldsArgs, type BuildVoteClusterAdmitTxFieldsArgs, ChainStatsResponse, ClobMarketResponse, ClobMarketsResponse, ClobOhlcResponse, ClobOrderBookResponse, ClobTradesResponse, type ClusterJoinFeeOptions, type ClusterJoinReadClient, ClusterJoinRequestView, type ClusterJoinSubmitClient, type ClusterJoinSubmitResult, type ClusterJoinTxFee, type CreateFixedSupplyMrc20CalldataArgs, type CreateTokenCalldataArgs, DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT, DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DelegationPrecompileError, EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER, type EncodeNativeAgentAvailabilitySlotArgs, type EncodeNativeAgentCounterEscrowArgs, type EncodeNativeAgentCreateEscrowArgs, type EncodeNativeAgentDeactivateServiceArgs, type EncodeNativeAgentEscrowActorArgs, type EncodeNativeAgentGrantConsentArgs, type EncodeNativeAgentIssueAttestationArgs, type EncodeNativeAgentListServiceArgs, type EncodeNativeAgentRecordPolicySpendArgs, type EncodeNativeAgentRecordReputationArgs, type EncodeNativeAgentRegisterArbiterArgs, type EncodeNativeAgentRegisterIssuerArgs, type EncodeNativeAgentResolveEscrowArgs, type EncodeNativeAgentRevokeAttestationArgs, type EncodeNativeAgentRevokeConsentArgs, type EncodeNativeAgentSetAvailabilityArgs, type EncodeNativeAgentSetSpendingPolicyArgs, type EncodeNativeAgentStartEscrowArgs, type EncodeNativeAgentSubmitEscrowArgs, ExecutionUnitPriceResponse, type HealthSummary, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, type LatencyBands, type LythFormatOptions, MAX_MULTISIG_MEMBERS, MIN_EXECUTION_UNIT_PRICE_LYTHOSHI, MIN_MULTISIG_MEMBERS, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MULTISIG_ADDRESS_DERIVATION_DOMAIN as MULTISIG_WITNESS_ADDRESS_DERIVATION_DOMAIN, MULTISIG_WITNESS_DOMAIN, type MemberPubkeyInput, type MonolythiumNetworkConfig, type MrcAccountRequest, MrcAccountResponse, type MrcHoldersRequest, MrcHoldersResponse, MrcMetadataResponse, type MrvAbiManifest, type MrvAbiParam, type MrvAbiSymbol, type MrvAbiSymbolKind, type MrvAbiType, type MrvAddressKind, type MrvArtifactMetadata, type MrvBuildMetadata, type MrvBytesLike, type MrvCallNativeTxOptions, type MrvCallNativeTxPlan, type MrvCallPlan, type MrvCallRequest, type MrvCallResponse, type MrvCallStatus, type MrvCallSubmission, type MrvCallSubmitOptions, type MrvDecimalLike, type MrvDeployNativeTxOptions, type MrvDeployNativeTxPlan, type MrvDeployPayload, type MrvDeployPayloadNativeTxOptions, type MrvDeployPayloadPlanOptions, type MrvDeployPayloadRequestOptions, type MrvDeployPayloadSubmission, type MrvDeployPayloadSubmitOptions, type MrvDeployPlan, type MrvDeployPlanOptions, type MrvDeployRequest, type MrvDeployResponse, type MrvDeploySubmission, type MrvDeploySubmitOptions, type MrvEncryptedSubmissionResult, type MrvEventRecord, type MrvExecutionReceipt, type MrvFeeDisplayConformanceInput, type MrvFeeDisplayConformanceReport, type MrvMemoryLimits, type MrvMeterCounters, type MrvNativeFeePreview, type MrvNativeStateDelta, type MrvNativeTxFacade, type MrvRequestBuildOptions, type MrvResolvedSyscall, type MrvRevertPayload, type MrvRiscvProfile, type MrvStorageNamespace, type MrvStructuredFeeConformanceOptions, type MrvStructuredFeeConformanceReport, type MrvSyscallImport, type MrvTransactionExtension, type MrvTypedAddress, type MrvValidatedArtifactMetadata, MrvValidationError, MultisigError, type MultisigMember, type MultisigMemberSignature, type MultisigWitness, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, type NativeAgentAddressInput, type NativeAgentAddressKind, type NativeAgentEscrowResolution, type NativeAgentForwarderInput, type NativeAgentModuleCallEnvelope, type NativeAgentModuleContractCall, type NativeAgentReputationScores, NativeAgentStateFilter, NativeAgentStateResponse, NativeDecodedEvent, type NativeDevApprovalKind, type NativeDevCommandName, type NativeDevContractPassport, type NativeDevHostApprovalResultMessage, type NativeDevHostCommandMessage, type NativeDevHostContextMessage, type NativeDevIpcMessage, type NativeDevMrcAllocation, type NativeDevMrcAssetKind, type NativeDevMrcTokenPlan, type NativeDevMrvDeployPlan, type NativeDevRiskLabel, type NativeDevRiskSeverity, type NativeDevSidecarApprovalRequestMessage, type NativeDevSidecarCommandResultMessage, type NativeDevSidecarProjectEventMessage, type NativeDevSidecarReadyMessage, type NativeDevVerificationBundle, type NativeDevWalletApprovalRequest, type NativeDevkitArchive, type NativeDevkitChannel, type NativeDevkitCompatibility, type NativeDevkitManifest, type NativeDevkitSidecarManifest, type NativeDevkitSidecarStatus, type NativeDevkitStatus, NativeEventFilter, NativeEventsFilter, NativeEventsResponse, NativeMarketOrderBookDeltasRequest, NativeMarketOrderBookDeltasResponse, NativeMarketStateFilter, NativeMarketStateResponse, NativeReceiptFee, type NativeReceiptFeeDisplay, NativeReceiptResponse, OPERATOR_ROUTER_ADDRESS, OperatorCapabilitiesResponse, type OperatorOnboardingPreview, type OperatorSealKeySubmitResult, PRECOMPILE_ADDRESSES, PROTOCOL_MAX_OPERATOR_FEE_BPS, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, PendingRewardsResponse, type PrecompileAddress, type PrecompileName, type PubkeyLookup, PubkeyRegistryError, REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT, RedemptionQueueResponse, type ResolvedExecutionFee, RpcClient, RuntimeBuildProvenance, RuntimeUpgradeStatus, SdkError, SearchResponse, ServiceProbeResponse, type StudioHostState, type StudioHostStatus, type SubmitPublishOperatorSealKeyArgs, type SubmitRequestClusterJoinArgs, type SubmitVoteClusterAdmitArgs, TOKEN_FACTORY_CREATE_DEPOSIT_LYTHOSHI, TOKEN_FACTORY_FLAGS, TOKEN_FACTORY_KNOWN_FLAG_MASK, TOKEN_FACTORY_MAX_CREATOR_FEE_BPS, TOKEN_FACTORY_MAX_DECIMALS, TOKEN_FACTORY_NAME_MAX_BYTES, TOKEN_FACTORY_SELECTORS, TOKEN_FACTORY_SIGS, TOKEN_FACTORY_SYMBOL_MAX_BYTES, TOKEN_FACTORY_TOKEN_ID_DOMAIN_TAG, TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT, TX_EXTENSION_KIND_MULTISIG, TX_EXTENSION_MULTISIG_V1, type TokenFactoryAddressInput, type TokenFactoryBytes32Input, TokenFactoryError, type TokenFactoryUintInput, type TransactionFeeExposure, TxFeedResponse, TypedAddress, TypedNativeReceiptEvent, VRF_DOMAIN_TAG_MAX_BYTES, VRF_HEIGHT_NOT_FINALIZED_REVERT, VRF_OUTPUT_BYTES, VrfCallError, type VrfDomainTagInput, apiEndpointFromRpcEndpoint, assembleMultisigSigned, assembleMultisigWitness, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildPublishOperatorSealKeyTxFields, buildRequestClusterJoinTxFields, buildVoteClusterAdmitTxFields, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, clampPriorityTip, clusterJoinRequestExists, compareNativeDevVersions, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeTokenFactoryTokenId, decodeVrfOutput, delegationAddressHex, deriveClusterJoinOperatorId, deriveMrvContractAddress, deriveMultisigAddress, deriveMultisigAddressBytes, deriveTokenFactoryTokenId, encodeClaimCalldata, encodeCompleteRedemptionCalldata, encodeCreateFixedSupplyMrc20Calldata, encodeCreateTokenCalldata, encodeDelegateCalldata, encodeHasPubkeyCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeMultisigWitnessBody, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeRedelegateCalldata, encodeRegisterPubkeyCalldata, encodeSetAutoCompoundCalldata, encodeTokenFactoryAllowanceCalldata, encodeTokenFactoryApproveCalldata, encodeTokenFactoryBalanceOfCalldata, encodeTokenFactoryBurnCalldata, encodeTokenFactoryDecreaseAllowanceCalldata, encodeTokenFactoryDestroyCalldata, encodeTokenFactoryIncreaseAllowanceCalldata, encodeTokenFactoryMetadataCalldata, encodeTokenFactoryMintCalldata, encodeTokenFactorySetPausedCalldata, encodeTokenFactoryTotalSupplyCalldata, encodeTokenFactoryTransferCalldata, encodeTokenFactoryTransferFromCalldata, encodeTokenFactoryTransferOwnershipCalldata, encodeUndelegateCalldata, encodeVrfEvaluateCalldata, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, isRedemptionPrincipalUnavailableRevert, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, multisigBaseSighash, multisigMemberIndex, nativeDevSchemaFieldNames, nativeDevUiStrings, parseLythToLythoshi, preflightClusterJoinRequest, previewRequestClusterJoin, previewVoteClusterAdmit, pubkeyRegistryAddressHex, readClusterJoinRequest, resolveClusterJoinExecutionFee, resolveExecutionFee, resolveMaxExecutionUnitPrice, resolveRegistryExecutionFee, resolveStudioHostStatus, sortMultisigMembers, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, submitPublishOperatorSealKey, submitRequestClusterJoin, submitVoteClusterAdmit, tokenFactoryAddressHex, transactionFeeExposure, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, validateMultisigRoster, validateTokenFactoryFlags, version, vrfAddressHex };

@@ -9582,6 +9582,162 @@ function bigintBytes(value, len) {
   }
   return out;
 }
+var TX_EXTENSION_KIND_MULTISIG = 64;
+var TX_EXTENSION_MULTISIG_V1 = 1;
+var MULTISIG_WITNESS_DOMAIN = "MONO_MULTISIG_WITNESS_V1";
+var MULTISIG_ADDRESS_DERIVATION_DOMAIN2 = "MONO_MULTISIG_BLAKE3_20_V1";
+var MIN_MULTISIG_MEMBERS = 1;
+var MAX_MULTISIG_MEMBERS = 64;
+var WITNESS_DOMAIN_BYTES = new TextEncoder().encode(MULTISIG_WITNESS_DOMAIN);
+var ADDRESS_DOMAIN_BYTES = new TextEncoder().encode(MULTISIG_ADDRESS_DERIVATION_DOMAIN2);
+var MultisigError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "MultisigError";
+  }
+};
+function toPubkeyBytes(value, label) {
+  return expectBytes(value, ML_DSA_65_PUBLIC_KEY_LEN, label);
+}
+function compareBytes2(a, b) {
+  const len = Math.min(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  return a.length - b.length;
+}
+function u64BeBytes2(value) {
+  const out = new Uint8Array(8);
+  let n = value;
+  for (let i = 7; i >= 0; i--) {
+    out[i] = Number(n & 0xffn);
+    n >>= 8n;
+  }
+  return out;
+}
+function expectThreshold(threshold) {
+  if (!Number.isInteger(threshold) || threshold < 0 || threshold > 65535) {
+    throw new MultisigError("threshold must be a uint16");
+  }
+  return threshold;
+}
+function sortMultisigMembers(members) {
+  return members.map((m, i) => toPubkeyBytes(m, `members[${i}]`)).sort(compareBytes2);
+}
+function deriveMultisigAddressBytes(threshold, members) {
+  expectThreshold(threshold);
+  const sorted = sortMultisigMembers(members);
+  const parts = [
+    ADDRESS_DOMAIN_BYTES,
+    Uint8Array.from([threshold >> 8 & 255, threshold & 255])
+  ];
+  for (const member of sorted) {
+    parts.push(u64BeBytes2(BigInt(member.length)));
+    parts.push(member);
+  }
+  return blake3_js.blake3(concatBytes2(...parts)).slice(0, 20);
+}
+function deriveMultisigAddress(threshold, members) {
+  return addressToTypedBech32("multisig", deriveMultisigAddressBytes(threshold, members));
+}
+function validateMultisigRoster(witness) {
+  const n = witness.members.length;
+  if (n < MIN_MULTISIG_MEMBERS || n > MAX_MULTISIG_MEMBERS) {
+    throw new MultisigError("roster size out of range");
+  }
+  if (witness.threshold === 0 || witness.threshold > n) {
+    throw new MultisigError("threshold out of range");
+  }
+  if (witness.signatures.length > n) {
+    throw new MultisigError("more signatures than members");
+  }
+  let prev;
+  for (const member of witness.members) {
+    if (member.algoId !== STANDARD_ALGO_NUMBER_ML_DSA_65) {
+      throw new MultisigError("non-ml-dsa-65 member");
+    }
+    if (member.pubkey.length !== ML_DSA_65_PUBLIC_KEY_LEN) {
+      throw new MultisigError("member pubkey length");
+    }
+    if (prev !== void 0 && compareBytes2(member.pubkey, prev) <= 0) {
+      throw new MultisigError("roster not sorted / duplicate");
+    }
+    prev = member.pubkey;
+  }
+}
+function assembleMultisigWitness(threshold, members, signatures = []) {
+  expectThreshold(threshold);
+  const sortedPubkeys = sortMultisigMembers(members);
+  const witness = {
+    threshold,
+    members: sortedPubkeys.map((pubkey) => ({
+      algoId: STANDARD_ALGO_NUMBER_ML_DSA_65,
+      pubkey
+    })),
+    signatures: signatures.map((s, i) => ({
+      memberIndex: expectMemberIndex(s.memberIndex, `signatures[${i}].memberIndex`),
+      signature: expectBytes(s.signature, ML_DSA_65_SIGNATURE_LEN, `signatures[${i}].signature`)
+    }))
+  };
+  validateMultisigRoster(witness);
+  return witness;
+}
+function expectMemberIndex(value, label) {
+  if (!Number.isInteger(value) || value < 0 || value > 65535) {
+    throw new MultisigError(`${label} must be a uint16`);
+  }
+  return value;
+}
+function multisigMemberIndex(members, pubkey) {
+  const target = toPubkeyBytes(pubkey, "pubkey");
+  const sorted = sortMultisigMembers(members);
+  return sorted.findIndex((m) => compareBytes2(m, target) === 0);
+}
+function encodeMultisigWitnessBody(witness) {
+  validateMultisigRoster(witness);
+  const w = new BincodeWriter();
+  w.u16(witness.threshold);
+  w.u64(BigInt(witness.members.length));
+  for (const member of witness.members) {
+    w.u16(member.algoId);
+    w.bytes(member.pubkey);
+  }
+  w.u64(BigInt(witness.signatures.length));
+  for (const sig of witness.signatures) {
+    w.u16(sig.memberIndex);
+    w.bytes(sig.signature);
+  }
+  return concatBytes2(
+    Uint8Array.of(TX_EXTENSION_MULTISIG_V1),
+    WITNESS_DOMAIN_BYTES,
+    w.toBytes()
+  );
+}
+function hasMultisigExtension(fields) {
+  return (fields.extensions ?? []).some((ext) => ext.kind === TX_EXTENSION_KIND_MULTISIG);
+}
+function stripMultisigExtensions(fields) {
+  if (!hasMultisigExtension(fields)) return fields;
+  return {
+    ...fields,
+    extensions: (fields.extensions ?? []).filter((ext) => ext.kind !== TX_EXTENSION_KIND_MULTISIG)
+  };
+}
+function multisigBaseSighash(fields) {
+  const base = stripMultisigExtensions(fields);
+  return sha3_js.keccak_256(encodeTransactionForHash(base, 1));
+}
+function assembleMultisigSigned(fields, witness) {
+  if (hasMultisigExtension(fields)) {
+    throw new MultisigError("transaction already carries a multisig witness extension");
+  }
+  const body = encodeMultisigWitnessBody(witness);
+  const extensions = [
+    ...fields.extensions ?? [],
+    { kind: TX_EXTENSION_KIND_MULTISIG, body }
+  ];
+  return { ...fields, extensions };
+}
 
 // src/delegation.ts
 var DELEGATION_SELECTORS = {
@@ -11523,9 +11679,11 @@ exports.EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER = EXECUTION_UNIT_PRICE_SAFETY_MUL
 exports.FEED_ID_DOMAIN_TAG = FEED_ID_DOMAIN_TAG;
 exports.LYTHOSHI_PER_LYTH = LYTHOSHI_PER_LYTH;
 exports.LYTH_DECIMALS = LYTH_DECIMALS;
+exports.MAX_MULTISIG_MEMBERS = MAX_MULTISIG_MEMBERS;
 exports.MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES = MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES;
 exports.MAX_NATIVE_RECEIPT_EVENTS = MAX_NATIVE_RECEIPT_EVENTS;
 exports.MIN_EXECUTION_UNIT_PRICE_LYTHOSHI = MIN_EXECUTION_UNIT_PRICE_LYTHOSHI;
+exports.MIN_MULTISIG_MEMBERS = MIN_MULTISIG_MEMBERS;
 exports.ML_DSA_65_PUBLIC_KEY_LEN = ML_DSA_65_PUBLIC_KEY_LEN2;
 exports.ML_DSA_65_SIGNATURE_LEN = ML_DSA_65_SIGNATURE_LEN2;
 exports.MONOLYTHIUM_NETWORKS = MONOLYTHIUM_NETWORKS;
@@ -11544,8 +11702,11 @@ exports.MRV_STRUCTURED_FEE_FIELDS = MRV_STRUCTURED_FEE_FIELDS;
 exports.MRV_TX_EXTENSION_KIND = MRV_TX_EXTENSION_KIND;
 exports.MRV_TX_EXTENSION_V1 = MRV_TX_EXTENSION_V1;
 exports.MULTISIG_ADDRESS_DERIVATION_DOMAIN = MULTISIG_ADDRESS_DERIVATION_DOMAIN;
+exports.MULTISIG_WITNESS_ADDRESS_DERIVATION_DOMAIN = MULTISIG_ADDRESS_DERIVATION_DOMAIN2;
+exports.MULTISIG_WITNESS_DOMAIN = MULTISIG_WITNESS_DOMAIN;
 exports.MarketActionError = MarketActionError;
 exports.MrvValidationError = MrvValidationError;
+exports.MultisigError = MultisigError;
 exports.NAME_BASE_MULTIPLIER = NAME_BASE_MULTIPLIER;
 exports.NAME_FALLBACK_FEE_UNIT_LYTHOSHI = NAME_FALLBACK_FEE_UNIT_LYTHOSHI;
 exports.NAME_LABEL_MAX_LEN = NAME_LABEL_MAX_LEN;
@@ -11642,6 +11803,8 @@ exports.TOKEN_FACTORY_SIGS = TOKEN_FACTORY_SIGS;
 exports.TOKEN_FACTORY_SYMBOL_MAX_BYTES = TOKEN_FACTORY_SYMBOL_MAX_BYTES;
 exports.TOKEN_FACTORY_TOKEN_ID_DOMAIN_TAG = TOKEN_FACTORY_TOKEN_ID_DOMAIN_TAG;
 exports.TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT = TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT;
+exports.TX_EXTENSION_KIND_MULTISIG = TX_EXTENSION_KIND_MULTISIG;
+exports.TX_EXTENSION_MULTISIG_V1 = TX_EXTENSION_MULTISIG_V1;
 exports.TokenFactoryError = TokenFactoryError;
 exports.V1_BRIDGE_ALLOWED_FEE_TOKEN = V1_BRIDGE_ALLOWED_FEE_TOKEN;
 exports.V1_BRIDGE_ALLOWED_PROTOCOL = V1_BRIDGE_ALLOWED_PROTOCOL;
@@ -11654,6 +11817,8 @@ exports.addressToBech32 = addressToBech32;
 exports.addressToTypedBech32 = addressToTypedBech32;
 exports.allowRootFor = allowRootFor;
 exports.apiEndpointFromRpcEndpoint = apiEndpointFromRpcEndpoint;
+exports.assembleMultisigSigned = assembleMultisigSigned;
+exports.assembleMultisigWitness = assembleMultisigWitness;
 exports.assertMrvCallNativeSubmissionPlan = assertMrvCallNativeSubmissionPlan;
 exports.assertMrvDeployNativeSubmissionPlan = assertMrvDeployNativeSubmissionPlan;
 exports.assertMrvFeeDisplayConformance = assertMrvFeeDisplayConformance;
@@ -11761,6 +11926,8 @@ exports.deriveClusterAnchorAddress = deriveClusterAnchorAddress;
 exports.deriveClusterJoinOperatorId = deriveClusterJoinOperatorId;
 exports.deriveFeedId = deriveFeedId;
 exports.deriveMrvContractAddress = deriveMrvContractAddress;
+exports.deriveMultisigAddress = deriveMultisigAddress;
+exports.deriveMultisigAddressBytes = deriveMultisigAddressBytes;
 exports.deriveNativeSpotMarketId = deriveNativeSpotMarketId;
 exports.deriveNativeSpotOrderId = deriveNativeSpotOrderId;
 exports.deriveTokenFactoryTokenId = deriveTokenFactoryTokenId;
@@ -11790,6 +11957,7 @@ exports.encodeHasPubkeyCalldata = encodeHasPubkeyCalldata;
 exports.encodeLockBridgeConfigCalldata = encodeLockBridgeConfigCalldata;
 exports.encodeLookupPubkeyCalldata = encodeLookupPubkeyCalldata;
 exports.encodeMrvDeployPayload = encodeMrvDeployPayload;
+exports.encodeMultisigWitnessBody = encodeMultisigWitnessBody;
 exports.encodeNameAcceptTransferCall = encodeNameAcceptTransferCall;
 exports.encodeNameProposeTransferCall = encodeNameProposeTransferCall;
 exports.encodeNameRegisterCall = encodeNameRegisterCall;
@@ -11905,6 +12073,8 @@ exports.mrvAddressToBech32 = mrvAddressToBech32;
 exports.mrvBech32ToAddress = mrvBech32ToAddress;
 exports.mrvCodeHashHex = mrvCodeHashHex;
 exports.mrvV1TransactionExtension = mrvV1TransactionExtension;
+exports.multisigBaseSighash = multisigBaseSighash;
+exports.multisigMemberIndex = multisigMemberIndex;
 exports.nameLengthModifierX10 = nameLengthModifierX10;
 exports.nameRegistrationCost = nameRegistrationCost;
 exports.nameRegistryAddressHex = nameRegistryAddressHex;
@@ -11957,6 +12127,7 @@ exports.resolveStudioHostStatus = resolveStudioHostStatus;
 exports.selectBridgeTransferRoute = selectBridgeTransferRoute;
 exports.serviceProbeStatusLabel = serviceProbeStatusLabel;
 exports.setDestinationRoot = setDestinationRoot;
+exports.sortMultisigMembers = sortMultisigMembers;
 exports.spendingPolicyAddressHex = spendingPolicyAddressHex;
 exports.submitMrvCallNativeTx = submitMrvCallNativeTx;
 exports.submitMrvDeployNativeTx = submitMrvDeployNativeTx;
@@ -11973,6 +12144,7 @@ exports.validateBridgeRouteCatalogue = validateBridgeRouteCatalogue;
 exports.validateMrvArtifactMetadata = validateMrvArtifactMetadata;
 exports.validateMrvCallRequest = validateMrvCallRequest;
 exports.validateMrvDeployRequest = validateMrvDeployRequest;
+exports.validateMultisigRoster = validateMultisigRoster;
 exports.validateTokenFactoryFlags = validateTokenFactoryFlags;
 exports.verifyNoEvmArchiveProofSignatures = verifyNoEvmArchiveProofSignatures;
 exports.verifyNoEvmBlockFinalityEvidenceMultisig = verifyNoEvmBlockFinalityEvidenceMultisig;

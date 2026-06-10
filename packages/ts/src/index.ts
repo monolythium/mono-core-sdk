@@ -644,6 +644,30 @@ export {
 } from "./address.js";
 export type { AddressKind, AddressValidation, TypedAddress } from "./address.js";
 export {
+  MAX_MULTISIG_MEMBERS,
+  MIN_MULTISIG_MEMBERS,
+  MULTISIG_ADDRESS_DERIVATION_DOMAIN as MULTISIG_WITNESS_ADDRESS_DERIVATION_DOMAIN,
+  MULTISIG_WITNESS_DOMAIN,
+  MultisigError,
+  TX_EXTENSION_KIND_MULTISIG,
+  TX_EXTENSION_MULTISIG_V1,
+  assembleMultisigSigned,
+  assembleMultisigWitness,
+  deriveMultisigAddress,
+  deriveMultisigAddressBytes,
+  encodeMultisigWitnessBody,
+  multisigBaseSighash,
+  multisigMemberIndex,
+  sortMultisigMembers,
+  validateMultisigRoster,
+} from "./multisig.js";
+export type {
+  MemberPubkeyInput,
+  MultisigMember,
+  MultisigMemberSignature,
+  MultisigWitness,
+} from "./multisig.js";
+export {
   DELEGATION_REVERT_TAGS,
   DELEGATION_SELECTORS,
   DelegationPrecompileError,
