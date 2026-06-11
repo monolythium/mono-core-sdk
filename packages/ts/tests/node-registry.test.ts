@@ -30,7 +30,11 @@ import {
   NODE_REGISTRY_UPDATE_CHARTER_MESSAGE_DOMAIN,
   NODE_REGISTRY_CHARTER_COOLDOWN_EPOCHS,
   NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN,
+  NODE_REGISTRY_ARCHIVE_NONCE_DOMAIN,
   NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH,
+  NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT,
+  NODE_REGISTRY_CHALLENGE_EPOCH_WINDOW,
+  NODE_REGISTRY_ARCHIVE_KIND_EPOCH_SEED,
   NODE_REGISTRY_TAG_ARCHIVE_CHALLENGE,
   NODE_REGISTRY_TAG_SERVICE_SCORE,
   NODE_REGISTRY_TAG_TREASURY,
@@ -80,10 +84,12 @@ import {
   nodeHostingClassFromByte,
   nodeRegistryAddressHex,
   parseDkgResharePublicKeys,
+  protocolNonceForEpoch,
   serviceMaskToBitIndex,
   serviceProbeStatusLabel,
   slotArchiveChallengePass,
   slotClusterServiceScore,
+  slotEpochChallengeSeed,
   slotProbeAuthority,
   slotScoreServiceProbe,
   updateCharterMessageHex,
@@ -758,7 +764,9 @@ describe("service-reward + charter-governance encoders", () => {
     expect(NODE_REGISTRY_SELECTORS.updateCharter).toBe("0x9f1b8bbf");
     expect(NODE_REGISTRY_SELECTORS.getPendingCharter).toBe("0xb968c95e");
     expect(NODE_REGISTRY_SELECTORS.commitArchiveRoot).toBe("0xa769f5fe");
-    expect(NODE_REGISTRY_SELECTORS.answerArchiveChallenge).toBe("0xacf1ff46");
+    // BLOCKER-1: new 5-arg signature
+    // answerArchiveChallenge(bytes32,uint16,uint64,bytes,bytes32[]).
+    expect(NODE_REGISTRY_SELECTORS.answerArchiveChallenge).toBe("0xe4cedf12");
     expect(NODE_REGISTRY_SELECTORS.setProbeAuthority).toBe("0xec63306c");
     expect(NODE_REGISTRY_SELECTORS.getProbeAuthority).toBe("0x83b9eee8");
     expect(NODE_REGISTRY_SELECTORS.attestServiceProbe).toBe("0x45631aab");
@@ -771,7 +779,11 @@ describe("service-reward + charter-governance encoders", () => {
     );
     expect(NODE_REGISTRY_CHARTER_COOLDOWN_EPOCHS).toBe(2);
     expect(NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN).toBe("monolythium.archive-challenge.v1");
+    expect(NODE_REGISTRY_ARCHIVE_NONCE_DOMAIN).toBe("monolythium.archive-challenge.nonce.v1");
     expect(NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH).toBe(40);
+    expect(NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT).toBe(256n);
+    expect(NODE_REGISTRY_CHALLENGE_EPOCH_WINDOW).toBe(2n);
+    expect(NODE_REGISTRY_ARCHIVE_KIND_EPOCH_SEED).toBe(0x03);
     expect(NODE_REGISTRY_TAG_ARCHIVE_CHALLENGE).toBe(0x32);
     expect(NODE_REGISTRY_TAG_SERVICE_SCORE).toBe(0x24);
     expect(NODE_REGISTRY_TAG_TREASURY).toBe(0x1f);
@@ -933,32 +945,46 @@ describe("service-reward + charter-governance encoders", () => {
     expect(bytes.length).toBe(4 + 4 * 32);
   });
 
-  it("encodes answerArchiveChallenge calldata with the leaf + proof tails", () => {
+  it("rejects a commitArchiveRoot below MIN_ARCHIVE_LEAF_COUNT (BLOCKER-1)", () => {
+    const base = {
+      peerId: new Uint8Array(32).fill(0x11),
+      shardIndex: 3,
+      shardRoot: new Uint8Array(32).fill(0x22),
+    };
+    // Exactly at the floor is fine; one below reverts client-side.
+    expect(() =>
+      encodeCommitArchiveRootCalldata({ ...base, leafCount: NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT }),
+    ).not.toThrow();
+    expect(() => encodeCommitArchiveRootCalldata({ ...base, leafCount: 255n })).toThrow(
+      /MIN_ARCHIVE_LEAF_COUNT/u,
+    );
+    expect(() => encodeCommitArchiveRootCalldata({ ...base, leafCount: 1n })).toThrow(
+      /MIN_ARCHIVE_LEAF_COUNT/u,
+    );
+  });
+
+  it("encodes answerArchiveChallenge (BLOCKER-1 5-arg form) with leaf + proof tails", () => {
     const peerId = new Uint8Array(32).fill(0x11);
-    const roundCertDigest = new Uint8Array(32).fill(0xab);
     const leaf = new Uint8Array([1, 2, 3, 4, 5]);
     const proof = [new Uint8Array(32).fill(0xa1), new Uint8Array(32).fill(0xa2)];
+    // BLOCKER-1: no roundCertDigest / nonce — protocol pins the seed.
     const calldata = encodeAnswerArchiveChallengeCalldata({
       peerId,
       shardIndex: 3,
       epoch: 7,
-      nonce: 42,
-      roundCertDigest,
       leaf,
       proof,
     });
     const bytes = hexBytes(calldata);
     expect(bytes.slice(0, 4)).toEqual(hexBytes(NODE_REGISTRY_SELECTORS.answerArchiveChallenge));
-    // 7 head words: peerId, shard, epoch, nonce, rcDigest, leafOffset, proofOffset.
+    // 5 head words: peerId, shard, epoch, leafOffset, proofOffset.
     expect(bytes.slice(4, 36)).toEqual(peerId);
     expect(wordBigint(bytes.slice(36, 68))).toBe(3n);
     expect(wordBigint(bytes.slice(68, 100))).toBe(7n);
-    expect(wordBigint(bytes.slice(100, 132))).toBe(42n);
-    expect(bytes.slice(132, 164)).toEqual(roundCertDigest);
-    const leafOffset = 7n * 32n;
+    const leafOffset = 5n * 32n;
     const proofOffset = leafOffset + 32n + 32n; // leaf padded to one word
-    expect(wordBigint(bytes.slice(164, 196))).toBe(leafOffset);
-    expect(wordBigint(bytes.slice(196, 228))).toBe(proofOffset);
+    expect(wordBigint(bytes.slice(100, 132))).toBe(leafOffset);
+    expect(wordBigint(bytes.slice(132, 164))).toBe(proofOffset);
     // leaf tail
     const leafLenAt = 4 + Number(leafOffset);
     expect(wordBigint(bytes.slice(leafLenAt, leafLenAt + 32))).toBe(5n);
@@ -976,26 +1002,107 @@ describe("service-reward + charter-governance encoders", () => {
         peerId: new Uint8Array(32),
         shardIndex: 0,
         epoch: 0,
-        nonce: 0,
-        roundCertDigest: new Uint8Array(32),
         leaf: new Uint8Array(1),
         proof: Array.from({ length: NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH + 1 }, () => new Uint8Array(32)),
       }),
     ).toThrow(/proof length/u);
   });
 
-  it("derives the archive challenge byte-identical to mono-core", () => {
-    // PARITY VECTOR: same fixture as the Rust
-    // archive_challenge::derive_challenge unit/SDK vector.
-    const rcDigest = new Uint8Array(32).fill(0xab);
+  it("derives slotEpochChallengeSeed + protocolNonceForEpoch byte-identical to mono-core", () => {
+    // PARITY VECTORS: derived in the Rust SSOT
+    // (archive_challenge::slot_epoch_challenge_seed /
+    // protocol_nonce_for_epoch) on `service-rewards` d2ee4548 and asserted
+    // byte-equal here. seed = 0xcd…cd (32 bytes), epoch = 7.
+    expect(slotEpochChallengeSeed(7)).toBe(
+      "0xe2d0f0d42134849f8d23fcecec9dc6ea74e767df023fb9b664d80bc4ae89441a",
+    );
+    // …and differs per epoch (the slot binds the epoch).
+    expect(slotEpochChallengeSeed(8)).toBe(
+      "0xb210b1025a5cd7c00fcc36a7c0ca725c1ef6e11b3c7b6ffa746e38a95f9bddf6",
+    );
+    expect(slotEpochChallengeSeed(7)).not.toBe(slotEpochChallengeSeed(8));
+    // protocol nonce is a pure function of the pinned seed + epoch.
+    const seed = new Uint8Array(32).fill(0xcd);
+    expect(protocolNonceForEpoch(seed, 7)).toBe(8766292481912385616n);
+    // a different epoch or seed changes it.
+    expect(protocolNonceForEpoch(seed, 8)).not.toBe(protocolNonceForEpoch(seed, 7));
+    expect(protocolNonceForEpoch(new Uint8Array(32).fill(0xce), 7)).not.toBe(
+      protocolNonceForEpoch(seed, 7),
+    );
+  });
+
+  it("derives the archive challenge from the ON-CHAIN seed byte-identical to mono-core", () => {
+    // PARITY VECTOR (BLOCKER-1): same fixture as the Rust
+    // archive_challenge::derive_challenge with the PROTOCOL-PINNED seed
+    // (0xcd…cd) + the seed-derived nonce, over a 256-leaf tree.
+    const seed = new Uint8Array(32).fill(0xcd);
     const opHash = new Uint8Array(32).fill(0x11);
-    const c = deriveArchiveChallenge(rcDigest, opHash, 3, 7, 42, 1000n);
+    const c = deriveArchiveChallenge(seed, opHash, 3, 7, NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT);
     expect(c).not.toBeNull();
-    expect(c!.seed).toBe("0x353142770b26caab05c33bf2c7a1822047a157bf0afdee76fc0d3738a5b7e202");
-    expect(c!.leafIndex).toBe(819n);
+    expect(c!.seed).toBe("0xffa5a9214d02a6a05dac914d4faafa6a93fa24ff4231a42662024c9cf4131e6c");
+    expect(c!.leafIndex).toBe(160n);
     expect(c!.shardIndex).toBe(3);
+    // The derived nonce feeding the challenge is the protocol nonce.
+    expect(protocolNonceForEpoch(seed, 7)).toBe(8766292481912385616n);
     // leafCount == 0 ⇒ null (nothing to challenge).
-    expect(deriveArchiveChallenge(rcDigest, opHash, 3, 7, 42, 0n)).toBeNull();
+    expect(deriveArchiveChallenge(seed, opHash, 3, 7, 0n)).toBeNull();
+  });
+
+  it("encodes the full BLOCKER-1 answerArchiveChallenge calldata byte-identical to mono-core", () => {
+    // PARITY VECTOR: the complete answerArchiveChallenge calldata for the
+    // 256-leaf fixture above, with the leaf the protocol pseudo-randomly
+    // selected (index 160 = "archive-leaf-0160") + its 8-element merkle
+    // proof. Hex pinned from the Rust SSOT (built byte-for-byte as the TS
+    // encoder does); a mismatch = Monarch submits the wrong calldata.
+    const seed = new Uint8Array(32).fill(0xcd);
+    const opHash = new Uint8Array(32).fill(0x11);
+    const c = deriveArchiveChallenge(seed, opHash, 3, 7, NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT);
+    expect(c!.leafIndex).toBe(160n);
+    const leaf = new TextEncoder().encode("archive-leaf-0160");
+    const proof = [
+      "0x7519b8349f27bc234f5e44654e1831327609600c1348af7eccff2868f119589a",
+      "0xd482cf2cf5436cb2704c1c69818ce1f4cb687ee8edde7f934433a524cddf5d5f",
+      "0x5ec61ddcf1e8525be1b27fa79ef1b88336e7540a5cdcec106c6212858d060e87",
+      "0x4530b693ece56d721cd530cc88d5fc2004e08cb252702f3c5d2c7941cae988be",
+      "0xc00a911d29da312ddec02c86cd8651ae54d1c79f2d1cacad9b2df87424a93ed1",
+      "0xa2296073e820bb55e0f308cd82eb1d897aed5077161f54d969e37ba5835e22e5",
+      "0x8ea2493591bb0122907e8e793149c1d607f8612eafb3ba49bff24b3739fc9267",
+      "0xe9c31490fd8adeccc1646a63cf3ca901075b71ab44a369232fa95f8e3e6e4555",
+    ];
+    const calldata = encodeAnswerArchiveChallengeCalldata({
+      peerId: opHash,
+      shardIndex: 3,
+      epoch: 7,
+      leaf,
+      proof,
+    });
+    expect(calldata).toBe(
+      "0xe4cedf12" +
+        // peerId
+        "1111111111111111111111111111111111111111111111111111111111111111" +
+        // shardIndex = 3
+        "0000000000000000000000000000000000000000000000000000000000000003" +
+        // epoch = 7
+        "0000000000000000000000000000000000000000000000000000000000000007" +
+        // leafOffset = 0xa0 (5 words)
+        "00000000000000000000000000000000000000000000000000000000000000a0" +
+        // proofOffset = 0xe0
+        "00000000000000000000000000000000000000000000000000000000000000e0" +
+        // leaf length = 17 (0x11)
+        "0000000000000000000000000000000000000000000000000000000000000011" +
+        // leaf bytes "archive-leaf-0160" right-padded to one word
+        "617263686976652d6c6561662d30313630000000000000000000000000000000" +
+        // proof length = 8
+        "0000000000000000000000000000000000000000000000000000000000000008" +
+        "7519b8349f27bc234f5e44654e1831327609600c1348af7eccff2868f119589a" +
+        "d482cf2cf5436cb2704c1c69818ce1f4cb687ee8edde7f934433a524cddf5d5f" +
+        "5ec61ddcf1e8525be1b27fa79ef1b88336e7540a5cdcec106c6212858d060e87" +
+        "4530b693ece56d721cd530cc88d5fc2004e08cb252702f3c5d2c7941cae988be" +
+        "c00a911d29da312ddec02c86cd8651ae54d1c79f2d1cacad9b2df87424a93ed1" +
+        "a2296073e820bb55e0f308cd82eb1d897aed5077161f54d969e37ba5835e22e5" +
+        "8ea2493591bb0122907e8e793149c1d607f8612eafb3ba49bff24b3739fc9267" +
+        "e9c31490fd8adeccc1646a63cf3ca901075b71ab44a369232fa95f8e3e6e4555",
+    );
   });
 
   it("hashes an archive merkle leaf byte-identical to mono-core", () => {

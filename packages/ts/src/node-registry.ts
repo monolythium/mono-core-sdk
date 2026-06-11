@@ -112,10 +112,16 @@ export const NODE_REGISTRY_SELECTORS = {
   getPendingCharter: "0x" + selectorHex("getPendingCharter(uint32)"),
   /** `commitArchiveRoot(bytes32,uint16,bytes32,uint64)` — Component B archive serve-challenge commit. */
   commitArchiveRoot: "0x" + selectorHex("commitArchiveRoot(bytes32,uint16,bytes32,uint64)"),
-  /** `answerArchiveChallenge(bytes32,uint16,uint64,uint64,bytes32,bytes,bytes32[])` — Component B answer. */
+  /**
+   * `answerArchiveChallenge(bytes32,uint16,uint64,bytes,bytes32[])` —
+   * Component B answer. BLOCKER-1 (mono-core `service-rewards` d2ee4548):
+   * the caller-supplied `roundCertDigest` + `nonce` were REMOVED — the
+   * challenge seed is now the protocol-pinned per-epoch quorum-certificate
+   * digest and the nonce is derived from it. 5 args: peerId, shardIndex,
+   * epoch, leaf, proof.
+   */
   answerArchiveChallenge:
-    "0x" +
-    selectorHex("answerArchiveChallenge(bytes32,uint16,uint64,uint64,bytes32,bytes,bytes32[])"),
+    "0x" + selectorHex("answerArchiveChallenge(bytes32,uint16,uint64,bytes,bytes32[])"),
   /** `setProbeAuthority(address)` — Component C foundation-gated probe-authority rotation. */
   setProbeAuthority: "0x" + selectorHex("setProbeAuthority(address)"),
   /** `getProbeAuthority()` view — Component C configured probe-authority address. */
@@ -202,12 +208,43 @@ export const NODE_REGISTRY_CHARTER_COOLDOWN_EPOCHS = 2;
  * trailing NUL (it is hashed verbatim).
  */
 export const NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN = "monolythium.archive-challenge.v1" as const;
+/**
+ * Component B (BLOCKER-1) — domain tag bound into the protocol-issued
+ * per-epoch challenge nonce so it can never collide with the challenge-seed
+ * domain. Mirrors mono-core `archive_challenge::ARCHIVE_NONCE_DOMAIN`. No
+ * trailing NUL (it is hashed verbatim).
+ */
+export const NODE_REGISTRY_ARCHIVE_NONCE_DOMAIN =
+  "monolythium.archive-challenge.nonce.v1" as const;
 /** Component B — domain byte prefixing a merkle leaf hash (`H(0x00 || leaf)`). */
 export const NODE_REGISTRY_MERKLE_LEAF_DOMAIN = 0x00;
 /** Component B — domain byte prefixing a merkle inner node (`H(0x01 || left || right)`). */
 export const NODE_REGISTRY_MERKLE_INNER_DOMAIN = 0x01;
 /** Component B — maximum merkle authentication-path length accepted on-chain. */
 export const NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH = 40;
+/**
+ * Component B (BLOCKER-1) — minimum committed `leafCount` accepted by
+ * `commitArchiveRoot`. A tree below this width is forgeable (a 1-leaf
+ * self-commit has `root == leaf_hash` + an empty proof and passes every
+ * challenge serving nothing), so the chain rejects it at commit time. This
+ * SDK enforces it client-side before a nonce is burned. Mirrors mono-core
+ * `archive_challenge::MIN_ARCHIVE_LEAF_COUNT`.
+ */
+export const NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT = 256n;
+/**
+ * Component B (BLOCKER-1) — how many epochs back from the current epoch an
+ * `answerArchiveChallenge` may target on-chain. Informational mirror of
+ * mono-core `archive_challenge::CHALLENGE_EPOCH_WINDOW`; a future epoch is
+ * always rejected and an epoch older than `current_epoch - window` reverts
+ * with `EffectiveEpochInvalid`.
+ */
+export const NODE_REGISTRY_CHALLENGE_EPOCH_WINDOW = 2n;
+/**
+ * Component B (BLOCKER-1) — storage sub-kind byte for the per-epoch
+ * protocol-issued challenge seed slot (`keccak256(0x32 || epoch_be64 ||
+ * 0x03)`). Mirrors mono-core `archive_challenge::KIND_EPOCH_SEED`.
+ */
+export const NODE_REGISTRY_ARCHIVE_KIND_EPOCH_SEED = 0x03;
 
 /**
  * Storage-slot tag byte for the archive-challenge family (registry
@@ -415,14 +452,22 @@ export interface CommitArchiveRootCalldataArgs {
   leafCount: bigint | number | string;
 }
 
-/** Args for `answerArchiveChallenge(bytes32,uint16,uint64,uint64,bytes32,bytes,bytes32[])` (Component B). */
+/**
+ * Args for `answerArchiveChallenge(bytes32,uint16,uint64,bytes,bytes32[])`
+ * (Component B).
+ *
+ * BLOCKER-1 (mono-core `service-rewards` d2ee4548): the caller-supplied
+ * `roundCertDigest` and `nonce` were REMOVED. The challenge seed is now the
+ * protocol-pinned per-epoch quorum-certificate digest (sloaded from
+ * {@link slotEpochChallengeSeed}) and the nonce is derived from it
+ * ({@link protocolNonceForEpoch}) — the operator can no longer choose the
+ * challenge coordinate. Off-chain tooling derives the challenged leaf via
+ * {@link deriveArchiveChallenge}, then submits the revealed leaf + proof.
+ */
 export interface AnswerArchiveChallengeCalldataArgs {
   peerId: string | Uint8Array | readonly number[];
   shardIndex: number;
   epoch: bigint | number | string;
-  nonce: bigint | number | string;
-  /** The committed round-certificate digest the challenge was seeded from (32 bytes). */
-  roundCertDigest: string | Uint8Array | readonly number[];
   /** The revealed challenged leaf bytes. */
   leaf: string | Uint8Array | readonly number[];
   /** The bottom-up merkle authentication path (each element 32 bytes). */
@@ -1227,24 +1272,42 @@ export function decodePendingCharter(
 /**
  * Encode `commitArchiveRoot(bytes32,uint16,bytes32,uint64)` calldata
  * (Component B). All four args are fixed-size — a flat 4-word head.
+ *
+ * BLOCKER-1: enforces the on-chain `MIN_ARCHIVE_LEAF_COUNT` floor
+ * client-side — a `leafCount` below
+ * {@link NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT} is rejected here so a
+ * doomed commit never burns a nonce (the chain rejects it with
+ * `ArchiveCommitmentTooFewLeaves`).
  */
 export function encodeCommitArchiveRootCalldata(args: CommitArchiveRootCalldataArgs): string {
+  const leafCount = toUint64(args.leafCount, "leafCount");
+  if (leafCount < NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT) {
+    throw new NodeRegistryError(
+      `leafCount must be >= ${NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT} (MIN_ARCHIVE_LEAF_COUNT), got ${leafCount}`,
+    );
+  }
   return bytesToHex(
     concatBytes(
       hexToBytes(NODE_REGISTRY_SELECTORS.commitArchiveRoot),
       expectLength(toBytes(args.peerId), 32, "peerId"),
       uint16Word(args.shardIndex),
       expectLength(toBytes(args.shardRoot), 32, "shardRoot"),
-      uint64Word(args.leafCount, "leafCount"),
+      uint64Word(leafCount, "leafCount"),
     ),
   );
 }
 
 /**
- * Encode `answerArchiveChallenge(bytes32,uint16,uint64,uint64,bytes32,
- * bytes,bytes32[])` calldata (Component B).
+ * Encode `answerArchiveChallenge(bytes32,uint16,uint64,bytes,bytes32[])`
+ * calldata (Component B).
  *
- * Head: 7 words — five fixed args then the `bytes leaf` offset and the
+ * BLOCKER-1 (mono-core `service-rewards` d2ee4548): the caller-supplied
+ * `roundCertDigest` + `nonce` were removed. The challenge seed is the
+ * protocol-pinned per-epoch quorum-certificate digest and the nonce is
+ * derived from it on-chain, so the caller submits only `(peerId,
+ * shardIndex, epoch, leaf, proof)`.
+ *
+ * Head: 5 words — three fixed args then the `bytes leaf` offset and the
  * `bytes32[] proof` offset. Tails: the leaf bytes, then the proof array
  * (length word + N × 32-byte sibling words).
  */
@@ -1259,8 +1322,8 @@ export function encodeAnswerArchiveChallengeCalldata(
     );
   }
   const leafPadded = padToWord(leaf);
-  // Head: 7 words (5 fixed + leafOffset + proofOffset).
-  const leafOffset = 7n * 32n;
+  // Head: 5 words (3 fixed + leafOffset + proofOffset).
+  const leafOffset = 5n * 32n;
   const proofOffset = leafOffset + 32n + BigInt(leafPadded.length);
   const proofTail = concatBytes(
     uint64Word(BigInt(proof.length), "proofLength"),
@@ -1272,8 +1335,6 @@ export function encodeAnswerArchiveChallengeCalldata(
       expectLength(toBytes(args.peerId), 32, "peerId"),
       uint16Word(args.shardIndex),
       uint64Word(args.epoch, "epoch"),
-      uint64Word(args.nonce, "nonce"),
-      expectLength(toBytes(args.roundCertDigest), 32, "roundCertDigest"),
       uint64Word(leafOffset, "leafOffset"),
       uint64Word(proofOffset, "proofOffset"),
       uint64Word(BigInt(leaf.length), "leafLength"),
@@ -1284,55 +1345,106 @@ export function encodeAnswerArchiveChallengeCalldata(
 }
 
 /**
- * Derive the deterministic archive serve-challenge for one
- * `(roundCertDigest, opHash, shardIndex, epoch, nonce)` against a
- * committed `leafCount` (Component B). Mirrors mono-core
- * `archive_challenge::derive_challenge`:
+ * Slot holding the protocol-issued archive challenge seed pinned for
+ * `epoch` (Component B, BLOCKER-1). `keccak256(0x32 || epoch_be64 ||
+ * 0x03)`. The stored 32-byte value is the quorum-certificate digest the
+ * protocol pins at the epoch boundary; a zero word means no seed pinned
+ * (the epoch is un-answerable / fail-closed). Mirrors mono-core
+ * `archive_challenge::slot_epoch_challenge_seed`.
  *
- * `seed = BLAKE3(ARCHIVE_CHALLENGE_DOMAIN ‖ roundCertDigest ‖ opHash ‖
+ * No RPC method exists for this read yet — derive the slot key and SLOAD
+ * it via `eth_getStorageAt` / `lyth_getStorageAt` against the node-registry
+ * account `0x1005`, then feed the returned word into
+ * {@link deriveArchiveChallenge}.
+ */
+export function slotEpochChallengeSeed(epoch: bigint | number | string): string {
+  const buf = new Uint8Array(1 + 8 + 1);
+  buf[0] = NODE_REGISTRY_TAG_ARCHIVE_CHALLENGE;
+  buf.set(u64BeBytes(toUint64(epoch, "epoch")), 1);
+  buf[9] = NODE_REGISTRY_ARCHIVE_KIND_EPOCH_SEED;
+  return bytesToHex(keccak_256(buf));
+}
+
+/**
+ * Derive the protocol-issued challenge nonce for `epoch` from the pinned
+ * challenge `seed` (Component B, BLOCKER-1). Mirrors mono-core
+ * `archive_challenge::protocol_nonce_for_epoch`:
+ *
+ * `nonce = u64_be(BLAKE3(ARCHIVE_NONCE_DOMAIN ‖ epoch_be64 ‖ seed)[..8])`.
+ *
+ * The nonce is a pure function of the pinned (ungrindable) seed and the
+ * epoch — there is exactly one valid `(epoch, nonce)` coordinate per epoch,
+ * fixed by consensus state the operator does not control.
+ */
+export function protocolNonceForEpoch(
+  seed: string | Uint8Array | readonly number[],
+  epoch: bigint | number | string,
+): bigint {
+  const s = expectLength(toBytes(seed), 32, "seed");
+  const e = toUint64(epoch, "epoch");
+  const digest = blake3(
+    concatBytes(new TextEncoder().encode(NODE_REGISTRY_ARCHIVE_NONCE_DOMAIN), u64BeBytes(e), s),
+  );
+  let n = 0n;
+  for (let i = 0; i < 8; i += 1) {
+    n = (n << 8n) | BigInt(digest[i]);
+  }
+  return n;
+}
+
+/**
+ * Derive the deterministic archive serve-challenge for `(opHash,
+ * shardIndex, epoch)` against a committed `leafCount`, using the
+ * ON-CHAIN protocol-pinned `seed` (Component B, BLOCKER-1). Mirrors
+ * mono-core `archive_challenge::derive_challenge` with the protocol nonce
+ * derived internally via {@link protocolNonceForEpoch}:
+ *
+ * `nonce = protocolNonceForEpoch(seed, epoch)`;
+ * `challengeSeed = BLAKE3(ARCHIVE_CHALLENGE_DOMAIN ‖ seed ‖ opHash ‖
  *  shardIndex_be16 ‖ epoch_be64 ‖ nonce_be64)`; the leaf index is the
- * seed's first 8 bytes (BE u64) modulo `leafCount`.
+ * challenge seed's first 8 bytes (BE u64) modulo `leafCount`.
  *
- * Returns `null` when `leafCount === 0` (nothing committed → nothing to
- * challenge). Useful for off-chain tooling that mirrors what an operator
- * is about to be asked.
+ * `seed` is NOT caller-chosen — it is the quorum-certificate digest the
+ * protocol pins for `epoch`, read from {@link slotEpochChallengeSeed} via
+ * `eth_getStorageAt`. Returns `null` when `leafCount === 0` (nothing
+ * committed → nothing to challenge). Useful for off-chain tooling that
+ * mirrors what an operator is about to be asked.
  */
 export function deriveArchiveChallenge(
-  roundCertDigest: string | Uint8Array | readonly number[],
+  seed: string | Uint8Array | readonly number[],
   opHash: string | Uint8Array | readonly number[],
   shardIndex: number,
   epoch: bigint | number | string,
-  nonce: bigint | number | string,
   leafCount: bigint | number | string,
 ): ArchiveChallenge | null {
-  const rcDigest = expectLength(toBytes(roundCertDigest), 32, "roundCertDigest");
+  const pinnedSeed = expectLength(toBytes(seed), 32, "seed");
   const op = expectLength(toBytes(opHash), 32, "opHash");
   const shard = expectUint16(shardIndex, "shardIndex");
   const e = toUint64(epoch, "epoch");
-  const n = toUint64(nonce, "nonce");
   const count = toUint64(leafCount, "leafCount");
   if (count === 0n) {
     return null;
   }
-  const seed = blake3(
+  const nonce = protocolNonceForEpoch(pinnedSeed, e);
+  const challengeSeed = blake3(
     concatBytes(
       new TextEncoder().encode(NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN),
-      rcDigest,
+      pinnedSeed,
       op,
       u16BeBytes(shard),
       u64BeBytes(e),
-      u64BeBytes(n),
+      u64BeBytes(nonce),
     ),
   );
   let idx = 0n;
   for (let i = 0; i < 8; i += 1) {
-    idx = (idx << 8n) | BigInt(seed[i]);
+    idx = (idx << 8n) | BigInt(challengeSeed[i]);
   }
   return {
     opHash: bytesToHex(op),
     shardIndex: shard,
     leafIndex: idx % count,
-    seed: bytesToHex(seed),
+    seed: bytesToHex(challengeSeed),
   };
 }
 

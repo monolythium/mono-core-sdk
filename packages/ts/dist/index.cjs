@@ -475,8 +475,15 @@ var NODE_REGISTRY_SELECTORS = {
   getPendingCharter: "0x" + selectorHex("getPendingCharter(uint32)"),
   /** `commitArchiveRoot(bytes32,uint16,bytes32,uint64)` — Component B archive serve-challenge commit. */
   commitArchiveRoot: "0x" + selectorHex("commitArchiveRoot(bytes32,uint16,bytes32,uint64)"),
-  /** `answerArchiveChallenge(bytes32,uint16,uint64,uint64,bytes32,bytes,bytes32[])` — Component B answer. */
-  answerArchiveChallenge: "0x" + selectorHex("answerArchiveChallenge(bytes32,uint16,uint64,uint64,bytes32,bytes,bytes32[])"),
+  /**
+   * `answerArchiveChallenge(bytes32,uint16,uint64,bytes,bytes32[])` —
+   * Component B answer. BLOCKER-1 (mono-core `service-rewards` d2ee4548):
+   * the caller-supplied `roundCertDigest` + `nonce` were REMOVED — the
+   * challenge seed is now the protocol-pinned per-epoch quorum-certificate
+   * digest and the nonce is derived from it. 5 args: peerId, shardIndex,
+   * epoch, leaf, proof.
+   */
+  answerArchiveChallenge: "0x" + selectorHex("answerArchiveChallenge(bytes32,uint16,uint64,bytes,bytes32[])"),
   /** `setProbeAuthority(address)` — Component C foundation-gated probe-authority rotation. */
   setProbeAuthority: "0x" + selectorHex("setProbeAuthority(address)"),
   /** `getProbeAuthority()` view — Component C configured probe-authority address. */
@@ -511,9 +518,13 @@ var NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD = NODE_REGISTRY_FORM_CLUSTER_THRESHOL
 var NODE_REGISTRY_UPDATE_CHARTER_MESSAGE_DOMAIN = "PROTOCORE_NODE_REGISTRY_CLUSTER_UPDATE_CHARTER_V1\0";
 var NODE_REGISTRY_CHARTER_COOLDOWN_EPOCHS = 2;
 var NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN = "monolythium.archive-challenge.v1";
+var NODE_REGISTRY_ARCHIVE_NONCE_DOMAIN = "monolythium.archive-challenge.nonce.v1";
 var NODE_REGISTRY_MERKLE_LEAF_DOMAIN = 0;
 var NODE_REGISTRY_MERKLE_INNER_DOMAIN = 1;
 var NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH = 40;
+var NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT = 256n;
+var NODE_REGISTRY_CHALLENGE_EPOCH_WINDOW = 2n;
+var NODE_REGISTRY_ARCHIVE_KIND_EPOCH_SEED = 3;
 var NODE_REGISTRY_TAG_ARCHIVE_CHALLENGE = 50;
 var NODE_REGISTRY_TAG_SERVICE_SCORE = 36;
 var NODE_REGISTRY_TAG_TREASURY = 31;
@@ -1124,13 +1135,19 @@ function decodePendingCharter(returnData) {
   return { present: true, delegatorShareBps, effectiveEpoch, signerCount, memberShareBps };
 }
 function encodeCommitArchiveRootCalldata(args) {
+  const leafCount = toUint64(args.leafCount, "leafCount");
+  if (leafCount < NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT) {
+    throw new NodeRegistryError(
+      `leafCount must be >= ${NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT} (MIN_ARCHIVE_LEAF_COUNT), got ${leafCount}`
+    );
+  }
   return bytesToHex(
     concatBytes(
       hexToBytes(NODE_REGISTRY_SELECTORS.commitArchiveRoot),
       expectLength2(toBytes(args.peerId), 32, "peerId"),
       uint16Word(args.shardIndex),
       expectLength2(toBytes(args.shardRoot), 32, "shardRoot"),
-      uint64Word(args.leafCount, "leafCount")
+      uint64Word(leafCount, "leafCount")
     )
   );
 }
@@ -1143,7 +1160,7 @@ function encodeAnswerArchiveChallengeCalldata(args) {
     );
   }
   const leafPadded = padToWord(leaf);
-  const leafOffset = 7n * 32n;
+  const leafOffset = 5n * 32n;
   const proofOffset = leafOffset + 32n + BigInt(leafPadded.length);
   const proofTail = concatBytes(
     uint64Word(BigInt(proof.length), "proofLength"),
@@ -1155,8 +1172,6 @@ function encodeAnswerArchiveChallengeCalldata(args) {
       expectLength2(toBytes(args.peerId), 32, "peerId"),
       uint16Word(args.shardIndex),
       uint64Word(args.epoch, "epoch"),
-      uint64Word(args.nonce, "nonce"),
-      expectLength2(toBytes(args.roundCertDigest), 32, "roundCertDigest"),
       uint64Word(leafOffset, "leafOffset"),
       uint64Word(proofOffset, "proofOffset"),
       uint64Word(BigInt(leaf.length), "leafLength"),
@@ -1165,35 +1180,54 @@ function encodeAnswerArchiveChallengeCalldata(args) {
     )
   );
 }
-function deriveArchiveChallenge(roundCertDigest, opHash, shardIndex, epoch, nonce, leafCount) {
-  const rcDigest = expectLength2(toBytes(roundCertDigest), 32, "roundCertDigest");
+function slotEpochChallengeSeed(epoch) {
+  const buf = new Uint8Array(1 + 8 + 1);
+  buf[0] = NODE_REGISTRY_TAG_ARCHIVE_CHALLENGE;
+  buf.set(u64BeBytes(toUint64(epoch, "epoch")), 1);
+  buf[9] = NODE_REGISTRY_ARCHIVE_KIND_EPOCH_SEED;
+  return bytesToHex(sha3_js.keccak_256(buf));
+}
+function protocolNonceForEpoch(seed, epoch) {
+  const s = expectLength2(toBytes(seed), 32, "seed");
+  const e = toUint64(epoch, "epoch");
+  const digest = blake3_js.blake3(
+    concatBytes(new TextEncoder().encode(NODE_REGISTRY_ARCHIVE_NONCE_DOMAIN), u64BeBytes(e), s)
+  );
+  let n = 0n;
+  for (let i = 0; i < 8; i += 1) {
+    n = n << 8n | BigInt(digest[i]);
+  }
+  return n;
+}
+function deriveArchiveChallenge(seed, opHash, shardIndex, epoch, leafCount) {
+  const pinnedSeed = expectLength2(toBytes(seed), 32, "seed");
   const op = expectLength2(toBytes(opHash), 32, "opHash");
   const shard = expectUint16(shardIndex, "shardIndex");
   const e = toUint64(epoch, "epoch");
-  const n = toUint64(nonce, "nonce");
   const count = toUint64(leafCount, "leafCount");
   if (count === 0n) {
     return null;
   }
-  const seed = blake3_js.blake3(
+  const nonce = protocolNonceForEpoch(pinnedSeed, e);
+  const challengeSeed = blake3_js.blake3(
     concatBytes(
       new TextEncoder().encode(NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN),
-      rcDigest,
+      pinnedSeed,
       op,
       u16BeBytes(shard),
       u64BeBytes(e),
-      u64BeBytes(n)
+      u64BeBytes(nonce)
     )
   );
   let idx = 0n;
   for (let i = 0; i < 8; i += 1) {
-    idx = idx << 8n | BigInt(seed[i]);
+    idx = idx << 8n | BigInt(challengeSeed[i]);
   }
   return {
     opHash: bytesToHex(op),
     shardIndex: shard,
     leafIndex: idx % count,
-    seed: bytesToHex(seed)
+    seed: bytesToHex(challengeSeed)
   };
 }
 function archiveMerkleLeafHash(leaf) {
@@ -12189,9 +12223,12 @@ exports.NATIVE_MARKET_MODULE_ADDRESS = NATIVE_MARKET_MODULE_ADDRESS;
 exports.NATIVE_MARKET_MODULE_ADDRESS_BYTES = NATIVE_MARKET_MODULE_ADDRESS_BYTES;
 exports.NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC = NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC;
 exports.NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN = NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN;
+exports.NODE_REGISTRY_ARCHIVE_KIND_EPOCH_SEED = NODE_REGISTRY_ARCHIVE_KIND_EPOCH_SEED;
+exports.NODE_REGISTRY_ARCHIVE_NONCE_DOMAIN = NODE_REGISTRY_ARCHIVE_NONCE_DOMAIN;
 exports.NODE_REGISTRY_BLS_PUBKEY_BYTES = NODE_REGISTRY_BLS_PUBKEY_BYTES;
 exports.NODE_REGISTRY_CAPABILITIES = NODE_REGISTRY_CAPABILITIES;
 exports.NODE_REGISTRY_CAPABILITY_MASK = NODE_REGISTRY_CAPABILITY_MASK;
+exports.NODE_REGISTRY_CHALLENGE_EPOCH_WINDOW = NODE_REGISTRY_CHALLENGE_EPOCH_WINDOW;
 exports.NODE_REGISTRY_CHARTER_COOLDOWN_EPOCHS = NODE_REGISTRY_CHARTER_COOLDOWN_EPOCHS;
 exports.NODE_REGISTRY_CLUSTER_CHARTER_BYTES = NODE_REGISTRY_CLUSTER_CHARTER_BYTES;
 exports.NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS = NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS;
@@ -12214,6 +12251,7 @@ exports.NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES = NODE_REGISTRY_LEGACY_
 exports.NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH = NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH;
 exports.NODE_REGISTRY_MERKLE_INNER_DOMAIN = NODE_REGISTRY_MERKLE_INNER_DOMAIN;
 exports.NODE_REGISTRY_MERKLE_LEAF_DOMAIN = NODE_REGISTRY_MERKLE_LEAF_DOMAIN;
+exports.NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT = NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT;
 exports.NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES = NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES;
 exports.NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES = NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES;
 exports.NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES = NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES;
@@ -12604,6 +12642,7 @@ exports.parseQuantityBig = parseQuantityBig;
 exports.preflightClusterJoinRequest = preflightClusterJoinRequest;
 exports.previewRequestClusterJoin = previewRequestClusterJoin;
 exports.previewVoteClusterAdmit = previewVoteClusterAdmit;
+exports.protocolNonceForEpoch = protocolNonceForEpoch;
 exports.proverMarketStateFromByte = proverMarketStateFromByte;
 exports.pubkeyRegistryAddressHex = pubkeyRegistryAddressHex;
 exports.quoteOperatorFee = quoteOperatorFee;
@@ -12623,6 +12662,7 @@ exports.serviceProbeStatusLabel = serviceProbeStatusLabel;
 exports.setDestinationRoot = setDestinationRoot;
 exports.slotArchiveChallengePass = slotArchiveChallengePass;
 exports.slotClusterServiceScore = slotClusterServiceScore;
+exports.slotEpochChallengeSeed = slotEpochChallengeSeed;
 exports.slotProbeAuthority = slotProbeAuthority;
 exports.slotScoreServiceProbe = slotScoreServiceProbe;
 exports.sortMultisigMembers = sortMultisigMembers;
