@@ -1,7 +1,11 @@
+import { blake3 } from "@noble/hashes/blake3.js";
 import { describe, expect, it } from "vitest";
 import {
   NODE_REGISTRY_BLS_PUBKEY_BYTES,
   NODE_REGISTRY_CAPABILITIES,
+  NODE_REGISTRY_CLUSTER_CHARTER_BYTES,
+  NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS,
+  NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS,
   NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES,
   NODE_REGISTRY_CONSENSUS_POP_BYTES,
   NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
@@ -12,6 +16,7 @@ import {
   NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES,
   NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT,
   NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT,
+  NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN_V2,
   NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT,
   NODE_REGISTRY_FORM_CLUSTER_THRESHOLD,
   NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES,
@@ -32,8 +37,10 @@ import {
   encodeAttestDkgReshareCalldata,
   encodeCancelClusterJoinCalldata,
   encodeCancelPendingChangeCalldata,
+  encodeClusterCharter,
   encodeExpireClusterJoinCalldata,
   encodeFormClusterCalldata,
+  encodeFormClusterV2Calldata,
   encodeGetClusterJoinRequestCalldata,
   encodeGetOperatorSealKeyCalldata,
   encodePublishOperatorSealKeyCalldata,
@@ -44,6 +51,7 @@ import {
   encodeSubmitPendingChangeCalldata,
   encodeVoteClusterAdmitCalldata,
   formClusterMessageHex,
+  formClusterMessageV2Hex,
   isConcreteServiceProbeStatus,
   isSinglePublicServiceProbeMask,
   isValidPublicServiceProbeMask,
@@ -409,6 +417,137 @@ describe("node-registry helpers", () => {
     ).toThrow(/activePubkeys/);
   });
 
+  it("encodes the V2 cluster charter and validates its terms", () => {
+    expect(NODE_REGISTRY_CLUSTER_CHARTER_BYTES).toBe(30);
+    expect(NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS).toBe(2000);
+    expect(NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS).toBe(10000);
+    expect(NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN_V2).toBe(
+      "PROTOCORE_NODE_REGISTRY_CLUSTER_FORM_V2\0",
+    );
+
+    const memberShareBps = [1500, 1500, 1000, 1000, 1000, 1000, 1000, 800, 700, 500];
+    const charter = encodeClusterCharter({
+      memberShareBps,
+      delegatorShareBps: 3000,
+      expiresMs: 1_999_999_999_000n,
+    });
+    // Byte-parity vector pinned from the Rust SDK `encode_cluster_charter`
+    // (protocore-sdk, 2026-06-11).
+    expect(Array.from(charter)).toEqual(
+      Array.from(hexBytes("0x05dc05dc03e803e803e803e803e8032002bc01f40bb8000001d1a94a1c18")),
+    );
+
+    // Validation mirrors the on-chain decode.
+    expect(() =>
+      encodeClusterCharter({
+        memberShareBps: [...memberShareBps.slice(0, 9), 501],
+        delegatorShareBps: 3000,
+        expiresMs: 0,
+      }),
+    ).toThrow(/sum/u);
+    expect(() =>
+      encodeClusterCharter({
+        memberShareBps,
+        delegatorShareBps: NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS - 1,
+        expiresMs: 0,
+      }),
+    ).toThrow(/delegatorShareBps/u);
+    expect(() =>
+      encodeClusterCharter({
+        memberShareBps: memberShareBps.slice(1),
+        delegatorShareBps: 3000,
+        expiresMs: 0,
+      }),
+    ).toThrow(/entries/u);
+  });
+
+  it("encodes formCluster V2 calldata byte-identical to the Rust SDK", () => {
+    // Same deterministic fixture as the Rust-side vector test: active
+    // key i filled with 0x20+i, standby key j filled with 0x40+j,
+    // signature k filled with 0x80+k.
+    const activePubkeys = concatTestBytes(
+      ...Array.from({ length: NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT }, (_, i) =>
+        new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0x20 + i),
+      ),
+    );
+    const standbyPubkeys = concatTestBytes(
+      ...Array.from({ length: NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT }, (_, i) =>
+        new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0x40 + i),
+      ),
+    );
+    const signatures = concatTestBytes(
+      ...Array.from({ length: NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT }, (_, i) =>
+        new Uint8Array(NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES).fill(0x80 + i),
+      ),
+    );
+    const charter = encodeClusterCharter({
+      memberShareBps: [1500, 1500, 1000, 1000, 1000, 1000, 1000, 800, 700, 500],
+      delegatorShareBps: 3000,
+      expiresMs: 1_999_999_999_000n,
+    });
+
+    // Selector pinned from mono-core's `abi::selectors().form_cluster_v2`.
+    expect(NODE_REGISTRY_SELECTORS.formClusterV2).toBe("0xdc4cc1cc");
+
+    const calldata = encodeFormClusterV2Calldata({
+      activePubkeys,
+      standbyPubkeys,
+      signatures,
+      charter,
+    });
+    const bytes = hexBytes(calldata);
+
+    // Full byte-parity with the Rust SDK encoder, pinned via BLAKE3 of
+    // the entire calldata (protocore-sdk `encode_form_cluster_v2_calldata`,
+    // 2026-06-11).
+    expect(bytes.length).toBe(52932);
+    expect(bytesHex(blake3(bytes))).toBe(
+      "0x1a752e3995adf1cdd86b4e6daefe4660d58cecd63170b2a4763d7837bb181edc",
+    );
+
+    // Structure: 4 head offsets, then the four (length ‖ body) tails.
+    const activeLen = NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES;
+    const standbyLen =
+      NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES;
+    const signatureLen =
+      NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT * NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES;
+    const signaturePaddedLen = Math.ceil(signatureLen / 32) * 32;
+    const activeOffset = 4n * 32n;
+    const standbyOffset = activeOffset + 32n + BigInt(activeLen);
+    const signaturesOffset = standbyOffset + 32n + BigInt(standbyLen);
+    const charterOffset = signaturesOffset + 32n + BigInt(signaturePaddedLen);
+    expect(bytes.slice(0, 4)).toEqual(hexBytes(NODE_REGISTRY_SELECTORS.formClusterV2));
+    expect(wordBigint(bytes.slice(4, 36))).toBe(activeOffset);
+    expect(wordBigint(bytes.slice(36, 68))).toBe(standbyOffset);
+    expect(wordBigint(bytes.slice(68, 100))).toBe(signaturesOffset);
+    expect(wordBigint(bytes.slice(100, 132))).toBe(charterOffset);
+    const charterLenWordAt = 4 + Number(charterOffset);
+    expect(wordBigint(bytes.slice(charterLenWordAt, charterLenWordAt + 32))).toBe(
+      BigInt(NODE_REGISTRY_CLUSTER_CHARTER_BYTES),
+    );
+    expect(bytes.slice(charterLenWordAt + 32, charterLenWordAt + 32 + 30)).toEqual(charter);
+
+    // The V2 digest is pinned to mono-core's `form_cluster_message_v2`
+    // for the same fixture, commits to the charter, and differs from V1.
+    const v2 = formClusterMessageV2Hex(activePubkeys, standbyPubkeys, charter);
+    expect(v2).toBe("0x118e8dbfc057ffd2fcab85d6a1942c674cdb3f516f4cae86377e1b275bdcd106");
+    expect(formClusterMessageHex(activePubkeys, standbyPubkeys)).toBe(
+      "0xa49cb5314c8f1b2feb508d2512b59e599a05f27d78e8cc6426cac67b55504015",
+    );
+    const tweaked = new Uint8Array(charter);
+    tweaked[21] ^= 0x01;
+    expect(formClusterMessageV2Hex(activePubkeys, standbyPubkeys, tweaked)).not.toBe(v2);
+
+    expect(() =>
+      encodeFormClusterV2Calldata({
+        activePubkeys,
+        standbyPubkeys,
+        signatures,
+        charter: charter.slice(0, 22),
+      }),
+    ).toThrow(/charter/u);
+  });
+
   it("exposes the SERVES_GPU_PROVE bit (MB-4) without changing the public-service mask", () => {
     expect(NODE_REGISTRY_CAPABILITIES.SERVES_GPU_PROVE).toBe(0x0000_0200);
     // GPU-prove is not a probeable public service.
@@ -601,6 +740,14 @@ function wordBigint(word: Uint8Array): bigint {
     value = (value << 8n) | BigInt(byte);
   }
   return value;
+}
+
+function bytesHex(bytes: Uint8Array): string {
+  let out = "0x";
+  for (const byte of bytes) {
+    out += byte.toString(16).padStart(2, "0");
+  }
+  return out;
 }
 
 function u256Word(value: bigint): Uint8Array {

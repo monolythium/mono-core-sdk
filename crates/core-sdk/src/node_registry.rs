@@ -70,6 +70,16 @@ pub const NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES: usize = 1_184;
 pub const MULTISIG_ADDRESS_DERIVATION_DOMAIN: &[u8] = b"MONO_MULTISIG_BLAKE3_20_V1";
 
 const FORM_CLUSTER_MESSAGE_DOMAIN: &[u8] = b"PROTOCORE_NODE_REGISTRY_CLUSTER_FORM_V1\x00";
+const FORM_CLUSTER_MESSAGE_DOMAIN_V2: &[u8] = b"PROTOCORE_NODE_REGISTRY_CLUSTER_FORM_V2\x00";
+
+/// Fixed byte width of the V2 charter argument: 10×u16 BE member shares
+/// (member-declaration order: active `0..7`, then standby `7..10`) ‖
+/// u16 BE delegator share ‖ u64 BE consent expiry (ms).
+pub const NODE_REGISTRY_CLUSTER_CHARTER_BYTES: usize = 30;
+/// Protocol floor for a charter's delegator share (Law §6.8).
+pub const NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS: u16 = 2_000;
+/// Basis-point denominator a charter's member shares must sum to.
+pub const NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS: u16 = 10_000;
 
 /// Hosting class an operator runs under (PF-6).
 ///
@@ -238,6 +248,35 @@ pub fn form_cluster_message(active_pubkeys: &[u8], standby_pubkeys: &[u8]) -> [u
     hasher.finalize().into()
 }
 
+/// Build the V2 roster-consent digest for
+/// `formCluster(bytes,bytes,bytes,bytes)` — the V1 commitment plus the
+/// length-prefixed charter bytes under a fresh domain.
+///
+/// `charter` is the raw
+/// [`NODE_REGISTRY_CLUSTER_CHARTER_BYTES`]-byte wire payload including
+/// `expires_ms`, so the cluster's economics AND the consent expiry are
+/// inside what every member signs. Byte-identical to mono-core's
+/// `form_cluster_message_v2` and the TS `formClusterMessageV2`.
+#[must_use]
+pub fn form_cluster_message_v2(
+    active_pubkeys: &[u8],
+    standby_pubkeys: &[u8],
+    charter: &[u8],
+) -> [u8; 32] {
+    let mut hasher = Hasher::new();
+    hasher.update(FORM_CLUSTER_MESSAGE_DOMAIN_V2);
+    hasher.update(&(FORM_CLUSTER_ACTIVE_COUNT as u16).to_be_bytes());
+    hasher.update(&(FORM_CLUSTER_STANDBY_COUNT as u16).to_be_bytes());
+    hasher.update(&FORM_CLUSTER_THRESHOLD.to_be_bytes());
+    hasher.update(&(active_pubkeys.len() as u32).to_be_bytes());
+    hasher.update(active_pubkeys);
+    hasher.update(&(standby_pubkeys.len() as u32).to_be_bytes());
+    hasher.update(standby_pubkeys);
+    hasher.update(&(charter.len() as u32).to_be_bytes());
+    hasher.update(charter);
+    hasher.finalize().into()
+}
+
 /// `true` when all bits set in `flags` lie within
 /// [`NODE_REGISTRY_CAPABILITY_MASK`].
 #[must_use]
@@ -315,5 +354,56 @@ mod tests {
         let mut changed = active.clone();
         changed[0] ^= 0x01;
         assert_ne!(message, form_cluster_message(&changed, &standby));
+    }
+
+    /// Deterministic roster fixture shared with the mono-core SDK and
+    /// the TS parity tests: active key `i` filled with `0x20 + i`,
+    /// standby key `j` filled with `0x40 + j`.
+    fn v2_fixture() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        let mut active = Vec::new();
+        for i in 0..FORM_CLUSTER_ACTIVE_COUNT {
+            active.extend_from_slice(&vec![0x20 + i as u8; NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES]);
+        }
+        let mut standby = Vec::new();
+        for i in 0..FORM_CLUSTER_STANDBY_COUNT {
+            standby.extend_from_slice(&vec![0x40 + i as u8; NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES]);
+        }
+        // member shares [1500,1500,1000,1000,1000,1000,1000,800,700,500]
+        // ‖ delegator 3000 bps ‖ expires 1_999_999_999_000 ms.
+        let charter = hex_to_bytes("05dc05dc03e803e803e803e803e8032002bc01f40bb8000001d1a94a1c18");
+        assert_eq!(charter.len(), NODE_REGISTRY_CLUSTER_CHARTER_BYTES);
+        (active, standby, charter)
+    }
+
+    fn hex_to_bytes(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn form_cluster_message_v2_matches_mono_core_vector() {
+        let (active, standby, charter) = v2_fixture();
+        // Pinned from mono-core's `form_cluster_message_v2` /
+        // `form_cluster_message` (protocore-sdk, 2026-06-11). Drift here
+        // means the digest mirrors have diverged from the chain.
+        assert_eq!(
+            form_cluster_message_v2(&active, &standby, &charter).as_slice(),
+            hex_to_bytes("118e8dbfc057ffd2fcab85d6a1942c674cdb3f516f4cae86377e1b275bdcd106")
+                .as_slice()
+        );
+        assert_eq!(
+            form_cluster_message(&active, &standby).as_slice(),
+            hex_to_bytes("a49cb5314c8f1b2feb508d2512b59e599a05f27d78e8cc6426cac67b55504015")
+                .as_slice()
+        );
+
+        // The V2 digest commits to the charter and differs from V1.
+        let mut other = charter.clone();
+        other[21] ^= 0x01;
+        let v2 = form_cluster_message_v2(&active, &standby, &charter);
+        assert_ne!(v2, form_cluster_message_v2(&active, &standby, &other));
+        assert_ne!(v2, form_cluster_message(&active, &standby));
     }
 }

@@ -89,6 +89,12 @@ export const NODE_REGISTRY_SELECTORS = {
   getClusterJoinRequest: "0x" + selectorHex("getClusterJoinRequest(uint32,bytes32)"),
   /** `formCluster(bytes,bytes,bytes)` — no-foundation cluster formation by roster consent. */
   formCluster: "0x" + selectorHex("formCluster(bytes,bytes,bytes)"),
+  /**
+   * `formCluster(bytes,bytes,bytes,bytes)` — V2 formation carrying the
+   * 30-byte economics charter (Law §6.8); consents verify over the V2
+   * digest, which commits to the charter bytes.
+   */
+  formClusterV2: "0x" + selectorHex("formCluster(bytes,bytes,bytes,bytes)"),
   /** `setOperatorDisplay(bytes32,string,string)` — owner-callable public display metadata. */
   setOperatorDisplay: "0x" + selectorHex("setOperatorDisplay(bytes32,string,string)"),
   /** `publishOperatorSealKey(bytes32,bytes)` — owner-callable LythiumSeal EK publication. */
@@ -125,6 +131,18 @@ export const NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT =
 export const NODE_REGISTRY_FORM_CLUSTER_THRESHOLD = 7;
 export const NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN =
   "PROTOCORE_NODE_REGISTRY_CLUSTER_FORM_V1\0" as const;
+export const NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN_V2 =
+  "PROTOCORE_NODE_REGISTRY_CLUSTER_FORM_V2\0" as const;
+/**
+ * Fixed byte width of the V2 charter argument: 10×u16 BE member shares
+ * (member-declaration order: active 0..7, then standby 7..10) ‖ u16 BE
+ * delegator share ‖ u64 BE consent expiry (ms).
+ */
+export const NODE_REGISTRY_CLUSTER_CHARTER_BYTES = 30;
+/** Protocol floor for a charter's delegator share (Law §6.8). */
+export const NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS = 2000;
+/** Basis-point denominator a charter's member shares must sum to. */
+export const NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS = 10000;
 export const NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES = 128;
 export const NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES = 64;
 
@@ -210,6 +228,28 @@ export interface FormClusterCalldataArgs {
   activePubkeys: string | Uint8Array | readonly number[];
   standbyPubkeys: string | Uint8Array | readonly number[];
   signatures: string | Uint8Array | readonly number[];
+}
+
+/** Decoded form of the 30-byte V2 cluster charter (Law §6.8). */
+export interface ClusterCharterArgs {
+  /**
+   * Per-member operator-pot shares in basis points, member-declaration
+   * order (active 0..7, then standby 7..10). Must sum to exactly
+   * `NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS`.
+   */
+  memberShareBps: readonly number[];
+  /**
+   * Delegator share of the cluster pot in basis points, within
+   * `[NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS, 10000]`.
+   */
+  delegatorShareBps: number;
+  /** Consent expiry as a Unix timestamp in milliseconds. */
+  expiresMs: bigint | number;
+}
+
+export interface FormClusterV2CalldataArgs extends FormClusterCalldataArgs {
+  /** The 30-byte charter wire payload (see `encodeClusterCharter`). */
+  charter: string | Uint8Array | readonly number[];
 }
 
 export type ClusterJoinRequestStatus = "none" | "open" | "admitted" | "cancelled" | "expired" | "unknown";
@@ -648,6 +688,165 @@ export function encodeFormClusterCalldata(args: FormClusterCalldataArgs): string
       standbyPadded,
       uint64Word(BigInt(signatures.length), "signaturesLength"),
       signaturesPadded,
+    ),
+  );
+}
+
+/**
+ * Encode the 30-byte V2 charter wire payload: 10×u16 BE member shares
+ * ‖ u16 BE delegator share ‖ u64 BE consent expiry (ms).
+ *
+ * Performs the same structural validation as the on-chain
+ * `decode_cluster_charter` (length, share sum, delegator floor band) so
+ * a malformed charter fails client-side before a nonce is burned.
+ * Byte-identical to the Rust SDK `encode_cluster_charter`.
+ */
+export function encodeClusterCharter(args: ClusterCharterArgs): Uint8Array {
+  if (args.memberShareBps.length !== NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT) {
+    throw new NodeRegistryError(
+      `memberShareBps needs exactly ${NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT} entries, got ${args.memberShareBps.length}`,
+    );
+  }
+  let sum = 0;
+  for (const bps of args.memberShareBps) {
+    if (!Number.isInteger(bps) || bps < 0 || bps > 0xffff) {
+      throw new NodeRegistryError(`memberShareBps entries must be u16 integers, got ${bps}`);
+    }
+    sum += bps;
+  }
+  if (sum !== NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS) {
+    throw new NodeRegistryError(
+      `memberShareBps must sum to ${NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS}, got ${sum}`,
+    );
+  }
+  if (
+    !Number.isInteger(args.delegatorShareBps) ||
+    args.delegatorShareBps < NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS ||
+    args.delegatorShareBps > NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS
+  ) {
+    throw new NodeRegistryError(
+      `delegatorShareBps must be within [${NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS}, ${NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS}], got ${args.delegatorShareBps}`,
+    );
+  }
+  const expiresMs = typeof args.expiresMs === "bigint" ? args.expiresMs : BigInt(args.expiresMs);
+  if (expiresMs < 0n || expiresMs > 0xffff_ffff_ffff_ffffn) {
+    throw new NodeRegistryError(`expiresMs must fit in u64, got ${expiresMs}`);
+  }
+  const out = new Uint8Array(NODE_REGISTRY_CLUSTER_CHARTER_BYTES);
+  for (let i = 0; i < NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT; i += 1) {
+    out.set(u16BeBytes(args.memberShareBps[i]!), 2 * i);
+  }
+  out.set(u16BeBytes(args.delegatorShareBps), 20);
+  out.set(u64BeBytes(expiresMs), 22);
+  return out;
+}
+
+/**
+ * V2 roster-consent digest — the V1 commitment plus the length-prefixed
+ * charter bytes under the `..._CLUSTER_FORM_V2\0` domain. Economics +
+ * consent expiry are INSIDE the signed message: no member can be bound
+ * to terms they did not sign, and no V2 consent replays under different
+ * terms (or under the V1 digest — the domains differ). Byte-identical
+ * to mono-core's `form_cluster_message_v2`.
+ */
+export function formClusterMessageV2(
+  activePubkeys: string | Uint8Array | readonly number[],
+  standbyPubkeys: string | Uint8Array | readonly number[],
+  charter: string | Uint8Array | readonly number[],
+): Uint8Array {
+  const active = expectLength(
+    toBytes(activePubkeys),
+    NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "activePubkeys",
+  );
+  const standby = expectLength(
+    toBytes(standbyPubkeys),
+    NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "standbyPubkeys",
+  );
+  const charterBytes = expectLength(
+    toBytes(charter),
+    NODE_REGISTRY_CLUSTER_CHARTER_BYTES,
+    "charter",
+  );
+  return blake3(
+    concatBytes(
+      new TextEncoder().encode(NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN_V2),
+      u16BeBytes(NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT),
+      u16BeBytes(NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT),
+      u16BeBytes(NODE_REGISTRY_FORM_CLUSTER_THRESHOLD),
+      u32BeBytes(active.length),
+      active,
+      u32BeBytes(standby.length),
+      standby,
+      u32BeBytes(charterBytes.length),
+      charterBytes,
+    ),
+  );
+}
+
+export function formClusterMessageV2Hex(
+  activePubkeys: string | Uint8Array | readonly number[],
+  standbyPubkeys: string | Uint8Array | readonly number[],
+  charter: string | Uint8Array | readonly number[],
+): string {
+  return bytesToHex(formClusterMessageV2(activePubkeys, standbyPubkeys, charter));
+}
+
+/**
+ * Encode `formCluster(bytes,bytes,bytes,bytes)` calldata — the V2
+ * (charter) selector. Same layout discipline as
+ * `encodeFormClusterCalldata` with a fourth dynamic `bytes` tail.
+ * Byte-identical to the Rust SDK `encode_form_cluster_v2_calldata`.
+ *
+ * The 10 consent signatures must verify over `formClusterMessageV2`
+ * (NOT the V1 digest).
+ */
+export function encodeFormClusterV2Calldata(args: FormClusterV2CalldataArgs): string {
+  const activePubkeys = expectLength(
+    toBytes(args.activePubkeys),
+    NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "activePubkeys",
+  );
+  const standbyPubkeys = expectLength(
+    toBytes(args.standbyPubkeys),
+    NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "standbyPubkeys",
+  );
+  const signatures = expectLength(
+    toBytes(args.signatures),
+    NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT * NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES,
+    "signatures",
+  );
+  const charter = expectLength(
+    toBytes(args.charter),
+    NODE_REGISTRY_CLUSTER_CHARTER_BYTES,
+    "charter",
+  );
+  const activePadded = padToWord(activePubkeys);
+  const standbyPadded = padToWord(standbyPubkeys);
+  const signaturesPadded = padToWord(signatures);
+  const charterPadded = padToWord(charter);
+  const activeOffset = 4n * 32n;
+  const standbyOffset = activeOffset + 32n + BigInt(activePadded.length);
+  const signaturesOffset = standbyOffset + 32n + BigInt(standbyPadded.length);
+  const charterOffset = signaturesOffset + 32n + BigInt(signaturesPadded.length);
+
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.formClusterV2),
+      uint64Word(activeOffset, "activePubkeysOffset"),
+      uint64Word(standbyOffset, "standbyPubkeysOffset"),
+      uint64Word(signaturesOffset, "signaturesOffset"),
+      uint64Word(charterOffset, "charterOffset"),
+      uint64Word(BigInt(activePubkeys.length), "activePubkeysLength"),
+      activePadded,
+      uint64Word(BigInt(standbyPubkeys.length), "standbyPubkeysLength"),
+      standbyPadded,
+      uint64Word(BigInt(signatures.length), "signaturesLength"),
+      signaturesPadded,
+      uint64Word(BigInt(charter.length), "charterLength"),
+      charterPadded,
     ),
   );
 }
