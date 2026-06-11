@@ -452,6 +452,12 @@ var NODE_REGISTRY_SELECTORS = {
   getClusterJoinRequest: "0x" + selectorHex("getClusterJoinRequest(uint32,bytes32)"),
   /** `formCluster(bytes,bytes,bytes)` — no-foundation cluster formation by roster consent. */
   formCluster: "0x" + selectorHex("formCluster(bytes,bytes,bytes)"),
+  /**
+   * `formCluster(bytes,bytes,bytes,bytes)` — V2 formation carrying the
+   * 30-byte economics charter (Law §6.8); consents verify over the V2
+   * digest, which commits to the charter bytes.
+   */
+  formClusterV2: "0x" + selectorHex("formCluster(bytes,bytes,bytes,bytes)"),
   /** `setOperatorDisplay(bytes32,string,string)` — owner-callable public display metadata. */
   setOperatorDisplay: "0x" + selectorHex("setOperatorDisplay(bytes32,string,string)"),
   /** `publishOperatorSealKey(bytes32,bytes)` — owner-callable LythiumSeal EK publication. */
@@ -476,6 +482,10 @@ var NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT = 3;
 var NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT = NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT + NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT;
 var NODE_REGISTRY_FORM_CLUSTER_THRESHOLD = 7;
 var NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN = "PROTOCORE_NODE_REGISTRY_CLUSTER_FORM_V1\0";
+var NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN_V2 = "PROTOCORE_NODE_REGISTRY_CLUSTER_FORM_V2\0";
+var NODE_REGISTRY_CLUSTER_CHARTER_BYTES = 30;
+var NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS = 2e3;
+var NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS = 1e4;
 var NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES = 128;
 var NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES = 64;
 var PENDING_CHANGE_KIND_CODES = {
@@ -836,6 +846,122 @@ function encodeFormClusterCalldata(args) {
       standbyPadded,
       uint64Word(BigInt(signatures.length), "signaturesLength"),
       signaturesPadded
+    )
+  );
+}
+function encodeClusterCharter(args) {
+  if (args.memberShareBps.length !== NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT) {
+    throw new NodeRegistryError(
+      `memberShareBps needs exactly ${NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT} entries, got ${args.memberShareBps.length}`
+    );
+  }
+  let sum = 0;
+  for (const bps of args.memberShareBps) {
+    if (!Number.isInteger(bps) || bps < 0 || bps > 65535) {
+      throw new NodeRegistryError(`memberShareBps entries must be u16 integers, got ${bps}`);
+    }
+    sum += bps;
+  }
+  if (sum !== NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS) {
+    throw new NodeRegistryError(
+      `memberShareBps must sum to ${NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS}, got ${sum}`
+    );
+  }
+  if (!Number.isInteger(args.delegatorShareBps) || args.delegatorShareBps < NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS || args.delegatorShareBps > NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS) {
+    throw new NodeRegistryError(
+      `delegatorShareBps must be within [${NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS}, ${NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS}], got ${args.delegatorShareBps}`
+    );
+  }
+  const expiresMs = typeof args.expiresMs === "bigint" ? args.expiresMs : BigInt(args.expiresMs);
+  if (expiresMs < 0n || expiresMs > 0xffffffffffffffffn) {
+    throw new NodeRegistryError(`expiresMs must fit in u64, got ${expiresMs}`);
+  }
+  const out = new Uint8Array(NODE_REGISTRY_CLUSTER_CHARTER_BYTES);
+  for (let i = 0; i < NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT; i += 1) {
+    out.set(u16BeBytes(args.memberShareBps[i]), 2 * i);
+  }
+  out.set(u16BeBytes(args.delegatorShareBps), 20);
+  out.set(u64BeBytes(expiresMs), 22);
+  return out;
+}
+function formClusterMessageV2(activePubkeys, standbyPubkeys, charter) {
+  const active = expectLength2(
+    toBytes(activePubkeys),
+    NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "activePubkeys"
+  );
+  const standby = expectLength2(
+    toBytes(standbyPubkeys),
+    NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "standbyPubkeys"
+  );
+  const charterBytes = expectLength2(
+    toBytes(charter),
+    NODE_REGISTRY_CLUSTER_CHARTER_BYTES,
+    "charter"
+  );
+  return blake3_js.blake3(
+    concatBytes(
+      new TextEncoder().encode(NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN_V2),
+      u16BeBytes(NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT),
+      u16BeBytes(NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT),
+      u16BeBytes(NODE_REGISTRY_FORM_CLUSTER_THRESHOLD),
+      u32BeBytes(active.length),
+      active,
+      u32BeBytes(standby.length),
+      standby,
+      u32BeBytes(charterBytes.length),
+      charterBytes
+    )
+  );
+}
+function formClusterMessageV2Hex(activePubkeys, standbyPubkeys, charter) {
+  return bytesToHex(formClusterMessageV2(activePubkeys, standbyPubkeys, charter));
+}
+function encodeFormClusterV2Calldata(args) {
+  const activePubkeys = expectLength2(
+    toBytes(args.activePubkeys),
+    NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "activePubkeys"
+  );
+  const standbyPubkeys = expectLength2(
+    toBytes(args.standbyPubkeys),
+    NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "standbyPubkeys"
+  );
+  const signatures = expectLength2(
+    toBytes(args.signatures),
+    NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT * NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES,
+    "signatures"
+  );
+  const charter = expectLength2(
+    toBytes(args.charter),
+    NODE_REGISTRY_CLUSTER_CHARTER_BYTES,
+    "charter"
+  );
+  const activePadded = padToWord(activePubkeys);
+  const standbyPadded = padToWord(standbyPubkeys);
+  const signaturesPadded = padToWord(signatures);
+  const charterPadded = padToWord(charter);
+  const activeOffset = 4n * 32n;
+  const standbyOffset = activeOffset + 32n + BigInt(activePadded.length);
+  const signaturesOffset = standbyOffset + 32n + BigInt(standbyPadded.length);
+  const charterOffset = signaturesOffset + 32n + BigInt(signaturesPadded.length);
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.formClusterV2),
+      uint64Word(activeOffset, "activePubkeysOffset"),
+      uint64Word(standbyOffset, "standbyPubkeysOffset"),
+      uint64Word(signaturesOffset, "signaturesOffset"),
+      uint64Word(charterOffset, "charterOffset"),
+      uint64Word(BigInt(activePubkeys.length), "activePubkeysLength"),
+      activePadded,
+      uint64Word(BigInt(standbyPubkeys.length), "standbyPubkeysLength"),
+      standbyPadded,
+      uint64Word(BigInt(signatures.length), "signaturesLength"),
+      signaturesPadded,
+      uint64Word(BigInt(charter.length), "charterLength"),
+      charterPadded
     )
   );
 }
@@ -11706,6 +11832,9 @@ exports.NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC = NATIVE_MARKET_ORDER_BOOK_STREAM_
 exports.NODE_REGISTRY_BLS_PUBKEY_BYTES = NODE_REGISTRY_BLS_PUBKEY_BYTES;
 exports.NODE_REGISTRY_CAPABILITIES = NODE_REGISTRY_CAPABILITIES;
 exports.NODE_REGISTRY_CAPABILITY_MASK = NODE_REGISTRY_CAPABILITY_MASK;
+exports.NODE_REGISTRY_CLUSTER_CHARTER_BYTES = NODE_REGISTRY_CLUSTER_CHARTER_BYTES;
+exports.NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS = NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS;
+exports.NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS = NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS;
 exports.NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES = NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES;
 exports.NODE_REGISTRY_CONSENSUS_POP_BYTES = NODE_REGISTRY_CONSENSUS_POP_BYTES;
 exports.NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES = NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES;
@@ -11717,6 +11846,7 @@ exports.NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES = NODE_REGISTRY_DKG_THRESHOLD_SIG_
 exports.NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT = NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT;
 exports.NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT = NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT;
 exports.NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN = NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN;
+exports.NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN_V2 = NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN_V2;
 exports.NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT = NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT;
 exports.NODE_REGISTRY_FORM_CLUSTER_THRESHOLD = NODE_REGISTRY_FORM_CLUSTER_THRESHOLD;
 exports.NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES = NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES;
@@ -11918,6 +12048,7 @@ exports.encodeCancelOrderCalldata = encodeCancelOrderCalldata;
 exports.encodeCancelPendingChangeCalldata = encodeCancelPendingChangeCalldata;
 exports.encodeClaimCalldata = encodeClaimCalldata;
 exports.encodeClaimPolicyByAddressCalldata = encodeClaimPolicyByAddressCalldata;
+exports.encodeClusterCharter = encodeClusterCharter;
 exports.encodeCreateFixedSupplyMrc20Calldata = encodeCreateFixedSupplyMrc20Calldata;
 exports.encodeCreateRequestCalldata = encodeCreateRequestCalldata;
 exports.encodeCreateRequestCanonical = encodeCreateRequestCanonical;
@@ -11927,6 +12058,7 @@ exports.encodeDisableCalldata = encodeDisableCalldata;
 exports.encodeEnableCalldata = encodeEnableCalldata;
 exports.encodeExpireClusterJoinCalldata = encodeExpireClusterJoinCalldata;
 exports.encodeFormClusterCalldata = encodeFormClusterCalldata;
+exports.encodeFormClusterV2Calldata = encodeFormClusterV2Calldata;
 exports.encodeGetClusterJoinRequestCalldata = encodeGetClusterJoinRequestCalldata;
 exports.encodeGetOperatorSealKeyCalldata = encodeGetOperatorSealKeyCalldata;
 exports.encodeHasPubkeyCalldata = encodeHasPubkeyCalldata;
@@ -12025,6 +12157,8 @@ exports.fetchChainInfoLatest = fetchChainInfoLatest;
 exports.fetchChainRegistryLatest = fetchChainRegistryLatest;
 exports.formClusterMessage = formClusterMessage;
 exports.formClusterMessageHex = formClusterMessageHex;
+exports.formClusterMessageV2 = formClusterMessageV2;
+exports.formClusterMessageV2Hex = formClusterMessageV2Hex;
 exports.formatLyth = formatLyth;
 exports.formatLythoshi = formatLythoshi;
 exports.formatNativeReceiptFeeDisplay = formatNativeReceiptFeeDisplay;
