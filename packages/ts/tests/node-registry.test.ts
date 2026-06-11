@@ -26,29 +26,50 @@ import {
   NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID,
   NODE_REGISTRY_PUBLIC_SERVICE_MASK,
   NODE_REGISTRY_SELECTORS,
+  NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD,
+  NODE_REGISTRY_UPDATE_CHARTER_MESSAGE_DOMAIN,
+  NODE_REGISTRY_CHARTER_COOLDOWN_EPOCHS,
+  NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN,
+  NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH,
+  NODE_REGISTRY_TAG_ARCHIVE_CHALLENGE,
+  NODE_REGISTRY_TAG_SERVICE_SCORE,
+  NODE_REGISTRY_TAG_TREASURY,
   PENDING_CHANGE_KIND_CODES,
   SERVICE_PROBE_STATUS,
+  archiveMerkleLeafHash,
+  decodeClusterCharter,
   decodeClusterDiversity,
   decodeClusterFormedEvent,
   decodeClusterJoinRequest,
   decodeOperatorNetworkMetadata,
   decodeOperatorSealKey,
+  decodePendingCharter,
+  decodeProbeAuthority,
+  decodeScoreServiceProbe,
+  deriveArchiveChallenge,
   deriveClusterAnchorAddress,
+  encodeAnswerArchiveChallengeCalldata,
   encodeAttestDkgReshareCalldata,
+  encodeAttestServiceProbeCalldata,
   encodeCancelClusterJoinCalldata,
   encodeCancelPendingChangeCalldata,
   encodeClusterCharter,
+  encodeCommitArchiveRootCalldata,
   encodeExpireClusterJoinCalldata,
   encodeFormClusterCalldata,
   encodeFormClusterV2Calldata,
   encodeGetClusterJoinRequestCalldata,
   encodeGetOperatorSealKeyCalldata,
+  encodeGetPendingCharterCalldata,
+  encodeGetProbeAuthorityCalldata,
   encodePublishOperatorSealKeyCalldata,
   encodeRecoverOperatorNodeCalldata,
   encodeReportServiceProbeCalldata,
   encodeRequestClusterJoinCalldata,
   encodeSetOperatorDisplayCalldata,
+  encodeSetProbeAuthorityCalldata,
   encodeSubmitPendingChangeCalldata,
+  encodeUpdateCharterCalldata,
   encodeVoteClusterAdmitCalldata,
   formClusterMessageHex,
   formClusterMessageV2Hex,
@@ -59,7 +80,13 @@ import {
   nodeHostingClassFromByte,
   nodeRegistryAddressHex,
   parseDkgResharePublicKeys,
+  serviceMaskToBitIndex,
   serviceProbeStatusLabel,
+  slotArchiveChallengePass,
+  slotClusterServiceScore,
+  slotProbeAuthority,
+  slotScoreServiceProbe,
+  updateCharterMessageHex,
 } from "../src/index.js";
 
 describe("node-registry helpers", () => {
@@ -714,6 +741,373 @@ describe("node-registry helpers", () => {
     ).toThrow();
   });
 });
+
+describe("service-reward + charter-governance encoders", () => {
+  // Charter fixture pinned byte-identical to the existing
+  // encodeClusterCharter parity vector (member shares 1500..500,
+  // delegator 3000, expires 1_999_999_999_000ms).
+  const charter = encodeClusterCharter({
+    memberShareBps: [1500, 1500, 1000, 1000, 1000, 1000, 1000, 800, 700, 500],
+    delegatorShareBps: 3000,
+    expiresMs: 1_999_999_999_000n,
+  });
+
+  it("pins the new service-reward + charter selectors to mono-core", () => {
+    // Pinned from the node-registry `abi::selector(sig::*)` SSOT
+    // (service-rewards branch 0c414208, 2026-06-11).
+    expect(NODE_REGISTRY_SELECTORS.updateCharter).toBe("0x9f1b8bbf");
+    expect(NODE_REGISTRY_SELECTORS.getPendingCharter).toBe("0xb968c95e");
+    expect(NODE_REGISTRY_SELECTORS.commitArchiveRoot).toBe("0xa769f5fe");
+    expect(NODE_REGISTRY_SELECTORS.answerArchiveChallenge).toBe("0xacf1ff46");
+    expect(NODE_REGISTRY_SELECTORS.setProbeAuthority).toBe("0xec63306c");
+    expect(NODE_REGISTRY_SELECTORS.getProbeAuthority).toBe("0x83b9eee8");
+    expect(NODE_REGISTRY_SELECTORS.attestServiceProbe).toBe("0x45631aab");
+  });
+
+  it("pins the new charter-governance constants", () => {
+    expect(NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD).toBe(7);
+    expect(NODE_REGISTRY_UPDATE_CHARTER_MESSAGE_DOMAIN).toBe(
+      "PROTOCORE_NODE_REGISTRY_CLUSTER_UPDATE_CHARTER_V1\0",
+    );
+    expect(NODE_REGISTRY_CHARTER_COOLDOWN_EPOCHS).toBe(2);
+    expect(NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN).toBe("monolythium.archive-challenge.v1");
+    expect(NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH).toBe(40);
+    expect(NODE_REGISTRY_TAG_ARCHIVE_CHALLENGE).toBe(0x32);
+    expect(NODE_REGISTRY_TAG_SERVICE_SCORE).toBe(0x24);
+    expect(NODE_REGISTRY_TAG_TREASURY).toBe(0x1f);
+  });
+
+  it("derives the updateCharter consent digest byte-identical to mono-core", () => {
+    // PARITY VECTOR: derived in BOTH the Rust SSOT
+    // (cluster_form::update_charter_message, clusterId=7, the same charter
+    // bytes) and TS; asserted byte-equal. A mismatch = Monarch signs the
+    // wrong thing.
+    expect(bytesHex(charter)).toBe(
+      "0x05dc05dc03e803e803e803e803e8032002bc01f40bb8000001d1a94a1c18",
+    );
+    expect(updateCharterMessageHex(7, charter)).toBe(
+      "0x1742796403f9b420fbc5bfd39233a3dc47dd7f861b9fe802670c6a32e6774078",
+    );
+    // The digest binds the cluster id: a different cluster ⇒ a different
+    // digest (replay-resistance).
+    expect(updateCharterMessageHex(8, charter)).not.toBe(updateCharterMessageHex(7, charter));
+    // …and binds the charter bytes.
+    const tweaked = new Uint8Array(charter);
+    tweaked[21] ^= 0x01;
+    expect(updateCharterMessageHex(7, tweaked)).not.toBe(updateCharterMessageHex(7, charter));
+  });
+
+  it("round-trips the cluster charter decoder", () => {
+    const decoded = decodeClusterCharter(charter);
+    expect(decoded.memberShareBps).toEqual([1500, 1500, 1000, 1000, 1000, 1000, 1000, 800, 700, 500]);
+    expect(decoded.delegatorShareBps).toBe(3000);
+    expect(decoded.expiresMs).toBe(1_999_999_999_000n);
+    expect(Array.from(encodeClusterCharter(decoded))).toEqual(Array.from(charter));
+  });
+
+  it("encodes updateCharter calldata with the right ABI layout", () => {
+    const signerPubkeys = Array.from({ length: 7 }, (_, i) =>
+      new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0x20 + i),
+    );
+    const signatures = Array.from({ length: 7 }, (_, i) =>
+      new Uint8Array(NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES).fill(0x80 + i),
+    );
+    const calldata = encodeUpdateCharterCalldata({
+      clusterId: 7,
+      charter,
+      signerPubkeys,
+      signatures,
+    });
+    const bytes = hexBytes(calldata);
+    // Head: selector + clusterId word + 3 offset words.
+    expect(bytes.slice(0, 4)).toEqual(hexBytes(NODE_REGISTRY_SELECTORS.updateCharter));
+    expect(wordBigint(bytes.slice(4, 36))).toBe(7n);
+    const charterOffset = 4n * 32n;
+    const charterPaddedLen = BigInt(Math.ceil(charter.length / 32) * 32);
+    const signerLen = 7 * NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES;
+    const signerPaddedLen = BigInt(Math.ceil(signerLen / 32) * 32);
+    const signerOffset = charterOffset + 32n + charterPaddedLen;
+    const sigsOffset = signerOffset + 32n + signerPaddedLen;
+    expect(wordBigint(bytes.slice(36, 68))).toBe(charterOffset);
+    expect(wordBigint(bytes.slice(68, 100))).toBe(signerOffset);
+    expect(wordBigint(bytes.slice(100, 132))).toBe(sigsOffset);
+    // charter length + body
+    const charterLenAt = 4 + Number(charterOffset);
+    expect(wordBigint(bytes.slice(charterLenAt, charterLenAt + 32))).toBe(
+      BigInt(charter.length),
+    );
+    expect(bytes.slice(charterLenAt + 32, charterLenAt + 32 + 30)).toEqual(charter);
+    // Concatenated buffer form must produce identical calldata.
+    const flatPubkeys = concatTestBytes(...signerPubkeys);
+    const flatSigs = concatTestBytes(...signatures);
+    expect(
+      encodeUpdateCharterCalldata({ clusterId: 7, charter, signerPubkeys: flatPubkeys, signatures: flatSigs }),
+    ).toBe(calldata);
+  });
+
+  it("rejects malformed updateCharter inputs", () => {
+    const pk = new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES);
+    const sig = new Uint8Array(NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES);
+    // sub-threshold (6 signers)
+    expect(() =>
+      encodeUpdateCharterCalldata({
+        clusterId: 1,
+        charter,
+        signerPubkeys: Array.from({ length: 6 }, () => pk),
+        signatures: Array.from({ length: 6 }, () => sig),
+      }),
+    ).toThrow(/signer count/u);
+    // mismatched counts
+    expect(() =>
+      encodeUpdateCharterCalldata({
+        clusterId: 1,
+        charter,
+        signerPubkeys: Array.from({ length: 7 }, () => pk),
+        signatures: Array.from({ length: 8 }, () => sig),
+      }),
+    ).toThrow(/counts must match/u);
+    // bad charter length
+    expect(() =>
+      encodeUpdateCharterCalldata({
+        clusterId: 1,
+        charter: new Uint8Array(29),
+        signerPubkeys: Array.from({ length: 7 }, () => pk),
+        signatures: Array.from({ length: 7 }, () => sig),
+      }),
+    ).toThrow(/charter/u);
+  });
+
+  it("decodes getPendingCharter view return data", () => {
+    expect(encodeGetPendingCharterCalldata(7)).toBe(
+      bytesHex(concatTestBytes(hexBytes(NODE_REGISTRY_SELECTORS.getPendingCharter), wordU32(7))),
+    );
+    // Build the exact wire return the on-chain encoder emits for a present
+    // pending charter: head = present, delegatorBps, effectiveEpoch,
+    // signerCount, bytesOffset(=160); tail = len(32) + packed shares word.
+    const memberShareBps = [1500, 1500, 1000, 1000, 1000, 1000, 1000, 800, 700, 500];
+    const packed = new Uint8Array(32);
+    for (let i = 0; i < 10; i += 1) {
+      packed[12 + 2 * i] = (memberShareBps[i] >> 8) & 0xff;
+      packed[12 + 2 * i + 1] = memberShareBps[i] & 0xff;
+    }
+    const present = encodeWordU16(1);
+    const delegator = encodeWordU16(3000);
+    const effective = encodeWordU64(123n);
+    const signerCount = encodeWordU16(7);
+    const bytesOffset = encodeWordU64(160n);
+    const lenWord = encodeWordU64(32n);
+    const ret = concatTestBytes(present, delegator, effective, signerCount, bytesOffset, lenWord, packed);
+    const view = decodePendingCharter(ret);
+    expect(view.present).toBe(true);
+    expect(view.delegatorShareBps).toBe(3000);
+    expect(view.effectiveEpoch).toBe(123n);
+    expect(view.signerCount).toBe(7);
+    expect(view.memberShareBps).toEqual(memberShareBps);
+
+    // Absent pending: a zeroed 5-word head + empty bytes length.
+    const absent = concatTestBytes(
+      new Uint8Array(4 * 32),
+      encodeWordU64(160n),
+      encodeWordU64(0n),
+    );
+    const none = decodePendingCharter(absent);
+    expect(none.present).toBe(false);
+    expect(none.memberShareBps).toEqual([]);
+  });
+
+  it("encodes commitArchiveRoot calldata (flat 4-word head)", () => {
+    const peerId = new Uint8Array(32).fill(0x11);
+    const shardRoot = new Uint8Array(32).fill(0x22);
+    const calldata = encodeCommitArchiveRootCalldata({
+      peerId,
+      shardIndex: 3,
+      shardRoot,
+      leafCount: 1000n,
+    });
+    const bytes = hexBytes(calldata);
+    expect(bytes.slice(0, 4)).toEqual(hexBytes(NODE_REGISTRY_SELECTORS.commitArchiveRoot));
+    expect(bytes.slice(4, 36)).toEqual(peerId);
+    expect(wordBigint(bytes.slice(36, 68))).toBe(3n);
+    expect(bytes.slice(68, 100)).toEqual(shardRoot);
+    expect(wordBigint(bytes.slice(100, 132))).toBe(1000n);
+    expect(bytes.length).toBe(4 + 4 * 32);
+  });
+
+  it("encodes answerArchiveChallenge calldata with the leaf + proof tails", () => {
+    const peerId = new Uint8Array(32).fill(0x11);
+    const roundCertDigest = new Uint8Array(32).fill(0xab);
+    const leaf = new Uint8Array([1, 2, 3, 4, 5]);
+    const proof = [new Uint8Array(32).fill(0xa1), new Uint8Array(32).fill(0xa2)];
+    const calldata = encodeAnswerArchiveChallengeCalldata({
+      peerId,
+      shardIndex: 3,
+      epoch: 7,
+      nonce: 42,
+      roundCertDigest,
+      leaf,
+      proof,
+    });
+    const bytes = hexBytes(calldata);
+    expect(bytes.slice(0, 4)).toEqual(hexBytes(NODE_REGISTRY_SELECTORS.answerArchiveChallenge));
+    // 7 head words: peerId, shard, epoch, nonce, rcDigest, leafOffset, proofOffset.
+    expect(bytes.slice(4, 36)).toEqual(peerId);
+    expect(wordBigint(bytes.slice(36, 68))).toBe(3n);
+    expect(wordBigint(bytes.slice(68, 100))).toBe(7n);
+    expect(wordBigint(bytes.slice(100, 132))).toBe(42n);
+    expect(bytes.slice(132, 164)).toEqual(roundCertDigest);
+    const leafOffset = 7n * 32n;
+    const proofOffset = leafOffset + 32n + 32n; // leaf padded to one word
+    expect(wordBigint(bytes.slice(164, 196))).toBe(leafOffset);
+    expect(wordBigint(bytes.slice(196, 228))).toBe(proofOffset);
+    // leaf tail
+    const leafLenAt = 4 + Number(leafOffset);
+    expect(wordBigint(bytes.slice(leafLenAt, leafLenAt + 32))).toBe(5n);
+    expect(bytes.slice(leafLenAt + 32, leafLenAt + 32 + 5)).toEqual(leaf);
+    // proof tail
+    const proofLenAt = 4 + Number(proofOffset);
+    expect(wordBigint(bytes.slice(proofLenAt, proofLenAt + 32))).toBe(2n);
+    expect(bytes.slice(proofLenAt + 32, proofLenAt + 64)).toEqual(proof[0]);
+    expect(bytes.slice(proofLenAt + 64, proofLenAt + 96)).toEqual(proof[1]);
+  });
+
+  it("rejects an over-long archive proof", () => {
+    expect(() =>
+      encodeAnswerArchiveChallengeCalldata({
+        peerId: new Uint8Array(32),
+        shardIndex: 0,
+        epoch: 0,
+        nonce: 0,
+        roundCertDigest: new Uint8Array(32),
+        leaf: new Uint8Array(1),
+        proof: Array.from({ length: NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH + 1 }, () => new Uint8Array(32)),
+      }),
+    ).toThrow(/proof length/u);
+  });
+
+  it("derives the archive challenge byte-identical to mono-core", () => {
+    // PARITY VECTOR: same fixture as the Rust
+    // archive_challenge::derive_challenge unit/SDK vector.
+    const rcDigest = new Uint8Array(32).fill(0xab);
+    const opHash = new Uint8Array(32).fill(0x11);
+    const c = deriveArchiveChallenge(rcDigest, opHash, 3, 7, 42, 1000n);
+    expect(c).not.toBeNull();
+    expect(c!.seed).toBe("0x353142770b26caab05c33bf2c7a1822047a157bf0afdee76fc0d3738a5b7e202");
+    expect(c!.leafIndex).toBe(819n);
+    expect(c!.shardIndex).toBe(3);
+    // leafCount == 0 ⇒ null (nothing to challenge).
+    expect(deriveArchiveChallenge(rcDigest, opHash, 3, 7, 42, 0n)).toBeNull();
+  });
+
+  it("hashes an archive merkle leaf byte-identical to mono-core", () => {
+    // PARITY VECTOR: merkle_leaf_hash(b"hello-archive-leaf").
+    expect(bytesHex(archiveMerkleLeafHash(new TextEncoder().encode("hello-archive-leaf")))).toBe(
+      "0x525493fea4d3b41f40b30edebd95bf4b3e0d74a9421c7b749e54a262de4b4d5e",
+    );
+  });
+
+  it("encodes setProbeAuthority / getProbeAuthority calldata", () => {
+    const addr = new Uint8Array(20).fill(0x33);
+    const calldata = encodeSetProbeAuthorityCalldata(addr);
+    const bytes = hexBytes(calldata);
+    expect(bytes.slice(0, 4)).toEqual(hexBytes(NODE_REGISTRY_SELECTORS.setProbeAuthority));
+    // left-padded address word
+    expect(bytes.slice(4, 16)).toEqual(new Uint8Array(12));
+    expect(bytes.slice(16, 36)).toEqual(addr);
+    expect(bytes.length).toBe(4 + 32);
+    expect(encodeGetProbeAuthorityCalldata()).toBe(NODE_REGISTRY_SELECTORS.getProbeAuthority);
+    // decode a return word
+    const ret = concatTestBytes(new Uint8Array(12), addr);
+    expect(decodeProbeAuthority(ret)).toBe(bytesHex(addr));
+  });
+
+  it("encodes attestServiceProbe calldata (flat 4-word head)", () => {
+    const opHash = new Uint8Array(32).fill(0x11);
+    const calldata = encodeAttestServiceProbeCalldata({
+      opHash,
+      serviceMask: NODE_REGISTRY_CAPABILITIES.SERVES_RPC | NODE_REGISTRY_CAPABILITIES.SERVES_INDEXER,
+      status: SERVICE_PROBE_STATUS.REACHABLE,
+      epoch: 9,
+    });
+    const bytes = hexBytes(calldata);
+    expect(bytes.slice(0, 4)).toEqual(hexBytes(NODE_REGISTRY_SELECTORS.attestServiceProbe));
+    expect(bytes.slice(4, 36)).toEqual(opHash);
+    expect(wordBigint(bytes.slice(36, 68))).toBe(
+      BigInt(NODE_REGISTRY_CAPABILITIES.SERVES_RPC | NODE_REGISTRY_CAPABILITIES.SERVES_INDEXER),
+    );
+    expect(wordBigint(bytes.slice(68, 100))).toBe(BigInt(SERVICE_PROBE_STATUS.REACHABLE));
+    expect(wordBigint(bytes.slice(100, 132))).toBe(9n);
+    expect(bytes.length).toBe(4 + 4 * 32);
+    // invalid mask / status rejected
+    expect(() =>
+      encodeAttestServiceProbeCalldata({ opHash, serviceMask: NODE_REGISTRY_CAPABILITIES.SERVES_BROADCASTER, status: 1, epoch: 1 }),
+    ).toThrow(/mask/u);
+    expect(() =>
+      encodeAttestServiceProbeCalldata({ opHash, serviceMask: NODE_REGISTRY_CAPABILITIES.SERVES_RPC, status: 0, epoch: 1 }),
+    ).toThrow(/status/u);
+  });
+
+  it("derives service-score storage-slot keys byte-identical to mono-core", () => {
+    // PARITY VECTORS: derived in the Rust SSOT
+    // (service-score slots + node-registry slot_score_service_probe /
+    // slot_probe_authority) for the same fixtures.
+    const opHash = new Uint8Array(32).fill(0x11);
+    expect(slotClusterServiceScore(7)).toBe(
+      "0x0b6128637738a1e9aaf30fbaf95de751d6cdf1a8f35e89a276d358a1dbb684ef",
+    );
+    // SERVES_RPC ⇒ bit index 0; SERVES_ARCHIVE ⇒ bit index 3.
+    expect(serviceMaskToBitIndex(NODE_REGISTRY_CAPABILITIES.SERVES_RPC)).toBe(0);
+    expect(serviceMaskToBitIndex(NODE_REGISTRY_CAPABILITIES.SERVES_ARCHIVE)).toBe(3);
+    expect(serviceMaskToBitIndex(NODE_REGISTRY_CAPABILITIES.SERVES_RPC | NODE_REGISTRY_CAPABILITIES.SERVES_INDEXER)).toBeNull();
+    expect(slotScoreServiceProbe(opHash, 0)).toBe(
+      "0xd494abdafe3ad736722f3cff564a0df11bb512a812d76fa7294c5bd08c811133",
+    );
+    expect(slotScoreServiceProbe(opHash, 3)).toBe(
+      "0x5eab6148dc72387a6e3cacba434201e0260858dcade68777eee37b6c53c049a3",
+    );
+    expect(slotProbeAuthority()).toBe(
+      "0x1d21c9a7dbbe25d4aa94cbc9882f68457a9d1cdf7c713d602dcde82d817e9a5f",
+    );
+    // archive-challenge pass slot derives deterministically + differs per epoch.
+    expect(slotArchiveChallengePass(7, 5)).toBe(slotArchiveChallengePass(7, 5));
+    expect(slotArchiveChallengePass(7, 5)).not.toBe(slotArchiveChallengePass(7, 6));
+  });
+
+  it("decodes a packed score-service-probe word", () => {
+    // (epoch << 8) | status, with epoch=9 status=REACHABLE(1).
+    const word = new Uint8Array(32);
+    word[31] = SERVICE_PROBE_STATUS.REACHABLE;
+    word[30] = 9; // (9 << 8) places 9 in the second-lowest byte.
+    const decoded = decodeScoreServiceProbe(word);
+    expect(decoded.epoch).toBe(9n);
+    expect(decoded.status).toBe(SERVICE_PROBE_STATUS.REACHABLE);
+  });
+});
+
+function wordU32(value: number): Uint8Array {
+  const out = new Uint8Array(32);
+  out[28] = (value >>> 24) & 0xff;
+  out[29] = (value >>> 16) & 0xff;
+  out[30] = (value >>> 8) & 0xff;
+  out[31] = value & 0xff;
+  return out;
+}
+
+function encodeWordU16(value: number): Uint8Array {
+  const out = new Uint8Array(32);
+  out[30] = (value >>> 8) & 0xff;
+  out[31] = value & 0xff;
+  return out;
+}
+
+function encodeWordU64(value: bigint): Uint8Array {
+  const out = new Uint8Array(32);
+  let n = value;
+  for (let i = 31; i >= 24; i--) {
+    out[i] = Number(n & 0xffn);
+    n >>= 8n;
+  }
+  return out;
+}
 
 function hexBytes(hex: string): Uint8Array {
   const body = hex.startsWith("0x") ? hex.slice(2) : hex;

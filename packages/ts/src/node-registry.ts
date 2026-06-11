@@ -101,6 +101,27 @@ export const NODE_REGISTRY_SELECTORS = {
   publishOperatorSealKey: "0x" + selectorHex("publishOperatorSealKey(bytes32,bytes)"),
   /** `getOperatorSealKey(bytes32)` view — returns the operator's published LythiumSeal EK. */
   getOperatorSealKey: "0x" + selectorHex("getOperatorSealKey(bytes32)"),
+  /**
+   * `updateCharter(uint32,bytes,bytes,bytes)` — Component H live charter
+   * amendment (Law §6.8); re-signs a new 30-byte charter for a LIVE cluster
+   * with a delegator-protective cooldown. Consents verify over
+   * `updateCharterMessage` (NOT the formCluster digests).
+   */
+  updateCharter: "0x" + selectorHex("updateCharter(uint32,bytes,bytes,bytes)"),
+  /** `getPendingCharter(uint32)` view — Component H pending-amendment status. */
+  getPendingCharter: "0x" + selectorHex("getPendingCharter(uint32)"),
+  /** `commitArchiveRoot(bytes32,uint16,bytes32,uint64)` — Component B archive serve-challenge commit. */
+  commitArchiveRoot: "0x" + selectorHex("commitArchiveRoot(bytes32,uint16,bytes32,uint64)"),
+  /** `answerArchiveChallenge(bytes32,uint16,uint64,uint64,bytes32,bytes,bytes32[])` — Component B answer. */
+  answerArchiveChallenge:
+    "0x" +
+    selectorHex("answerArchiveChallenge(bytes32,uint16,uint64,uint64,bytes32,bytes,bytes32[])"),
+  /** `setProbeAuthority(address)` — Component C foundation-gated probe-authority rotation. */
+  setProbeAuthority: "0x" + selectorHex("setProbeAuthority(address)"),
+  /** `getProbeAuthority()` view — Component C configured probe-authority address. */
+  getProbeAuthority: "0x" + selectorHex("getProbeAuthority()"),
+  /** `attestServiceProbe(bytes32,uint32,uint8,uint64)` — Component C attested score-eligibility path. */
+  attestServiceProbe: "0x" + selectorHex("attestServiceProbe(bytes32,uint32,uint8,uint64)"),
 } as const;
 
 /** Cluster-member reference width used by genesis and formation rosters. */
@@ -145,6 +166,68 @@ export const NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS = 2000;
 export const NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS = 10000;
 export const NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES = 128;
 export const NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES = 64;
+
+/**
+ * Component H — consensus threshold for a live `updateCharter` amendment:
+ * 7 of the 10 cluster members must consent (the same 7-of-10 quorum that
+ * forms the cluster), and every signer must be CURRENTLY active. Bound
+ * into the `updateCharterMessage` digest. Equal to
+ * `NODE_REGISTRY_FORM_CLUSTER_THRESHOLD`.
+ */
+export const NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD = NODE_REGISTRY_FORM_CLUSTER_THRESHOLD;
+/**
+ * Domain separator for the `updateCharter` consent digest. Distinct from
+ * the formCluster domains so a formation consent can never replay as an
+ * amendment consent (or vice-versa). Note the trailing `\0` byte — it is
+ * part of the hashed preimage. Mirrors mono-core
+ * `cluster_form::UPDATE_CHARTER_DOMAIN`.
+ */
+export const NODE_REGISTRY_UPDATE_CHARTER_MESSAGE_DOMAIN =
+  "PROTOCORE_NODE_REGISTRY_CLUSTER_UPDATE_CHARTER_V1\0" as const;
+/**
+ * Component H — delegator-protective cooldown for a live `updateCharter`
+ * amendment, in epochs. A new charter does NOT apply immediately; it
+ * becomes effective no earlier than `current_epoch + COOLDOWN`. The OLD
+ * terms apply throughout so an ARK delegator can undelegate first. The
+ * production value is 2 epochs (~24h notice); public-testnet builds
+ * (`testnet-fast-epochs`) use 1. This SDK constant mirrors the production
+ * value — read the on-chain `getPendingCharter` `effectiveEpoch` for the
+ * exact landing epoch rather than computing it from this constant.
+ */
+export const NODE_REGISTRY_CHARTER_COOLDOWN_EPOCHS = 2;
+
+/**
+ * Component B — domain tag bound into the archive serve-challenge seed.
+ * Mirrors mono-core `archive_challenge::ARCHIVE_CHALLENGE_DOMAIN`. No
+ * trailing NUL (it is hashed verbatim).
+ */
+export const NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN = "monolythium.archive-challenge.v1" as const;
+/** Component B — domain byte prefixing a merkle leaf hash (`H(0x00 || leaf)`). */
+export const NODE_REGISTRY_MERKLE_LEAF_DOMAIN = 0x00;
+/** Component B — domain byte prefixing a merkle inner node (`H(0x01 || left || right)`). */
+export const NODE_REGISTRY_MERKLE_INNER_DOMAIN = 0x01;
+/** Component B — maximum merkle authentication-path length accepted on-chain. */
+export const NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH = 40;
+
+/**
+ * Storage-slot tag byte for the archive-challenge family (registry
+ * namespace, under `0x1005`). Mirrors mono-core
+ * `archive_challenge::TAG_ARCHIVE_CHALLENGE`.
+ */
+export const NODE_REGISTRY_TAG_ARCHIVE_CHALLENGE = 0x32;
+/**
+ * Storage-slot tag byte for the ServiceScore-engine family (under
+ * `0x1005`, shared with the attested-probe writer). Mirrors
+ * `protocore_service_score::slots::TAG_SERVICE_SCORE` and node-registry
+ * `storage::TAG_SCORE_SERVICE_PROBE`.
+ */
+export const NODE_REGISTRY_TAG_SERVICE_SCORE = 0x24;
+/**
+ * Storage-slot tag byte for the node-registry treasury/keys family (under
+ * `0x1005`), which the probe-authority key slot lives under. Mirrors
+ * node-registry `storage::TAG_TREASURY`.
+ */
+export const NODE_REGISTRY_TAG_TREASURY = 0x1f;
 
 export type PendingChangeKind = "add" | "remove" | "rotate";
 
@@ -273,6 +356,101 @@ export interface ReportServiceProbeCalldataArgs {
   status: number;
   latencyMs: number;
   probeDigest: string | Uint8Array | readonly number[];
+}
+
+/** Args for `updateCharter(uint32,bytes,bytes,bytes)` (Component H). */
+export interface UpdateCharterCalldataArgs {
+  clusterId: bigint | number | string;
+  /** The 30-byte charter wire payload (see `encodeClusterCharter`). */
+  charter: string | Uint8Array | readonly number[];
+  /**
+   * The consenting operators' 1952-byte ML-DSA-65 consensus pubkeys, in
+   * the same order as `signatures`. `7..=10` keys. May be supplied as a
+   * single concatenated buffer or an array of per-signer keys.
+   */
+  signerPubkeys:
+    | string
+    | Uint8Array
+    | readonly number[]
+    | readonly (string | Uint8Array | readonly number[])[];
+  /**
+   * The 3309-byte ML-DSA-65 signatures over `updateCharterMessage`, 1:1
+   * with `signerPubkeys`. May be a concatenated buffer or an array.
+   */
+  signatures:
+    | string
+    | Uint8Array
+    | readonly number[]
+    | readonly (string | Uint8Array | readonly number[])[];
+}
+
+/**
+ * Decoded `getPendingCharter(uint32)` return (Component H). Zeroed /
+ * `present=false` when no amendment is pending.
+ */
+export interface PendingCharterView {
+  /** `true` iff a pending amendment is posted for the cluster. */
+  present: boolean;
+  /** Proposed delegator share of the cluster pot in basis points. */
+  delegatorShareBps: number;
+  /** Epoch at/after which the pending charter takes effect (the cooldown landing). */
+  effectiveEpoch: bigint;
+  /** Count of recorded active signers that consented to the pending charter. */
+  signerCount: number;
+  /**
+   * The proposed per-member operator-pot shares in basis points,
+   * member-declaration order (active 0..7, then standby 7..10). Empty when
+   * `present` is `false`.
+   */
+  memberShareBps: readonly number[];
+}
+
+/** Args for `commitArchiveRoot(bytes32,uint16,bytes32,uint64)` (Component B). */
+export interface CommitArchiveRootCalldataArgs {
+  peerId: string | Uint8Array | readonly number[];
+  shardIndex: number;
+  /** The per-shard merkle root over the archived shard data (32 bytes). */
+  shardRoot: string | Uint8Array | readonly number[];
+  /** The committed leaf count (tree width); must be non-zero. */
+  leafCount: bigint | number | string;
+}
+
+/** Args for `answerArchiveChallenge(bytes32,uint16,uint64,uint64,bytes32,bytes,bytes32[])` (Component B). */
+export interface AnswerArchiveChallengeCalldataArgs {
+  peerId: string | Uint8Array | readonly number[];
+  shardIndex: number;
+  epoch: bigint | number | string;
+  nonce: bigint | number | string;
+  /** The committed round-certificate digest the challenge was seeded from (32 bytes). */
+  roundCertDigest: string | Uint8Array | readonly number[];
+  /** The revealed challenged leaf bytes. */
+  leaf: string | Uint8Array | readonly number[];
+  /** The bottom-up merkle authentication path (each element 32 bytes). */
+  proof: readonly (string | Uint8Array | readonly number[])[];
+}
+
+/** A fully-deterministic archive serve-challenge (mirror of mono-core `ArchiveChallenge`). */
+export interface ArchiveChallenge {
+  /** The 32-byte op-hash of the operator under challenge (`0x` hex). */
+  opHash: string;
+  /** The shard whose committed root the answer must verify against. */
+  shardIndex: number;
+  /** The leaf the operator must reveal + prove, reduced modulo the committed leaf count. */
+  leafIndex: bigint;
+  /** The full 32-byte challenge seed (`0x` hex). */
+  seed: string;
+}
+
+/** Args for `attestServiceProbe(bytes32,uint32,uint8,uint64)` (Component C). */
+export interface AttestServiceProbeCalldataArgs {
+  /** The operator's canonical op-hash (`BLAKE3(consensusPubkey)[..32]`, 32 bytes). */
+  opHash: string | Uint8Array | readonly number[];
+  /** Bitmask of public services to attest (must be a valid public-service mask). */
+  serviceMask: number;
+  /** Concrete probe status (`REACHABLE` / `DEGRADED` / `UNREACHABLE`). */
+  status: number;
+  /** Attestation epoch stamped into the score-domain slot. */
+  epoch: bigint | number | string;
 }
 
 export class NodeRegistryError extends Error {
@@ -852,6 +1030,500 @@ export function encodeFormClusterV2Calldata(args: FormClusterV2CalldataArgs): st
 }
 
 /**
+ * Decode the 30-byte V2 charter wire payload into its terms.
+ *
+ * Inverse of {@link encodeClusterCharter}; applies the same structural
+ * validation as the on-chain `decode_cluster_charter` (length, share sum,
+ * delegator floor band). Used by {@link decodePendingCharter} and any UI
+ * that renders an active charter read from chain.
+ */
+export function decodeClusterCharter(
+  charter: string | Uint8Array | readonly number[],
+): ClusterCharterArgs {
+  const bytes = expectLength(toBytes(charter), NODE_REGISTRY_CLUSTER_CHARTER_BYTES, "charter");
+  const memberShareBps: number[] = [];
+  let sum = 0;
+  for (let i = 0; i < NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT; i += 1) {
+    const bps = (bytes[2 * i] << 8) | bytes[2 * i + 1];
+    memberShareBps.push(bps);
+    sum += bps;
+  }
+  if (sum !== NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS) {
+    throw new NodeRegistryError(
+      `memberShareBps must sum to ${NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS}, got ${sum}`,
+    );
+  }
+  const delegatorShareBps = (bytes[20] << 8) | bytes[21];
+  if (
+    delegatorShareBps < NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS ||
+    delegatorShareBps > NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS
+  ) {
+    throw new NodeRegistryError(
+      `delegatorShareBps must be within [${NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS}, ${NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS}], got ${delegatorShareBps}`,
+    );
+  }
+  let expiresMs = 0n;
+  for (let i = 22; i < 30; i += 1) {
+    expiresMs = (expiresMs << 8n) | BigInt(bytes[i]);
+  }
+  return { memberShareBps, delegatorShareBps, expiresMs };
+}
+
+/**
+ * Build the `updateCharter` consent digest every signer must sign
+ * (Component H). Binds the amendment to the exact `clusterId` and the
+ * full 30-byte charter wire payload under the
+ * `..._CLUSTER_UPDATE_CHARTER_V1\0` domain:
+ *
+ * `BLAKE3(DOMAIN ‖ clusterId_be32 ‖ UPDATE_CHARTER_THRESHOLD_be16 ‖
+ *  charter.len_be32 ‖ charter)`.
+ *
+ * Byte-identical to mono-core's `cluster_form::update_charter_message` —
+ * this is the value Monarch's signing flow hashes. There is no
+ * blind-signing surface: the Rust derivation is the SSOT.
+ */
+export function updateCharterMessage(
+  clusterId: bigint | number | string,
+  charter: string | Uint8Array | readonly number[],
+): Uint8Array {
+  const id = toUint32(clusterId, "clusterId");
+  const charterBytes = expectLength(toBytes(charter), NODE_REGISTRY_CLUSTER_CHARTER_BYTES, "charter");
+  return blake3(
+    concatBytes(
+      new TextEncoder().encode(NODE_REGISTRY_UPDATE_CHARTER_MESSAGE_DOMAIN),
+      u32BeBytes(id),
+      u16BeBytes(NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD),
+      u32BeBytes(charterBytes.length),
+      charterBytes,
+    ),
+  );
+}
+
+export function updateCharterMessageHex(
+  clusterId: bigint | number | string,
+  charter: string | Uint8Array | readonly number[],
+): string {
+  return bytesToHex(updateCharterMessage(clusterId, charter));
+}
+
+/**
+ * Encode `updateCharter(uint32,bytes,bytes,bytes)` calldata (Component H).
+ *
+ * Head: `clusterId` word + three dynamic-`bytes` offset words. Tails (in
+ * order): the 30-byte charter, the concatenated 1952-byte signer pubkeys,
+ * and the concatenated 3309-byte signatures. The signatures must verify
+ * over {@link updateCharterMessage}. `signerPubkeys`/`signatures` accept
+ * either a single concatenated buffer or an array of per-signer values
+ * (`7..=10` entries, equal counts).
+ */
+export function encodeUpdateCharterCalldata(args: UpdateCharterCalldataArgs): string {
+  const id = toUint32(args.clusterId, "clusterId");
+  const charter = expectLength(
+    toBytes(args.charter),
+    NODE_REGISTRY_CLUSTER_CHARTER_BYTES,
+    "charter",
+  );
+  const signerPubkeys = flattenFixedWidth(
+    args.signerPubkeys,
+    NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "signerPubkeys",
+  );
+  const signatures = flattenFixedWidth(
+    args.signatures,
+    NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES,
+    "signatures",
+  );
+  const nPubkeys = signerPubkeys.length / NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES;
+  const nSigs = signatures.length / NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES;
+  if (nPubkeys !== nSigs) {
+    throw new NodeRegistryError(
+      `signerPubkeys (${nPubkeys}) and signatures (${nSigs}) counts must match`,
+    );
+  }
+  if (nPubkeys < NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD || nPubkeys > NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT) {
+    throw new NodeRegistryError(
+      `signer count must be in [${NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD}, ${NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT}], got ${nPubkeys}`,
+    );
+  }
+  const charterPadded = padToWord(charter);
+  const signerPadded = padToWord(signerPubkeys);
+  const sigsPadded = padToWord(signatures);
+  // Head: clusterId word + 3 offset words = 4 words.
+  const charterOffset = 4n * 32n;
+  const signerOffset = charterOffset + 32n + BigInt(charterPadded.length);
+  const sigsOffset = signerOffset + 32n + BigInt(signerPadded.length);
+
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.updateCharter),
+      uint32Word(id),
+      uint64Word(charterOffset, "charterOffset"),
+      uint64Word(signerOffset, "signerPubkeysOffset"),
+      uint64Word(sigsOffset, "signaturesOffset"),
+      uint64Word(BigInt(charter.length), "charterLength"),
+      charterPadded,
+      uint64Word(BigInt(signerPubkeys.length), "signerPubkeysLength"),
+      signerPadded,
+      uint64Word(BigInt(signatures.length), "signaturesLength"),
+      sigsPadded,
+    ),
+  );
+}
+
+/** Encode `getPendingCharter(uint32)` view calldata (Component H). */
+export function encodeGetPendingCharterCalldata(clusterId: bigint | number | string): string {
+  return bytesToHex(
+    concatBytes(hexToBytes(NODE_REGISTRY_SELECTORS.getPendingCharter), uint32Word(toUint32(clusterId, "clusterId"))),
+  );
+}
+
+/**
+ * Decode a `getPendingCharter(uint32)` return tuple (Component H).
+ *
+ * Wire return: head of 5 words `(bool present, uint16 delegatorShareBps,
+ * uint64 effectiveEpoch, uint16 signerCount, uint64 bytesOffset)`, then a
+ * `bytes` tail `(length word + one 32-byte packed-shares word)`. The
+ * packed-shares word holds the 10×u16 BE member shares in its low 20
+ * bytes (offset 12..32) — the same layout the on-chain encoder writes.
+ */
+export function decodePendingCharter(
+  returnData: string | Uint8Array | readonly number[],
+): PendingCharterView {
+  const bytes = toBytes(returnData);
+  if (bytes.length < 5 * 32) {
+    throw new NodeRegistryError("getPendingCharter return shorter than the 5-word head");
+  }
+  const word = (i: number) => bytes.slice(i * 32, (i + 1) * 32);
+  const present = numberFromWord(word(0), "present", 1) === 1;
+  const delegatorShareBps = numberFromWord(word(1), "delegatorShareBps", 0xffff);
+  const effectiveEpoch = u64FromWord(word(2));
+  const signerCount = numberFromWord(word(3), "signerCount", 0xffff);
+  if (!present) {
+    return { present: false, delegatorShareBps: 0, effectiveEpoch, signerCount: 0, memberShareBps: [] };
+  }
+  const bytesOffset = Number(u64FromWord(word(4)));
+  const lenAt = bytesOffset;
+  if (bytes.length < lenAt + 32) {
+    throw new NodeRegistryError("getPendingCharter bytes-length word out of range");
+  }
+  const sharesLen = Number(u64FromWord(bytes.slice(lenAt, lenAt + 32)));
+  const sharesAt = lenAt + 32;
+  if (sharesLen < 32 || bytes.length < sharesAt + 32) {
+    throw new NodeRegistryError("getPendingCharter packed-shares word truncated");
+  }
+  const packed = bytes.slice(sharesAt, sharesAt + 32);
+  const memberShareBps: number[] = [];
+  for (let i = 0; i < NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT; i += 1) {
+    const at = 12 + 2 * i;
+    memberShareBps.push((packed[at] << 8) | packed[at + 1]);
+  }
+  return { present: true, delegatorShareBps, effectiveEpoch, signerCount, memberShareBps };
+}
+
+// --------------------------------------------------------------------
+// Component B — archive serve-challenge.
+// --------------------------------------------------------------------
+
+/**
+ * Encode `commitArchiveRoot(bytes32,uint16,bytes32,uint64)` calldata
+ * (Component B). All four args are fixed-size — a flat 4-word head.
+ */
+export function encodeCommitArchiveRootCalldata(args: CommitArchiveRootCalldataArgs): string {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.commitArchiveRoot),
+      expectLength(toBytes(args.peerId), 32, "peerId"),
+      uint16Word(args.shardIndex),
+      expectLength(toBytes(args.shardRoot), 32, "shardRoot"),
+      uint64Word(args.leafCount, "leafCount"),
+    ),
+  );
+}
+
+/**
+ * Encode `answerArchiveChallenge(bytes32,uint16,uint64,uint64,bytes32,
+ * bytes,bytes32[])` calldata (Component B).
+ *
+ * Head: 7 words — five fixed args then the `bytes leaf` offset and the
+ * `bytes32[] proof` offset. Tails: the leaf bytes, then the proof array
+ * (length word + N × 32-byte sibling words).
+ */
+export function encodeAnswerArchiveChallengeCalldata(
+  args: AnswerArchiveChallengeCalldataArgs,
+): string {
+  const leaf = toBytes(args.leaf);
+  const proof = args.proof.map((p, i) => expectLength(toBytes(p), 32, `proof[${i}]`));
+  if (proof.length > NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH) {
+    throw new NodeRegistryError(
+      `proof length must be <= ${NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH}, got ${proof.length}`,
+    );
+  }
+  const leafPadded = padToWord(leaf);
+  // Head: 7 words (5 fixed + leafOffset + proofOffset).
+  const leafOffset = 7n * 32n;
+  const proofOffset = leafOffset + 32n + BigInt(leafPadded.length);
+  const proofTail = concatBytes(
+    uint64Word(BigInt(proof.length), "proofLength"),
+    ...proof,
+  );
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.answerArchiveChallenge),
+      expectLength(toBytes(args.peerId), 32, "peerId"),
+      uint16Word(args.shardIndex),
+      uint64Word(args.epoch, "epoch"),
+      uint64Word(args.nonce, "nonce"),
+      expectLength(toBytes(args.roundCertDigest), 32, "roundCertDigest"),
+      uint64Word(leafOffset, "leafOffset"),
+      uint64Word(proofOffset, "proofOffset"),
+      uint64Word(BigInt(leaf.length), "leafLength"),
+      leafPadded,
+      proofTail,
+    ),
+  );
+}
+
+/**
+ * Derive the deterministic archive serve-challenge for one
+ * `(roundCertDigest, opHash, shardIndex, epoch, nonce)` against a
+ * committed `leafCount` (Component B). Mirrors mono-core
+ * `archive_challenge::derive_challenge`:
+ *
+ * `seed = BLAKE3(ARCHIVE_CHALLENGE_DOMAIN ‖ roundCertDigest ‖ opHash ‖
+ *  shardIndex_be16 ‖ epoch_be64 ‖ nonce_be64)`; the leaf index is the
+ * seed's first 8 bytes (BE u64) modulo `leafCount`.
+ *
+ * Returns `null` when `leafCount === 0` (nothing committed → nothing to
+ * challenge). Useful for off-chain tooling that mirrors what an operator
+ * is about to be asked.
+ */
+export function deriveArchiveChallenge(
+  roundCertDigest: string | Uint8Array | readonly number[],
+  opHash: string | Uint8Array | readonly number[],
+  shardIndex: number,
+  epoch: bigint | number | string,
+  nonce: bigint | number | string,
+  leafCount: bigint | number | string,
+): ArchiveChallenge | null {
+  const rcDigest = expectLength(toBytes(roundCertDigest), 32, "roundCertDigest");
+  const op = expectLength(toBytes(opHash), 32, "opHash");
+  const shard = expectUint16(shardIndex, "shardIndex");
+  const e = toUint64(epoch, "epoch");
+  const n = toUint64(nonce, "nonce");
+  const count = toUint64(leafCount, "leafCount");
+  if (count === 0n) {
+    return null;
+  }
+  const seed = blake3(
+    concatBytes(
+      new TextEncoder().encode(NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN),
+      rcDigest,
+      op,
+      u16BeBytes(shard),
+      u64BeBytes(e),
+      u64BeBytes(n),
+    ),
+  );
+  let idx = 0n;
+  for (let i = 0; i < 8; i += 1) {
+    idx = (idx << 8n) | BigInt(seed[i]);
+  }
+  return {
+    opHash: bytesToHex(op),
+    shardIndex: shard,
+    leafIndex: idx % count,
+    seed: bytesToHex(seed),
+  };
+}
+
+/**
+ * Hash one merkle leaf with Component B's domain separation:
+ * `BLAKE3(0x00 || leaf)`. Mirrors mono-core `merkle_leaf_hash`.
+ */
+export function archiveMerkleLeafHash(leaf: string | Uint8Array | readonly number[]): Uint8Array {
+  return blake3(concatBytes(Uint8Array.from([NODE_REGISTRY_MERKLE_LEAF_DOMAIN]), toBytes(leaf)));
+}
+
+/**
+ * Hash an inner merkle node with Component B's domain separation:
+ * `BLAKE3(0x01 || left || right)`. Mirrors mono-core `merkle_inner_hash`.
+ */
+export function archiveMerkleInnerHash(
+  left: string | Uint8Array | readonly number[],
+  right: string | Uint8Array | readonly number[],
+): Uint8Array {
+  return blake3(
+    concatBytes(
+      Uint8Array.from([NODE_REGISTRY_MERKLE_INNER_DOMAIN]),
+      expectLength(toBytes(left), 32, "left"),
+      expectLength(toBytes(right), 32, "right"),
+    ),
+  );
+}
+
+// --------------------------------------------------------------------
+// Component C — attested service probe / probe authority.
+// --------------------------------------------------------------------
+
+/**
+ * Encode `setProbeAuthority(address)` calldata (Component C,
+ * foundation-multisig-gated). `address(0)` clears the dedicated authority
+ * (attestation then authorises against the foundation multisig alone).
+ */
+export function encodeSetProbeAuthorityCalldata(
+  probeAuthority: string | Uint8Array | readonly number[],
+): string {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.setProbeAuthority),
+      addressWord(probeAuthority, "probeAuthority"),
+    ),
+  );
+}
+
+/** Encode `getProbeAuthority()` view calldata (Component C). */
+export function encodeGetProbeAuthorityCalldata(): string {
+  return NODE_REGISTRY_SELECTORS.getProbeAuthority;
+}
+
+/**
+ * Decode a `getProbeAuthority()` return word into a `0x`-prefixed 20-byte
+ * address (Component C). The zero address means no dedicated authority is
+ * configured (the foundation multisig is the sole attestor).
+ */
+export function decodeProbeAuthority(
+  returnData: string | Uint8Array | readonly number[],
+): string {
+  const bytes = expectLength(toBytes(returnData), 32, "probeAuthority");
+  return bytesToHex(bytes.slice(12, 32));
+}
+
+/**
+ * Encode `attestServiceProbe(bytes32,uint32,uint8,uint64)` calldata
+ * (Component C, probe-authority/foundation-gated). Writes the
+ * score-domain attested status for every service bit in `serviceMask`,
+ * keyed by `opHash` and stamped with `epoch`. A flat 4-word head.
+ */
+export function encodeAttestServiceProbeCalldata(args: AttestServiceProbeCalldataArgs): string {
+  if (!isValidPublicServiceProbeMask(args.serviceMask)) {
+    throw new NodeRegistryError(
+      `serviceMask 0x${args.serviceMask.toString(16).padStart(8, "0")} is not a valid public-service mask`,
+    );
+  }
+  if (!isConcreteServiceProbeStatus(args.status)) {
+    throw new NodeRegistryError(`status ${args.status} is not a concrete service-probe outcome`);
+  }
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.attestServiceProbe),
+      expectLength(toBytes(args.opHash), 32, "opHash"),
+      uint32Word(args.serviceMask),
+      uint8Word(args.status),
+      uint64Word(args.epoch, "epoch"),
+    ),
+  );
+}
+
+// --------------------------------------------------------------------
+// Storage-slot key derivation (no RPC method exists for service-score
+// reads yet — derive the slot key and SLOAD via eth_getStorageAt /
+// lyth_getStorageAt against the node-registry account 0x1005).
+// --------------------------------------------------------------------
+
+/**
+ * Slot holding the settled per-cluster ServiceScore (Component A), read
+ * each block by the reward path. `keccak256(0x24 || 0x00 ||
+ * clusterId_be32)`. The value is a right-aligned `u64`; `0` ⇒ never
+ * scored. Mirrors `protocore_service_score::slot_cluster_service_score`.
+ */
+export function slotClusterServiceScore(clusterId: bigint | number | string): string {
+  return scoreSlotHex(0x00, u32BeBytes(toUint32(clusterId, "clusterId")));
+}
+
+/**
+ * Slot holding the `(cluster, epoch)` archive-challenge pass flag
+ * (Component B writes; Component A reads). `keccak256(0x24 || 0x01 ||
+ * clusterId_be32 || epoch_be64)`. Mirrors
+ * `protocore_service_score::slot_archive_challenge_pass` /
+ * node-registry `slot_cluster_pass`.
+ */
+export function slotArchiveChallengePass(
+  clusterId: bigint | number | string,
+  epoch: bigint | number | string,
+): string {
+  return scoreSlotHex(
+    0x01,
+    concatBytes(u32BeBytes(toUint32(clusterId, "clusterId")), u64BeBytes(toUint64(epoch, "epoch"))),
+  );
+}
+
+/**
+ * Slot holding the attested probe status for `(opHash, serviceBit)`
+ * (Component C writes; Component A reads). `keccak256(0x24 || 0x02 ||
+ * opHash || serviceBit)`. `serviceBit` is the BIT INDEX (`SERVES_RPC`=0,
+ * `SERVES_INDEXER`=1, `SERVES_ARCHIVE`=3, …) — NOT the capability mask
+ * value. The stored word packs `(epoch << 8) | status` (see
+ * {@link decodeScoreServiceProbe}). Mirrors
+ * `protocore_service_score::slot_service_probe_status` /
+ * node-registry `slot_score_service_probe`.
+ */
+export function slotScoreServiceProbe(
+  opHash: string | Uint8Array | readonly number[],
+  serviceBit: number,
+): string {
+  if (!Number.isInteger(serviceBit) || serviceBit < 0 || serviceBit > 0xff) {
+    throw new NodeRegistryError("serviceBit must be a u8 bit index");
+  }
+  return scoreSlotHex(
+    0x02,
+    concatBytes(expectLength(toBytes(opHash), 32, "opHash"), Uint8Array.from([serviceBit])),
+  );
+}
+
+/** The single bit index (`0..=15`) of a single-flag capability mask, or `null`. */
+export function serviceMaskToBitIndex(mask: number): number | null {
+  if (!Number.isInteger(mask) || mask <= 0 || (mask & (mask - 1)) !== 0) {
+    return null;
+  }
+  let bit = 0;
+  let m = mask >>> 0;
+  while ((m & 1) === 0) {
+    m >>>= 1;
+    bit += 1;
+  }
+  return bit;
+}
+
+/**
+ * Decode a `slotScoreServiceProbe` storage word — the packed
+ * `(epoch << 8) | status` value. Returns the attestation epoch and the
+ * status byte. A zero word means no attestation on file.
+ */
+export function decodeScoreServiceProbe(
+  word: string | Uint8Array | readonly number[],
+): { epoch: bigint; status: number } {
+  const bytes = expectLength(toBytes(word), 32, "scoreServiceProbeWord");
+  const status = bytes[31];
+  let packed = 0n;
+  for (const b of bytes) {
+    packed = (packed << 8n) | BigInt(b);
+  }
+  return { epoch: packed >> 8n, status };
+}
+
+/**
+ * Slot holding the rotatable probe-authority address (Component C).
+ * `keccak256(TAG_TREASURY=0x1F || 32 zero bytes || 0x0A)`. Mirrors
+ * node-registry `storage::slot_probe_authority`.
+ */
+export function slotProbeAuthority(): string {
+  const buf = new Uint8Array(1 + 32 + 1);
+  buf[0] = NODE_REGISTRY_TAG_TREASURY;
+  buf[33] = 0x0a;
+  return bytesToHex(keccak_256(buf));
+}
+
+/**
  * Decode CJ-1 `getClusterJoinRequest(uint32,bytes32)` return data.
  *
  * Planned flat tuple:
@@ -1211,6 +1883,62 @@ function u16BeBytes(value: number): Uint8Array {
     throw new NodeRegistryError("uint16 value out of range");
   }
   return Uint8Array.from([(value >>> 8) & 0xff, value & 0xff]);
+}
+
+function expectUint16(value: number, name: string): number {
+  if (!Number.isInteger(value) || value < 0 || value > 0xffff) {
+    throw new NodeRegistryError(`${name} must be a uint16`);
+  }
+  return value;
+}
+
+function uint16Word(value: number): Uint8Array {
+  const out = new Uint8Array(32);
+  out.set(u16BeBytes(value), 30);
+  return out;
+}
+
+function addressWord(value: string | Uint8Array | readonly number[], name: string): Uint8Array {
+  const addr = expectLength(toBytes(value), 20, name);
+  const out = new Uint8Array(32);
+  out.set(addr, 12);
+  return out;
+}
+
+/**
+ * Flatten a fixed-width-element argument that may be supplied either as a
+ * single concatenated buffer or an array of per-element values. Validates
+ * that the total length is a non-zero multiple of `width`.
+ */
+function flattenFixedWidth(
+  value:
+    | string
+    | Uint8Array
+    | readonly number[]
+    | readonly (string | Uint8Array | readonly number[])[],
+  width: number,
+  name: string,
+): Uint8Array {
+  let flat: Uint8Array;
+  if (Array.isArray(value) && value.length > 0 && typeof value[0] !== "number") {
+    const parts = (value as readonly (string | Uint8Array | readonly number[])[]).map((v, i) =>
+      expectLength(toBytes(v), width, `${name}[${i}]`),
+    );
+    flat = concatBytes(...parts);
+  } else {
+    flat = toBytes(value as string | Uint8Array | readonly number[]);
+  }
+  if (flat.length === 0 || flat.length % width !== 0) {
+    throw new NodeRegistryError(`${name} must be a non-empty multiple of ${width} bytes, got ${flat.length}`);
+  }
+  return flat;
+}
+
+/** Build a ServiceScore-family slot key: `keccak256(0x24 || kind || tail)`. */
+function scoreSlotHex(kind: number, tail: Uint8Array): string {
+  return bytesToHex(
+    keccak_256(concatBytes(Uint8Array.from([NODE_REGISTRY_TAG_SERVICE_SCORE, kind]), tail)),
+  );
 }
 
 function compareBytes(a: Uint8Array, b: Uint8Array): number {

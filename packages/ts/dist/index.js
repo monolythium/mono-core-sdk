@@ -461,7 +461,26 @@ var NODE_REGISTRY_SELECTORS = {
   /** `publishOperatorSealKey(bytes32,bytes)` — owner-callable LythiumSeal EK publication. */
   publishOperatorSealKey: "0x" + selectorHex("publishOperatorSealKey(bytes32,bytes)"),
   /** `getOperatorSealKey(bytes32)` view — returns the operator's published LythiumSeal EK. */
-  getOperatorSealKey: "0x" + selectorHex("getOperatorSealKey(bytes32)")
+  getOperatorSealKey: "0x" + selectorHex("getOperatorSealKey(bytes32)"),
+  /**
+   * `updateCharter(uint32,bytes,bytes,bytes)` — Component H live charter
+   * amendment (Law §6.8); re-signs a new 30-byte charter for a LIVE cluster
+   * with a delegator-protective cooldown. Consents verify over
+   * `updateCharterMessage` (NOT the formCluster digests).
+   */
+  updateCharter: "0x" + selectorHex("updateCharter(uint32,bytes,bytes,bytes)"),
+  /** `getPendingCharter(uint32)` view — Component H pending-amendment status. */
+  getPendingCharter: "0x" + selectorHex("getPendingCharter(uint32)"),
+  /** `commitArchiveRoot(bytes32,uint16,bytes32,uint64)` — Component B archive serve-challenge commit. */
+  commitArchiveRoot: "0x" + selectorHex("commitArchiveRoot(bytes32,uint16,bytes32,uint64)"),
+  /** `answerArchiveChallenge(bytes32,uint16,uint64,uint64,bytes32,bytes,bytes32[])` — Component B answer. */
+  answerArchiveChallenge: "0x" + selectorHex("answerArchiveChallenge(bytes32,uint16,uint64,uint64,bytes32,bytes,bytes32[])"),
+  /** `setProbeAuthority(address)` — Component C foundation-gated probe-authority rotation. */
+  setProbeAuthority: "0x" + selectorHex("setProbeAuthority(address)"),
+  /** `getProbeAuthority()` view — Component C configured probe-authority address. */
+  getProbeAuthority: "0x" + selectorHex("getProbeAuthority()"),
+  /** `attestServiceProbe(bytes32,uint32,uint8,uint64)` — Component C attested score-eligibility path. */
+  attestServiceProbe: "0x" + selectorHex("attestServiceProbe(bytes32,uint32,uint8,uint64)")
 };
 var NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES = 48;
 var NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES = NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES;
@@ -486,6 +505,16 @@ var NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS = 2e3;
 var NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS = 1e4;
 var NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES = 128;
 var NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES = 64;
+var NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD = NODE_REGISTRY_FORM_CLUSTER_THRESHOLD;
+var NODE_REGISTRY_UPDATE_CHARTER_MESSAGE_DOMAIN = "PROTOCORE_NODE_REGISTRY_CLUSTER_UPDATE_CHARTER_V1\0";
+var NODE_REGISTRY_CHARTER_COOLDOWN_EPOCHS = 2;
+var NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN = "monolythium.archive-challenge.v1";
+var NODE_REGISTRY_MERKLE_LEAF_DOMAIN = 0;
+var NODE_REGISTRY_MERKLE_INNER_DOMAIN = 1;
+var NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH = 40;
+var NODE_REGISTRY_TAG_ARCHIVE_CHALLENGE = 50;
+var NODE_REGISTRY_TAG_SERVICE_SCORE = 36;
+var NODE_REGISTRY_TAG_TREASURY = 31;
 var PENDING_CHANGE_KIND_CODES = {
   add: 1,
   remove: 2,
@@ -963,6 +992,299 @@ function encodeFormClusterV2Calldata(args) {
     )
   );
 }
+function decodeClusterCharter(charter) {
+  const bytes = expectLength2(toBytes(charter), NODE_REGISTRY_CLUSTER_CHARTER_BYTES, "charter");
+  const memberShareBps = [];
+  let sum = 0;
+  for (let i = 0; i < NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT; i += 1) {
+    const bps = bytes[2 * i] << 8 | bytes[2 * i + 1];
+    memberShareBps.push(bps);
+    sum += bps;
+  }
+  if (sum !== NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS) {
+    throw new NodeRegistryError(
+      `memberShareBps must sum to ${NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS}, got ${sum}`
+    );
+  }
+  const delegatorShareBps = bytes[20] << 8 | bytes[21];
+  if (delegatorShareBps < NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS || delegatorShareBps > NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS) {
+    throw new NodeRegistryError(
+      `delegatorShareBps must be within [${NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS}, ${NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS}], got ${delegatorShareBps}`
+    );
+  }
+  let expiresMs = 0n;
+  for (let i = 22; i < 30; i += 1) {
+    expiresMs = expiresMs << 8n | BigInt(bytes[i]);
+  }
+  return { memberShareBps, delegatorShareBps, expiresMs };
+}
+function updateCharterMessage(clusterId, charter) {
+  const id = toUint32(clusterId, "clusterId");
+  const charterBytes = expectLength2(toBytes(charter), NODE_REGISTRY_CLUSTER_CHARTER_BYTES, "charter");
+  return blake3(
+    concatBytes(
+      new TextEncoder().encode(NODE_REGISTRY_UPDATE_CHARTER_MESSAGE_DOMAIN),
+      u32BeBytes(id),
+      u16BeBytes(NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD),
+      u32BeBytes(charterBytes.length),
+      charterBytes
+    )
+  );
+}
+function updateCharterMessageHex(clusterId, charter) {
+  return bytesToHex(updateCharterMessage(clusterId, charter));
+}
+function encodeUpdateCharterCalldata(args) {
+  const id = toUint32(args.clusterId, "clusterId");
+  const charter = expectLength2(
+    toBytes(args.charter),
+    NODE_REGISTRY_CLUSTER_CHARTER_BYTES,
+    "charter"
+  );
+  const signerPubkeys = flattenFixedWidth(
+    args.signerPubkeys,
+    NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "signerPubkeys"
+  );
+  const signatures = flattenFixedWidth(
+    args.signatures,
+    NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES,
+    "signatures"
+  );
+  const nPubkeys = signerPubkeys.length / NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES;
+  const nSigs = signatures.length / NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES;
+  if (nPubkeys !== nSigs) {
+    throw new NodeRegistryError(
+      `signerPubkeys (${nPubkeys}) and signatures (${nSigs}) counts must match`
+    );
+  }
+  if (nPubkeys < NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD || nPubkeys > NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT) {
+    throw new NodeRegistryError(
+      `signer count must be in [${NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD}, ${NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT}], got ${nPubkeys}`
+    );
+  }
+  const charterPadded = padToWord(charter);
+  const signerPadded = padToWord(signerPubkeys);
+  const sigsPadded = padToWord(signatures);
+  const charterOffset = 4n * 32n;
+  const signerOffset = charterOffset + 32n + BigInt(charterPadded.length);
+  const sigsOffset = signerOffset + 32n + BigInt(signerPadded.length);
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.updateCharter),
+      uint32Word(id),
+      uint64Word(charterOffset, "charterOffset"),
+      uint64Word(signerOffset, "signerPubkeysOffset"),
+      uint64Word(sigsOffset, "signaturesOffset"),
+      uint64Word(BigInt(charter.length), "charterLength"),
+      charterPadded,
+      uint64Word(BigInt(signerPubkeys.length), "signerPubkeysLength"),
+      signerPadded,
+      uint64Word(BigInt(signatures.length), "signaturesLength"),
+      sigsPadded
+    )
+  );
+}
+function encodeGetPendingCharterCalldata(clusterId) {
+  return bytesToHex(
+    concatBytes(hexToBytes(NODE_REGISTRY_SELECTORS.getPendingCharter), uint32Word(toUint32(clusterId, "clusterId")))
+  );
+}
+function decodePendingCharter(returnData) {
+  const bytes = toBytes(returnData);
+  if (bytes.length < 5 * 32) {
+    throw new NodeRegistryError("getPendingCharter return shorter than the 5-word head");
+  }
+  const word = (i) => bytes.slice(i * 32, (i + 1) * 32);
+  const present = numberFromWord(word(0), "present", 1) === 1;
+  const delegatorShareBps = numberFromWord(word(1), "delegatorShareBps", 65535);
+  const effectiveEpoch = u64FromWord(word(2));
+  const signerCount = numberFromWord(word(3), "signerCount", 65535);
+  if (!present) {
+    return { present: false, delegatorShareBps: 0, effectiveEpoch, signerCount: 0, memberShareBps: [] };
+  }
+  const bytesOffset = Number(u64FromWord(word(4)));
+  const lenAt = bytesOffset;
+  if (bytes.length < lenAt + 32) {
+    throw new NodeRegistryError("getPendingCharter bytes-length word out of range");
+  }
+  const sharesLen = Number(u64FromWord(bytes.slice(lenAt, lenAt + 32)));
+  const sharesAt = lenAt + 32;
+  if (sharesLen < 32 || bytes.length < sharesAt + 32) {
+    throw new NodeRegistryError("getPendingCharter packed-shares word truncated");
+  }
+  const packed = bytes.slice(sharesAt, sharesAt + 32);
+  const memberShareBps = [];
+  for (let i = 0; i < NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT; i += 1) {
+    const at = 12 + 2 * i;
+    memberShareBps.push(packed[at] << 8 | packed[at + 1]);
+  }
+  return { present: true, delegatorShareBps, effectiveEpoch, signerCount, memberShareBps };
+}
+function encodeCommitArchiveRootCalldata(args) {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.commitArchiveRoot),
+      expectLength2(toBytes(args.peerId), 32, "peerId"),
+      uint16Word(args.shardIndex),
+      expectLength2(toBytes(args.shardRoot), 32, "shardRoot"),
+      uint64Word(args.leafCount, "leafCount")
+    )
+  );
+}
+function encodeAnswerArchiveChallengeCalldata(args) {
+  const leaf = toBytes(args.leaf);
+  const proof = args.proof.map((p, i) => expectLength2(toBytes(p), 32, `proof[${i}]`));
+  if (proof.length > NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH) {
+    throw new NodeRegistryError(
+      `proof length must be <= ${NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH}, got ${proof.length}`
+    );
+  }
+  const leafPadded = padToWord(leaf);
+  const leafOffset = 7n * 32n;
+  const proofOffset = leafOffset + 32n + BigInt(leafPadded.length);
+  const proofTail = concatBytes(
+    uint64Word(BigInt(proof.length), "proofLength"),
+    ...proof
+  );
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.answerArchiveChallenge),
+      expectLength2(toBytes(args.peerId), 32, "peerId"),
+      uint16Word(args.shardIndex),
+      uint64Word(args.epoch, "epoch"),
+      uint64Word(args.nonce, "nonce"),
+      expectLength2(toBytes(args.roundCertDigest), 32, "roundCertDigest"),
+      uint64Word(leafOffset, "leafOffset"),
+      uint64Word(proofOffset, "proofOffset"),
+      uint64Word(BigInt(leaf.length), "leafLength"),
+      leafPadded,
+      proofTail
+    )
+  );
+}
+function deriveArchiveChallenge(roundCertDigest, opHash, shardIndex, epoch, nonce, leafCount) {
+  const rcDigest = expectLength2(toBytes(roundCertDigest), 32, "roundCertDigest");
+  const op = expectLength2(toBytes(opHash), 32, "opHash");
+  const shard = expectUint16(shardIndex, "shardIndex");
+  const e = toUint64(epoch, "epoch");
+  const n = toUint64(nonce, "nonce");
+  const count = toUint64(leafCount, "leafCount");
+  if (count === 0n) {
+    return null;
+  }
+  const seed = blake3(
+    concatBytes(
+      new TextEncoder().encode(NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN),
+      rcDigest,
+      op,
+      u16BeBytes(shard),
+      u64BeBytes(e),
+      u64BeBytes(n)
+    )
+  );
+  let idx = 0n;
+  for (let i = 0; i < 8; i += 1) {
+    idx = idx << 8n | BigInt(seed[i]);
+  }
+  return {
+    opHash: bytesToHex(op),
+    shardIndex: shard,
+    leafIndex: idx % count,
+    seed: bytesToHex(seed)
+  };
+}
+function archiveMerkleLeafHash(leaf) {
+  return blake3(concatBytes(Uint8Array.from([NODE_REGISTRY_MERKLE_LEAF_DOMAIN]), toBytes(leaf)));
+}
+function archiveMerkleInnerHash(left, right) {
+  return blake3(
+    concatBytes(
+      Uint8Array.from([NODE_REGISTRY_MERKLE_INNER_DOMAIN]),
+      expectLength2(toBytes(left), 32, "left"),
+      expectLength2(toBytes(right), 32, "right")
+    )
+  );
+}
+function encodeSetProbeAuthorityCalldata(probeAuthority) {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.setProbeAuthority),
+      addressWord(probeAuthority, "probeAuthority")
+    )
+  );
+}
+function encodeGetProbeAuthorityCalldata() {
+  return NODE_REGISTRY_SELECTORS.getProbeAuthority;
+}
+function decodeProbeAuthority(returnData) {
+  const bytes = expectLength2(toBytes(returnData), 32, "probeAuthority");
+  return bytesToHex(bytes.slice(12, 32));
+}
+function encodeAttestServiceProbeCalldata(args) {
+  if (!isValidPublicServiceProbeMask(args.serviceMask)) {
+    throw new NodeRegistryError(
+      `serviceMask 0x${args.serviceMask.toString(16).padStart(8, "0")} is not a valid public-service mask`
+    );
+  }
+  if (!isConcreteServiceProbeStatus(args.status)) {
+    throw new NodeRegistryError(`status ${args.status} is not a concrete service-probe outcome`);
+  }
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.attestServiceProbe),
+      expectLength2(toBytes(args.opHash), 32, "opHash"),
+      uint32Word(args.serviceMask),
+      uint8Word(args.status),
+      uint64Word(args.epoch, "epoch")
+    )
+  );
+}
+function slotClusterServiceScore(clusterId) {
+  return scoreSlotHex(0, u32BeBytes(toUint32(clusterId, "clusterId")));
+}
+function slotArchiveChallengePass(clusterId, epoch) {
+  return scoreSlotHex(
+    1,
+    concatBytes(u32BeBytes(toUint32(clusterId, "clusterId")), u64BeBytes(toUint64(epoch, "epoch")))
+  );
+}
+function slotScoreServiceProbe(opHash, serviceBit) {
+  if (!Number.isInteger(serviceBit) || serviceBit < 0 || serviceBit > 255) {
+    throw new NodeRegistryError("serviceBit must be a u8 bit index");
+  }
+  return scoreSlotHex(
+    2,
+    concatBytes(expectLength2(toBytes(opHash), 32, "opHash"), Uint8Array.from([serviceBit]))
+  );
+}
+function serviceMaskToBitIndex(mask) {
+  if (!Number.isInteger(mask) || mask <= 0 || (mask & mask - 1) !== 0) {
+    return null;
+  }
+  let bit = 0;
+  let m = mask >>> 0;
+  while ((m & 1) === 0) {
+    m >>>= 1;
+    bit += 1;
+  }
+  return bit;
+}
+function decodeScoreServiceProbe(word) {
+  const bytes = expectLength2(toBytes(word), 32, "scoreServiceProbeWord");
+  const status = bytes[31];
+  let packed = 0n;
+  for (const b of bytes) {
+    packed = packed << 8n | BigInt(b);
+  }
+  return { epoch: packed >> 8n, status };
+}
+function slotProbeAuthority() {
+  const buf = new Uint8Array(1 + 32 + 1);
+  buf[0] = NODE_REGISTRY_TAG_TREASURY;
+  buf[33] = 10;
+  return bytesToHex(keccak_256(buf));
+}
 function decodeClusterJoinRequest(returnData) {
   const bytes = expectLength2(toBytes(returnData), 8 * 32, "clusterJoinRequest");
   const word = (i) => bytes.slice(i * 32, (i + 1) * 32);
@@ -1140,6 +1462,43 @@ function u16BeBytes(value) {
     throw new NodeRegistryError("uint16 value out of range");
   }
   return Uint8Array.from([value >>> 8 & 255, value & 255]);
+}
+function expectUint16(value, name) {
+  if (!Number.isInteger(value) || value < 0 || value > 65535) {
+    throw new NodeRegistryError(`${name} must be a uint16`);
+  }
+  return value;
+}
+function uint16Word(value) {
+  const out = new Uint8Array(32);
+  out.set(u16BeBytes(value), 30);
+  return out;
+}
+function addressWord(value, name) {
+  const addr = expectLength2(toBytes(value), 20, name);
+  const out = new Uint8Array(32);
+  out.set(addr, 12);
+  return out;
+}
+function flattenFixedWidth(value, width, name) {
+  let flat;
+  if (Array.isArray(value) && value.length > 0 && typeof value[0] !== "number") {
+    const parts = value.map(
+      (v, i) => expectLength2(toBytes(v), width, `${name}[${i}]`)
+    );
+    flat = concatBytes(...parts);
+  } else {
+    flat = toBytes(value);
+  }
+  if (flat.length === 0 || flat.length % width !== 0) {
+    throw new NodeRegistryError(`${name} must be a non-empty multiple of ${width} bytes, got ${flat.length}`);
+  }
+  return flat;
+}
+function scoreSlotHex(kind, tail) {
+  return bytesToHex(
+    keccak_256(concatBytes(Uint8Array.from([NODE_REGISTRY_TAG_SERVICE_SCORE, kind]), tail))
+  );
 }
 function compareBytes(a, b) {
   const len = Math.min(a.length, b.length);
@@ -3668,7 +4027,7 @@ function encodeStringAddressCall(selector, name, address) {
       hexToBytes4(selector),
       // Two head words (string offset, address) → string tail starts at 0x40.
       uint256Word(0x40n),
-      addressWord(address),
+      addressWord2(address),
       uint256Word(BigInt(nameBytes.length)),
       padTo32(nameBytes)
     )
@@ -3692,7 +4051,7 @@ function selectorHex2(signature) {
   const sel = keccak_256(new TextEncoder().encode(signature)).slice(0, 4);
   return `0x${[...sel].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function addressWord(value) {
+function addressWord2(value) {
   const out = new Uint8Array(32);
   if (value == null) return out;
   const bytes = toBytes2(value);
@@ -6236,7 +6595,7 @@ function encodeSetBridgeRouteFinalityCalldata(bridgeId, finalityBlocks) {
 function bridgeSelector(signature) {
   return keccak_256(new TextEncoder().encode(signature)).slice(0, 4);
 }
-function addressWord2(value, name) {
+function addressWord3(value, name) {
   const addr = expectLength3(toBytes3(value), 20, name);
   const out = new Uint8Array(32);
   out.set(addr, 12);
@@ -6255,7 +6614,7 @@ function encodeBridgeClaimCalldata(bridgeId, depositId, recipient) {
       bridgeSelector("claim(bytes32,bytes32,address)"),
       expectLength3(toBytes3(bridgeId), 32, "bridgeId"),
       expectLength3(toBytes3(depositId), 32, "depositId"),
-      addressWord2(recipient, "recipient")
+      addressWord3(recipient, "recipient")
     )
   );
 }
@@ -9249,8 +9608,8 @@ function encodeTokenFactoryTransferFromCalldata(tokenId, from, to, amount) {
     concatBytes2(
       hexToBytes2(TOKEN_FACTORY_SELECTORS.transferFrom, "transferFrom selector"),
       bytes32(tokenId, "tokenId"),
-      addressWord3(from, "from"),
-      addressWord3(to, "to"),
+      addressWord4(from, "from"),
+      addressWord4(to, "to"),
       uint256Word2(parseUint(amount, "amount"), "amount")
     )
   );
@@ -9272,8 +9631,8 @@ function encodeTokenFactoryAllowanceCalldata(tokenId, owner, spender) {
     concatBytes2(
       hexToBytes2(TOKEN_FACTORY_SELECTORS.allowance, "allowance selector"),
       bytes32(tokenId, "tokenId"),
-      addressWord3(owner, "owner"),
-      addressWord3(spender, "spender")
+      addressWord4(owner, "owner"),
+      addressWord4(spender, "spender")
     )
   );
 }
@@ -9340,7 +9699,7 @@ function encodeBytes32Address(selector, tokenId, address) {
     concatBytes2(
       hexToBytes2(selector, "selector"),
       bytes32(tokenId, "tokenId"),
-      addressWord3(address, "address")
+      addressWord4(address, "address")
     )
   );
 }
@@ -9349,7 +9708,7 @@ function encodeBytes32AddressUint(selector, tokenId, address, amount) {
     concatBytes2(
       hexToBytes2(selector, "selector"),
       bytes32(tokenId, "tokenId"),
-      addressWord3(address, "address"),
+      addressWord4(address, "address"),
       uint256Word2(parseUint(amount, "amount"), "amount")
     )
   );
@@ -9375,7 +9734,7 @@ function padTo323(bytes) {
   out.set(bytes);
   return out;
 }
-function addressWord3(value, label) {
+function addressWord4(value, label) {
   const out = new Uint8Array(32);
   out.set(addressBytes(value, label), 12);
   return out;
@@ -9890,7 +10249,7 @@ function encodeDelegateCalldata(cluster, weightBps) {
     concatBytes8(
       hexToBytes8(DELEGATION_SELECTORS.delegate),
       uint32Word2(cluster, "cluster"),
-      uint16Word(weightBps, "weightBps")
+      uint16Word2(weightBps, "weightBps")
     )
   );
 }
@@ -9908,7 +10267,7 @@ function encodeRedelegateCalldata(fromCluster, toCluster, weightBps) {
       hexToBytes8(DELEGATION_SELECTORS.redelegate),
       uint32Word2(fromCluster, "fromCluster"),
       uint32Word2(toCluster, "toCluster"),
-      uint16Word(weightBps, "weightBps")
+      uint16Word2(weightBps, "weightBps")
     )
   );
 }
@@ -9938,7 +10297,7 @@ function uint32Word2(value, name) {
   }
   return out;
 }
-function uint16Word(value, name) {
+function uint16Word2(value, name) {
   const n = toBigint3(value, name);
   if (n < 0n || n > 0xffffn) {
     throw new DelegationPrecompileError(`${name} must fit uint16`);
@@ -10349,9 +10708,9 @@ function decodeHasPubkeyReturn(data) {
   throw new PubkeyRegistryError("hasPubkey bool must be 0 or 1");
 }
 function encodeSingleAddressCall2(selector, address) {
-  return bytesToHex11(concatBytes10(hexToBytes10(selector), addressWord4(toAddressBytes(address))));
+  return bytesToHex11(concatBytes10(hexToBytes10(selector), addressWord5(toAddressBytes(address))));
 }
-function addressWord4(address) {
+function addressWord5(address) {
   return concatBytes10(new Uint8Array(12), address);
 }
 function toAddressBytes(value) {
@@ -10560,7 +10919,7 @@ function encodePlaceMarketOrderCalldata(args) {
       normalized.quoteTokenId,
       uint8Word2(normalized.side),
       uint256Word5(normalized.quantity, "quantity"),
-      uint16Word2(normalized.maxSlippageBps, "maxSlippageBps")
+      uint16Word3(normalized.maxSlippageBps, "maxSlippageBps")
     )
   );
 }
@@ -10573,7 +10932,7 @@ function encodePlaceMarketOrderExCalldata(args) {
       normalized.quoteTokenId,
       uint8Word2(normalized.side),
       uint256Word5(normalized.quantity, "quantity"),
-      uint16Word2(normalized.maxSlippageBps, "maxSlippageBps"),
+      uint16Word3(normalized.maxSlippageBps, "maxSlippageBps"),
       uint8Word2(normalized.mode)
     )
   );
@@ -10880,7 +11239,7 @@ function encodePlaceLimitOrderViaCalldata(args) {
   return bytesToHex2(
     concatBytes2(
       hexToBytes2(OPERATOR_ROUTER_SELECTORS.placeLimitOrderVia, "placeLimitOrderVia selector"),
-      addressWord5(operator.bytes),
+      addressWord6(operator.bytes),
       bytes32FromHex(args.base, "base"),
       bytes32FromHex(args.quote, "quote"),
       uint8Word2(side),
@@ -11188,7 +11547,7 @@ function uint64Word3(value, name) {
   }
   return out;
 }
-function uint16Word2(value, name) {
+function uint16Word3(value, name) {
   if (value < 0n || value > 0xffffn) {
     throw new MarketActionError(`${name} must fit uint16`);
   }
@@ -11209,7 +11568,7 @@ function uint256Word5(value, name) {
   }
   return out;
 }
-function addressWord5(addr) {
+function addressWord6(addr) {
   if (addr.length !== 20) {
     throw new MarketActionError("address must be 20 bytes");
   }
@@ -11751,6 +12110,6 @@ var MONOLYTHIUM_NETWORKS = {
 // src/index.ts
 var version = "0.4.8";
 
-export { ADDRESS_HRP, ADDRESS_KIND_HRPS, API_STREAM_TOPICS, AddressError, AgentActionError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, CLOB_MARKET_ID_DOMAIN_TAG, CLOB_SELECTORS, CLUSTER_FORMED_EVENT_SIG, DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT, DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DIVERSITY_SCORE_MAX, DelegationPrecompileError, EMPTY_ROOT, EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER, FEED_ID_DOMAIN_TAG, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_MULTISIG_MEMBERS, MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES, MAX_NATIVE_RECEIPT_EVENTS, MIN_EXECUTION_UNIT_PRICE_LYTHOSHI, MIN_MULTISIG_MEMBERS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MULTISIG_ADDRESS_DERIVATION_DOMAIN, MULTISIG_ADDRESS_DERIVATION_DOMAIN2 as MULTISIG_WITNESS_ADDRESS_DERIVATION_DOMAIN, MULTISIG_WITNESS_DOMAIN, MarketActionError, MrvValidationError, MultisigError, NAME_BASE_MULTIPLIER, NAME_FALLBACK_FEE_UNIT_LYTHOSHI, NAME_LABEL_MAX_LEN, NAME_LABEL_MIN_LEN, NAME_MAX_LEN, NAME_REGISTRY_SELECTORS, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE, NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY, NATIVE_CALL_FORWARDER_RESPONSE_OFFSET, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NATIVE_MARKET_MODULE_ADDRESS, NATIVE_MARKET_MODULE_ADDRESS_BYTES, NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, NODE_REGISTRY_BLS_PUBKEY_BYTES, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_CLUSTER_CHARTER_BYTES, NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS, NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS, NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES, NODE_REGISTRY_CONSENSUS_POP_BYTES, NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES, NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES, NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES, NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS, NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS, NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES, NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT, NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT, NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN, NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN_V2, NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT, NODE_REGISTRY_FORM_CLUSTER_THRESHOLD, NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES, NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES, NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES, NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES, NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_FINALITY_EVIDENCE_SCHEMA, NO_EVM_FINALITY_EVIDENCE_SOURCE, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NameRegistryError, NoEvmReceiptProofError, NodeRegistryError, OPERATOR_ROUTER_ADDRESS, OPERATOR_ROUTER_EVENT_SIGS, OPERATOR_ROUTER_SELECTORS, OPERATOR_ROUTER_SIGS, ORACLE_EVENT_SIGS, OracleEventError, PENDING_CHANGE_KIND_CODES, PRECOMPILE_ADDRESSES, PROTOCOL_MAX_OPERATOR_FEE_BPS, PROVER_MARKET_ADDRESS, PROVER_MARKET_BID_DOMAIN, PROVER_MARKET_EVENT_SIGS, PROVER_MARKET_REQUEST_DOMAIN, PROVER_MARKET_SELECTORS, PROVER_MARKET_SUBMIT_DOMAIN, PROVER_SLASH_REASON_BAD_PROOF, PROVER_SLASH_REASON_NON_DELIVERY, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, ProverMarketError, PubkeyRegistryError, REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT, RESERVED_ADDRESS_HRPS, RpcClient, SERVES_GPU_PROVE, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, TOKEN_FACTORY_CREATE_DEPOSIT_LYTHOSHI, TOKEN_FACTORY_FLAGS, TOKEN_FACTORY_KNOWN_FLAG_MASK, TOKEN_FACTORY_MAX_CREATOR_FEE_BPS, TOKEN_FACTORY_MAX_DECIMALS, TOKEN_FACTORY_NAME_MAX_BYTES, TOKEN_FACTORY_SELECTORS, TOKEN_FACTORY_SIGS, TOKEN_FACTORY_SYMBOL_MAX_BYTES, TOKEN_FACTORY_TOKEN_ID_DOMAIN_TAG, TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT, TX_EXTENSION_KIND_MULTISIG, TX_EXTENSION_MULTISIG_V1, TokenFactoryError, V1_BRIDGE_ALLOWED_FEE_TOKEN, V1_BRIDGE_ALLOWED_PROTOCOL, VRF_DOMAIN_TAG_MAX_BYTES, VRF_HEIGHT_NOT_FINALIZED_REVERT, VRF_OUTPUT_BYTES, VrfCallError, addressBytesToHex, addressToBech32, addressToTypedBech32, allowRootFor, apiEndpointFromRpcEndpoint, assembleMultisigSigned, assembleMultisigWitness, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, assertNativeMarketOrderBookStreamPayload, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bidSighash, bridgeAddressHex, bridgeDrainRemaining, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildBridgeRouteCatalogue, buildCancelSpotOrderPlan, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildNativeCallForwarderArtifact, buildNativeMarketModuleCallEnvelope, buildNativeNftBuyListingForwarderInput, buildNativeNftBuyListingModuleCall, buildNativeNftCancelListingForwarderInput, buildNativeNftCancelListingModuleCall, buildNativeNftCreateListingForwarderInput, buildNativeNftCreateListingModuleCall, buildNativeNftPlaceAuctionBidForwarderInput, buildNativeNftPlaceAuctionBidModuleCall, buildNativeNftSettleAuctionForwarderInput, buildNativeNftSettleAuctionModuleCall, buildNativeNftSweepExpiredListingsForwarderInput, buildNativeNftSweepExpiredListingsModuleCall, buildNativeSpotCancelOrderForwarderInput, buildNativeSpotCancelOrderModuleCall, buildNativeSpotCreateMarketForwarderInput, buildNativeSpotCreateMarketModuleCall, buildNativeSpotLimitOrderForwarderInput, buildNativeSpotLimitOrderModuleCall, buildNativeSpotSettleLimitOrderForwarderInput, buildNativeSpotSettleLimitOrderModuleCall, buildNativeSpotSettleRoutedLimitOrderForwarderInput, buildNativeSpotSettleRoutedLimitOrderModuleCall, buildPlaceLimitOrderViaPlan, buildPlaceSpotLimitOrderPlan, buildPlaceSpotMarketOrderExPlan, buildPlaceSpotMarketOrderPlan, buildPublishOperatorSealKeyTxFields, buildRequestClusterJoinTxFields, buildVoteClusterAdmitTxFields, categoryRoot, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, clampPriorityTip, clobAddressHex, clusterApyPercent, clusterJoinRequestExists, compareNativeDevVersions, composeClaimBoundMessage, computeNoEvmDacFinalityMessage, computeNoEvmLeaderFinalityMessage, computeNoEvmReceiptsRoot, computeNoEvmRoundFinalityMessage, computeNoEvmTargetReceiptHash, computeQuoteLiquidity, consumeNativeEvents, decodeClusterDiversity, decodeClusterFormedEvent, decodeClusterJoinRequest, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNativeAgentStateResponse, decodeNativeMarketOrderBookDeltasResponse, decodeNativeReceiptResponse, decodeNoEvmReceiptTranscript, decodeOperatorFeeChargedEvent, decodeOperatorNetworkMetadata, decodeOperatorSealKey, decodeOracleEvent, decodeTimeWindow, decodeTokenFactoryTokenId, decodeTxFeedResponse, decodeVrfOutput, delegationAddressHex, denyRootFor, deriveClobMarketId, deriveClusterAnchorAddress, deriveClusterJoinOperatorId, deriveFeedId, deriveMrvContractAddress, deriveMultisigAddress, deriveMultisigAddressBytes, deriveNativeSpotMarketId, deriveNativeSpotOrderId, deriveTokenFactoryTokenId, destinationRoot, encodeAttestDkgReshareCalldata, encodeBlockSelector, encodeBridgeChallengeCalldata, encodeBridgeClaimCalldata, encodeCancelClusterJoinCalldata, encodeCancelOrderCalldata, encodeCancelPendingChangeCalldata, encodeClaimCalldata, encodeClaimPolicyByAddressCalldata, encodeClusterCharter, encodeCreateFixedSupplyMrc20Calldata, encodeCreateRequestCalldata, encodeCreateRequestCanonical, encodeCreateTokenCalldata, encodeDelegateCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeExpireClusterJoinCalldata, encodeFormClusterCalldata, encodeFormClusterV2Calldata, encodeGetClusterJoinRequestCalldata, encodeGetOperatorSealKeyCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeMultisigWitnessBody, encodeNameAcceptTransferCall, encodeNameProposeTransferCall, encodeNameRegisterCall, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeNativeMarketModuleForwarderInput, encodeNativeNftBuyListingCall, encodeNativeNftCancelListingCall, encodeNativeNftCreateListingCall, encodeNativeNftPlaceAuctionBidCall, encodeNativeNftSettleAuctionCall, encodeNativeNftSweepExpiredListingsCall, encodeNativeSpotCancelOrderCall, encodeNativeSpotCreateMarketCall, encodeNativeSpotLimitOrderCall, encodeNativeSpotSettleLimitOrderCall, encodeNativeSpotSettleRoutedLimitOrderCall, encodePlaceLimitOrderCalldata, encodePlaceLimitOrderViaCalldata, encodePlaceMarketOrderCalldata, encodePlaceMarketOrderExCalldata, encodePublishOperatorSealKeyCalldata, encodeRecoverOperatorNodeCalldata, encodeRedelegateCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeRequestClusterJoinCalldata, encodeSetAutoCompoundCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetLotSizeCalldata, encodeSetMinNotionalCalldata, encodeSetOperatorDisplayCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, encodeSetTickSizeCalldata, encodeSubmitBridgeProofCalldata, encodeSubmitPendingChangeCalldata, encodeTokenFactoryAllowanceCalldata, encodeTokenFactoryApproveCalldata, encodeTokenFactoryBalanceOfCalldata, encodeTokenFactoryBurnCalldata, encodeTokenFactoryDecreaseAllowanceCalldata, encodeTokenFactoryDestroyCalldata, encodeTokenFactoryIncreaseAllowanceCalldata, encodeTokenFactoryMetadataCalldata, encodeTokenFactoryMintCalldata, encodeTokenFactorySetPausedCalldata, encodeTokenFactoryTotalSupplyCalldata, encodeTokenFactoryTransferCalldata, encodeTokenFactoryTransferFromCalldata, encodeTokenFactoryTransferOwnershipCalldata, encodeUndelegateCalldata, encodeVoteClusterAdmitCalldata, encodeVrfEvaluateCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formClusterMessage, formClusterMessageHex, formClusterMessageV2, formClusterMessageV2Hex, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, formatOraclePrice, getChainInfo, getNoEvmReceiptTrustPolicy, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isNativeMarketOrderBookStreamPayload, isSinglePublicServiceProbeMask, isUnexpectedValueRevert, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, multisigBaseSighash, multisigMemberIndex, nameLengthModifierX10, nameRegistrationCost, nameRegistryAddressHex, nativeAgentStateFilterParams, nativeDevSchemaFieldNames, nativeDevUiStrings, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nativeMarketStateFilterParams, noEvmReceiptTrustPolicyFromChainInfo, nodeHostingClassFromByte, nodeHostingClassToByte, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, normalizePendingChangeKind, oracleAddressHex, oraclePriceToNumber, packTimeWindow, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseDkgResharePublicKeys, parseLythToLythoshi, parseNameCategory, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, preflightClusterJoinRequest, previewRequestClusterJoin, previewVoteClusterAdmit, proverMarketStateFromByte, pubkeyRegistryAddressHex, quoteOperatorFee, rankBridgeRoutes, rankMarketsByVolume, readClusterJoinRequest, requestSighash, requireTypedAddress, resolveClusterJoinExecutionFee, resolveExecutionFee, resolveMaxExecutionUnitPrice, resolveRegistryExecutionFee, resolveStudioHostStatus, selectBridgeTransferRoute, serviceProbeStatusLabel, setDestinationRoot, sortMultisigMembers, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, submitPublishOperatorSealKey, submitRequestClusterJoin, submitSighash, submitVoteClusterAdmit, tokenFactoryAddressHex, transactionFeeExposure, typedBech32ToAddress, validateAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, validateMultisigRoster, validateTokenFactoryFlags, verifyNoEvmArchiveProofSignatures, verifyNoEvmBlockFinalityEvidenceMultisig, verifyNoEvmBlockFinalityEvidenceThreshold, verifyNoEvmFinalityEvidenceMultisig, verifyNoEvmFinalityEvidenceThreshold, verifyNoEvmReceiptProof, verifyNoEvmReceiptProofTrust, version, vrfAddressHex };
+export { ADDRESS_HRP, ADDRESS_KIND_HRPS, API_STREAM_TOPICS, AddressError, AgentActionError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, CLOB_MARKET_ID_DOMAIN_TAG, CLOB_SELECTORS, CLUSTER_FORMED_EVENT_SIG, DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT, DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DIVERSITY_SCORE_MAX, DelegationPrecompileError, EMPTY_ROOT, EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER, FEED_ID_DOMAIN_TAG, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_MULTISIG_MEMBERS, MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES, MAX_NATIVE_RECEIPT_EVENTS, MIN_EXECUTION_UNIT_PRICE_LYTHOSHI, MIN_MULTISIG_MEMBERS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MULTISIG_ADDRESS_DERIVATION_DOMAIN, MULTISIG_ADDRESS_DERIVATION_DOMAIN2 as MULTISIG_WITNESS_ADDRESS_DERIVATION_DOMAIN, MULTISIG_WITNESS_DOMAIN, MarketActionError, MrvValidationError, MultisigError, NAME_BASE_MULTIPLIER, NAME_FALLBACK_FEE_UNIT_LYTHOSHI, NAME_LABEL_MAX_LEN, NAME_LABEL_MIN_LEN, NAME_MAX_LEN, NAME_REGISTRY_SELECTORS, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE, NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY, NATIVE_CALL_FORWARDER_RESPONSE_OFFSET, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NATIVE_MARKET_MODULE_ADDRESS, NATIVE_MARKET_MODULE_ADDRESS_BYTES, NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN, NODE_REGISTRY_BLS_PUBKEY_BYTES, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_CHARTER_COOLDOWN_EPOCHS, NODE_REGISTRY_CLUSTER_CHARTER_BYTES, NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS, NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS, NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES, NODE_REGISTRY_CONSENSUS_POP_BYTES, NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES, NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES, NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES, NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS, NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS, NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES, NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT, NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT, NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN, NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN_V2, NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT, NODE_REGISTRY_FORM_CLUSTER_THRESHOLD, NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES, NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH, NODE_REGISTRY_MERKLE_INNER_DOMAIN, NODE_REGISTRY_MERKLE_LEAF_DOMAIN, NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES, NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES, NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES, NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SELECTORS, NODE_REGISTRY_TAG_ARCHIVE_CHALLENGE, NODE_REGISTRY_TAG_SERVICE_SCORE, NODE_REGISTRY_TAG_TREASURY, NODE_REGISTRY_UPDATE_CHARTER_MESSAGE_DOMAIN, NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD, NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_FINALITY_EVIDENCE_SCHEMA, NO_EVM_FINALITY_EVIDENCE_SOURCE, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NameRegistryError, NoEvmReceiptProofError, NodeRegistryError, OPERATOR_ROUTER_ADDRESS, OPERATOR_ROUTER_EVENT_SIGS, OPERATOR_ROUTER_SELECTORS, OPERATOR_ROUTER_SIGS, ORACLE_EVENT_SIGS, OracleEventError, PENDING_CHANGE_KIND_CODES, PRECOMPILE_ADDRESSES, PROTOCOL_MAX_OPERATOR_FEE_BPS, PROVER_MARKET_ADDRESS, PROVER_MARKET_BID_DOMAIN, PROVER_MARKET_EVENT_SIGS, PROVER_MARKET_REQUEST_DOMAIN, PROVER_MARKET_SELECTORS, PROVER_MARKET_SUBMIT_DOMAIN, PROVER_SLASH_REASON_BAD_PROOF, PROVER_SLASH_REASON_NON_DELIVERY, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, ProverMarketError, PubkeyRegistryError, REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT, RESERVED_ADDRESS_HRPS, RpcClient, SERVES_GPU_PROVE, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, TOKEN_FACTORY_CREATE_DEPOSIT_LYTHOSHI, TOKEN_FACTORY_FLAGS, TOKEN_FACTORY_KNOWN_FLAG_MASK, TOKEN_FACTORY_MAX_CREATOR_FEE_BPS, TOKEN_FACTORY_MAX_DECIMALS, TOKEN_FACTORY_NAME_MAX_BYTES, TOKEN_FACTORY_SELECTORS, TOKEN_FACTORY_SIGS, TOKEN_FACTORY_SYMBOL_MAX_BYTES, TOKEN_FACTORY_TOKEN_ID_DOMAIN_TAG, TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT, TX_EXTENSION_KIND_MULTISIG, TX_EXTENSION_MULTISIG_V1, TokenFactoryError, V1_BRIDGE_ALLOWED_FEE_TOKEN, V1_BRIDGE_ALLOWED_PROTOCOL, VRF_DOMAIN_TAG_MAX_BYTES, VRF_HEIGHT_NOT_FINALIZED_REVERT, VRF_OUTPUT_BYTES, VrfCallError, addressBytesToHex, addressToBech32, addressToTypedBech32, allowRootFor, apiEndpointFromRpcEndpoint, archiveMerkleInnerHash, archiveMerkleLeafHash, assembleMultisigSigned, assembleMultisigWitness, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, assertNativeMarketOrderBookStreamPayload, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bidSighash, bridgeAddressHex, bridgeDrainRemaining, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildBridgeRouteCatalogue, buildCancelSpotOrderPlan, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildNativeCallForwarderArtifact, buildNativeMarketModuleCallEnvelope, buildNativeNftBuyListingForwarderInput, buildNativeNftBuyListingModuleCall, buildNativeNftCancelListingForwarderInput, buildNativeNftCancelListingModuleCall, buildNativeNftCreateListingForwarderInput, buildNativeNftCreateListingModuleCall, buildNativeNftPlaceAuctionBidForwarderInput, buildNativeNftPlaceAuctionBidModuleCall, buildNativeNftSettleAuctionForwarderInput, buildNativeNftSettleAuctionModuleCall, buildNativeNftSweepExpiredListingsForwarderInput, buildNativeNftSweepExpiredListingsModuleCall, buildNativeSpotCancelOrderForwarderInput, buildNativeSpotCancelOrderModuleCall, buildNativeSpotCreateMarketForwarderInput, buildNativeSpotCreateMarketModuleCall, buildNativeSpotLimitOrderForwarderInput, buildNativeSpotLimitOrderModuleCall, buildNativeSpotSettleLimitOrderForwarderInput, buildNativeSpotSettleLimitOrderModuleCall, buildNativeSpotSettleRoutedLimitOrderForwarderInput, buildNativeSpotSettleRoutedLimitOrderModuleCall, buildPlaceLimitOrderViaPlan, buildPlaceSpotLimitOrderPlan, buildPlaceSpotMarketOrderExPlan, buildPlaceSpotMarketOrderPlan, buildPublishOperatorSealKeyTxFields, buildRequestClusterJoinTxFields, buildVoteClusterAdmitTxFields, categoryRoot, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, clampPriorityTip, clobAddressHex, clusterApyPercent, clusterJoinRequestExists, compareNativeDevVersions, composeClaimBoundMessage, computeNoEvmDacFinalityMessage, computeNoEvmLeaderFinalityMessage, computeNoEvmReceiptsRoot, computeNoEvmRoundFinalityMessage, computeNoEvmTargetReceiptHash, computeQuoteLiquidity, consumeNativeEvents, decodeClusterCharter, decodeClusterDiversity, decodeClusterFormedEvent, decodeClusterJoinRequest, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNativeAgentStateResponse, decodeNativeMarketOrderBookDeltasResponse, decodeNativeReceiptResponse, decodeNoEvmReceiptTranscript, decodeOperatorFeeChargedEvent, decodeOperatorNetworkMetadata, decodeOperatorSealKey, decodeOracleEvent, decodePendingCharter, decodeProbeAuthority, decodeScoreServiceProbe, decodeTimeWindow, decodeTokenFactoryTokenId, decodeTxFeedResponse, decodeVrfOutput, delegationAddressHex, denyRootFor, deriveArchiveChallenge, deriveClobMarketId, deriveClusterAnchorAddress, deriveClusterJoinOperatorId, deriveFeedId, deriveMrvContractAddress, deriveMultisigAddress, deriveMultisigAddressBytes, deriveNativeSpotMarketId, deriveNativeSpotOrderId, deriveTokenFactoryTokenId, destinationRoot, encodeAnswerArchiveChallengeCalldata, encodeAttestDkgReshareCalldata, encodeAttestServiceProbeCalldata, encodeBlockSelector, encodeBridgeChallengeCalldata, encodeBridgeClaimCalldata, encodeCancelClusterJoinCalldata, encodeCancelOrderCalldata, encodeCancelPendingChangeCalldata, encodeClaimCalldata, encodeClaimPolicyByAddressCalldata, encodeClusterCharter, encodeCommitArchiveRootCalldata, encodeCreateFixedSupplyMrc20Calldata, encodeCreateRequestCalldata, encodeCreateRequestCanonical, encodeCreateTokenCalldata, encodeDelegateCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeExpireClusterJoinCalldata, encodeFormClusterCalldata, encodeFormClusterV2Calldata, encodeGetClusterJoinRequestCalldata, encodeGetOperatorSealKeyCalldata, encodeGetPendingCharterCalldata, encodeGetProbeAuthorityCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeMultisigWitnessBody, encodeNameAcceptTransferCall, encodeNameProposeTransferCall, encodeNameRegisterCall, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeNativeMarketModuleForwarderInput, encodeNativeNftBuyListingCall, encodeNativeNftCancelListingCall, encodeNativeNftCreateListingCall, encodeNativeNftPlaceAuctionBidCall, encodeNativeNftSettleAuctionCall, encodeNativeNftSweepExpiredListingsCall, encodeNativeSpotCancelOrderCall, encodeNativeSpotCreateMarketCall, encodeNativeSpotLimitOrderCall, encodeNativeSpotSettleLimitOrderCall, encodeNativeSpotSettleRoutedLimitOrderCall, encodePlaceLimitOrderCalldata, encodePlaceLimitOrderViaCalldata, encodePlaceMarketOrderCalldata, encodePlaceMarketOrderExCalldata, encodePublishOperatorSealKeyCalldata, encodeRecoverOperatorNodeCalldata, encodeRedelegateCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeRequestClusterJoinCalldata, encodeSetAutoCompoundCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetLotSizeCalldata, encodeSetMinNotionalCalldata, encodeSetOperatorDisplayCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, encodeSetProbeAuthorityCalldata, encodeSetTickSizeCalldata, encodeSubmitBridgeProofCalldata, encodeSubmitPendingChangeCalldata, encodeTokenFactoryAllowanceCalldata, encodeTokenFactoryApproveCalldata, encodeTokenFactoryBalanceOfCalldata, encodeTokenFactoryBurnCalldata, encodeTokenFactoryDecreaseAllowanceCalldata, encodeTokenFactoryDestroyCalldata, encodeTokenFactoryIncreaseAllowanceCalldata, encodeTokenFactoryMetadataCalldata, encodeTokenFactoryMintCalldata, encodeTokenFactorySetPausedCalldata, encodeTokenFactoryTotalSupplyCalldata, encodeTokenFactoryTransferCalldata, encodeTokenFactoryTransferFromCalldata, encodeTokenFactoryTransferOwnershipCalldata, encodeUndelegateCalldata, encodeUpdateCharterCalldata, encodeVoteClusterAdmitCalldata, encodeVrfEvaluateCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formClusterMessage, formClusterMessageHex, formClusterMessageV2, formClusterMessageV2Hex, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, formatOraclePrice, getChainInfo, getNoEvmReceiptTrustPolicy, getP2pSeeds, getRpcEndpoints, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isNativeMarketOrderBookStreamPayload, isSinglePublicServiceProbeMask, isUnexpectedValueRevert, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, multisigBaseSighash, multisigMemberIndex, nameLengthModifierX10, nameRegistrationCost, nameRegistryAddressHex, nativeAgentStateFilterParams, nativeDevSchemaFieldNames, nativeDevUiStrings, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nativeMarketStateFilterParams, noEvmReceiptTrustPolicyFromChainInfo, nodeHostingClassFromByte, nodeHostingClassToByte, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, normalizePendingChangeKind, oracleAddressHex, oraclePriceToNumber, packTimeWindow, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseDkgResharePublicKeys, parseLythToLythoshi, parseNameCategory, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, preflightClusterJoinRequest, previewRequestClusterJoin, previewVoteClusterAdmit, proverMarketStateFromByte, pubkeyRegistryAddressHex, quoteOperatorFee, rankBridgeRoutes, rankMarketsByVolume, readClusterJoinRequest, requestSighash, requireTypedAddress, resolveClusterJoinExecutionFee, resolveExecutionFee, resolveMaxExecutionUnitPrice, resolveRegistryExecutionFee, resolveStudioHostStatus, selectBridgeTransferRoute, serviceMaskToBitIndex, serviceProbeStatusLabel, setDestinationRoot, slotArchiveChallengePass, slotClusterServiceScore, slotProbeAuthority, slotScoreServiceProbe, sortMultisigMembers, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, submitPublishOperatorSealKey, submitRequestClusterJoin, submitSighash, submitVoteClusterAdmit, tokenFactoryAddressHex, transactionFeeExposure, typedBech32ToAddress, updateCharterMessage, updateCharterMessageHex, validateAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, validateMultisigRoster, validateTokenFactoryFlags, verifyNoEvmArchiveProofSignatures, verifyNoEvmBlockFinalityEvidenceMultisig, verifyNoEvmBlockFinalityEvidenceThreshold, verifyNoEvmFinalityEvidenceMultisig, verifyNoEvmFinalityEvidenceThreshold, verifyNoEvmReceiptProof, verifyNoEvmReceiptProofTrust, version, vrfAddressHex };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

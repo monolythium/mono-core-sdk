@@ -463,7 +463,26 @@ var NODE_REGISTRY_SELECTORS = {
   /** `publishOperatorSealKey(bytes32,bytes)` — owner-callable LythiumSeal EK publication. */
   publishOperatorSealKey: "0x" + selectorHex("publishOperatorSealKey(bytes32,bytes)"),
   /** `getOperatorSealKey(bytes32)` view — returns the operator's published LythiumSeal EK. */
-  getOperatorSealKey: "0x" + selectorHex("getOperatorSealKey(bytes32)")
+  getOperatorSealKey: "0x" + selectorHex("getOperatorSealKey(bytes32)"),
+  /**
+   * `updateCharter(uint32,bytes,bytes,bytes)` — Component H live charter
+   * amendment (Law §6.8); re-signs a new 30-byte charter for a LIVE cluster
+   * with a delegator-protective cooldown. Consents verify over
+   * `updateCharterMessage` (NOT the formCluster digests).
+   */
+  updateCharter: "0x" + selectorHex("updateCharter(uint32,bytes,bytes,bytes)"),
+  /** `getPendingCharter(uint32)` view — Component H pending-amendment status. */
+  getPendingCharter: "0x" + selectorHex("getPendingCharter(uint32)"),
+  /** `commitArchiveRoot(bytes32,uint16,bytes32,uint64)` — Component B archive serve-challenge commit. */
+  commitArchiveRoot: "0x" + selectorHex("commitArchiveRoot(bytes32,uint16,bytes32,uint64)"),
+  /** `answerArchiveChallenge(bytes32,uint16,uint64,uint64,bytes32,bytes,bytes32[])` — Component B answer. */
+  answerArchiveChallenge: "0x" + selectorHex("answerArchiveChallenge(bytes32,uint16,uint64,uint64,bytes32,bytes,bytes32[])"),
+  /** `setProbeAuthority(address)` — Component C foundation-gated probe-authority rotation. */
+  setProbeAuthority: "0x" + selectorHex("setProbeAuthority(address)"),
+  /** `getProbeAuthority()` view — Component C configured probe-authority address. */
+  getProbeAuthority: "0x" + selectorHex("getProbeAuthority()"),
+  /** `attestServiceProbe(bytes32,uint32,uint8,uint64)` — Component C attested score-eligibility path. */
+  attestServiceProbe: "0x" + selectorHex("attestServiceProbe(bytes32,uint32,uint8,uint64)")
 };
 var NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES = 48;
 var NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES = NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES;
@@ -488,6 +507,16 @@ var NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS = 2e3;
 var NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS = 1e4;
 var NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES = 128;
 var NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES = 64;
+var NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD = NODE_REGISTRY_FORM_CLUSTER_THRESHOLD;
+var NODE_REGISTRY_UPDATE_CHARTER_MESSAGE_DOMAIN = "PROTOCORE_NODE_REGISTRY_CLUSTER_UPDATE_CHARTER_V1\0";
+var NODE_REGISTRY_CHARTER_COOLDOWN_EPOCHS = 2;
+var NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN = "monolythium.archive-challenge.v1";
+var NODE_REGISTRY_MERKLE_LEAF_DOMAIN = 0;
+var NODE_REGISTRY_MERKLE_INNER_DOMAIN = 1;
+var NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH = 40;
+var NODE_REGISTRY_TAG_ARCHIVE_CHALLENGE = 50;
+var NODE_REGISTRY_TAG_SERVICE_SCORE = 36;
+var NODE_REGISTRY_TAG_TREASURY = 31;
 var PENDING_CHANGE_KIND_CODES = {
   add: 1,
   remove: 2,
@@ -965,6 +994,299 @@ function encodeFormClusterV2Calldata(args) {
     )
   );
 }
+function decodeClusterCharter(charter) {
+  const bytes = expectLength2(toBytes(charter), NODE_REGISTRY_CLUSTER_CHARTER_BYTES, "charter");
+  const memberShareBps = [];
+  let sum = 0;
+  for (let i = 0; i < NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT; i += 1) {
+    const bps = bytes[2 * i] << 8 | bytes[2 * i + 1];
+    memberShareBps.push(bps);
+    sum += bps;
+  }
+  if (sum !== NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS) {
+    throw new NodeRegistryError(
+      `memberShareBps must sum to ${NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS}, got ${sum}`
+    );
+  }
+  const delegatorShareBps = bytes[20] << 8 | bytes[21];
+  if (delegatorShareBps < NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS || delegatorShareBps > NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS) {
+    throw new NodeRegistryError(
+      `delegatorShareBps must be within [${NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS}, ${NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS}], got ${delegatorShareBps}`
+    );
+  }
+  let expiresMs = 0n;
+  for (let i = 22; i < 30; i += 1) {
+    expiresMs = expiresMs << 8n | BigInt(bytes[i]);
+  }
+  return { memberShareBps, delegatorShareBps, expiresMs };
+}
+function updateCharterMessage(clusterId, charter) {
+  const id = toUint32(clusterId, "clusterId");
+  const charterBytes = expectLength2(toBytes(charter), NODE_REGISTRY_CLUSTER_CHARTER_BYTES, "charter");
+  return blake3_js.blake3(
+    concatBytes(
+      new TextEncoder().encode(NODE_REGISTRY_UPDATE_CHARTER_MESSAGE_DOMAIN),
+      u32BeBytes(id),
+      u16BeBytes(NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD),
+      u32BeBytes(charterBytes.length),
+      charterBytes
+    )
+  );
+}
+function updateCharterMessageHex(clusterId, charter) {
+  return bytesToHex(updateCharterMessage(clusterId, charter));
+}
+function encodeUpdateCharterCalldata(args) {
+  const id = toUint32(args.clusterId, "clusterId");
+  const charter = expectLength2(
+    toBytes(args.charter),
+    NODE_REGISTRY_CLUSTER_CHARTER_BYTES,
+    "charter"
+  );
+  const signerPubkeys = flattenFixedWidth(
+    args.signerPubkeys,
+    NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "signerPubkeys"
+  );
+  const signatures = flattenFixedWidth(
+    args.signatures,
+    NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES,
+    "signatures"
+  );
+  const nPubkeys = signerPubkeys.length / NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES;
+  const nSigs = signatures.length / NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES;
+  if (nPubkeys !== nSigs) {
+    throw new NodeRegistryError(
+      `signerPubkeys (${nPubkeys}) and signatures (${nSigs}) counts must match`
+    );
+  }
+  if (nPubkeys < NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD || nPubkeys > NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT) {
+    throw new NodeRegistryError(
+      `signer count must be in [${NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD}, ${NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT}], got ${nPubkeys}`
+    );
+  }
+  const charterPadded = padToWord(charter);
+  const signerPadded = padToWord(signerPubkeys);
+  const sigsPadded = padToWord(signatures);
+  const charterOffset = 4n * 32n;
+  const signerOffset = charterOffset + 32n + BigInt(charterPadded.length);
+  const sigsOffset = signerOffset + 32n + BigInt(signerPadded.length);
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.updateCharter),
+      uint32Word(id),
+      uint64Word(charterOffset, "charterOffset"),
+      uint64Word(signerOffset, "signerPubkeysOffset"),
+      uint64Word(sigsOffset, "signaturesOffset"),
+      uint64Word(BigInt(charter.length), "charterLength"),
+      charterPadded,
+      uint64Word(BigInt(signerPubkeys.length), "signerPubkeysLength"),
+      signerPadded,
+      uint64Word(BigInt(signatures.length), "signaturesLength"),
+      sigsPadded
+    )
+  );
+}
+function encodeGetPendingCharterCalldata(clusterId) {
+  return bytesToHex(
+    concatBytes(hexToBytes(NODE_REGISTRY_SELECTORS.getPendingCharter), uint32Word(toUint32(clusterId, "clusterId")))
+  );
+}
+function decodePendingCharter(returnData) {
+  const bytes = toBytes(returnData);
+  if (bytes.length < 5 * 32) {
+    throw new NodeRegistryError("getPendingCharter return shorter than the 5-word head");
+  }
+  const word = (i) => bytes.slice(i * 32, (i + 1) * 32);
+  const present = numberFromWord(word(0), "present", 1) === 1;
+  const delegatorShareBps = numberFromWord(word(1), "delegatorShareBps", 65535);
+  const effectiveEpoch = u64FromWord(word(2));
+  const signerCount = numberFromWord(word(3), "signerCount", 65535);
+  if (!present) {
+    return { present: false, delegatorShareBps: 0, effectiveEpoch, signerCount: 0, memberShareBps: [] };
+  }
+  const bytesOffset = Number(u64FromWord(word(4)));
+  const lenAt = bytesOffset;
+  if (bytes.length < lenAt + 32) {
+    throw new NodeRegistryError("getPendingCharter bytes-length word out of range");
+  }
+  const sharesLen = Number(u64FromWord(bytes.slice(lenAt, lenAt + 32)));
+  const sharesAt = lenAt + 32;
+  if (sharesLen < 32 || bytes.length < sharesAt + 32) {
+    throw new NodeRegistryError("getPendingCharter packed-shares word truncated");
+  }
+  const packed = bytes.slice(sharesAt, sharesAt + 32);
+  const memberShareBps = [];
+  for (let i = 0; i < NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT; i += 1) {
+    const at = 12 + 2 * i;
+    memberShareBps.push(packed[at] << 8 | packed[at + 1]);
+  }
+  return { present: true, delegatorShareBps, effectiveEpoch, signerCount, memberShareBps };
+}
+function encodeCommitArchiveRootCalldata(args) {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.commitArchiveRoot),
+      expectLength2(toBytes(args.peerId), 32, "peerId"),
+      uint16Word(args.shardIndex),
+      expectLength2(toBytes(args.shardRoot), 32, "shardRoot"),
+      uint64Word(args.leafCount, "leafCount")
+    )
+  );
+}
+function encodeAnswerArchiveChallengeCalldata(args) {
+  const leaf = toBytes(args.leaf);
+  const proof = args.proof.map((p, i) => expectLength2(toBytes(p), 32, `proof[${i}]`));
+  if (proof.length > NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH) {
+    throw new NodeRegistryError(
+      `proof length must be <= ${NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH}, got ${proof.length}`
+    );
+  }
+  const leafPadded = padToWord(leaf);
+  const leafOffset = 7n * 32n;
+  const proofOffset = leafOffset + 32n + BigInt(leafPadded.length);
+  const proofTail = concatBytes(
+    uint64Word(BigInt(proof.length), "proofLength"),
+    ...proof
+  );
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.answerArchiveChallenge),
+      expectLength2(toBytes(args.peerId), 32, "peerId"),
+      uint16Word(args.shardIndex),
+      uint64Word(args.epoch, "epoch"),
+      uint64Word(args.nonce, "nonce"),
+      expectLength2(toBytes(args.roundCertDigest), 32, "roundCertDigest"),
+      uint64Word(leafOffset, "leafOffset"),
+      uint64Word(proofOffset, "proofOffset"),
+      uint64Word(BigInt(leaf.length), "leafLength"),
+      leafPadded,
+      proofTail
+    )
+  );
+}
+function deriveArchiveChallenge(roundCertDigest, opHash, shardIndex, epoch, nonce, leafCount) {
+  const rcDigest = expectLength2(toBytes(roundCertDigest), 32, "roundCertDigest");
+  const op = expectLength2(toBytes(opHash), 32, "opHash");
+  const shard = expectUint16(shardIndex, "shardIndex");
+  const e = toUint64(epoch, "epoch");
+  const n = toUint64(nonce, "nonce");
+  const count = toUint64(leafCount, "leafCount");
+  if (count === 0n) {
+    return null;
+  }
+  const seed = blake3_js.blake3(
+    concatBytes(
+      new TextEncoder().encode(NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN),
+      rcDigest,
+      op,
+      u16BeBytes(shard),
+      u64BeBytes(e),
+      u64BeBytes(n)
+    )
+  );
+  let idx = 0n;
+  for (let i = 0; i < 8; i += 1) {
+    idx = idx << 8n | BigInt(seed[i]);
+  }
+  return {
+    opHash: bytesToHex(op),
+    shardIndex: shard,
+    leafIndex: idx % count,
+    seed: bytesToHex(seed)
+  };
+}
+function archiveMerkleLeafHash(leaf) {
+  return blake3_js.blake3(concatBytes(Uint8Array.from([NODE_REGISTRY_MERKLE_LEAF_DOMAIN]), toBytes(leaf)));
+}
+function archiveMerkleInnerHash(left, right) {
+  return blake3_js.blake3(
+    concatBytes(
+      Uint8Array.from([NODE_REGISTRY_MERKLE_INNER_DOMAIN]),
+      expectLength2(toBytes(left), 32, "left"),
+      expectLength2(toBytes(right), 32, "right")
+    )
+  );
+}
+function encodeSetProbeAuthorityCalldata(probeAuthority) {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.setProbeAuthority),
+      addressWord(probeAuthority, "probeAuthority")
+    )
+  );
+}
+function encodeGetProbeAuthorityCalldata() {
+  return NODE_REGISTRY_SELECTORS.getProbeAuthority;
+}
+function decodeProbeAuthority(returnData) {
+  const bytes = expectLength2(toBytes(returnData), 32, "probeAuthority");
+  return bytesToHex(bytes.slice(12, 32));
+}
+function encodeAttestServiceProbeCalldata(args) {
+  if (!isValidPublicServiceProbeMask(args.serviceMask)) {
+    throw new NodeRegistryError(
+      `serviceMask 0x${args.serviceMask.toString(16).padStart(8, "0")} is not a valid public-service mask`
+    );
+  }
+  if (!isConcreteServiceProbeStatus(args.status)) {
+    throw new NodeRegistryError(`status ${args.status} is not a concrete service-probe outcome`);
+  }
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.attestServiceProbe),
+      expectLength2(toBytes(args.opHash), 32, "opHash"),
+      uint32Word(args.serviceMask),
+      uint8Word(args.status),
+      uint64Word(args.epoch, "epoch")
+    )
+  );
+}
+function slotClusterServiceScore(clusterId) {
+  return scoreSlotHex(0, u32BeBytes(toUint32(clusterId, "clusterId")));
+}
+function slotArchiveChallengePass(clusterId, epoch) {
+  return scoreSlotHex(
+    1,
+    concatBytes(u32BeBytes(toUint32(clusterId, "clusterId")), u64BeBytes(toUint64(epoch, "epoch")))
+  );
+}
+function slotScoreServiceProbe(opHash, serviceBit) {
+  if (!Number.isInteger(serviceBit) || serviceBit < 0 || serviceBit > 255) {
+    throw new NodeRegistryError("serviceBit must be a u8 bit index");
+  }
+  return scoreSlotHex(
+    2,
+    concatBytes(expectLength2(toBytes(opHash), 32, "opHash"), Uint8Array.from([serviceBit]))
+  );
+}
+function serviceMaskToBitIndex(mask) {
+  if (!Number.isInteger(mask) || mask <= 0 || (mask & mask - 1) !== 0) {
+    return null;
+  }
+  let bit = 0;
+  let m = mask >>> 0;
+  while ((m & 1) === 0) {
+    m >>>= 1;
+    bit += 1;
+  }
+  return bit;
+}
+function decodeScoreServiceProbe(word) {
+  const bytes = expectLength2(toBytes(word), 32, "scoreServiceProbeWord");
+  const status = bytes[31];
+  let packed = 0n;
+  for (const b of bytes) {
+    packed = packed << 8n | BigInt(b);
+  }
+  return { epoch: packed >> 8n, status };
+}
+function slotProbeAuthority() {
+  const buf = new Uint8Array(1 + 32 + 1);
+  buf[0] = NODE_REGISTRY_TAG_TREASURY;
+  buf[33] = 10;
+  return bytesToHex(sha3_js.keccak_256(buf));
+}
 function decodeClusterJoinRequest(returnData) {
   const bytes = expectLength2(toBytes(returnData), 8 * 32, "clusterJoinRequest");
   const word = (i) => bytes.slice(i * 32, (i + 1) * 32);
@@ -1142,6 +1464,43 @@ function u16BeBytes(value) {
     throw new NodeRegistryError("uint16 value out of range");
   }
   return Uint8Array.from([value >>> 8 & 255, value & 255]);
+}
+function expectUint16(value, name) {
+  if (!Number.isInteger(value) || value < 0 || value > 65535) {
+    throw new NodeRegistryError(`${name} must be a uint16`);
+  }
+  return value;
+}
+function uint16Word(value) {
+  const out = new Uint8Array(32);
+  out.set(u16BeBytes(value), 30);
+  return out;
+}
+function addressWord(value, name) {
+  const addr = expectLength2(toBytes(value), 20, name);
+  const out = new Uint8Array(32);
+  out.set(addr, 12);
+  return out;
+}
+function flattenFixedWidth(value, width, name) {
+  let flat;
+  if (Array.isArray(value) && value.length > 0 && typeof value[0] !== "number") {
+    const parts = value.map(
+      (v, i) => expectLength2(toBytes(v), width, `${name}[${i}]`)
+    );
+    flat = concatBytes(...parts);
+  } else {
+    flat = toBytes(value);
+  }
+  if (flat.length === 0 || flat.length % width !== 0) {
+    throw new NodeRegistryError(`${name} must be a non-empty multiple of ${width} bytes, got ${flat.length}`);
+  }
+  return flat;
+}
+function scoreSlotHex(kind, tail) {
+  return bytesToHex(
+    sha3_js.keccak_256(concatBytes(Uint8Array.from([NODE_REGISTRY_TAG_SERVICE_SCORE, kind]), tail))
+  );
 }
 function compareBytes(a, b) {
   const len = Math.min(a.length, b.length);
@@ -3670,7 +4029,7 @@ function encodeStringAddressCall(selector, name, address) {
       hexToBytes4(selector),
       // Two head words (string offset, address) → string tail starts at 0x40.
       uint256Word(0x40n),
-      addressWord(address),
+      addressWord2(address),
       uint256Word(BigInt(nameBytes.length)),
       padTo32(nameBytes)
     )
@@ -3694,7 +4053,7 @@ function selectorHex2(signature) {
   const sel = sha3_js.keccak_256(new TextEncoder().encode(signature)).slice(0, 4);
   return `0x${[...sel].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
-function addressWord(value) {
+function addressWord2(value) {
   const out = new Uint8Array(32);
   if (value == null) return out;
   const bytes = toBytes2(value);
@@ -6238,7 +6597,7 @@ function encodeSetBridgeRouteFinalityCalldata(bridgeId, finalityBlocks) {
 function bridgeSelector(signature) {
   return sha3_js.keccak_256(new TextEncoder().encode(signature)).slice(0, 4);
 }
-function addressWord2(value, name) {
+function addressWord3(value, name) {
   const addr = expectLength3(toBytes3(value), 20, name);
   const out = new Uint8Array(32);
   out.set(addr, 12);
@@ -6257,7 +6616,7 @@ function encodeBridgeClaimCalldata(bridgeId, depositId, recipient) {
       bridgeSelector("claim(bytes32,bytes32,address)"),
       expectLength3(toBytes3(bridgeId), 32, "bridgeId"),
       expectLength3(toBytes3(depositId), 32, "depositId"),
-      addressWord2(recipient, "recipient")
+      addressWord3(recipient, "recipient")
     )
   );
 }
@@ -9251,8 +9610,8 @@ function encodeTokenFactoryTransferFromCalldata(tokenId, from, to, amount) {
     concatBytes2(
       hexToBytes2(TOKEN_FACTORY_SELECTORS.transferFrom, "transferFrom selector"),
       bytes32(tokenId, "tokenId"),
-      addressWord3(from, "from"),
-      addressWord3(to, "to"),
+      addressWord4(from, "from"),
+      addressWord4(to, "to"),
       uint256Word2(parseUint(amount, "amount"), "amount")
     )
   );
@@ -9274,8 +9633,8 @@ function encodeTokenFactoryAllowanceCalldata(tokenId, owner, spender) {
     concatBytes2(
       hexToBytes2(TOKEN_FACTORY_SELECTORS.allowance, "allowance selector"),
       bytes32(tokenId, "tokenId"),
-      addressWord3(owner, "owner"),
-      addressWord3(spender, "spender")
+      addressWord4(owner, "owner"),
+      addressWord4(spender, "spender")
     )
   );
 }
@@ -9342,7 +9701,7 @@ function encodeBytes32Address(selector, tokenId, address) {
     concatBytes2(
       hexToBytes2(selector, "selector"),
       bytes32(tokenId, "tokenId"),
-      addressWord3(address, "address")
+      addressWord4(address, "address")
     )
   );
 }
@@ -9351,7 +9710,7 @@ function encodeBytes32AddressUint(selector, tokenId, address, amount) {
     concatBytes2(
       hexToBytes2(selector, "selector"),
       bytes32(tokenId, "tokenId"),
-      addressWord3(address, "address"),
+      addressWord4(address, "address"),
       uint256Word2(parseUint(amount, "amount"), "amount")
     )
   );
@@ -9377,7 +9736,7 @@ function padTo323(bytes) {
   out.set(bytes);
   return out;
 }
-function addressWord3(value, label) {
+function addressWord4(value, label) {
   const out = new Uint8Array(32);
   out.set(addressBytes(value, label), 12);
   return out;
@@ -9892,7 +10251,7 @@ function encodeDelegateCalldata(cluster, weightBps) {
     concatBytes8(
       hexToBytes8(DELEGATION_SELECTORS.delegate),
       uint32Word2(cluster, "cluster"),
-      uint16Word(weightBps, "weightBps")
+      uint16Word2(weightBps, "weightBps")
     )
   );
 }
@@ -9910,7 +10269,7 @@ function encodeRedelegateCalldata(fromCluster, toCluster, weightBps) {
       hexToBytes8(DELEGATION_SELECTORS.redelegate),
       uint32Word2(fromCluster, "fromCluster"),
       uint32Word2(toCluster, "toCluster"),
-      uint16Word(weightBps, "weightBps")
+      uint16Word2(weightBps, "weightBps")
     )
   );
 }
@@ -9940,7 +10299,7 @@ function uint32Word2(value, name) {
   }
   return out;
 }
-function uint16Word(value, name) {
+function uint16Word2(value, name) {
   const n = toBigint3(value, name);
   if (n < 0n || n > 0xffffn) {
     throw new DelegationPrecompileError(`${name} must fit uint16`);
@@ -10351,9 +10710,9 @@ function decodeHasPubkeyReturn(data) {
   throw new PubkeyRegistryError("hasPubkey bool must be 0 or 1");
 }
 function encodeSingleAddressCall2(selector, address) {
-  return bytesToHex11(concatBytes10(hexToBytes10(selector), addressWord4(toAddressBytes(address))));
+  return bytesToHex11(concatBytes10(hexToBytes10(selector), addressWord5(toAddressBytes(address))));
 }
-function addressWord4(address) {
+function addressWord5(address) {
   return concatBytes10(new Uint8Array(12), address);
 }
 function toAddressBytes(value) {
@@ -10562,7 +10921,7 @@ function encodePlaceMarketOrderCalldata(args) {
       normalized.quoteTokenId,
       uint8Word2(normalized.side),
       uint256Word5(normalized.quantity, "quantity"),
-      uint16Word2(normalized.maxSlippageBps, "maxSlippageBps")
+      uint16Word3(normalized.maxSlippageBps, "maxSlippageBps")
     )
   );
 }
@@ -10575,7 +10934,7 @@ function encodePlaceMarketOrderExCalldata(args) {
       normalized.quoteTokenId,
       uint8Word2(normalized.side),
       uint256Word5(normalized.quantity, "quantity"),
-      uint16Word2(normalized.maxSlippageBps, "maxSlippageBps"),
+      uint16Word3(normalized.maxSlippageBps, "maxSlippageBps"),
       uint8Word2(normalized.mode)
     )
   );
@@ -10882,7 +11241,7 @@ function encodePlaceLimitOrderViaCalldata(args) {
   return bytesToHex2(
     concatBytes2(
       hexToBytes2(OPERATOR_ROUTER_SELECTORS.placeLimitOrderVia, "placeLimitOrderVia selector"),
-      addressWord5(operator.bytes),
+      addressWord6(operator.bytes),
       bytes32FromHex(args.base, "base"),
       bytes32FromHex(args.quote, "quote"),
       uint8Word2(side),
@@ -11190,7 +11549,7 @@ function uint64Word3(value, name) {
   }
   return out;
 }
-function uint16Word2(value, name) {
+function uint16Word3(value, name) {
   if (value < 0n || value > 0xffffn) {
     throw new MarketActionError(`${name} must fit uint16`);
   }
@@ -11211,7 +11570,7 @@ function uint256Word5(value, name) {
   }
   return out;
 }
-function addressWord5(addr) {
+function addressWord6(addr) {
   if (addr.length !== 20) {
     throw new MarketActionError("address must be 20 bytes");
   }
@@ -11829,9 +12188,11 @@ exports.NATIVE_MARKET_EVENT_FAMILY = NATIVE_MARKET_EVENT_FAMILY;
 exports.NATIVE_MARKET_MODULE_ADDRESS = NATIVE_MARKET_MODULE_ADDRESS;
 exports.NATIVE_MARKET_MODULE_ADDRESS_BYTES = NATIVE_MARKET_MODULE_ADDRESS_BYTES;
 exports.NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC = NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC;
+exports.NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN = NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN;
 exports.NODE_REGISTRY_BLS_PUBKEY_BYTES = NODE_REGISTRY_BLS_PUBKEY_BYTES;
 exports.NODE_REGISTRY_CAPABILITIES = NODE_REGISTRY_CAPABILITIES;
 exports.NODE_REGISTRY_CAPABILITY_MASK = NODE_REGISTRY_CAPABILITY_MASK;
+exports.NODE_REGISTRY_CHARTER_COOLDOWN_EPOCHS = NODE_REGISTRY_CHARTER_COOLDOWN_EPOCHS;
 exports.NODE_REGISTRY_CLUSTER_CHARTER_BYTES = NODE_REGISTRY_CLUSTER_CHARTER_BYTES;
 exports.NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS = NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS;
 exports.NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS = NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS;
@@ -11850,12 +12211,20 @@ exports.NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN_V2 = NODE_REGISTRY_FORM_CLUSTE
 exports.NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT = NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT;
 exports.NODE_REGISTRY_FORM_CLUSTER_THRESHOLD = NODE_REGISTRY_FORM_CLUSTER_THRESHOLD;
 exports.NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES = NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES;
+exports.NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH = NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH;
+exports.NODE_REGISTRY_MERKLE_INNER_DOMAIN = NODE_REGISTRY_MERKLE_INNER_DOMAIN;
+exports.NODE_REGISTRY_MERKLE_LEAF_DOMAIN = NODE_REGISTRY_MERKLE_LEAF_DOMAIN;
 exports.NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES = NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES;
 exports.NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES = NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES;
 exports.NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES = NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES;
 exports.NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID = NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID;
 exports.NODE_REGISTRY_PUBLIC_SERVICE_MASK = NODE_REGISTRY_PUBLIC_SERVICE_MASK;
 exports.NODE_REGISTRY_SELECTORS = NODE_REGISTRY_SELECTORS;
+exports.NODE_REGISTRY_TAG_ARCHIVE_CHALLENGE = NODE_REGISTRY_TAG_ARCHIVE_CHALLENGE;
+exports.NODE_REGISTRY_TAG_SERVICE_SCORE = NODE_REGISTRY_TAG_SERVICE_SCORE;
+exports.NODE_REGISTRY_TAG_TREASURY = NODE_REGISTRY_TAG_TREASURY;
+exports.NODE_REGISTRY_UPDATE_CHARTER_MESSAGE_DOMAIN = NODE_REGISTRY_UPDATE_CHARTER_MESSAGE_DOMAIN;
+exports.NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD = NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD;
 exports.NO_EVM_ARCHIVE_PROOF_SCHEMA = NO_EVM_ARCHIVE_PROOF_SCHEMA;
 exports.NO_EVM_ARCHIVE_SIGNATURE_SCHEME = NO_EVM_ARCHIVE_SIGNATURE_SCHEME;
 exports.NO_EVM_FINALITY_EVIDENCE_SCHEMA = NO_EVM_FINALITY_EVIDENCE_SCHEMA;
@@ -11924,6 +12293,8 @@ exports.addressToBech32 = addressToBech32;
 exports.addressToTypedBech32 = addressToTypedBech32;
 exports.allowRootFor = allowRootFor;
 exports.apiEndpointFromRpcEndpoint = apiEndpointFromRpcEndpoint;
+exports.archiveMerkleInnerHash = archiveMerkleInnerHash;
+exports.archiveMerkleLeafHash = archiveMerkleLeafHash;
 exports.assembleMultisigSigned = assembleMultisigSigned;
 exports.assembleMultisigWitness = assembleMultisigWitness;
 exports.assertMrvCallNativeSubmissionPlan = assertMrvCallNativeSubmissionPlan;
@@ -12009,6 +12380,7 @@ exports.computeNoEvmRoundFinalityMessage = computeNoEvmRoundFinalityMessage;
 exports.computeNoEvmTargetReceiptHash = computeNoEvmTargetReceiptHash;
 exports.computeQuoteLiquidity = computeQuoteLiquidity;
 exports.consumeNativeEvents = consumeNativeEvents;
+exports.decodeClusterCharter = decodeClusterCharter;
 exports.decodeClusterDiversity = decodeClusterDiversity;
 exports.decodeClusterFormedEvent = decodeClusterFormedEvent;
 exports.decodeClusterJoinRequest = decodeClusterJoinRequest;
@@ -12022,12 +12394,16 @@ exports.decodeOperatorFeeChargedEvent = decodeOperatorFeeChargedEvent;
 exports.decodeOperatorNetworkMetadata = decodeOperatorNetworkMetadata;
 exports.decodeOperatorSealKey = decodeOperatorSealKey;
 exports.decodeOracleEvent = decodeOracleEvent;
+exports.decodePendingCharter = decodePendingCharter;
+exports.decodeProbeAuthority = decodeProbeAuthority;
+exports.decodeScoreServiceProbe = decodeScoreServiceProbe;
 exports.decodeTimeWindow = decodeTimeWindow;
 exports.decodeTokenFactoryTokenId = decodeTokenFactoryTokenId;
 exports.decodeTxFeedResponse = decodeTxFeedResponse;
 exports.decodeVrfOutput = decodeVrfOutput;
 exports.delegationAddressHex = delegationAddressHex;
 exports.denyRootFor = denyRootFor;
+exports.deriveArchiveChallenge = deriveArchiveChallenge;
 exports.deriveClobMarketId = deriveClobMarketId;
 exports.deriveClusterAnchorAddress = deriveClusterAnchorAddress;
 exports.deriveClusterJoinOperatorId = deriveClusterJoinOperatorId;
@@ -12039,7 +12415,9 @@ exports.deriveNativeSpotMarketId = deriveNativeSpotMarketId;
 exports.deriveNativeSpotOrderId = deriveNativeSpotOrderId;
 exports.deriveTokenFactoryTokenId = deriveTokenFactoryTokenId;
 exports.destinationRoot = destinationRoot;
+exports.encodeAnswerArchiveChallengeCalldata = encodeAnswerArchiveChallengeCalldata;
 exports.encodeAttestDkgReshareCalldata = encodeAttestDkgReshareCalldata;
+exports.encodeAttestServiceProbeCalldata = encodeAttestServiceProbeCalldata;
 exports.encodeBlockSelector = encodeBlockSelector;
 exports.encodeBridgeChallengeCalldata = encodeBridgeChallengeCalldata;
 exports.encodeBridgeClaimCalldata = encodeBridgeClaimCalldata;
@@ -12049,6 +12427,7 @@ exports.encodeCancelPendingChangeCalldata = encodeCancelPendingChangeCalldata;
 exports.encodeClaimCalldata = encodeClaimCalldata;
 exports.encodeClaimPolicyByAddressCalldata = encodeClaimPolicyByAddressCalldata;
 exports.encodeClusterCharter = encodeClusterCharter;
+exports.encodeCommitArchiveRootCalldata = encodeCommitArchiveRootCalldata;
 exports.encodeCreateFixedSupplyMrc20Calldata = encodeCreateFixedSupplyMrc20Calldata;
 exports.encodeCreateRequestCalldata = encodeCreateRequestCalldata;
 exports.encodeCreateRequestCanonical = encodeCreateRequestCanonical;
@@ -12061,6 +12440,8 @@ exports.encodeFormClusterCalldata = encodeFormClusterCalldata;
 exports.encodeFormClusterV2Calldata = encodeFormClusterV2Calldata;
 exports.encodeGetClusterJoinRequestCalldata = encodeGetClusterJoinRequestCalldata;
 exports.encodeGetOperatorSealKeyCalldata = encodeGetOperatorSealKeyCalldata;
+exports.encodeGetPendingCharterCalldata = encodeGetPendingCharterCalldata;
+exports.encodeGetProbeAuthorityCalldata = encodeGetProbeAuthorityCalldata;
 exports.encodeHasPubkeyCalldata = encodeHasPubkeyCalldata;
 exports.encodeLockBridgeConfigCalldata = encodeLockBridgeConfigCalldata;
 exports.encodeLookupPubkeyCalldata = encodeLookupPubkeyCalldata;
@@ -12132,6 +12513,7 @@ exports.encodeSetMinNotionalCalldata = encodeSetMinNotionalCalldata;
 exports.encodeSetOperatorDisplayCalldata = encodeSetOperatorDisplayCalldata;
 exports.encodeSetPolicyCalldata = encodeSetPolicyCalldata;
 exports.encodeSetPolicyClaimCalldata = encodeSetPolicyClaimCalldata;
+exports.encodeSetProbeAuthorityCalldata = encodeSetProbeAuthorityCalldata;
 exports.encodeSetTickSizeCalldata = encodeSetTickSizeCalldata;
 exports.encodeSubmitBridgeProofCalldata = encodeSubmitBridgeProofCalldata;
 exports.encodeSubmitPendingChangeCalldata = encodeSubmitPendingChangeCalldata;
@@ -12150,6 +12532,7 @@ exports.encodeTokenFactoryTransferCalldata = encodeTokenFactoryTransferCalldata;
 exports.encodeTokenFactoryTransferFromCalldata = encodeTokenFactoryTransferFromCalldata;
 exports.encodeTokenFactoryTransferOwnershipCalldata = encodeTokenFactoryTransferOwnershipCalldata;
 exports.encodeUndelegateCalldata = encodeUndelegateCalldata;
+exports.encodeUpdateCharterCalldata = encodeUpdateCharterCalldata;
 exports.encodeVoteClusterAdmitCalldata = encodeVoteClusterAdmitCalldata;
 exports.encodeVrfEvaluateCalldata = encodeVrfEvaluateCalldata;
 exports.exportBridgeRouteCatalogueJson = exportBridgeRouteCatalogueJson;
@@ -12235,8 +12618,13 @@ exports.resolveMaxExecutionUnitPrice = resolveMaxExecutionUnitPrice;
 exports.resolveRegistryExecutionFee = resolveRegistryExecutionFee;
 exports.resolveStudioHostStatus = resolveStudioHostStatus;
 exports.selectBridgeTransferRoute = selectBridgeTransferRoute;
+exports.serviceMaskToBitIndex = serviceMaskToBitIndex;
 exports.serviceProbeStatusLabel = serviceProbeStatusLabel;
 exports.setDestinationRoot = setDestinationRoot;
+exports.slotArchiveChallengePass = slotArchiveChallengePass;
+exports.slotClusterServiceScore = slotClusterServiceScore;
+exports.slotProbeAuthority = slotProbeAuthority;
+exports.slotScoreServiceProbe = slotScoreServiceProbe;
 exports.sortMultisigMembers = sortMultisigMembers;
 exports.spendingPolicyAddressHex = spendingPolicyAddressHex;
 exports.submitMrvCallNativeTx = submitMrvCallNativeTx;
@@ -12249,6 +12637,8 @@ exports.submitVoteClusterAdmit = submitVoteClusterAdmit;
 exports.tokenFactoryAddressHex = tokenFactoryAddressHex;
 exports.transactionFeeExposure = transactionFeeExposure;
 exports.typedBech32ToAddress = typedBech32ToAddress;
+exports.updateCharterMessage = updateCharterMessage;
+exports.updateCharterMessageHex = updateCharterMessageHex;
 exports.validateAddress = validateAddress;
 exports.validateBridgeRouteCatalogue = validateBridgeRouteCatalogue;
 exports.validateMrvArtifactMetadata = validateMrvArtifactMetadata;
