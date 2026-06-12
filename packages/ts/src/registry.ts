@@ -99,8 +99,8 @@ export const TESTNET_69420: ChainInfo = {
   description:
     "Public Monolythium testnet. Testnet state may reset without notice; do not store value on this network.",
   genesis_hash:
-    "0x0d2903aeac5aa127b3fb75cd1405c2c193896981e8897671792d3817a6fdf689",
-  binary_sha: "52f1694c5a6d",
+    "0x11774775b5c3bfc36ecb9c37e7252b49898caaacdb55668de3913fe60c660258",
+  binary_sha: "b4257f14",
   rpc: [
     {
       url: "http://178.105.12.9:8545",
@@ -159,18 +159,18 @@ export const TESTNET_69420: ChainInfo = {
       notes: "operator-8",
     },
     {
-      url: "http://162.55.54.198:8545",
-      provider: "monolythium-foundation",
-      region: "fsn1",
-      tier: "official",
-      notes: "operator-9",
-    },
-    {
       url: "http://95.217.156.190:8545",
       provider: "monolythium-foundation",
       region: "hel1",
       tier: "official",
       notes: "operator-10",
+    },
+    {
+      url: "http://162.55.54.198:8545",
+      provider: "monolythium-foundation",
+      region: "fsn1",
+      tier: "official",
+      notes: "operator-9",
     },
     {
       url: "http://178.105.45.210:8545",

@@ -34,9 +34,9 @@ describe("chain registry snapshot", () => {
   it("vendors the public testnet RPC endpoints", () => {
     expect(TESTNET_69420.chain_id).toBe(69420);
     expect(TESTNET_69420.genesis_hash).toBe(
-      "0x0d2903aeac5aa127b3fb75cd1405c2c193896981e8897671792d3817a6fdf689",
+      "0x11774775b5c3bfc36ecb9c37e7252b49898caaacdb55668de3913fe60c660258",
     );
-    expect(TESTNET_69420.binary_sha).toBe("52f1694c5a6d");
+    expect(TESTNET_69420.binary_sha).toBe("b4257f14");
     expect(getRpcEndpoints("testnet-69420").map((r) => r.url)).toEqual([
       "http://178.105.12.9:8545",
       "http://178.105.15.216:8545",
@@ -46,8 +46,8 @@ describe("chain registry snapshot", () => {
       "http://87.99.145.48:8545",
       "http://5.223.85.76:8545",
       "http://142.132.180.99:8545",
-      "http://162.55.54.198:8545",
       "http://95.217.156.190:8545",
+      "http://162.55.54.198:8545",
       "http://178.105.45.210:8545",
       "http://65.21.252.34:8545",
     ]);

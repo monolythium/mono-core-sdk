@@ -38,9 +38,13 @@ import {
   NODE_REGISTRY_TAG_ARCHIVE_CHALLENGE,
   NODE_REGISTRY_TAG_SERVICE_SCORE,
   NODE_REGISTRY_TAG_TREASURY,
+  NODE_REGISTRY_TAG_CLUSTER_CHARTER,
+  NODE_REGISTRY_SUBKIND_CHARTER_DELEGATOR_BPS,
+  NODE_REGISTRY_SUBKIND_CHARTER_MEMBER_SHARES,
   PENDING_CHANGE_KIND_CODES,
   SERVICE_PROBE_STATUS,
   archiveMerkleLeafHash,
+  decodeActiveCharter,
   decodeClusterCharter,
   decodeClusterDiversity,
   decodeClusterFormedEvent,
@@ -88,12 +92,16 @@ import {
   serviceMaskToBitIndex,
   serviceProbeStatusLabel,
   slotArchiveChallengePass,
+  slotClusterCharter,
+  slotClusterCharterDelegator,
+  slotClusterCharterMembers,
   slotClusterServiceScore,
   slotEpochChallengeSeed,
   slotProbeAuthority,
   slotScoreServiceProbe,
   updateCharterMessageHex,
 } from "../src/index.js";
+import { keccak_256 } from "@noble/hashes/sha3.js";
 
 describe("node-registry helpers", () => {
   it("exports public-service masks pinned to mono-core", () => {
@@ -1187,6 +1195,64 @@ describe("service-reward + charter-governance encoders", () => {
     const decoded = decodeScoreServiceProbe(word);
     expect(decoded.epoch).toBe(9n);
     expect(decoded.status).toBe(SERVICE_PROBE_STATUS.REACHABLE);
+  });
+
+  it("pins the active-charter tag + sub-kind constants to mono-core", () => {
+    // Mirrors cluster_anchor::{TAG_CLUSTER_CHARTER, SUBKIND_CHARTER_*}.
+    expect(NODE_REGISTRY_TAG_CLUSTER_CHARTER).toBe(0x31);
+    expect(NODE_REGISTRY_SUBKIND_CHARTER_DELEGATOR_BPS).toBe(0x00);
+    expect(NODE_REGISTRY_SUBKIND_CHARTER_MEMBER_SHARES).toBe(0x01);
+  });
+
+  it("derives active-charter storage-slot keys byte-identical to mono-core", () => {
+    // slot_cluster_charter(cluster_id, subkind) =
+    //   keccak256(0x31 || cluster_id_be4 || subkind). Re-derive the keccak
+    // preimage inline and assert the helper matches it exactly.
+    const expectedSlot = (cid: number, sub: number): string => {
+      const buf = new Uint8Array(6);
+      buf[0] = 0x31;
+      buf[1] = (cid >>> 24) & 0xff;
+      buf[2] = (cid >>> 16) & 0xff;
+      buf[3] = (cid >>> 8) & 0xff;
+      buf[4] = cid & 0xff;
+      buf[5] = sub;
+      return bytesHex(keccak_256(buf));
+    };
+    expect(slotClusterCharter(7, 0x00)).toBe(expectedSlot(7, 0x00));
+    expect(slotClusterCharter(7, 0x01)).toBe(expectedSlot(7, 0x01));
+    // Pinned vectors (cluster 7) — regression-lock the derivation.
+    expect(slotClusterCharterDelegator(7)).toBe(
+      "0x72d5b82ed75cebc9609e4785c48ea783f1e5e68031894e800e5e31cf5ef1f853",
+    );
+    expect(slotClusterCharterMembers(7)).toBe(
+      "0x8ae16cb2ae86d510bed32c1830d2401d70e4441bb25d82138d681012c047ad15",
+    );
+    // The two sub-kinds + the cluster id all disambiguate.
+    expect(slotClusterCharterDelegator(7)).not.toBe(slotClusterCharterMembers(7));
+    expect(slotClusterCharterDelegator(7)).not.toBe(slotClusterCharterDelegator(8));
+    expect(() => slotClusterCharter(7, 256)).toThrow(/subkind/u);
+  });
+
+  it("decodes the two active-charter storage words", () => {
+    const memberShareBps = [1500, 1500, 1000, 1000, 1000, 1000, 1000, 800, 700, 500];
+    // sub-kind 0x00: right-aligned u64 = delegatorShareBps + 1.
+    const delegatorWord = encodeWordU64(BigInt(3000 + 1));
+    // sub-kind 0x01: 10×u16 BE packed at byte offset 12.
+    const membersWord = new Uint8Array(32);
+    for (let i = 0; i < 10; i += 1) {
+      membersWord[12 + 2 * i] = (memberShareBps[i] >> 8) & 0xff;
+      membersWord[12 + 2 * i + 1] = memberShareBps[i] & 0xff;
+    }
+    const view = decodeActiveCharter(delegatorWord, membersWord);
+    expect(view.present).toBe(true);
+    expect(view.delegatorShareBps).toBe(3000);
+    expect(view.memberShareBps).toEqual(memberShareBps);
+
+    // A zero presence word ⇒ no active charter (genesis / 3-arg formCluster).
+    const none = decodeActiveCharter(new Uint8Array(32), membersWord);
+    expect(none.present).toBe(false);
+    expect(none.delegatorShareBps).toBe(0);
+    expect(none.memberShareBps).toEqual([]);
   });
 });
 

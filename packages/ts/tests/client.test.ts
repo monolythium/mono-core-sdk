@@ -14,8 +14,13 @@ import {
   addressToTypedBech32,
   assessBridgeRoute,
   decodeNativeAgentStateResponse,
+  encodeGetPendingCharterCalldata,
+  nodeRegistryAddressHex,
   parseQuantity,
   parseQuantityBig,
+  slotClusterCharterDelegator,
+  slotClusterCharterMembers,
+  slotClusterServiceScore,
 } from "../src/index.js";
 import type {
   BridgeRouteDisclosure,
@@ -2970,5 +2975,116 @@ describe("parseQuantity", () => {
 
   it("rejects values that overflow safe-integer range", () => {
     expect(() => parseQuantity("0xffffffffffffffff")).toThrow(SdkError);
+  });
+});
+
+describe("charter read wrappers", () => {
+  // A right-aligned u64 storage word holding `value`.
+  function storageWordU64(value: bigint): string {
+    let hex = value.toString(16);
+    return "0x" + hex.padStart(64, "0");
+  }
+
+  function packedMemberSharesWord(memberShareBps: number[]): string {
+    const word = new Uint8Array(32);
+    for (let i = 0; i < memberShareBps.length; i += 1) {
+      word[12 + 2 * i] = (memberShareBps[i] >> 8) & 0xff;
+      word[12 + 2 * i + 1] = memberShareBps[i] & 0xff;
+    }
+    let hex = "0x";
+    for (const b of word) hex += b.toString(16).padStart(2, "0");
+    return hex;
+  }
+
+  const proofEnvelope = (value: string) => ({
+    value,
+    state_root: "0x" + "00".repeat(32),
+    block_number: 100,
+    proof: null,
+  });
+
+  it("lythGetClusterCharter SLOADs both charter words and decodes them", async () => {
+    const memberShareBps = [1500, 1500, 1000, 1000, 1000, 1000, 1000, 800, 700, 500];
+    const { fetch, calls } = mockFetchSequence([
+      proofEnvelope(storageWordU64(BigInt(3000 + 1))),
+      proofEnvelope(packedMemberSharesWord(memberShareBps)),
+    ]);
+    const client = new RpcClient("http://x", { fetch });
+    const view = await client.lythGetClusterCharter(7);
+    expect(view.present).toBe(true);
+    expect(view.delegatorShareBps).toBe(3000);
+    expect(view.memberShareBps).toEqual(memberShareBps);
+    // Both reads hit eth_getStorageAt against 0x1005 at the derived slots.
+    expect(calls).toHaveLength(2);
+    expect(calls[0].method).toBe("eth_getStorageAt");
+    expect(calls[1].method).toBe("eth_getStorageAt");
+    const params0 = calls[0].params as unknown[];
+    const params1 = calls[1].params as unknown[];
+    expect(params0[0]).toBe(nodeRegistryAddressHex());
+    expect(params0[1]).toBe(slotClusterCharterDelegator(7));
+    expect(params0[2]).toBe("latest");
+    expect(params1[1]).toBe(slotClusterCharterMembers(7));
+  });
+
+  it("lythGetClusterCharter reports absent when the presence word is zero", async () => {
+    const { fetch } = mockFetchSequence([
+      proofEnvelope(storageWordU64(0n)),
+      proofEnvelope("0x" + "00".repeat(32)),
+    ]);
+    const client = new RpcClient("http://x", { fetch });
+    const view = await client.lythGetClusterCharter(9);
+    expect(view.present).toBe(false);
+    expect(view.delegatorShareBps).toBe(0);
+    expect(view.memberShareBps).toEqual([]);
+  });
+
+  it("lythGetPendingCharter eth_calls getPendingCharter and decodes the return", async () => {
+    const memberShareBps = [1500, 1500, 1000, 1000, 1000, 1000, 1000, 800, 700, 500];
+    const packed = new Uint8Array(32);
+    for (let i = 0; i < 10; i += 1) {
+      packed[12 + 2 * i] = (memberShareBps[i] >> 8) & 0xff;
+      packed[12 + 2 * i + 1] = memberShareBps[i] & 0xff;
+    }
+    // Wire return: head (present, delegatorBps, effectiveEpoch, signerCount,
+    // bytesOffset=160) + tail (len=32 + packed shares word).
+    const word = (fill: (b: Uint8Array) => void): string => {
+      const b = new Uint8Array(32);
+      fill(b);
+      let h = "";
+      for (const x of b) h += x.toString(16).padStart(2, "0");
+      return h;
+    };
+    const u16 = (v: number) => word((b) => { b[30] = (v >> 8) & 0xff; b[31] = v & 0xff; });
+    const u64 = (v: bigint) => word((b) => { let n = v; for (let i = 31; i >= 24; i--) { b[i] = Number(n & 0xffn); n >>= 8n; } });
+    let packedHex = "";
+    for (const x of packed) packedHex += x.toString(16).padStart(2, "0");
+    const ret =
+      "0x" + u16(1) + u16(3000) + u64(123n) + u16(7) + u64(160n) + u64(32n) + packedHex;
+    const { fetch, calls } = mockFetch(ret);
+    const client = new RpcClient("http://x", { fetch });
+    const view = await client.lythGetPendingCharter(7);
+    expect(view.present).toBe(true);
+    expect(view.delegatorShareBps).toBe(3000);
+    expect(view.effectiveEpoch).toBe(123n);
+    expect(view.signerCount).toBe(7);
+    expect(view.memberShareBps).toEqual(memberShareBps);
+    expect(calls[0].method).toBe("eth_call");
+    const params = calls[0].params as unknown[];
+    expect(params[0]).toEqual({
+      to: nodeRegistryAddressHex(),
+      data: encodeGetPendingCharterCalldata(7),
+    });
+    expect(params[1]).toBe("latest");
+  });
+
+  it("lythGetClusterServiceScore SLOADs the score slot and returns a bigint", async () => {
+    const { fetch, calls } = mockFetch(proofEnvelope(storageWordU64(42n)));
+    const client = new RpcClient("http://x", { fetch });
+    const score = await client.lythGetClusterServiceScore(7);
+    expect(score).toBe(42n);
+    expect(calls[0].method).toBe("eth_getStorageAt");
+    const params = calls[0].params as unknown[];
+    expect(params[0]).toBe(nodeRegistryAddressHex());
+    expect(params[1]).toBe(slotClusterServiceScore(7));
   });
 });

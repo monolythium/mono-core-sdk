@@ -10,7 +10,7 @@
  * subpath so native SDK consumers do not import that peer dependency.
  */
 
-export const version = "0.4.8";
+export const version = "0.4.17";
 
 export { ApiClient, apiEndpointFromRpcEndpoint } from "./api.js";
 export {
@@ -470,11 +470,15 @@ export {
   NODE_REGISTRY_TAG_ARCHIVE_CHALLENGE,
   NODE_REGISTRY_TAG_SERVICE_SCORE,
   NODE_REGISTRY_TAG_TREASURY,
+  NODE_REGISTRY_TAG_CLUSTER_CHARTER,
+  NODE_REGISTRY_SUBKIND_CHARTER_DELEGATOR_BPS,
+  NODE_REGISTRY_SUBKIND_CHARTER_MEMBER_SHARES,
   NodeRegistryError,
   PENDING_CHANGE_KIND_CODES,
   SERVICE_PROBE_STATUS,
   archiveMerkleInnerHash,
   archiveMerkleLeafHash,
+  decodeActiveCharter,
   decodeClusterCharter,
   decodeClusterDiversity,
   decodeClusterFormedEvent,
@@ -526,6 +530,9 @@ export {
   serviceMaskToBitIndex,
   serviceProbeStatusLabel,
   slotArchiveChallengePass,
+  slotClusterCharter,
+  slotClusterCharterDelegator,
+  slotClusterCharterMembers,
   slotClusterServiceScore,
   slotEpochChallengeSeed,
   slotProbeAuthority,
@@ -534,6 +541,7 @@ export {
   updateCharterMessageHex,
 } from "./node-registry.js";
 export type {
+  ActiveCharterView,
   AnswerArchiveChallengeCalldataArgs,
   ArchiveChallenge,
   AttestDkgReshareCalldataArgs,

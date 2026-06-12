@@ -20,8 +20,19 @@ import type {
   BridgeRoutesResponse,
 } from "./bridge.js";
 import type {
+  ActiveCharterView,
   ClusterDiversityView,
   OperatorNetworkMetadataView,
+  PendingCharterView,
+} from "./node-registry.js";
+import {
+  decodeActiveCharter,
+  decodePendingCharter,
+  encodeGetPendingCharterCalldata,
+  nodeRegistryAddressHex,
+  slotClusterCharterDelegator,
+  slotClusterCharterMembers,
+  slotClusterServiceScore,
 } from "./node-registry.js";
 import type {
   OperatorFeeConfig,
@@ -2179,6 +2190,67 @@ export class RpcClient {
   /** PF-6 — `lyth_getClusterDiversity`: diversity score + asn/geo/hosting breakdown. */
   async lythGetClusterDiversity(clusterId: number): Promise<ClusterDiversityView> {
     return this.call("lyth_getClusterDiversity", [clusterId]);
+  }
+
+  /**
+   * Component H — read a cluster's ACTIVE economics charter (Law §6.8).
+   *
+   * There is no `lyth_*` / view-selector for the active charter, so this
+   * SLOADs the two `TAG_CLUSTER_CHARTER` (`0x31`) storage words from the
+   * node-registry account `0x1005` via `eth_getStorageAt` and decodes them
+   * with {@link decodeActiveCharter}. Returns `{ present: false }` (zeroed
+   * shares) for genesis / 3-arg-formCluster clusters that never adopted a
+   * charter. The active record carries no `effectiveEpoch` — that lives on
+   * the pending amendment ({@link lythGetPendingCharter}).
+   */
+  async lythGetClusterCharter(
+    clusterId: number,
+    block: BlockSelector = "latest",
+  ): Promise<ActiveCharterView> {
+    const registry = nodeRegistryAddressHex();
+    const [delegator, members] = await Promise.all([
+      this.ethGetStorageAt(registry, slotClusterCharterDelegator(clusterId), block),
+      this.ethGetStorageAt(registry, slotClusterCharterMembers(clusterId), block),
+    ]);
+    return decodeActiveCharter(delegator.value, members.value);
+  }
+
+  /**
+   * Component H — read a cluster's PENDING charter amendment (Law §6.8).
+   *
+   * Calls the `getPendingCharter(uint32)` view on the node-registry account
+   * `0x1005` over `eth_call` and decodes the return with
+   * {@link decodePendingCharter}. Returns `{ present: false }` when no
+   * amendment is posted; otherwise carries the proposed shares plus the
+   * `effectiveEpoch` at which the delegator-protective cooldown lands.
+   */
+  async lythGetPendingCharter(
+    clusterId: number,
+    block: BlockSelector = "latest",
+  ): Promise<PendingCharterView> {
+    const data = await this.ethCall(
+      { to: nodeRegistryAddressHex(), data: encodeGetPendingCharterCalldata(clusterId) },
+      block,
+    );
+    return decodePendingCharter(data);
+  }
+
+  /**
+   * Component A — read a cluster's settled per-cluster ServiceScore (the
+   * `u64` the reward path reads each block). SLOADs the `TAG_SERVICE_SCORE`
+   * (`0x24`) score slot from `0x1005` via `eth_getStorageAt`; `0n` means the
+   * cluster has never been scored.
+   */
+  async lythGetClusterServiceScore(
+    clusterId: number,
+    block: BlockSelector = "latest",
+  ): Promise<bigint> {
+    const word = await this.ethGetStorageAt(
+      nodeRegistryAddressHex(),
+      slotClusterServiceScore(clusterId),
+      block,
+    );
+    return parseQuantityBig(word.value);
   }
 
   /**

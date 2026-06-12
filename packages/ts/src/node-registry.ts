@@ -265,6 +265,30 @@ export const NODE_REGISTRY_TAG_SERVICE_SCORE = 0x24;
  * node-registry `storage::TAG_TREASURY`.
  */
 export const NODE_REGISTRY_TAG_TREASURY = 0x1f;
+/**
+ * Storage-slot tag byte for the per-cluster ACTIVE economics charter family
+ * (under `0x1005`). Mirrors mono-core
+ * `protocore_node_registry::cluster_anchor::TAG_CLUSTER_CHARTER`. The active
+ * charter is written by the V2 `formCluster(bytes,bytes,bytes,bytes)` path
+ * (and amended via `updateCharter` once the cooldown lands) and read by the
+ * reward engine each block. Two sub-kind slots per cluster — see
+ * {@link slotClusterCharterDelegator} / {@link slotClusterCharterMembers}.
+ */
+export const NODE_REGISTRY_TAG_CLUSTER_CHARTER = 0x31;
+/**
+ * Charter sub-kind `0x00` — the presence + delegator-share slot. The stored
+ * value is a right-aligned `u64` equal to `delegatorShareBps + 1`; a zero
+ * word means NO active charter (genesis clusters / 3-arg formCluster, which
+ * fall back to the legacy default split). Mirrors
+ * `SUBKIND_CHARTER_DELEGATOR_BPS`.
+ */
+export const NODE_REGISTRY_SUBKIND_CHARTER_DELEGATOR_BPS = 0x00;
+/**
+ * Charter sub-kind `0x01` — the packed member-shares slot. The stored value
+ * is a single 32-byte word holding the 10×u16 BE member shares in its low
+ * 20 bytes (offset 12..32). Mirrors `SUBKIND_CHARTER_MEMBER_SHARES`.
+ */
+export const NODE_REGISTRY_SUBKIND_CHARTER_MEMBER_SHARES = 0x01;
 
 export type PendingChangeKind = "add" | "remove" | "rotate";
 
@@ -436,6 +460,29 @@ export interface PendingCharterView {
   signerCount: number;
   /**
    * The proposed per-member operator-pot shares in basis points,
+   * member-declaration order (active 0..7, then standby 7..10). Empty when
+   * `present` is `false`.
+   */
+  memberShareBps: readonly number[];
+}
+
+/**
+ * Decoded ACTIVE cluster charter (Law §6.8), reconstructed from the two
+ * `TAG_CLUSTER_CHARTER` (`0x31`) storage words SLOADed against the
+ * node-registry account `0x1005`. `present=false` (with zeroed shares) when
+ * the cluster has no active charter — genesis clusters and clusters formed
+ * through the 3-arg `formCluster` selector, which fall back to the legacy
+ * default split. The active charter carries no on-chain effective epoch (it
+ * is the currently-effective record); the cooldown / `effectiveEpoch` lives
+ * only on the {@link PendingCharterView}.
+ */
+export interface ActiveCharterView {
+  /** `true` iff the cluster has an active on-chain charter record. */
+  present: boolean;
+  /** The active delegator share of the cluster pot in basis points. */
+  delegatorShareBps: number;
+  /**
+   * The active per-member operator-pot shares in basis points,
    * member-declaration order (active 0..7, then standby 7..10). Empty when
    * `present` is `false`.
    */
@@ -1633,6 +1680,83 @@ export function slotProbeAuthority(): string {
   buf[0] = NODE_REGISTRY_TAG_TREASURY;
   buf[33] = 0x0a;
   return bytesToHex(keccak_256(buf));
+}
+
+/**
+ * Slot for one sub-kind of a cluster's ACTIVE charter record (Law §6.8).
+ * `keccak256(0x31 || clusterId_be32 || subkind)`. Mirrors mono-core
+ * `cluster_anchor::slot_cluster_charter`.
+ *
+ * No RPC method exists for the active charter — derive the slot key and
+ * SLOAD it via `eth_getStorageAt` / `lyth_getStorageAt` against the
+ * node-registry account `0x1005`, then feed both words into
+ * {@link decodeActiveCharter}. See {@link slotClusterCharterDelegator} and
+ * {@link slotClusterCharterMembers} for the two concrete sub-kinds.
+ */
+export function slotClusterCharter(
+  clusterId: bigint | number | string,
+  subkind: number,
+): string {
+  if (!Number.isInteger(subkind) || subkind < 0 || subkind > 0xff) {
+    throw new NodeRegistryError("charter subkind must be a u8");
+  }
+  const buf = new Uint8Array(1 + 4 + 1);
+  buf[0] = NODE_REGISTRY_TAG_CLUSTER_CHARTER;
+  buf.set(u32BeBytes(toUint32(clusterId, "clusterId")), 1);
+  buf[5] = subkind;
+  return bytesToHex(keccak_256(buf));
+}
+
+/**
+ * Slot holding the active charter's presence + delegator share
+ * (sub-kind `0x00`). The stored word is a right-aligned `u64` equal to
+ * `delegatorShareBps + 1`; a zero word means NO active charter.
+ */
+export function slotClusterCharterDelegator(clusterId: bigint | number | string): string {
+  return slotClusterCharter(clusterId, NODE_REGISTRY_SUBKIND_CHARTER_DELEGATOR_BPS);
+}
+
+/**
+ * Slot holding the active charter's packed member shares (sub-kind `0x01`).
+ * The stored word holds the 10×u16 BE member shares in its low 20 bytes
+ * (offset 12..32).
+ */
+export function slotClusterCharterMembers(clusterId: bigint | number | string): string {
+  return slotClusterCharter(clusterId, NODE_REGISTRY_SUBKIND_CHARTER_MEMBER_SHARES);
+}
+
+/**
+ * Decode the two ACTIVE-charter storage words into an {@link ActiveCharterView}.
+ *
+ * `delegatorWord` is the sub-kind `0x00` presence word
+ * ({@link slotClusterCharterDelegator}); `membersWord` is the sub-kind
+ * `0x01` packed-shares word ({@link slotClusterCharterMembers}). When the
+ * presence word is zero the cluster has no active charter and `present` is
+ * `false` (zeroed shares). Mirrors mono-core
+ * `cluster_anchor::load_cluster_charter_*`: the presence word decodes as
+ * `delegatorShareBps = word - 1` (saturating), and the members word packs
+ * the 10×u16 BE shares at byte offset 12.
+ */
+export function decodeActiveCharter(
+  delegatorWord: string | Uint8Array | readonly number[],
+  membersWord: string | Uint8Array | readonly number[],
+): ActiveCharterView {
+  const presence = expectLength(toBytes(delegatorWord), 32, "charterDelegatorWord");
+  let raw = 0n;
+  for (const b of presence) {
+    raw = (raw << 8n) | BigInt(b);
+  }
+  if (raw === 0n) {
+    return { present: false, delegatorShareBps: 0, memberShareBps: [] };
+  }
+  const delegatorShareBps = Number(raw - 1n > 0xffffn ? 0xffffn : raw - 1n);
+  const packed = expectLength(toBytes(membersWord), 32, "charterMembersWord");
+  const memberShareBps: number[] = [];
+  for (let i = 0; i < NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT; i += 1) {
+    const at = 12 + 2 * i;
+    memberShareBps.push((packed[at] << 8) | packed[at + 1]);
+  }
+  return { present: true, delegatorShareBps, memberShareBps };
 }
 
 /**
