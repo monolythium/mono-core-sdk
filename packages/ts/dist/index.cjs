@@ -1263,7 +1263,7 @@ function slotClusterCharterMembers(clusterId) {
   return slotClusterCharter(clusterId, NODE_REGISTRY_SUBKIND_CHARTER_MEMBER_SHARES);
 }
 function decodeActiveCharter(delegatorWord, membersWord) {
-  const presence = expectLength2(toBytes(delegatorWord), 32, "charterDelegatorWord");
+  const presence = leftPadToWord(toBytes(delegatorWord), "charterDelegatorWord");
   let raw = 0n;
   for (const b of presence) {
     raw = raw << 8n | BigInt(b);
@@ -1272,7 +1272,7 @@ function decodeActiveCharter(delegatorWord, membersWord) {
     return { present: false, delegatorShareBps: 0, memberShareBps: [] };
   }
   const delegatorShareBps = Number(raw - 1n > 0xffffn ? 0xffffn : raw - 1n);
-  const packed = expectLength2(toBytes(membersWord), 32, "charterMembersWord");
+  const packed = leftPadToWord(toBytes(membersWord), "charterMembersWord");
   const memberShareBps = [];
   for (let i = 0; i < NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT; i += 1) {
     const at = 12 + 2 * i;
@@ -1593,6 +1593,15 @@ function padToWord(bytes) {
   out.set(bytes);
   return out;
 }
+function leftPadToWord(bytes, name) {
+  if (bytes.length === 32) return bytes;
+  if (bytes.length > 32) {
+    throw new NodeRegistryError(`${name} must be <= 32 bytes, got ${bytes.length}`);
+  }
+  const out = new Uint8Array(32);
+  out.set(bytes, 32 - bytes.length);
+  return out;
+}
 function toBytes(value) {
   if (typeof value === "string") {
     return hexToBytes(value);
@@ -1613,10 +1622,11 @@ function displayTextBytes(value, maxBytes, name) {
   return bytes;
 }
 function hexToBytes(hex) {
-  const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
-  if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
+  const raw = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
+  if (!/^[0-9a-fA-F]*$/.test(raw)) {
     throw new NodeRegistryError("invalid hex bytes");
   }
+  const body = raw.length % 2 !== 0 ? `0${raw}` : raw;
   const out = new Uint8Array(body.length / 2);
   for (let i = 0; i < out.length; i++) {
     out[i] = Number.parseInt(body.slice(i * 2, i * 2 + 2), 16);
@@ -4305,17 +4315,35 @@ var RpcClient = class _RpcClient {
   async ethBlockNumber() {
     return parseQuantityBig(await this.call(ethCompatMethod("blockNumber"), []));
   }
-  /** `eth_getBalance` — balance + Merkle proof envelope. */
+  /**
+   * `eth_getBalance` — balance + Merkle proof envelope.
+   *
+   * The node may answer with a bare `0x…` hex word or a proof-wrapped
+   * object; both are normalized to a consistent {@link AccountProofResponse}
+   * via {@link normalizeAccountProof} so `.value` is always the bare word.
+   */
   async ethGetBalance(address, block = "latest") {
-    return this.call("eth_getBalance", [address, encodeBlockSelector(block)]);
+    return normalizeAccountProof(
+      await this.call("eth_getBalance", [address, encodeBlockSelector(block)])
+    );
   }
-  /** `eth_getStorageAt` — storage word + Merkle proof. */
+  /**
+   * `eth_getStorageAt` — storage word + Merkle proof.
+   *
+   * The node returns a proof-wrapped object
+   * `{ value, proof, stateRoot, blockNumber }` (some builds use a bare
+   * `0x…` hex word). Both shapes are normalized to a consistent
+   * {@link AccountProofResponse} via {@link normalizeAccountProof}; `.value`
+   * is always the bare storage word (even-length hex, `0x0` when zero).
+   */
   async ethGetStorageAt(address, slot, block = "latest") {
-    return this.call("eth_getStorageAt", [
-      address,
-      slot,
-      encodeBlockSelector(block)
-    ]);
+    return normalizeAccountProof(
+      await this.call("eth_getStorageAt", [
+        address,
+        slot,
+        encodeBlockSelector(block)
+      ])
+    );
   }
   /** `eth_getTransactionCount` — sender nonce. */
   async ethGetTransactionCount(address, block = "latest") {
@@ -4424,9 +4452,14 @@ var RpcClient = class _RpcClient {
   async lythGetRegistration(peerId) {
     return this.call("lyth_getRegistration", [peerId]);
   }
-  /** `lyth_registryStateProof` — Merkle proof for a registry entry. */
+  /**
+   * `lyth_registryStateProof` — Merkle proof for a registry entry.
+   *
+   * Normalized through {@link normalizeAccountProof} so a bare-hex or
+   * proof-wrapped answer both yield a consistent {@link AccountProofResponse}.
+   */
   async lythRegistryStateProof(peerId) {
-    return this.call("lyth_registryStateProof", [peerId]);
+    return normalizeAccountProof(await this.call("lyth_registryStateProof", [peerId]));
   }
   /** `lyth_getAccountPolicy` — privacy posture for an account. */
   async lythGetAccountPolicy(address) {
@@ -5347,6 +5380,38 @@ function parseQuantity(hex) {
     throw SdkError.malformed(`hex quantity exceeds safe integer: ${hex}`);
   }
   return Number(big);
+}
+function normalizeStorageWord(value) {
+  if (value === null || value === void 0 || value === "") return "0x0";
+  if (typeof value !== "string") {
+    throw SdkError.malformed(`storage word is not a string: ${typeof value}`);
+  }
+  const body = value.startsWith("0x") || value.startsWith("0X") ? value.slice(2) : value;
+  if (body.length === 0) return "0x0";
+  if (!/^[0-9a-fA-F]+$/.test(body)) {
+    throw SdkError.malformed(`invalid hex storage word: ${value}`);
+  }
+  return body.length % 2 === 0 ? `0x${body}` : `0x0${body}`;
+}
+function normalizeAccountProof(result) {
+  if (typeof result === "string" || result === null || result === void 0) {
+    return { value: normalizeStorageWord(result), state_root: "0x", block_number: 0n };
+  }
+  const obj = result;
+  const stateRoot = obj.state_root ?? obj.stateRoot ?? "0x";
+  const rawBlock = obj.block_number ?? obj.blockNumber ?? 0;
+  let blockNumber;
+  try {
+    blockNumber = typeof rawBlock === "bigint" ? rawBlock : BigInt(rawBlock);
+  } catch {
+    blockNumber = 0n;
+  }
+  return {
+    value: normalizeStorageWord(obj.value),
+    state_root: stateRoot,
+    block_number: blockNumber,
+    proof: obj.proof ?? null
+  };
 }
 function encodeRpcInteger(v) {
   if (typeof v === "bigint") return `0x${v.toString(16)}`;
@@ -12230,7 +12295,7 @@ var MONOLYTHIUM_NETWORKS = {
 };
 
 // src/index.ts
-var version = "0.4.17";
+var version = "0.4.18";
 
 exports.ADDRESS_HRP = ADDRESS_HRP;
 exports.ADDRESS_KIND_HRPS = ADDRESS_KIND_HRPS;

@@ -1465,25 +1465,43 @@ export class RpcClient {
     return parseQuantityBig(await this.call<string>(ethCompatMethod("blockNumber"), []));
   }
 
-  /** `eth_getBalance` — balance + Merkle proof envelope. */
+  /**
+   * `eth_getBalance` — balance + Merkle proof envelope.
+   *
+   * The node may answer with a bare `0x…` hex word or a proof-wrapped
+   * object; both are normalized to a consistent {@link AccountProofResponse}
+   * via {@link normalizeAccountProof} so `.value` is always the bare word.
+   */
   async ethGetBalance(
     address: string,
     block: BlockSelector = "latest",
   ): Promise<AccountProofResponse> {
-    return this.call("eth_getBalance", [address, encodeBlockSelector(block)]);
+    return normalizeAccountProof(
+      await this.call("eth_getBalance", [address, encodeBlockSelector(block)]),
+    );
   }
 
-  /** `eth_getStorageAt` — storage word + Merkle proof. */
+  /**
+   * `eth_getStorageAt` — storage word + Merkle proof.
+   *
+   * The node returns a proof-wrapped object
+   * `{ value, proof, stateRoot, blockNumber }` (some builds use a bare
+   * `0x…` hex word). Both shapes are normalized to a consistent
+   * {@link AccountProofResponse} via {@link normalizeAccountProof}; `.value`
+   * is always the bare storage word (even-length hex, `0x0` when zero).
+   */
   async ethGetStorageAt(
     address: string,
     slot: string,
     block: BlockSelector = "latest",
   ): Promise<AccountProofResponse> {
-    return this.call("eth_getStorageAt", [
-      address,
-      slot,
-      encodeBlockSelector(block),
-    ]);
+    return normalizeAccountProof(
+      await this.call("eth_getStorageAt", [
+        address,
+        slot,
+        encodeBlockSelector(block),
+      ]),
+    );
   }
 
   /** `eth_getTransactionCount` — sender nonce. */
@@ -1631,9 +1649,14 @@ export class RpcClient {
     return this.call("lyth_getRegistration", [peerId]);
   }
 
-  /** `lyth_registryStateProof` — Merkle proof for a registry entry. */
+  /**
+   * `lyth_registryStateProof` — Merkle proof for a registry entry.
+   *
+   * Normalized through {@link normalizeAccountProof} so a bare-hex or
+   * proof-wrapped answer both yield a consistent {@link AccountProofResponse}.
+   */
   async lythRegistryStateProof(peerId: string): Promise<AccountProofResponse> {
-    return this.call("lyth_registryStateProof", [peerId]);
+    return normalizeAccountProof(await this.call("lyth_registryStateProof", [peerId]));
   }
 
   /** `lyth_getAccountPolicy` — privacy posture for an account. */
@@ -2914,6 +2937,59 @@ export function parseQuantity(hex: string): number {
     throw SdkError.malformed(`hex quantity exceeds safe integer: ${hex}`);
   }
   return Number(big);
+}
+
+/**
+ * Coerce a raw account/storage word to a well-formed `0x`-prefixed,
+ * even-length hex string. The chain serializes a zero word as the minimal
+ * quantity `0x0` (odd-length) rather than a full 32-byte `0x00…00`, which
+ * the byte decoders reject — left-pad odd bodies by one nibble so callers
+ * can always `hexToBytes`/`toBytes` the result. `null`/`undefined`/`""`
+ * normalize to `0x0`.
+ */
+function normalizeStorageWord(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "0x0";
+  if (typeof value !== "string") {
+    throw SdkError.malformed(`storage word is not a string: ${typeof value}`);
+  }
+  const body = value.startsWith("0x") || value.startsWith("0X") ? value.slice(2) : value;
+  if (body.length === 0) return "0x0";
+  if (!/^[0-9a-fA-F]+$/.test(body)) {
+    throw SdkError.malformed(`invalid hex storage word: ${value}`);
+  }
+  return body.length % 2 === 0 ? `0x${body}` : `0x0${body}`;
+}
+
+/**
+ * Normalize an `eth_getBalance` / `eth_getStorageAt` / `lyth_registryStateProof`
+ * RPC result into a consistent {@link AccountProofResponse}.
+ *
+ * The node may return EITHER a bare `0x…` hex word OR a proof-wrapped
+ * object `{ value, proof, stateRoot, blockNumber }` (camelCase) — and some
+ * builds emit the ts-rs snake_case keys (`state_root` / `block_number`).
+ * Either way callers get the bare storage word in `.value` (normalized to
+ * even-length hex) plus the proof envelope when present. Defensive against
+ * `null` / `0x0` / missing fields.
+ */
+function normalizeAccountProof(result: unknown): AccountProofResponse {
+  if (typeof result === "string" || result === null || result === undefined) {
+    return { value: normalizeStorageWord(result), state_root: "0x", block_number: 0n };
+  }
+  const obj = result as Record<string, unknown>;
+  const stateRoot = (obj.state_root ?? obj.stateRoot ?? "0x") as string;
+  const rawBlock = obj.block_number ?? obj.blockNumber ?? 0;
+  let blockNumber: bigint;
+  try {
+    blockNumber = typeof rawBlock === "bigint" ? rawBlock : BigInt(rawBlock as number | string);
+  } catch {
+    blockNumber = 0n;
+  }
+  return {
+    value: normalizeStorageWord(obj.value),
+    state_root: stateRoot,
+    block_number: blockNumber,
+    proof: (obj.proof ?? null) as unknown,
+  };
 }
 
 function encodeRpcInteger(v: number | bigint | string): number | string {

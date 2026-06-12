@@ -6074,9 +6074,23 @@ declare class RpcClient {
     ethChainId(): Promise<bigint>;
     /** Compatibility block-height read. */
     ethBlockNumber(): Promise<bigint>;
-    /** `eth_getBalance` — balance + Merkle proof envelope. */
+    /**
+     * `eth_getBalance` — balance + Merkle proof envelope.
+     *
+     * The node may answer with a bare `0x…` hex word or a proof-wrapped
+     * object; both are normalized to a consistent {@link AccountProofResponse}
+     * via {@link normalizeAccountProof} so `.value` is always the bare word.
+     */
     ethGetBalance(address: string, block?: BlockSelector): Promise<AccountProofResponse>;
-    /** `eth_getStorageAt` — storage word + Merkle proof. */
+    /**
+     * `eth_getStorageAt` — storage word + Merkle proof.
+     *
+     * The node returns a proof-wrapped object
+     * `{ value, proof, stateRoot, blockNumber }` (some builds use a bare
+     * `0x…` hex word). Both shapes are normalized to a consistent
+     * {@link AccountProofResponse} via {@link normalizeAccountProof}; `.value`
+     * is always the bare storage word (even-length hex, `0x0` when zero).
+     */
     ethGetStorageAt(address: string, slot: string, block?: BlockSelector): Promise<AccountProofResponse>;
     /** `eth_getTransactionCount` — sender nonce. */
     ethGetTransactionCount(address: string, block?: BlockSelector): Promise<bigint>;
@@ -6128,7 +6142,12 @@ declare class RpcClient {
     lythListProviders(capabilityMask: number, cursor?: string | null, limit?: number): Promise<RegistryRecord[]>;
     /** `lyth_getRegistration` — single registry lookup. */
     lythGetRegistration(peerId: string): Promise<RegistryRecord | null>;
-    /** `lyth_registryStateProof` — Merkle proof for a registry entry. */
+    /**
+     * `lyth_registryStateProof` — Merkle proof for a registry entry.
+     *
+     * Normalized through {@link normalizeAccountProof} so a bare-hex or
+     * proof-wrapped answer both yield a consistent {@link AccountProofResponse}.
+     */
     lythRegistryStateProof(peerId: string): Promise<AccountProofResponse>;
     /** `lyth_getAccountPolicy` — privacy posture for an account. */
     lythGetAccountPolicy(address: string): Promise<AccountPolicy>;

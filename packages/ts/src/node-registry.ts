@@ -1741,7 +1741,7 @@ export function decodeActiveCharter(
   delegatorWord: string | Uint8Array | readonly number[],
   membersWord: string | Uint8Array | readonly number[],
 ): ActiveCharterView {
-  const presence = expectLength(toBytes(delegatorWord), 32, "charterDelegatorWord");
+  const presence = leftPadToWord(toBytes(delegatorWord), "charterDelegatorWord");
   let raw = 0n;
   for (const b of presence) {
     raw = (raw << 8n) | BigInt(b);
@@ -1750,7 +1750,7 @@ export function decodeActiveCharter(
     return { present: false, delegatorShareBps: 0, memberShareBps: [] };
   }
   const delegatorShareBps = Number(raw - 1n > 0xffffn ? 0xffffn : raw - 1n);
-  const packed = expectLength(toBytes(membersWord), 32, "charterMembersWord");
+  const packed = leftPadToWord(toBytes(membersWord), "charterMembersWord");
   const memberShareBps: number[] = [];
   for (let i = 0; i < NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT; i += 1) {
     const at = 12 + 2 * i;
@@ -2284,6 +2284,23 @@ function padToWord(bytes: Uint8Array): Uint8Array {
   return out;
 }
 
+/**
+ * Left-pad a storage word to a full 32 bytes (big-endian). The node returns
+ * storage words as minimal-quantity hex (`eth_getStorageAt` strips leading
+ * zeros, so a zero word is `0x0` and a small value is `0x…` shorter than 32
+ * bytes); a 32-byte SLOAD result is recovered by left-padding. Throws when
+ * the input is already wider than a word.
+ */
+function leftPadToWord(bytes: Uint8Array, name: string): Uint8Array {
+  if (bytes.length === 32) return bytes;
+  if (bytes.length > 32) {
+    throw new NodeRegistryError(`${name} must be <= 32 bytes, got ${bytes.length}`);
+  }
+  const out = new Uint8Array(32);
+  out.set(bytes, 32 - bytes.length);
+  return out;
+}
+
 function toBytes(value: string | Uint8Array | readonly number[]): Uint8Array {
   if (typeof value === "string") {
     return hexToBytes(value);
@@ -2306,10 +2323,14 @@ function displayTextBytes(value: string, maxBytes: number, name: string): Uint8A
 }
 
 function hexToBytes(hex: string): Uint8Array {
-  const body = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
-  if (body.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(body)) {
+  const raw = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
+  if (!/^[0-9a-fA-F]*$/.test(raw)) {
     throw new NodeRegistryError("invalid hex bytes");
   }
+  // The chain serializes storage words / quantities as minimal-quantity hex
+  // (leading zeros stripped), which can be odd-length (e.g. `0x0`). Treat an
+  // odd nibble count as a left-padded byte rather than rejecting it.
+  const body = raw.length % 2 !== 0 ? `0${raw}` : raw;
   const out = new Uint8Array(body.length / 2);
   for (let i = 0; i < out.length; i++) {
     out[i] = Number.parseInt(body.slice(i * 2, i * 2 + 2), 16);
