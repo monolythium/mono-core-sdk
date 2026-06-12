@@ -781,7 +781,7 @@ describe("service-reward + charter-governance encoders", () => {
     expect(NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN).toBe("monolythium.archive-challenge.v1");
     expect(NODE_REGISTRY_ARCHIVE_NONCE_DOMAIN).toBe("monolythium.archive-challenge.nonce.v1");
     expect(NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH).toBe(40);
-    expect(NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT).toBe(256n);
+    expect(NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT).toBe(65536n);
     expect(NODE_REGISTRY_CHALLENGE_EPOCH_WINDOW).toBe(2n);
     expect(NODE_REGISTRY_ARCHIVE_KIND_EPOCH_SEED).toBe(0x03);
     expect(NODE_REGISTRY_TAG_ARCHIVE_CHALLENGE).toBe(0x32);
@@ -934,14 +934,14 @@ describe("service-reward + charter-governance encoders", () => {
       peerId,
       shardIndex: 3,
       shardRoot,
-      leafCount: 1000n,
+      leafCount: 65536n,
     });
     const bytes = hexBytes(calldata);
     expect(bytes.slice(0, 4)).toEqual(hexBytes(NODE_REGISTRY_SELECTORS.commitArchiveRoot));
     expect(bytes.slice(4, 36)).toEqual(peerId);
     expect(wordBigint(bytes.slice(36, 68))).toBe(3n);
     expect(bytes.slice(68, 100)).toEqual(shardRoot);
-    expect(wordBigint(bytes.slice(100, 132))).toBe(1000n);
+    expect(wordBigint(bytes.slice(100, 132))).toBe(65536n);
     expect(bytes.length).toBe(4 + 4 * 32);
   });
 
@@ -1037,7 +1037,7 @@ describe("service-reward + charter-governance encoders", () => {
     // (0xcd…cd) + the seed-derived nonce, over a 256-leaf tree.
     const seed = new Uint8Array(32).fill(0xcd);
     const opHash = new Uint8Array(32).fill(0x11);
-    const c = deriveArchiveChallenge(seed, opHash, 3, 7, NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT);
+    const c = deriveArchiveChallenge(seed, opHash, 3, 7, 256n);
     expect(c).not.toBeNull();
     expect(c!.seed).toBe("0xffa5a9214d02a6a05dac914d4faafa6a93fa24ff4231a42662024c9cf4131e6c");
     expect(c!.leafIndex).toBe(160n);
@@ -1056,7 +1056,7 @@ describe("service-reward + charter-governance encoders", () => {
     // encoder does); a mismatch = Monarch submits the wrong calldata.
     const seed = new Uint8Array(32).fill(0xcd);
     const opHash = new Uint8Array(32).fill(0x11);
-    const c = deriveArchiveChallenge(seed, opHash, 3, 7, NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT);
+    const c = deriveArchiveChallenge(seed, opHash, 3, 7, 256n);
     expect(c!.leafIndex).toBe(160n);
     const leaf = new TextEncoder().encode("archive-leaf-0160");
     const proof = [

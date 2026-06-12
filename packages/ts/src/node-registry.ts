@@ -230,7 +230,7 @@ export const NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH = 40;
  * SDK enforces it client-side before a nonce is burned. Mirrors mono-core
  * `archive_challenge::MIN_ARCHIVE_LEAF_COUNT`.
  */
-export const NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT = 256n;
+export const NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT = 65536n;
 /**
  * Component B (BLOCKER-1) — how many epochs back from the current epoch an
  * `answerArchiveChallenge` may target on-chain. Informational mirror of
