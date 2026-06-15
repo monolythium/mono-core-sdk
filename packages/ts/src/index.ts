@@ -246,6 +246,18 @@ export type {
   VerticesAtRoundResponse,
 } from "./client.js";
 export {
+  isQuarantineError,
+  selectTrustedOperator,
+  selectTrustedOperatorForNetwork,
+  verifyOperatorGenesis,
+  OperatorTrustError,
+  QUARANTINED_RPC_CODE,
+} from "./operator-trust.js";
+export type {
+  GenesisVerdict,
+  OperatorTrustReason,
+} from "./operator-trust.js";
+export {
   API_STREAM_TOPICS,
   NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC,
   assertNativeMarketOrderBookStreamPayload,
