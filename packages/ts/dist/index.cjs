@@ -7510,6 +7510,92 @@ function concatBytes5(...parts) {
   }
   return out;
 }
+
+// src/operator-trust.ts
+var GENESIS_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
+var QUARANTINED_RPC_CODE = -32047;
+function normaliseHash(input) {
+  return typeof input === "string" && GENESIS_HASH_RE.test(input) ? input.toLowerCase() : null;
+}
+function isQuarantineError(err) {
+  if (err instanceof SdkError && err.code === QUARANTINED_RPC_CODE) return true;
+  const message = err instanceof Error ? err.message : String(err);
+  return /quarantin/i.test(message);
+}
+async function verifyOperatorGenesis(client, expectedGenesisHash) {
+  const pinned = normaliseHash(expectedGenesisHash);
+  try {
+    const stats = await client.lythChainStats();
+    const observed = normaliseHash(stats.genesisHash);
+    if (observed === null) {
+      return { ok: false, observed: null, quarantined: false };
+    }
+    return { ok: pinned !== null && observed === pinned, observed, quarantined: false };
+  } catch (err) {
+    if (isQuarantineError(err)) {
+      return { ok: false, observed: null, quarantined: true };
+    }
+    return { ok: false, observed: null, quarantined: false };
+  }
+}
+var OperatorTrustError = class extends SdkError {
+  reason;
+  constructor(reason, message) {
+    super("endpoint", message);
+    this.name = "OperatorTrustError";
+    this.reason = reason;
+  }
+};
+async function selectTrustedOperator(chain, options = {}) {
+  if (chain.rpc.length === 0) {
+    throw new OperatorTrustError(
+      "unreachable",
+      `network ${chain.network} has no RPC endpoints`
+    );
+  }
+  const expectedChainId = BigInt(chain.chain_id);
+  let sawRegenesis = false;
+  let sawWrongChain = false;
+  let sawUntrusted = false;
+  let sawQuarantined = false;
+  const probes = chain.rpc.map(async (ep) => {
+    const client = new RpcClient(ep.url, options);
+    let chainId;
+    try {
+      chainId = await client.ethChainId();
+    } catch (err) {
+      if (isQuarantineError(err)) sawQuarantined = true;
+      throw err;
+    }
+    if (chainId !== expectedChainId) {
+      sawWrongChain = true;
+      throw new SdkError("endpoint", `${ep.url}: chain id ${chainId} != ${chain.chain_id}`);
+    }
+    const verdict = await verifyOperatorGenesis(client, chain.genesis_hash);
+    if (verdict.quarantined) {
+      sawQuarantined = true;
+      throw new SdkError("endpoint", `${ep.url}: quarantined`);
+    }
+    if (!verdict.ok) {
+      if (verdict.observed !== null) sawRegenesis = true;
+      else sawUntrusted = true;
+      throw new SdkError("endpoint", `${ep.url}: genesis not trusted`);
+    }
+    return client;
+  });
+  try {
+    return await Promise.any(probes);
+  } catch {
+    const reason = sawRegenesis ? "regenesis" : sawWrongChain ? "wrong-chain" : sawUntrusted ? "untrusted" : sawQuarantined ? "quarantined" : "unreachable";
+    throw new OperatorTrustError(
+      reason,
+      `no trusted operator for ${chain.network} (${reason})`
+    );
+  }
+}
+async function selectTrustedOperatorForNetwork(network = "testnet-69420", options = {}) {
+  return selectTrustedOperator(getChainInfo(network), options);
+}
 var NO_EVM_RECEIPT_PROOF_SCHEMA = "mono.no_evm_receipt_proof.v1";
 var NO_EVM_RECEIPT_PROOF_TYPE = "canonicalReceiptsTranscript";
 var NO_EVM_RECEIPT_INCLUSION_PROOF_TYPE = "canonicalReceiptInclusion";
@@ -12434,6 +12520,7 @@ exports.OPERATOR_ROUTER_EVENT_SIGS = OPERATOR_ROUTER_EVENT_SIGS;
 exports.OPERATOR_ROUTER_SELECTORS = OPERATOR_ROUTER_SELECTORS;
 exports.OPERATOR_ROUTER_SIGS = OPERATOR_ROUTER_SIGS;
 exports.ORACLE_EVENT_SIGS = ORACLE_EVENT_SIGS;
+exports.OperatorTrustError = OperatorTrustError;
 exports.OracleEventError = OracleEventError;
 exports.PENDING_CHANGE_KIND_CODES = PENDING_CHANGE_KIND_CODES;
 exports.PRECOMPILE_ADDRESSES = PRECOMPILE_ADDRESSES;
@@ -12450,6 +12537,7 @@ exports.PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN = PUBKEY_REGISTRY_ML_DSA_65_PUB
 exports.PUBKEY_REGISTRY_SELECTORS = PUBKEY_REGISTRY_SELECTORS;
 exports.ProverMarketError = ProverMarketError;
 exports.PubkeyRegistryError = PubkeyRegistryError;
+exports.QUARANTINED_RPC_CODE = QUARANTINED_RPC_CODE;
 exports.REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT = REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT;
 exports.RESERVED_ADDRESS_HRPS = RESERVED_ADDRESS_HRPS;
 exports.RpcClient = RpcClient;
@@ -12751,6 +12839,7 @@ exports.isBridgeResumeCooldownActiveRevert = isBridgeResumeCooldownActiveRevert;
 exports.isConcreteServiceProbeStatus = isConcreteServiceProbeStatus;
 exports.isNativeDecodedEvent = isNativeDecodedEvent;
 exports.isNativeMarketOrderBookStreamPayload = isNativeMarketOrderBookStreamPayload;
+exports.isQuarantineError = isQuarantineError;
 exports.isSinglePublicServiceProbeMask = isSinglePublicServiceProbeMask;
 exports.isUnexpectedValueRevert = isUnexpectedValueRevert;
 exports.isValidNodeRegistryCapabilities = isValidNodeRegistryCapabilities;
@@ -12812,6 +12901,8 @@ exports.resolveMaxExecutionUnitPrice = resolveMaxExecutionUnitPrice;
 exports.resolveRegistryExecutionFee = resolveRegistryExecutionFee;
 exports.resolveStudioHostStatus = resolveStudioHostStatus;
 exports.selectBridgeTransferRoute = selectBridgeTransferRoute;
+exports.selectTrustedOperator = selectTrustedOperator;
+exports.selectTrustedOperatorForNetwork = selectTrustedOperatorForNetwork;
 exports.serviceMaskToBitIndex = serviceMaskToBitIndex;
 exports.serviceProbeStatusLabel = serviceProbeStatusLabel;
 exports.setDestinationRoot = setDestinationRoot;
@@ -12851,6 +12942,7 @@ exports.verifyNoEvmFinalityEvidenceMultisig = verifyNoEvmFinalityEvidenceMultisi
 exports.verifyNoEvmFinalityEvidenceThreshold = verifyNoEvmFinalityEvidenceThreshold;
 exports.verifyNoEvmReceiptProof = verifyNoEvmReceiptProof;
 exports.verifyNoEvmReceiptProofTrust = verifyNoEvmReceiptProofTrust;
+exports.verifyOperatorGenesis = verifyOperatorGenesis;
 exports.version = version;
 exports.vrfAddressHex = vrfAddressHex;
 //# sourceMappingURL=index.cjs.map
