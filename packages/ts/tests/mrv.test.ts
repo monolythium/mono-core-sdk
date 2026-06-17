@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  MRV_APP_CONTRACT_PARITY_CAPABILITY_ID,
   MRV_FORMAT_VERSION,
   MRV_DEPLOY_PAYLOAD_VERSION,
   MRV_PROFILE_MONO_RV32IM_V1,
@@ -28,7 +29,9 @@ import {
   formatNativeReceiptFeeDisplay,
   formatLyth,
   formatLythoshi,
+  isMrvParityActive,
   mrvAddressToBech32,
+  mrvAppContractParityCapability,
   mrvBech32ToAddress,
   mrvCodeHashHex,
   mrvV1TransactionExtension,
@@ -47,7 +50,12 @@ import {
   MlDsa65Backend,
   bytesToHex,
 } from "../src/crypto/index.js";
-import type { MrvArtifactMetadata, MrvCallRequest, MrvDeployRequest } from "../src/index.js";
+import type {
+  CapabilitiesResponse,
+  MrvArtifactMetadata,
+  MrvCallRequest,
+  MrvDeployRequest,
+} from "../src/index.js";
 
 interface CapturedCall {
   method: string;
@@ -302,6 +310,75 @@ describe("MRV/RISC-V SDK helpers", () => {
     expect(() => validateMrvArtifactMetadata(badImport, Uint8Array.from([0x13, 0x00, 0x00, 0x00]))).toThrow(
       /forbidden host import/,
     );
+  });
+
+  it("recognizes the EVM-parity context syscalls during import resolution", () => {
+    const code = Uint8Array.from([0x13, 0x00, 0x00, 0x00]);
+    const metadata = validMetadata();
+    metadata.imports = [
+      { module: "mono", name: "block_timestamp", id: 0x0205 },
+      { module: "mono", name: "chain_id", id: 0x0206 },
+      { module: "mono", name: "call_value", id: 0x0207 },
+    ];
+    metadata.codeHash = mrvCodeHashHex(code);
+    const validated = validateMrvArtifactMetadata(metadata, code);
+    expect(validated.syscalls).toEqual([
+      { id: 0x0205, name: "block_timestamp" },
+      { id: 0x0206, name: "chain_id" },
+      { id: 0x0207, name: "call_value" },
+    ]);
+  });
+
+  it("feature-detects MRV parity activation via lyth_capabilities", () => {
+    const parityAddr = "0x000000000000000000000000000000000000aabb";
+    const active: CapabilitiesResponse = {
+      blockNumber: 5_000n,
+      capabilities: {
+        [parityAddr]: {
+          address: parityAddr,
+          capabilityId: MRV_APP_CONTRACT_PARITY_CAPABILITY_ID,
+          capabilityName: "MRV EVM-parity context",
+          kind: "gateable",
+          active: true,
+          activationHeight: 4_096n,
+        },
+      },
+      nativeModuleForwarders: {},
+    };
+    expect(mrvAppContractParityCapability(active)?.capabilityId).toBe(
+      MRV_APP_CONTRACT_PARITY_CAPABILITY_ID,
+    );
+    // active && currentHeight >= activationHeight
+    expect(isMrvParityActive(active, 5_000)).toBe(true);
+    expect(isMrvParityActive(active, 4_096n)).toBe(true);
+    expect(isMrvParityActive(active, 4_095)).toBe(false);
+
+    // Reported but not yet activated.
+    const pending: CapabilitiesResponse = {
+      blockNumber: 100n,
+      capabilities: {
+        [parityAddr]: {
+          address: parityAddr,
+          capabilityId: MRV_APP_CONTRACT_PARITY_CAPABILITY_ID,
+          capabilityName: "MRV EVM-parity context",
+          kind: "gateable",
+          active: false,
+          activationHeight: null,
+        },
+      },
+      nativeModuleForwarders: {},
+    };
+    expect(mrvAppContractParityCapability(pending)).toBeDefined();
+    expect(isMrvParityActive(pending, 1_000_000)).toBe(false);
+
+    // Older node that does not report the capability -> false default.
+    const legacy: CapabilitiesResponse = {
+      blockNumber: 100n,
+      capabilities: {},
+      nativeModuleForwarders: {},
+    };
+    expect(mrvAppContractParityCapability(legacy)).toBeUndefined();
+    expect(isMrvParityActive(legacy, 1_000_000)).toBe(false);
   });
 
   it("exports typed bech32m address and MRV transaction extension helpers", () => {

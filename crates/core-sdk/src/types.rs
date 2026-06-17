@@ -4837,6 +4837,55 @@ pub struct CapabilitiesResponse {
     pub native_module_forwarders: BTreeMap<String, Vec<NativeModuleForwarderDescriptor>>,
 }
 
+/// Stable capability id for the MRV EVM-parity feature set
+/// (`block_timestamp`/`chain_id`/`call_value` host syscalls, the synthesized
+/// bare-deploy receipt sidecar, and hardened metering). Surfaced through
+/// `lyth_capabilities` and gated at a foundation-signed milestone height.
+///
+/// The deploy/call/constructor lane is always live and is **not** gated on
+/// this capability — only the parity additions activate at the milestone.
+pub const MRV_APP_CONTRACT_PARITY_CAPABILITY_ID: &str = "mrv_app_contract_parity";
+
+impl CapabilitiesResponse {
+    /// Returns the [`CapabilityDescriptor`] for a stable capability id, if the
+    /// node reports it. Matches on [`CapabilityDescriptor::capability_id`]
+    /// rather than the address key, so callers feature-detect by id.
+    #[must_use]
+    pub fn capability_by_id(&self, capability_id: &str) -> Option<&CapabilityDescriptor> {
+        self.capabilities
+            .values()
+            .find(|descriptor| descriptor.capability_id == capability_id)
+    }
+
+    /// Returns the MRV EVM-parity capability descriptor, if the node reports it.
+    #[must_use]
+    pub fn mrv_app_contract_parity(&self) -> Option<&CapabilityDescriptor> {
+        self.capability_by_id(MRV_APP_CONTRACT_PARITY_CAPABILITY_ID)
+    }
+
+    /// Feature-detects whether the MRV EVM-parity additions are active at
+    /// `current_height`.
+    ///
+    /// Returns `true` only when the node reports the capability as active and
+    /// `current_height` has reached its activation milestone. Pre-milestone
+    /// nodes, or older nodes that do not report the capability at all, yield
+    /// `false` (forward-compatible default). This never gates the always-live
+    /// deploy/call/constructor lane.
+    #[must_use]
+    pub fn is_mrv_parity_active(&self, current_height: u64) -> bool {
+        match self.mrv_app_contract_parity() {
+            Some(descriptor) => {
+                descriptor.active
+                    && match descriptor.activation_height {
+                        Some(activation_height) => current_height >= activation_height,
+                        None => false,
+                    }
+            }
+            None => false,
+        }
+    }
+}
+
 /// One signature row in `lyth_getLatestCheckpoint`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-bindings", derive(TS))]
@@ -6180,6 +6229,65 @@ mod tests {
         }))
         .unwrap();
         assert!(legacy.native_module_forwarders.is_empty());
+    }
+
+    #[test]
+    fn mrv_parity_capability_feature_detection() {
+        let parity_addr = "0x000000000000000000000000000000000000aabb";
+        let active: CapabilitiesResponse = serde_json::from_value(serde_json::json!({
+            "blockNumber": 5_000,
+            "capabilities": {
+                parity_addr: {
+                    "address": parity_addr,
+                    "capabilityId": MRV_APP_CONTRACT_PARITY_CAPABILITY_ID,
+                    "capabilityName": "MRV EVM-parity context",
+                    "kind": "gateable",
+                    "active": true,
+                    "activationHeight": 4_096
+                }
+            }
+        }))
+        .unwrap();
+
+        let descriptor = active
+            .mrv_app_contract_parity()
+            .expect("parity capability reported");
+        assert_eq!(
+            descriptor.capability_id,
+            MRV_APP_CONTRACT_PARITY_CAPABILITY_ID
+        );
+        // Above the activation height -> active.
+        assert!(active.is_mrv_parity_active(5_000));
+        assert!(active.is_mrv_parity_active(4_096));
+        // Below the activation height -> not yet active.
+        assert!(!active.is_mrv_parity_active(4_095));
+
+        // Reported but not yet active.
+        let pending: CapabilitiesResponse = serde_json::from_value(serde_json::json!({
+            "blockNumber": 100,
+            "capabilities": {
+                parity_addr: {
+                    "address": parity_addr,
+                    "capabilityId": MRV_APP_CONTRACT_PARITY_CAPABILITY_ID,
+                    "capabilityName": "MRV EVM-parity context",
+                    "kind": "gateable",
+                    "active": false,
+                    "activationHeight": null
+                }
+            }
+        }))
+        .unwrap();
+        assert!(pending.mrv_app_contract_parity().is_some());
+        assert!(!pending.is_mrv_parity_active(1_000_000));
+
+        // Older node that does not report the capability -> false default.
+        let legacy: CapabilitiesResponse = serde_json::from_value(serde_json::json!({
+            "blockNumber": 100,
+            "capabilities": {}
+        }))
+        .unwrap();
+        assert!(legacy.mrv_app_contract_parity().is_none());
+        assert!(!legacy.is_mrv_parity_active(1_000_000));
     }
 
     #[test]

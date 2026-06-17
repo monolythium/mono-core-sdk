@@ -8,6 +8,8 @@ import {
 } from "./crypto/submission.js";
 import { BincodeWriter } from "./crypto/bincode.js";
 
+export type { CapabilitiesResponse } from "./bindings/CapabilitiesResponse.js";
+export type { CapabilityDescriptor } from "./bindings/CapabilityDescriptor.js";
 export type { MrvAbiManifest } from "./bindings/MrvAbiManifest.js";
 export type { MrvAbiParam } from "./bindings/MrvAbiParam.js";
 export type { MrvAbiSymbol } from "./bindings/MrvAbiSymbol.js";
@@ -37,6 +39,8 @@ export type { MrvTypedAddress } from "./bindings/MrvTypedAddress.js";
 export type { MrvValidatedArtifactMetadata } from "./bindings/MrvValidatedArtifactMetadata.js";
 
 import type { AddressKind } from "./address.js";
+import type { CapabilitiesResponse } from "./bindings/CapabilitiesResponse.js";
+import type { CapabilityDescriptor } from "./bindings/CapabilityDescriptor.js";
 import type { MrvAbiManifest } from "./bindings/MrvAbiManifest.js";
 import type { MrvAbiType } from "./bindings/MrvAbiType.js";
 import type { MrvAddressKind } from "./bindings/MrvAddressKind.js";
@@ -201,6 +205,9 @@ const SYSCALLS = [
   [0x0202, "contract_address"],
   [0x0203, "block_height"],
   [0x0204, "block_hash"],
+  [0x0205, "block_timestamp"],
+  [0x0206, "chain_id"],
+  [0x0207, "call_value"],
   [0x0301, "call_contract"],
   [0x0302, "emit_event"],
   [0x0303, "transfer_native"],
@@ -211,6 +218,64 @@ const SYSCALLS = [
 
 const SYSCALL_NAME_BY_ID = new Map<number, string>(SYSCALLS);
 const SYSCALL_ID_BY_NAME = new Map<string, number>(SYSCALLS.map(([id, name]) => [name, id]));
+
+/**
+ * Stable capability id for the MRV EVM-parity feature set (the
+ * `block_timestamp`/`chain_id`/`call_value` host syscalls, the synthesized
+ * bare-deploy receipt sidecar, and hardened metering). Surfaced through
+ * `lyth_capabilities` and gated at a foundation-signed milestone height.
+ *
+ * The deploy/call/constructor lane is always live and is **not** gated on this
+ * capability — only the parity additions activate at the milestone.
+ */
+export const MRV_APP_CONTRACT_PARITY_CAPABILITY_ID = "mrv_app_contract_parity";
+
+/**
+ * Looks up a capability descriptor by its stable `capabilityId`, scanning the
+ * address-keyed `capabilities` map of a {@link CapabilitiesResponse}. Returns
+ * `undefined` when the node does not report the capability (older nodes).
+ */
+export function findCapabilityById(
+  capabilities: CapabilitiesResponse,
+  capabilityId: string,
+): CapabilityDescriptor | undefined {
+  for (const descriptor of Object.values(capabilities.capabilities)) {
+    if (descriptor && descriptor.capabilityId === capabilityId) {
+      return descriptor;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Returns the MRV EVM-parity capability descriptor, or `undefined` when the
+ * node does not report it.
+ */
+export function mrvAppContractParityCapability(
+  capabilities: CapabilitiesResponse,
+): CapabilityDescriptor | undefined {
+  return findCapabilityById(capabilities, MRV_APP_CONTRACT_PARITY_CAPABILITY_ID);
+}
+
+/**
+ * Feature-detects whether the MRV EVM-parity additions are active at
+ * `currentHeight`, per the capability contract:
+ * `active && currentHeight >= activationHeight`.
+ *
+ * Pre-milestone nodes, or older nodes that do not report the capability at
+ * all, yield `false` (forward-compatible default). This never gates the
+ * always-live deploy/call/constructor lane.
+ */
+export function isMrvParityActive(
+  capabilities: CapabilitiesResponse,
+  currentHeight: bigint | number,
+): boolean {
+  const descriptor = mrvAppContractParityCapability(capabilities);
+  if (!descriptor || !descriptor.active || descriptor.activationHeight === null) {
+    return false;
+  }
+  return BigInt(currentHeight) >= BigInt(descriptor.activationHeight);
+}
 
 export class MrvValidationError extends Error {
   constructor(message: string) {
