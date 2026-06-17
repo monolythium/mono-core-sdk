@@ -2568,6 +2568,9 @@ var SYSCALLS = [
   [514, "contract_address"],
   [515, "block_height"],
   [516, "block_hash"],
+  [517, "block_timestamp"],
+  [518, "chain_id"],
+  [519, "call_value"],
   [769, "call_contract"],
   [770, "emit_event"],
   [771, "transfer_native"],
@@ -2577,6 +2580,25 @@ var SYSCALLS = [
 ];
 var SYSCALL_NAME_BY_ID = new Map(SYSCALLS);
 var SYSCALL_ID_BY_NAME = new Map(SYSCALLS.map(([id, name]) => [name, id]));
+var MRV_APP_CONTRACT_PARITY_CAPABILITY_ID = "mrv_app_contract_parity";
+function findCapabilityById(capabilities, capabilityId) {
+  for (const descriptor of Object.values(capabilities.capabilities)) {
+    if (descriptor && descriptor.capabilityId === capabilityId) {
+      return descriptor;
+    }
+  }
+  return void 0;
+}
+function mrvAppContractParityCapability(capabilities) {
+  return findCapabilityById(capabilities, MRV_APP_CONTRACT_PARITY_CAPABILITY_ID);
+}
+function isMrvParityActive(capabilities, currentHeight) {
+  const descriptor = mrvAppContractParityCapability(capabilities);
+  if (!descriptor || !descriptor.active || descriptor.activationHeight === null) {
+    return false;
+  }
+  return BigInt(currentHeight) >= BigInt(descriptor.activationHeight);
+}
 var MrvValidationError = class extends Error {
   constructor(message) {
     super(message);
@@ -12422,6 +12444,7 @@ exports.ML_DSA_65_SIGNATURE_LEN = ML_DSA_65_SIGNATURE_LEN2;
 exports.MONOLYTHIUM_NETWORKS = MONOLYTHIUM_NETWORKS;
 exports.MONOLYTHIUM_TESTNET_CHAIN_ID = MONOLYTHIUM_TESTNET_CHAIN_ID;
 exports.MONOLYTHIUM_TESTNET_NETWORK_NAME = MONOLYTHIUM_TESTNET_NETWORK_NAME;
+exports.MRV_APP_CONTRACT_PARITY_CAPABILITY_ID = MRV_APP_CONTRACT_PARITY_CAPABILITY_ID;
 exports.MRV_DEPLOY_PAYLOAD_VERSION = MRV_DEPLOY_PAYLOAD_VERSION;
 exports.MRV_FORMAT_VERSION = MRV_FORMAT_VERSION;
 exports.MRV_MAX_ABI_SYMBOLS = MRV_MAX_ABI_SYMBOLS;
@@ -12819,6 +12842,7 @@ exports.encodeVrfEvaluateCalldata = encodeVrfEvaluateCalldata;
 exports.exportBridgeRouteCatalogueJson = exportBridgeRouteCatalogueJson;
 exports.fetchChainInfoLatest = fetchChainInfoLatest;
 exports.fetchChainRegistryLatest = fetchChainRegistryLatest;
+exports.findCapabilityById = findCapabilityById;
 exports.formClusterMessage = formClusterMessage;
 exports.formClusterMessageHex = formClusterMessageHex;
 exports.formClusterMessageV2 = formClusterMessageV2;
@@ -12837,6 +12861,7 @@ exports.isBridgeCooldownZeroRevert = isBridgeCooldownZeroRevert;
 exports.isBridgeFinalityZeroRevert = isBridgeFinalityZeroRevert;
 exports.isBridgeResumeCooldownActiveRevert = isBridgeResumeCooldownActiveRevert;
 exports.isConcreteServiceProbeStatus = isConcreteServiceProbeStatus;
+exports.isMrvParityActive = isMrvParityActive;
 exports.isNativeDecodedEvent = isNativeDecodedEvent;
 exports.isNativeMarketOrderBookStreamPayload = isNativeMarketOrderBookStreamPayload;
 exports.isQuarantineError = isQuarantineError;
@@ -12845,6 +12870,7 @@ exports.isUnexpectedValueRevert = isUnexpectedValueRevert;
 exports.isValidNodeRegistryCapabilities = isValidNodeRegistryCapabilities;
 exports.isValidPublicServiceProbeMask = isValidPublicServiceProbeMask;
 exports.mrvAddressToBech32 = mrvAddressToBech32;
+exports.mrvAppContractParityCapability = mrvAppContractParityCapability;
 exports.mrvBech32ToAddress = mrvBech32ToAddress;
 exports.mrvCodeHashHex = mrvCodeHashHex;
 exports.mrvV1TransactionExtension = mrvV1TransactionExtension;
