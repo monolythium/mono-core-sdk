@@ -1,5 +1,29 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { blake3 } from "@noble/hashes/blake3.js";
+
+// Canonical MRV code-hash domain, matching the node runtime and the SDK's
+// `mrvCodeHashHex`: BLAKE3("MONO_MRV_CODE_V1" || u64_be(len) || codeBytes).
+const MRV_CODE_HASH_DOMAIN = new TextEncoder().encode("MONO_MRV_CODE_V1");
+
+/**
+ * Canonical MRV code hash over the compiled RISC-V code section, identical to
+ * the node runtime and `@monolythium/core-sdk`'s `mrvCodeHashHex`.
+ *
+ * `code` must be the raw compiled code-section bytes (Uint8Array/Buffer). This
+ * is only meaningful once a real Rust -> RISC-V toolchain produces those bytes;
+ * see `buildArtifact`'s preview fallback for the current behaviour.
+ */
+export function mrvCodeHashHex(code) {
+  const codeBytes = code instanceof Uint8Array ? code : Uint8Array.from(code ?? []);
+  const len = new Uint8Array(8);
+  new DataView(len.buffer).setBigUint64(0, BigInt(codeBytes.length), false);
+  const input = new Uint8Array(MRV_CODE_HASH_DOMAIN.length + len.length + codeBytes.length);
+  input.set(MRV_CODE_HASH_DOMAIN, 0);
+  input.set(len, MRV_CODE_HASH_DOMAIN.length);
+  input.set(codeBytes, MRV_CODE_HASH_DOMAIN.length + len.length);
+  return Buffer.from(blake3(input)).toString("hex");
+}
 
 const templates = [
   {
@@ -89,7 +113,13 @@ pub fn read(current: u64) -> u64 {
   };
 }
 
-export function buildArtifact(project, sources) {
+// TODO(mrv-toolchain): the full Rust -> RISC-V compiler is not wired here yet.
+// Once a pinned toolchain produces a deterministic code section, pass those
+// bytes as `options.compiledCode` so `buildArtifact` emits the canonical
+// `mrv-artifact` with a real BLAKE3 `codeHash` (via `mrvCodeHashHex`). Until
+// then the build is a clearly-labelled preview that does NOT produce a
+// canonical, deployable artifact hash.
+export function buildArtifact(project, sources, options = {}) {
   const template = getTemplate(project.templateId);
   const sourceBundleHash = sha256(sources);
   const abiManifest = {
@@ -101,10 +131,23 @@ export function buildArtifact(project, sources) {
       { name: "read", inputs: [], output: "u64", mutatesState: false },
     ],
   };
-  const codeHash = sha256({ project, sources });
+
+  const compiledCode = options.compiledCode;
+  const hasCompiledCode =
+    compiledCode instanceof Uint8Array || Array.isArray(compiledCode);
+
+  // Canonical path: when the compiled code section is available, the code hash
+  // is the real BLAKE3 digest the chain will verify against. Otherwise fall
+  // back to a labelled preview hash that is explicitly NOT canonical.
+  const codeHash = hasCompiledCode
+    ? mrvCodeHashHex(compiledCode)
+    : sha256({ project, sources });
   const artifactHash = sha256({ codeHash, sourceBundleHash, abiManifest });
+
   return {
-    kind: "mrv-artifact-preview",
+    kind: hasCompiledCode ? "mrv-artifact" : "mrv-artifact-preview",
+    preview: !hasCompiledCode,
+    codeHashCanonical: hasCompiledCode,
     artifactHash,
     codeHash,
     sourceBundleHash,
@@ -118,7 +161,17 @@ export function buildArtifact(project, sources) {
       sdkVersion: project.sdkVersion,
       monoCoreCommit: project.monoCoreCommit,
       builtAt: new Date().toISOString(),
+      // The preview compiler does not pin a toolchain; a canonical build must
+      // record the toolchain that produced `compiledCode`.
+      toolchain: hasCompiledCode ? (options.toolchain ?? null) : "mono-dev-preview",
     },
+    diagnostics: hasCompiledCode
+      ? []
+      : [
+          "Preview build: codeHash is a non-canonical sha256 of project+sources, " +
+            "not the BLAKE3 hash of compiled RISC-V code. Supply options.compiledCode " +
+            "from a pinned Rust -> RISC-V toolchain to produce a canonical artifact.",
+        ],
   };
 }
 

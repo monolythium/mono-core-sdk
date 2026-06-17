@@ -27,7 +27,11 @@ importers:
         specifier: 2.2.0
         version: 2.2.0
 
-  packages/mono-dev: {}
+  packages/mono-dev:
+    dependencies:
+      '@noble/hashes':
+        specifier: 2.2.0
+        version: 2.2.0
 
   packages/ts:
     dependencies:
