@@ -330,24 +330,22 @@ describe("MRV/RISC-V SDK helpers", () => {
   });
 
   it("feature-detects MRV parity activation via lyth_capabilities", () => {
-    const parityAddr = "0x000000000000000000000000000000000000aabb";
+    // The node publishes the parity gate under the `runtimeFeatures` map
+    // (a sibling to the address-keyed `capabilities` map), keyed by the
+    // stable feature id, value `{ active, activationHeight }`.
     const active: CapabilitiesResponse = {
       blockNumber: 5_000n,
-      capabilities: {
-        [parityAddr]: {
-          address: parityAddr,
-          capabilityId: MRV_APP_CONTRACT_PARITY_CAPABILITY_ID,
-          capabilityName: "MRV EVM-parity context",
-          kind: "gateable",
+      capabilities: {},
+      nativeModuleForwarders: {},
+      runtimeFeatures: {
+        [MRV_APP_CONTRACT_PARITY_CAPABILITY_ID]: {
           active: true,
           activationHeight: 4_096n,
         },
       },
-      nativeModuleForwarders: {},
     };
-    expect(mrvAppContractParityCapability(active)?.capabilityId).toBe(
-      MRV_APP_CONTRACT_PARITY_CAPABILITY_ID,
-    );
+    expect(mrvAppContractParityCapability(active)?.active).toBe(true);
+    expect(mrvAppContractParityCapability(active)?.activationHeight).toBe(4_096n);
     // active && currentHeight >= activationHeight
     expect(isMrvParityActive(active, 5_000)).toBe(true);
     expect(isMrvParityActive(active, 4_096n)).toBe(true);
@@ -356,29 +354,49 @@ describe("MRV/RISC-V SDK helpers", () => {
     // Reported but not yet activated.
     const pending: CapabilitiesResponse = {
       blockNumber: 100n,
-      capabilities: {
-        [parityAddr]: {
-          address: parityAddr,
-          capabilityId: MRV_APP_CONTRACT_PARITY_CAPABILITY_ID,
-          capabilityName: "MRV EVM-parity context",
-          kind: "gateable",
+      capabilities: {},
+      nativeModuleForwarders: {},
+      runtimeFeatures: {
+        [MRV_APP_CONTRACT_PARITY_CAPABILITY_ID]: {
           active: false,
           activationHeight: null,
         },
       },
-      nativeModuleForwarders: {},
     };
     expect(mrvAppContractParityCapability(pending)).toBeDefined();
     expect(isMrvParityActive(pending, 1_000_000)).toBe(false);
 
-    // Older node that does not report the capability -> false default.
+    // Older node that does not report the feature -> false default.
     const legacy: CapabilitiesResponse = {
       blockNumber: 100n,
       capabilities: {},
       nativeModuleForwarders: {},
+      runtimeFeatures: {},
     };
     expect(mrvAppContractParityCapability(legacy)).toBeUndefined();
     expect(isMrvParityActive(legacy, 1_000_000)).toBe(false);
+
+    // Regression: the parity gate lives in `runtimeFeatures`, never the
+    // address-keyed `capabilities` map. A precompile descriptor carrying the
+    // same id must NOT satisfy the parity feature-detect.
+    const parityAddr = "0x000000000000000000000000000000000000aabb";
+    const misplaced: CapabilitiesResponse = {
+      blockNumber: 5_000n,
+      capabilities: {
+        [parityAddr]: {
+          address: parityAddr,
+          capabilityId: MRV_APP_CONTRACT_PARITY_CAPABILITY_ID,
+          capabilityName: "decoy",
+          kind: "gateable",
+          active: true,
+          activationHeight: 1n,
+        },
+      },
+      nativeModuleForwarders: {},
+      runtimeFeatures: {},
+    };
+    expect(mrvAppContractParityCapability(misplaced)).toBeUndefined();
+    expect(isMrvParityActive(misplaced, 1_000_000)).toBe(false);
   });
 
   it("exports typed bech32m address and MRV transaction extension helpers", () => {

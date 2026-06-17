@@ -4835,15 +4835,47 @@ pub struct CapabilitiesResponse {
     #[serde(rename = "nativeModuleForwarders", default)]
     #[cfg_attr(feature = "ts-bindings", ts(rename = "nativeModuleForwarders"))]
     pub native_module_forwarders: BTreeMap<String, Vec<NativeModuleForwarderDescriptor>>,
+    /// Runtime-feature gates that are not bound to a precompile address —
+    /// milestone-folded execution dials — keyed by a stable feature id (e.g.
+    /// `mrv_app_contract_parity`). Surfaced under the `lyth_capabilities`
+    /// `runtimeFeatures` map, a sibling to the address-keyed `capabilities`
+    /// map. Empty/absent on older nodes that predate the map; a missing entry
+    /// reads as inactive (forward-compatible default).
+    #[serde(rename = "runtimeFeatures", default)]
+    #[cfg_attr(feature = "ts-bindings", ts(rename = "runtimeFeatures"))]
+    pub runtime_features: BTreeMap<String, RuntimeFeatureGate>,
 }
 
-/// Stable capability id for the MRV EVM-parity feature set
+/// One runtime-feature gate from the `lyth_capabilities` `runtimeFeatures`
+/// map. Runtime features are milestone-folded execution dials that are **not**
+/// bound to a precompile address (unlike [`CapabilityDescriptor`]); they are
+/// keyed by a stable feature id in [`CapabilitiesResponse::runtime_features`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(TS))]
+#[cfg_attr(
+    feature = "ts-bindings",
+    ts(export, export_to = "RuntimeFeatureGate.ts")
+)]
+pub struct RuntimeFeatureGate {
+    /// `true` once the chain has reached the activation height, as sampled by
+    /// the node against the response's `blockNumber`. An unscheduled feature,
+    /// or one whose activation height sits in the future, reads `false`.
+    pub active: bool,
+    /// Height of the milestone that scheduled the feature, or `None` if no
+    /// milestone has touched the dial. May sit in the future relative to the
+    /// sampled height (then `active` is `false`).
+    #[serde(rename = "activationHeight")]
+    pub activation_height: Option<u64>,
+}
+
+/// Stable feature id for the MRV EVM-parity feature set
 /// (`block_timestamp`/`chain_id`/`call_value` host syscalls, the synthesized
-/// bare-deploy receipt sidecar, and hardened metering). Surfaced through
-/// `lyth_capabilities` and gated at a foundation-signed milestone height.
+/// bare-deploy receipt sidecar, and hardened metering). Surfaced through the
+/// `lyth_capabilities` `runtimeFeatures` map (not the address-keyed
+/// `capabilities` map) and gated at a foundation-signed milestone height.
 ///
 /// The deploy/call/constructor lane is always live and is **not** gated on
-/// this capability — only the parity additions activate at the milestone.
+/// this feature — only the parity additions activate at the milestone.
 pub const MRV_APP_CONTRACT_PARITY_CAPABILITY_ID: &str = "mrv_app_contract_parity";
 
 impl CapabilitiesResponse {
@@ -4857,26 +4889,31 @@ impl CapabilitiesResponse {
             .find(|descriptor| descriptor.capability_id == capability_id)
     }
 
-    /// Returns the MRV EVM-parity capability descriptor, if the node reports it.
+    /// Returns the MRV EVM-parity runtime-feature gate, if the node reports it.
+    ///
+    /// Reads the `runtimeFeatures` map — where the node publishes runtime
+    /// gates that are not bound to a precompile address — **not** the
+    /// address-keyed `capabilities` map.
     #[must_use]
-    pub fn mrv_app_contract_parity(&self) -> Option<&CapabilityDescriptor> {
-        self.capability_by_id(MRV_APP_CONTRACT_PARITY_CAPABILITY_ID)
+    pub fn mrv_app_contract_parity(&self) -> Option<&RuntimeFeatureGate> {
+        self.runtime_features
+            .get(MRV_APP_CONTRACT_PARITY_CAPABILITY_ID)
     }
 
     /// Feature-detects whether the MRV EVM-parity additions are active at
     /// `current_height`.
     ///
-    /// Returns `true` only when the node reports the capability as active and
+    /// Returns `true` only when the node reports the gate as active and
     /// `current_height` has reached its activation milestone. Pre-milestone
-    /// nodes, or older nodes that do not report the capability at all, yield
+    /// nodes, or older nodes that do not report the feature at all, yield
     /// `false` (forward-compatible default). This never gates the always-live
     /// deploy/call/constructor lane.
     #[must_use]
     pub fn is_mrv_parity_active(&self, current_height: u64) -> bool {
         match self.mrv_app_contract_parity() {
-            Some(descriptor) => {
-                descriptor.active
-                    && match descriptor.activation_height {
+            Some(gate) => {
+                gate.active
+                    && match gate.activation_height {
                         Some(activation_height) => current_height >= activation_height,
                         None => false,
                     }
@@ -6233,15 +6270,14 @@ mod tests {
 
     #[test]
     fn mrv_parity_capability_feature_detection() {
-        let parity_addr = "0x000000000000000000000000000000000000aabb";
+        // The node publishes the parity gate under the `runtimeFeatures` map
+        // (a sibling to the address-keyed `capabilities` map), keyed by the
+        // stable feature id, value `{ active, activationHeight }`.
         let active: CapabilitiesResponse = serde_json::from_value(serde_json::json!({
             "blockNumber": 5_000,
-            "capabilities": {
-                parity_addr: {
-                    "address": parity_addr,
-                    "capabilityId": MRV_APP_CONTRACT_PARITY_CAPABILITY_ID,
-                    "capabilityName": "MRV EVM-parity context",
-                    "kind": "gateable",
+            "capabilities": {},
+            "runtimeFeatures": {
+                MRV_APP_CONTRACT_PARITY_CAPABILITY_ID: {
                     "active": true,
                     "activationHeight": 4_096
                 }
@@ -6249,13 +6285,11 @@ mod tests {
         }))
         .unwrap();
 
-        let descriptor = active
+        let gate = active
             .mrv_app_contract_parity()
-            .expect("parity capability reported");
-        assert_eq!(
-            descriptor.capability_id,
-            MRV_APP_CONTRACT_PARITY_CAPABILITY_ID
-        );
+            .expect("parity gate reported");
+        assert!(gate.active);
+        assert_eq!(gate.activation_height, Some(4_096));
         // Above the activation height -> active.
         assert!(active.is_mrv_parity_active(5_000));
         assert!(active.is_mrv_parity_active(4_096));
@@ -6265,12 +6299,9 @@ mod tests {
         // Reported but not yet active.
         let pending: CapabilitiesResponse = serde_json::from_value(serde_json::json!({
             "blockNumber": 100,
-            "capabilities": {
-                parity_addr: {
-                    "address": parity_addr,
-                    "capabilityId": MRV_APP_CONTRACT_PARITY_CAPABILITY_ID,
-                    "capabilityName": "MRV EVM-parity context",
-                    "kind": "gateable",
+            "capabilities": {},
+            "runtimeFeatures": {
+                MRV_APP_CONTRACT_PARITY_CAPABILITY_ID: {
                     "active": false,
                     "activationHeight": null
                 }
@@ -6280,7 +6311,7 @@ mod tests {
         assert!(pending.mrv_app_contract_parity().is_some());
         assert!(!pending.is_mrv_parity_active(1_000_000));
 
-        // Older node that does not report the capability -> false default.
+        // Older node that does not report the feature -> false default.
         let legacy: CapabilitiesResponse = serde_json::from_value(serde_json::json!({
             "blockNumber": 100,
             "capabilities": {}
@@ -6288,6 +6319,29 @@ mod tests {
         .unwrap();
         assert!(legacy.mrv_app_contract_parity().is_none());
         assert!(!legacy.is_mrv_parity_active(1_000_000));
+
+        // Regression: the parity gate lives in `runtimeFeatures`, never the
+        // address-keyed `capabilities` map. A precompile descriptor that
+        // happens to carry the same id must NOT satisfy the parity
+        // feature-detect — otherwise the surface would light up against the
+        // wrong map and never track the real gate.
+        let parity_addr = "0x000000000000000000000000000000000000aabb";
+        let misplaced: CapabilitiesResponse = serde_json::from_value(serde_json::json!({
+            "blockNumber": 5_000,
+            "capabilities": {
+                parity_addr: {
+                    "address": parity_addr,
+                    "capabilityId": MRV_APP_CONTRACT_PARITY_CAPABILITY_ID,
+                    "capabilityName": "decoy",
+                    "kind": "gateable",
+                    "active": true,
+                    "activationHeight": 1
+                }
+            }
+        }))
+        .unwrap();
+        assert!(misplaced.mrv_app_contract_parity().is_none());
+        assert!(!misplaced.is_mrv_parity_active(1_000_000));
     }
 
     #[test]

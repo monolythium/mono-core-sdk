@@ -2590,14 +2590,14 @@ function findCapabilityById(capabilities, capabilityId) {
   return void 0;
 }
 function mrvAppContractParityCapability(capabilities) {
-  return findCapabilityById(capabilities, MRV_APP_CONTRACT_PARITY_CAPABILITY_ID);
+  return capabilities.runtimeFeatures?.[MRV_APP_CONTRACT_PARITY_CAPABILITY_ID];
 }
 function isMrvParityActive(capabilities, currentHeight) {
-  const descriptor = mrvAppContractParityCapability(capabilities);
-  if (!descriptor || !descriptor.active || descriptor.activationHeight === null) {
+  const gate = mrvAppContractParityCapability(capabilities);
+  if (!gate || !gate.active || gate.activationHeight === null) {
     return false;
   }
-  return BigInt(currentHeight) >= BigInt(descriptor.activationHeight);
+  return BigInt(currentHeight) >= BigInt(gate.activationHeight);
 }
 var MrvValidationError = class extends Error {
   constructor(message) {

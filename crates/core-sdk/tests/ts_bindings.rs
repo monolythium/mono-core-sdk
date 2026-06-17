@@ -55,9 +55,9 @@ use monolythium_core_sdk::types::{
     NativeReceiptFee, NativeSpotMarketStateRecord, NativeSpotOrderStateRecord, PeerSummary,
     PendingRewardsResponse, PendingRewardsRow, PendingTxSummary, PrecompileDescriptor,
     RedemptionQueueResponse, RedemptionQueueTicket, RegistryRecord, RichListHolder,
-    RichListResponse, RoundCertificateResponse, RoundInfo, StorageProofBatch, SyncStatus,
-    TokenBalanceMrcIdentity, TokenBalanceRecord, TpmAttestationResponse, TransactionReceipt,
-    TransactionView,
+    RichListResponse, RoundCertificateResponse, RoundInfo, RuntimeFeatureGate, StorageProofBatch,
+    SyncStatus, TokenBalanceMrcIdentity, TokenBalanceRecord, TpmAttestationResponse,
+    TransactionReceipt, TransactionView,
 };
 use ts_rs::TS;
 
@@ -116,6 +116,7 @@ fn export_bindings() {
     CallRequest::export_all_to(&out).expect("CallRequest");
     CapabilitiesResponse::export_all_to(&out).expect("CapabilitiesResponse");
     CapabilityDescriptor::export_all_to(&out).expect("CapabilityDescriptor");
+    RuntimeFeatureGate::export_all_to(&out).expect("RuntimeFeatureGate");
     CheckpointRecord::export_all_to(&out).expect("CheckpointRecord");
     ClobMarketRecord::export_all_to(&out).expect("ClobMarketRecord");
     ClobMarketResponse::export_all_to(&out).expect("ClobMarketResponse");

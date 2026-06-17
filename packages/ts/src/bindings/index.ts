@@ -164,6 +164,7 @@ export type { RichListHolder } from "./RichListHolder.js";
 export type { RichListResponse } from "./RichListResponse.js";
 export type { RoundCertificateResponse } from "./RoundCertificateResponse.js";
 export type { RoundInfo } from "./RoundInfo.js";
+export type { RuntimeFeatureGate } from "./RuntimeFeatureGate.js";
 export type { StorageProofBatch } from "./StorageProofBatch.js";
 export type { SyncStatus } from "./SyncStatus.js";
 export type { TokenBalanceMrcIdentity } from "./TokenBalanceMrcIdentity.js";
