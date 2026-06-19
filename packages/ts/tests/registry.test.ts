@@ -34,9 +34,9 @@ describe("chain registry snapshot", () => {
   it("vendors the public testnet RPC endpoints", () => {
     expect(TESTNET_69420.chain_id).toBe(69420);
     expect(TESTNET_69420.genesis_hash).toBe(
-      "0x11774775b5c3bfc36ecb9c37e7252b49898caaacdb55668de3913fe60c660258",
+      "0x6c76fe490fab7195fc5821b052ca7a90b8fe96e0b18204d28430e97f57751943",
     );
-    expect(TESTNET_69420.binary_sha).toBe("b4257f14");
+    expect(TESTNET_69420.binary_sha).toBe("f2964a9c");
     expect(getRpcEndpoints("testnet-69420").map((r) => r.url)).toEqual([
       "http://178.105.12.9:8545",
       "http://178.105.15.216:8545",
