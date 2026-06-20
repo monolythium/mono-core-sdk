@@ -36,7 +36,7 @@ describe("chain registry snapshot", () => {
     expect(TESTNET_69420.genesis_hash).toBe(
       "0x6c76fe490fab7195fc5821b052ca7a90b8fe96e0b18204d28430e97f57751943",
     );
-    expect(TESTNET_69420.binary_sha).toBe("f2964a9c");
+    expect(TESTNET_69420.binary_sha).toBe("553953b7");
     expect(getRpcEndpoints("testnet-69420").map((r) => r.url)).toEqual([
       "http://178.105.12.9:8545",
       "http://178.105.15.216:8545",
