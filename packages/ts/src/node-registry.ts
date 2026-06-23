@@ -97,10 +97,6 @@ export const NODE_REGISTRY_SELECTORS = {
   formClusterV2: "0x" + selectorHex("formCluster(bytes,bytes,bytes,bytes)"),
   /** `setOperatorDisplay(bytes32,string,string)` — owner-callable public display metadata. */
   setOperatorDisplay: "0x" + selectorHex("setOperatorDisplay(bytes32,string,string)"),
-  /** `publishOperatorSealKey(bytes32,bytes)` — owner-callable LythiumSeal EK publication. */
-  publishOperatorSealKey: "0x" + selectorHex("publishOperatorSealKey(bytes32,bytes)"),
-  /** `getOperatorSealKey(bytes32)` view — returns the operator's published LythiumSeal EK. */
-  getOperatorSealKey: "0x" + selectorHex("getOperatorSealKey(bytes32)"),
   /**
    * `updateCharter(uint32,bytes,bytes,bytes)` — Component H live charter
    * amendment (Law §6.8); re-signs a new 30-byte charter for a LIVE cluster
@@ -142,8 +138,6 @@ export const NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES = 1952;
 export const NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES = 3309;
 /** ML-DSA-65 self-signature width used as register proof-of-possession. */
 export const NODE_REGISTRY_CONSENSUS_POP_BYTES = 3309;
-/** ML-KEM-768 encapsulation key width published for LythiumSeal operator rosters. */
-export const NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES = 1184;
 /** DKG-reshare attestation signature width. Removal is tracked outside W1. */
 export const NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES = 96;
 /** @deprecated Use NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES. */
@@ -357,15 +351,6 @@ export interface SetOperatorDisplayCalldataArgs {
   peerId: string | Uint8Array | readonly number[];
   moniker: string;
   alias: string;
-}
-
-export interface PublishOperatorSealKeyCalldataArgs {
-  peerId: string | Uint8Array | readonly number[];
-  sealEk: string | Uint8Array | readonly number[];
-}
-
-export interface GetOperatorSealKeyCalldataArgs {
-  operatorId: string | Uint8Array | readonly number[];
 }
 
 export interface FormClusterCalldataArgs {
@@ -810,50 +795,6 @@ export function encodeSetOperatorDisplayCalldata(args: SetOperatorDisplayCalldat
       aliasPadded,
     ),
   );
-}
-
-export function encodePublishOperatorSealKeyCalldata(
-  args: PublishOperatorSealKeyCalldataArgs,
-): string {
-  const peerId = expectLength(toBytes(args.peerId), 32, "peerId");
-  const sealEk = expectNonZeroBytes(
-    expectLength(toBytes(args.sealEk), NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES, "sealEk"),
-    "sealEk",
-  );
-  const sealEkPadded = padToWord(sealEk);
-  return bytesToHex(
-    concatBytes(
-      hexToBytes(NODE_REGISTRY_SELECTORS.publishOperatorSealKey),
-      peerId,
-      uint64Word(2n * 32n, "sealEkOffset"),
-      uint64Word(BigInt(sealEk.length), "sealEkLength"),
-      sealEkPadded,
-    ),
-  );
-}
-
-export function encodeGetOperatorSealKeyCalldata(args: GetOperatorSealKeyCalldataArgs): string {
-  return bytesToHex(
-    concatBytes(
-      hexToBytes(NODE_REGISTRY_SELECTORS.getOperatorSealKey),
-      expectLength(toBytes(args.operatorId), 32, "operatorId"),
-    ),
-  );
-}
-
-export function decodeOperatorSealKey(
-  returnData: string | Uint8Array | readonly number[],
-): string {
-  const bytes = toBytes(returnData);
-  if (bytes.length === NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES) {
-    return bytesToHex(expectNonZeroBytes(bytes, "operatorSealKey"));
-  }
-  const sealEk = decodeDynamicBytesResult(
-    bytes,
-    NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES,
-    "operatorSealKey",
-  );
-  return bytesToHex(expectNonZeroBytes(sealEk, "operatorSealKey"));
 }
 
 export function encodeCancelClusterJoinCalldata(args: CancelClusterJoinCalldataArgs): string {
@@ -2359,32 +2300,3 @@ function expectLength(value: Uint8Array, len: number, name: string): Uint8Array 
   return value;
 }
 
-function expectNonZeroBytes(value: Uint8Array, name: string): Uint8Array {
-  if (value.every((byte) => byte === 0)) {
-    throw new NodeRegistryError(`${name} must not be all-zero`);
-  }
-  return value;
-}
-
-function decodeDynamicBytesResult(
-  bytes: Uint8Array,
-  expectedLength: number,
-  label: string,
-): Uint8Array {
-  if (bytes.length < 64) {
-    throw new NodeRegistryError(`${label} return must be ABI-encoded dynamic bytes`);
-  }
-  const offset = uintFromWord(bytes.slice(0, 32));
-  if (offset !== 32n) {
-    throw new NodeRegistryError(`${label} return offset must be 0x20`);
-  }
-  const len = uintFromWord(bytes.slice(32, 64));
-  if (len !== BigInt(expectedLength)) {
-    throw new NodeRegistryError(`${label} must be ${expectedLength} bytes, got ${len}`);
-  }
-  const paddedLen = Math.ceil(expectedLength / 32) * 32;
-  if (bytes.length < 64 + paddedLen) {
-    throw new NodeRegistryError(`${label} body is truncated`);
-  }
-  return bytes.slice(64, 64 + expectedLength);
-}

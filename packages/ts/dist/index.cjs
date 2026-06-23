@@ -379,10 +379,6 @@ var NODE_REGISTRY_SELECTORS = {
   formClusterV2: "0x" + selectorHex("formCluster(bytes,bytes,bytes,bytes)"),
   /** `setOperatorDisplay(bytes32,string,string)` — owner-callable public display metadata. */
   setOperatorDisplay: "0x" + selectorHex("setOperatorDisplay(bytes32,string,string)"),
-  /** `publishOperatorSealKey(bytes32,bytes)` — owner-callable LythiumSeal EK publication. */
-  publishOperatorSealKey: "0x" + selectorHex("publishOperatorSealKey(bytes32,bytes)"),
-  /** `getOperatorSealKey(bytes32)` view — returns the operator's published LythiumSeal EK. */
-  getOperatorSealKey: "0x" + selectorHex("getOperatorSealKey(bytes32)"),
   /**
    * `updateCharter(uint32,bytes,bytes,bytes)` — Component H live charter
    * amendment (Law §6.8); re-signs a new 30-byte charter for a LIVE cluster
@@ -416,7 +412,6 @@ var NODE_REGISTRY_BLS_PUBKEY_BYTES = NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES;
 var NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES = 1952;
 var NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES = 3309;
 var NODE_REGISTRY_CONSENSUS_POP_BYTES = 3309;
-var NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES = 1184;
 var NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES = 96;
 var NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES = NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES;
 var NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS = 5;
@@ -682,43 +677,6 @@ function encodeSetOperatorDisplayCalldata(args) {
       aliasPadded
     )
   );
-}
-function encodePublishOperatorSealKeyCalldata(args) {
-  const peerId = expectLength2(toBytes(args.peerId), 32, "peerId");
-  const sealEk = expectNonZeroBytes(
-    expectLength2(toBytes(args.sealEk), NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES, "sealEk"),
-    "sealEk"
-  );
-  const sealEkPadded = padToWord(sealEk);
-  return bytesToHex(
-    concatBytes(
-      hexToBytes(NODE_REGISTRY_SELECTORS.publishOperatorSealKey),
-      peerId,
-      uint64Word(2n * 32n, "sealEkOffset"),
-      uint64Word(BigInt(sealEk.length), "sealEkLength"),
-      sealEkPadded
-    )
-  );
-}
-function encodeGetOperatorSealKeyCalldata(args) {
-  return bytesToHex(
-    concatBytes(
-      hexToBytes(NODE_REGISTRY_SELECTORS.getOperatorSealKey),
-      expectLength2(toBytes(args.operatorId), 32, "operatorId")
-    )
-  );
-}
-function decodeOperatorSealKey(returnData) {
-  const bytes = toBytes(returnData);
-  if (bytes.length === NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES) {
-    return bytesToHex(expectNonZeroBytes(bytes, "operatorSealKey"));
-  }
-  const sealEk = decodeDynamicBytesResult(
-    bytes,
-    NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES,
-    "operatorSealKey"
-  );
-  return bytesToHex(expectNonZeroBytes(sealEk, "operatorSealKey"));
 }
 function encodeCancelClusterJoinCalldata(args) {
   return bytesToHex(
@@ -1647,30 +1605,6 @@ function expectLength2(value, len, name) {
     throw new NodeRegistryError(`${name} must be ${len} bytes, got ${value.length}`);
   }
   return value;
-}
-function expectNonZeroBytes(value, name) {
-  if (value.every((byte) => byte === 0)) {
-    throw new NodeRegistryError(`${name} must not be all-zero`);
-  }
-  return value;
-}
-function decodeDynamicBytesResult(bytes, expectedLength, label) {
-  if (bytes.length < 64) {
-    throw new NodeRegistryError(`${label} return must be ABI-encoded dynamic bytes`);
-  }
-  const offset = uintFromWord(bytes.slice(0, 32));
-  if (offset !== 32n) {
-    throw new NodeRegistryError(`${label} return offset must be 0x20`);
-  }
-  const len = uintFromWord(bytes.slice(32, 64));
-  if (len !== BigInt(expectedLength)) {
-    throw new NodeRegistryError(`${label} must be ${expectedLength} bytes, got ${len}`);
-  }
-  const paddedLen = Math.ceil(expectedLength / 32) * 32;
-  if (bytes.length < 64 + paddedLen) {
-    throw new NodeRegistryError(`${label} body is truncated`);
-  }
-  return bytes.slice(64, 64 + expectedLength);
 }
 
 // src/native-events.ts
@@ -12164,7 +12098,6 @@ exports.NODE_REGISTRY_MERKLE_LEAF_DOMAIN = NODE_REGISTRY_MERKLE_LEAF_DOMAIN;
 exports.NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT = NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT;
 exports.NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES = NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES;
 exports.NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES = NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES;
-exports.NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES = NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES;
 exports.NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID = NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID;
 exports.NODE_REGISTRY_PUBLIC_SERVICE_MASK = NODE_REGISTRY_PUBLIC_SERVICE_MASK;
 exports.NODE_REGISTRY_SELECTORS = NODE_REGISTRY_SELECTORS;
@@ -12349,7 +12282,6 @@ exports.decodeNativeReceiptResponse = decodeNativeReceiptResponse;
 exports.decodeNoEvmReceiptTranscript = decodeNoEvmReceiptTranscript;
 exports.decodeOperatorFeeChargedEvent = decodeOperatorFeeChargedEvent;
 exports.decodeOperatorNetworkMetadata = decodeOperatorNetworkMetadata;
-exports.decodeOperatorSealKey = decodeOperatorSealKey;
 exports.decodeOracleEvent = decodeOracleEvent;
 exports.decodePendingCharter = decodePendingCharter;
 exports.decodeProbeAuthority = decodeProbeAuthority;
@@ -12396,7 +12328,6 @@ exports.encodeExpireClusterJoinCalldata = encodeExpireClusterJoinCalldata;
 exports.encodeFormClusterCalldata = encodeFormClusterCalldata;
 exports.encodeFormClusterV2Calldata = encodeFormClusterV2Calldata;
 exports.encodeGetClusterJoinRequestCalldata = encodeGetClusterJoinRequestCalldata;
-exports.encodeGetOperatorSealKeyCalldata = encodeGetOperatorSealKeyCalldata;
 exports.encodeGetPendingCharterCalldata = encodeGetPendingCharterCalldata;
 exports.encodeGetProbeAuthorityCalldata = encodeGetProbeAuthorityCalldata;
 exports.encodeHasPubkeyCalldata = encodeHasPubkeyCalldata;
@@ -12456,7 +12387,6 @@ exports.encodePlaceLimitOrderCalldata = encodePlaceLimitOrderCalldata;
 exports.encodePlaceLimitOrderViaCalldata = encodePlaceLimitOrderViaCalldata;
 exports.encodePlaceMarketOrderCalldata = encodePlaceMarketOrderCalldata;
 exports.encodePlaceMarketOrderExCalldata = encodePlaceMarketOrderExCalldata;
-exports.encodePublishOperatorSealKeyCalldata = encodePublishOperatorSealKeyCalldata;
 exports.encodeRecoverOperatorNodeCalldata = encodeRecoverOperatorNodeCalldata;
 exports.encodeRedelegateCalldata = encodeRedelegateCalldata;
 exports.encodeRegisterPubkeyCalldata = encodeRegisterPubkeyCalldata;
