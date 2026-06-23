@@ -6,17 +6,10 @@ import {
   ML_DSA_65_PUBLIC_KEY_LEN,
   ML_DSA_65_SEED_LEN,
   ML_DSA_65_SIGNATURE_LEN,
-  ML_KEM_768_ENCAPSULATION_KEY_LEN,
-  MempoolClass,
   MlDsa65Backend,
   Pqm1Error,
   STANDARD_ALGO_NUMBER_ML_DSA_65,
   assemblePqm1Payload,
-  bincodeDecryptHint,
-  bincodeEncryptedEnvelope,
-  bincodeNonceAad,
-  buildEncryptedEnvelope,
-  buildEncryptedSubmission,
   bytesToHex,
   bincodeSignedTransaction,
   concatBytes,
@@ -24,7 +17,6 @@ import {
   encodeTransactionForHash,
   generatePqm1Mnemonic,
   mlDsa65AddressFromPublicKey,
-  outerSigDigest,
   parsePqm1Payload,
   pqm1MnemonicToAddress,
   pqm1MnemonicToMlDsa65Backend,
@@ -55,19 +47,6 @@ describe("crypto subpath", () => {
       "0x2c0f01000000000007000000000000002000000000000000000000000000000000000000000000000000000000000000000000000000000120000000000000000000000000000000000000000000000000000000000000000000000000000019a0860100000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000040000000000000013000000000000",
     wireSuffix:
       "0x6666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666",
-  } as const;
-
-  const MRV_ENCRYPTED_ENVELOPE_VECTOR = {
-    nonceAad:
-      "0x1400000000000000111111111111111111111111111111111111111107000000000000002c0f010000000000050000001900000000000000000000000000000001000000000000000000000000000000a086010000000000",
-    decryptHint: "0x09000000000000000000",
-    outerSignatureDigest: "0xd84fed20413cab193ea41e1c73cf58dbba0ee4071e11a3071bdccab6ed61f9a5",
-    wireLen: 6_543,
-    wirePrefix:
-      "0x1400000000000000111111111111111111111111111111111111111107000000000000002c0f010000000000050000001900000000000000000000000000000001000000000000000000000000000000a0860100000000006004000000000000" +
-      "44".repeat(84),
-    wireSuffix:
-      "0x" + "55".repeat(52) + "14000000000000001111111111111111111111111111111111111111",
   } as const;
 
   it("derives deterministic ML-DSA-65 keys and signatures from a seed", () => {
@@ -184,120 +163,6 @@ describe("crypto subpath", () => {
     expect(wire).toHaveLength(MRV_NATIVE_TX_VECTOR.wireLen);
     expect(bytesToHex(wire.slice(0, 160))).toBe(MRV_NATIVE_TX_VECTOR.wirePrefix);
     expect(bytesToHex(wire.slice(-80))).toBe(MRV_NATIVE_TX_VECTOR.wireSuffix);
-  });
-
-  it("matches the Rust encrypted MRV envelope deterministic vector", () => {
-    const nonceAad = {
-      sender: new Uint8Array(20).fill(0x11),
-      nonce: 7n,
-      chainId: 69_420n,
-      class: MempoolClass.FoundationOp,
-      maxFeePerGas: 25n,
-      maxPriorityFeePerGas: 1n,
-      gasLimit: 100_000n,
-    };
-    const decryptionHint = { epoch: 9n, scheme: 0 };
-    const ciphertext = new Uint8Array(1_088 + 12 + 4 + 16).fill(0x44);
-    const senderPubkey = new Uint8Array(ML_DSA_65_PUBLIC_KEY_LEN).fill(0x66);
-    const outerSignature = new Uint8Array(ML_DSA_65_SIGNATURE_LEN).fill(0x55);
-    const envelope = {
-      nonceAad,
-      ciphertext,
-      decryptionHint,
-      senderPubkey,
-      outerSignature,
-      sender: nonceAad.sender,
-    };
-    const wire = bincodeEncryptedEnvelope(envelope);
-
-    expect(MempoolClass.FoundationOp).toBe(5);
-    expect(bytesToHex(bincodeNonceAad(nonceAad))).toBe(MRV_ENCRYPTED_ENVELOPE_VECTOR.nonceAad);
-    expect(bytesToHex(bincodeDecryptHint(decryptionHint))).toBe(MRV_ENCRYPTED_ENVELOPE_VECTOR.decryptHint);
-    expect(bytesToHex(outerSigDigest(nonceAad, ciphertext, decryptionHint, senderPubkey))).toBe(
-      MRV_ENCRYPTED_ENVELOPE_VECTOR.outerSignatureDigest,
-    );
-    expect(wire).toHaveLength(MRV_ENCRYPTED_ENVELOPE_VECTOR.wireLen);
-    expect(bytesToHex(wire.slice(0, 180))).toBe(MRV_ENCRYPTED_ENVELOPE_VECTOR.wirePrefix);
-    expect(bytesToHex(wire.slice(-80))).toBe(MRV_ENCRYPTED_ENVELOPE_VECTOR.wireSuffix);
-  });
-
-  it("builds an encrypted envelope around signed tx bytes", async () => {
-    const backend = MlDsa65Backend.fromSeed(new Uint8Array(ML_DSA_65_SEED_LEN).fill(0x11));
-    const signed = backend.signEvmTx({
-      chainId: 69420n,
-      nonce: 0n,
-      maxPriorityFeePerGas: 1n,
-      maxFeePerGas: 1n,
-      gasLimit: 30_000n,
-      to: `0x${"22".repeat(20)}`,
-      value: 0n,
-      input: "0x",
-    });
-    const nonceAad = {
-      sender: backend.addressBytes(),
-      nonce: 0n,
-      chainId: 69420n,
-      class: MempoolClass.Transfer,
-      maxFeePerGas: 1n,
-      maxPriorityFeePerGas: 1n,
-      gasLimit: 30_000n,
-    };
-    const decryptionHint = { epoch: 1n, scheme: 0 };
-    const kemEncapsulationKey = new Uint8Array(ML_KEM_768_ENCAPSULATION_KEY_LEN).fill(0x33);
-
-    const built = await buildEncryptedEnvelope({
-      signedInnerTxBincode: signed.wireBytes,
-      nonceAad,
-      decryptionHint,
-      kemEncapsulationKey,
-      senderAddress: backend.addressBytes(),
-      senderPubkey: backend.publicKey(),
-      signOuterDigest: (digest) => backend.signPrehash(digest),
-    });
-
-    expect(built.wireHex.startsWith("0x")).toBe(true);
-    expect(built.envelope.outerSignature).toHaveLength(ML_DSA_65_SIGNATURE_LEN);
-    expect(built.wireBytes).toHaveLength((built.wireHex.length - 2) / 2);
-    expect(bytesToHex(bincodeEncryptedEnvelope(built.envelope))).toBe(built.wireHex);
-    expect(bincodeNonceAad(nonceAad).length).toBeGreaterThan(0);
-    expect(outerSigDigest(nonceAad, built.envelope.ciphertext, decryptionHint, backend.publicKey())).toHaveLength(32);
-  });
-
-  it("requires a cluster seal roster and never emits a scheme-0 envelope", async () => {
-    const backend = MlDsa65Backend.fromSeed(new Uint8Array(ML_DSA_65_SEED_LEN).fill(0x12));
-    const encryptionKey = {
-      algo: "ml-kem-768",
-      epoch: 1n,
-      encapsulationKey: new Uint8Array(ML_KEM_768_ENCAPSULATION_KEY_LEN).fill(0x34),
-    };
-
-    // The retired single-key ML-KEM-768 scheme-0 envelope is unsafe. Passing
-    // the legacy encryptionKey alone must not build an envelope; callers must
-    // supply a scheme-3 cluster seal roster or use the cluster-key RPC.
-    const promise = buildEncryptedSubmission({
-      backend,
-      encryptionKey,
-      tx: {
-        chainId: 69_420n,
-        nonce: 0n,
-        maxPriorityFeePerGas: 0n,
-        maxFeePerGas: 1n,
-        gasLimit: 30_000n,
-        to: null,
-        value: 0n,
-        input: "0x13000000",
-        extensions: [{ kind: 0x30, bodyHex: "0x01" }],
-      },
-    });
-    await expect(promise).rejects.toThrow(/private submission requires cluster seal keys/);
-    // Hard guard: the call rejected, so no envelope object exists to inspect.
-    let envelope: unknown;
-    try {
-      envelope = await promise;
-    } catch {
-      envelope = undefined;
-    }
-    expect(envelope).toBeUndefined();
   });
 
   it("round-trips PQM-1 v1 ML-DSA-65 mnemonics using the Rust payload layout", () => {

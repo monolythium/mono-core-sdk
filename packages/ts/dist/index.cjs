@@ -2,9 +2,6 @@
 
 var blake3_js = require('@noble/hashes/blake3.js');
 var sha3_js = require('@noble/hashes/sha3.js');
-var mlKem_js = require('@noble/post-quantum/ml-kem.js');
-var chacha_js = require('@noble/ciphers/chacha.js');
-require('@noble/hashes/utils.js');
 var mlDsa_js = require('@noble/post-quantum/ml-dsa.js');
 var bls12381_js = require('@noble/curves/bls12-381.js');
 var bip39 = require('@scure/bip39');
@@ -1816,6 +1813,40 @@ function parseBigint(value, label) {
   return BigInt(value);
 }
 
+// src/crypto/submission.ts
+function buildPlaintextSubmission(args) {
+  const signed = args.backend.signEvmTx(args.tx);
+  return {
+    signedTxWireHex: `0x${signed.wireHex}`,
+    innerTxHashHex: bytesToHex2(signed.txHash),
+    innerSighashHex: bytesToHex2(signed.sighash),
+    innerWireBytes: signed.wireBytes.length
+  };
+}
+async function submitPlaintextTransaction(client, signedTxWireHex, expectedTxHashHex) {
+  const returned = await client.call("mesh_submitTx", [signedTxWireHex]);
+  const returnedBytes = hexToBytes2(returned, "mesh_submitTx tx hash");
+  if (returnedBytes.length !== 32) {
+    throw new Error(
+      `mesh_submitTx tx hash must be 32 bytes, got ${returnedBytes.length}`
+    );
+  }
+  const expectedBytes = hexToBytes2(expectedTxHashHex, "expected tx hash");
+  if (!bytesEqual(returnedBytes, expectedBytes)) {
+    throw new Error(
+      `mesh_submitTx returned tx hash ${bytesToHex2(returnedBytes)} but the locally computed canonical hash is ${bytesToHex2(expectedBytes)}`
+    );
+  }
+  return bytesToHex2(returnedBytes);
+}
+function bytesEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 // src/crypto/bincode.ts
 var BincodeWriter = class {
   #chunks = [];
@@ -1874,673 +1905,6 @@ var BincodeWriter = class {
     }
   }
 };
-
-// src/crypto/tx.ts
-function encodeTransactionForHash(fields, tag) {
-  const n = normalizeTxFields(fields);
-  return concatBytes2(
-    Uint8Array.of(tag),
-    bigintToBeBytes(n.chainId, 8, "chainId"),
-    bigintToBeBytes(n.nonce, 8, "nonce"),
-    bigintToBeBytes(n.maxPriorityFeePerGas, 32, "maxPriorityFeePerGas"),
-    bigintToBeBytes(n.maxFeePerGas, 32, "maxFeePerGas"),
-    bigintToBeBytes(n.gasLimit, 8, "gasLimit"),
-    n.to === null ? Uint8Array.of(0) : concatBytes2(Uint8Array.of(1), n.to),
-    bigintToBeBytes(n.value, 32, "value"),
-    bigintToBeBytes(BigInt(n.input.length), 4, "input.length"),
-    n.input,
-    new Uint8Array(4),
-    // access_list length
-    encodeExtensionsForHash(n.extensions)
-  );
-}
-function bincodeSignedTransaction(fields, signature, publicKey) {
-  const n = normalizeTxFields(fields);
-  const sig = expectBytes(signature, ML_DSA_65_SIGNATURE_LEN, "ML-DSA-65 signature");
-  const pk = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key");
-  const w = new BincodeWriter();
-  w.u64(n.chainId);
-  w.u64(n.nonce);
-  w.bytes(uint256Be(n.maxPriorityFeePerGas, "maxPriorityFeePerGas"));
-  w.bytes(uint256Be(n.maxFeePerGas, "maxFeePerGas"));
-  w.u64(n.gasLimit);
-  if (n.to === null) {
-    w.u8(0);
-  } else {
-    w.u8(1);
-    w.bytes(n.to);
-  }
-  w.bytes(uint256Be(n.value, "value"));
-  w.bytes(n.input);
-  w.u64(0n);
-  w.u64(BigInt(n.extensions.length));
-  for (const ext of n.extensions) bincodeTypedExtensionInto(w, ext);
-  bincodeMlDsa65OpaqueInto(w, sig);
-  bincodeMlDsa65OpaqueInto(w, pk);
-  return w.toBytes();
-}
-function normalizeTxFields(fields) {
-  return {
-    chainId: parseBigint(fields.chainId, "chainId"),
-    nonce: parseBigint(fields.nonce, "nonce"),
-    maxPriorityFeePerGas: parseBigint(fields.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
-    maxFeePerGas: parseBigint(fields.maxFeePerGas, "maxFeePerGas"),
-    gasLimit: parseBigint(fields.gasLimit, "gasLimit"),
-    to: normalizeTo(fields.to),
-    value: parseBigint(fields.value, "value"),
-    input: normalizeBytes(fields.input ?? new Uint8Array(0), "input"),
-    extensions: normalizeExtensions(fields.extensions)
-  };
-}
-function normalizeTo(value) {
-  if (value === null) return null;
-  const bytes = normalizeBytes(value, "to");
-  return expectBytes(bytes, 20, "to");
-}
-function normalizeBytes(value, label) {
-  if (typeof value === "string") return hexToBytes2(value, label);
-  return value instanceof Uint8Array ? value : Uint8Array.from(value);
-}
-function normalizeExtensions(value) {
-  if (value === void 0) return [];
-  return value.map((ext, index) => {
-    if (!Number.isInteger(ext.kind) || ext.kind < 0 || ext.kind > 255) {
-      throw new Error(`extensions[${index}].kind out of u8 range`);
-    }
-    const body = normalizeBytes("bodyHex" in ext ? ext.bodyHex : ext.body, `extensions[${index}].body`);
-    if (body.length > 4294967295) {
-      throw new Error(`extensions[${index}].body exceeds u32 length`);
-    }
-    return { kind: ext.kind, body };
-  });
-}
-function encodeExtensionsForHash(extensions) {
-  const chunks = [bigintToBeBytes(BigInt(extensions.length), 4, "extensions.length")];
-  for (const ext of extensions) {
-    chunks.push(
-      Uint8Array.of(ext.kind),
-      bigintToBeBytes(BigInt(ext.body.length), 4, "extension.body.length"),
-      ext.body
-    );
-  }
-  return concatBytes2(...chunks);
-}
-function uint256Be(value, label) {
-  if (value < 0n || value >= 1n << 256n) throw new Error(`${label} out of u256 range`);
-  const out = new Uint8Array(32);
-  let v = value;
-  for (let i = 31; i >= 0; i--) {
-    out[i] = Number(v & 0xffn);
-    v >>= 8n;
-  }
-  return out;
-}
-function bincodeMlDsa65OpaqueInto(w, raw) {
-  w.enumVariant(ENUM_VARIANT_INDEX_ML_DSA_65);
-  w.u16(STANDARD_ALGO_NUMBER_ML_DSA_65);
-  w.bytes(raw);
-}
-function bincodeTypedExtensionInto(w, ext) {
-  w.u8(ext.kind);
-  w.bytes(ext.body);
-}
-
-// src/crypto/ml-dsa.ts
-var ML_DSA_65_SEED_LEN = 32;
-var ML_DSA_65_SIGNING_KEY_LEN = 4032;
-var ML_DSA_65_PUBLIC_KEY_LEN = 1952;
-var ML_DSA_65_SIGNATURE_LEN = 3309;
-var STANDARD_ALGO_NUMBER_ML_DSA_65 = 1001;
-var ENUM_VARIANT_INDEX_ML_DSA_65 = 3;
-var ADDRESS_DERIVATION_DOMAIN = "MONO_ADDRESS_BLAKE3_20_V1";
-var ADDRESS_DERIVATION_DOMAIN_BYTES = new TextEncoder().encode(ADDRESS_DERIVATION_DOMAIN);
-var MlDsa65Backend = class _MlDsa65Backend {
-  #secretKey;
-  #publicKey;
-  #addressBytes;
-  #disposed = false;
-  constructor(secretKey, publicKey) {
-    this.#secretKey = expectBytes(secretKey, ML_DSA_65_SIGNING_KEY_LEN, "ML-DSA-65 secret key").slice();
-    this.#publicKey = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key").slice();
-    this.#addressBytes = mlDsa65AddressBytes(this.#publicKey);
-  }
-  static fromSeed(seed) {
-    const kp = mlDsa_js.ml_dsa65.keygen(expectBytes(seed, ML_DSA_65_SEED_LEN, "ML-DSA-65 seed"));
-    return new _MlDsa65Backend(kp.secretKey, kp.publicKey);
-  }
-  publicKey() {
-    return this.#publicKey.slice();
-  }
-  addressBytes() {
-    return this.#addressBytes.slice();
-  }
-  getAddress() {
-    return bytesToHex2(this.#addressBytes);
-  }
-  sign(message) {
-    if (this.#disposed) {
-      throw new Error("MlDsa65Backend disposed");
-    }
-    return mlDsa_js.ml_dsa65.sign(message, this.#secretKey, { extraEntropy: false });
-  }
-  /**
-   * Best-effort deterministic wipe of the in-memory secret key. Zeroes the
-   * SDK-held `#secretKey` copy and makes any subsequent `sign()` /
-   * `signPrehash()` / `signEvmTx()` throw `"MlDsa65Backend disposed"` rather
-   * than signing with a zeroed key. Idempotent. Public material
-   * (`publicKey()` / `getAddress()` / `verify()`) stays usable.
-   *
-   * Defense-in-depth (S1-01): narrows the post-lock residency window of the
-   * ML-DSA-65 secret in the JS heap. `@noble/post-quantum`'s internal
-   * transient keygen/sign buffers are out of scope; the SDK-held copy is the
-   * meaningful residency win.
-   */
-  dispose() {
-    this.#secretKey.fill(0);
-    this.#disposed = true;
-  }
-  /** Alias for {@link dispose}. */
-  zeroize() {
-    this.dispose();
-  }
-  /** Whether {@link dispose} has been called (the secret key is wiped). */
-  get disposed() {
-    return this.#disposed;
-  }
-  signPrehash(digest) {
-    return this.sign(expectBytes(digest, 32, "prehash"));
-  }
-  verify(message, signature) {
-    return mlDsa_js.ml_dsa65.verify(
-      expectBytes(signature, ML_DSA_65_SIGNATURE_LEN, "ML-DSA-65 signature"),
-      message,
-      this.#publicKey
-    );
-  }
-  signEvmTx(fields) {
-    const txHashPreimage = encodeTransactionForHash(fields, 1);
-    const sighash = sha3_js.keccak_256(txHashPreimage);
-    const signature = this.sign(sighash);
-    const wireBytes = bincodeSignedTransaction(fields, signature, this.#publicKey);
-    const txHash = sha3_js.keccak_256(
-      concatBytes2(
-        encodeTransactionForHash(fields, 2),
-        signature,
-        this.#publicKey
-      )
-    );
-    return {
-      wireHex: bytesToHex2(wireBytes).slice(2),
-      wireBytes,
-      sighash,
-      txHash
-    };
-  }
-};
-function mlDsa65AddressFromPublicKey(publicKey) {
-  return bytesToHex2(mlDsa65AddressBytes(publicKey));
-}
-function mlDsa65AddressBytes(publicKey) {
-  const bytes = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key");
-  return blake3_js.blake3(concatBytes2(
-    ADDRESS_DERIVATION_DOMAIN_BYTES,
-    bigintToBeBytes(BigInt(STANDARD_ALGO_NUMBER_ML_DSA_65), 2, "ML-DSA-65 algo id"),
-    bytes
-  )).slice(0, 20);
-}
-
-// src/crypto/envelope.ts
-new TextEncoder().encode("protocore/v2/mempool/dkg-mlkem768/1");
-var MempoolClass = {
-  Transfer: 0,
-  ContractCall: 1,
-  CLOBOp: 3};
-function bincodeNonceAad(aad) {
-  const w = new BincodeWriter();
-  w.bytes(expectBytes(aad.sender, 20, "NonceAad.sender"));
-  w.u64(aad.nonce);
-  w.u64(aad.chainId);
-  w.enumVariant(aad.class);
-  w.u128(aad.maxFeePerGas);
-  w.u128(aad.maxPriorityFeePerGas);
-  w.u64(aad.gasLimit);
-  return w.toBytes();
-}
-function bincodeDecryptHint(hint) {
-  const w = new BincodeWriter();
-  w.u64(hint.epoch);
-  w.u16(hint.scheme);
-  return w.toBytes();
-}
-function bincodeEncryptedEnvelope(env) {
-  const w = new BincodeWriter();
-  w.rawBytes(bincodeNonceAad(env.nonceAad));
-  w.bytes(env.ciphertext);
-  w.rawBytes(bincodeDecryptHint(env.decryptionHint));
-  bincodeMlDsa65OpaqueInto2(w, expectBytes(env.senderPubkey, ML_DSA_65_PUBLIC_KEY_LEN, "senderPubkey"));
-  bincodeMlDsa65OpaqueInto2(w, expectBytes(env.outerSignature, ML_DSA_65_SIGNATURE_LEN, "outerSignature"));
-  w.bytes(expectBytes(env.sender, 20, "sender"));
-  return w.toBytes();
-}
-function outerSigDigest(nonceAad, ciphertext, decryptionHint, senderPubkey) {
-  const aad = bincodeNonceAad(nonceAad);
-  const hint = bincodeDecryptHint(decryptionHint);
-  return sha3_js.keccak_256(concatBytes2(aad, ciphertext, hint, expectBytes(senderPubkey, ML_DSA_65_PUBLIC_KEY_LEN, "senderPubkey")));
-}
-function bincodeMlDsa65OpaqueInto2(w, raw) {
-  w.enumVariant(ENUM_VARIANT_INDEX_ML_DSA_65);
-  w.u16(STANDARD_ALGO_NUMBER_ML_DSA_65);
-  w.bytes(raw);
-}
-var SEAL_EK_LEN = 1184;
-var SEAL_KEY_LEN = 32;
-var SEAL_NONCE_LEN = 12;
-var SEAL_COMMIT_LEN = 32;
-var SEAL_SECRET_LEN = 32;
-var SEAL_SHARE_LEN = 1 + SEAL_SECRET_LEN;
-var CLUSTER_MLKEM_SHAMIR = 3;
-var COMMIT_DOMAIN = new TextEncoder().encode("lythiumseal/commit/v1");
-var KEK_DOMAIN = new TextEncoder().encode("lythiumseal/kek/v1");
-var NONCE_DOMAIN = new TextEncoder().encode("lythiumseal/nonce/v1");
-var BODY_AAD_DOMAIN = new TextEncoder().encode("lythiumseal/body/v1");
-var SHARE_AAD_DOMAIN = new TextEncoder().encode("lythiumseal/share/v1");
-var ROSTER_DOMAIN = new TextEncoder().encode("lythiumseal/roster/v1");
-function cryptoRandomSource() {
-  return {
-    fillBytes(dest) {
-      crypto.getRandomValues(dest);
-    }
-  };
-}
-function u32le(n) {
-  const out = new Uint8Array(4);
-  out[0] = n & 255;
-  out[1] = n >>> 8 & 255;
-  out[2] = n >>> 16 & 255;
-  out[3] = n >>> 24 & 255;
-  return out;
-}
-function u64le(n) {
-  const out = new Uint8Array(8);
-  let v = n;
-  for (let i = 0; i < 8; i++) {
-    out[i] = Number(v & 0xffn);
-    v >>= 8n;
-  }
-  return out;
-}
-function framed(field2) {
-  return concatBytes2(u32le(field2.length), field2);
-}
-function keyCommitment(key) {
-  return sha3_js.shake256(concatBytes2(framed(COMMIT_DOMAIN), key), { dkLen: SEAL_COMMIT_LEN });
-}
-function deriveKek(sharedSecret, domain, clusterId, epoch, opIndex) {
-  const input = concatBytes2(
-    framed(KEK_DOMAIN),
-    framed(sharedSecret),
-    framed(domain),
-    u32le(clusterId),
-    u64le(epoch),
-    Uint8Array.of(opIndex)
-  );
-  return sha3_js.shake256(input, { dkLen: SEAL_KEY_LEN });
-}
-function deriveNonce(domain, context) {
-  const input = concatBytes2(framed(NONCE_DOMAIN), framed(domain), framed(context));
-  return sha3_js.shake256(input, { dkLen: SEAL_NONCE_LEN });
-}
-function bodyAad(ctx, k, n) {
-  return concatBytes2(
-    BODY_AAD_DOMAIN,
-    u32le(ctx.clusterId),
-    u64le(ctx.epoch),
-    Uint8Array.of(k),
-    Uint8Array.of(n),
-    ctx.rosterHash
-  );
-}
-function shareAad(ctx, opIndex) {
-  return concatBytes2(
-    SHARE_AAD_DOMAIN,
-    u32le(ctx.clusterId),
-    u64le(ctx.epoch),
-    Uint8Array.of(opIndex),
-    ctx.rosterHash
-  );
-}
-function aeadSeal(key, nonce, plaintext, aad) {
-  const cipher = chacha_js.chacha20poly1305(key, nonce, aad);
-  const ct = cipher.encrypt(plaintext);
-  return { nonce, ct, commitment: keyCommitment(key) };
-}
-function gfMul(a, b) {
-  let product = 0;
-  let x = a & 255;
-  let y = b & 255;
-  for (let i = 0; i < 8; i++) {
-    const mask = -(y & 1) & 255;
-    product ^= x & mask;
-    const high = -(x >> 7 & 1) & 255;
-    x = x << 1 & 255;
-    x ^= 27 & high;
-    y >>= 1;
-  }
-  return product & 255;
-}
-function polyEval(coeffs, x) {
-  let acc = 0;
-  for (let i = coeffs.length - 1; i >= 0; i--) {
-    acc = gfMul(acc, x) ^ coeffs[i];
-  }
-  return acc & 255;
-}
-function shamirSplit(secret, t, n, rng) {
-  const byteCoeffs = [];
-  for (let j = 0; j < SEAL_SECRET_LEN; j++) {
-    const c = new Uint8Array(t);
-    c[0] = secret[j];
-    if (t > 1) {
-      const tail = new Uint8Array(t - 1);
-      rng.fillBytes(tail);
-      c.set(tail, 1);
-    }
-    byteCoeffs.push(c);
-  }
-  const shares = [];
-  for (let k = 0; k < n; k++) {
-    const x = k + 1 & 255;
-    const value = new Uint8Array(SEAL_SECRET_LEN);
-    for (let j = 0; j < SEAL_SECRET_LEN; j++) {
-      value[j] = polyEval(byteCoeffs[j], x);
-    }
-    shares.push({ index: x, value });
-  }
-  return shares;
-}
-function shareToBytes(s) {
-  const out = new Uint8Array(SEAL_SHARE_LEN);
-  out[0] = s.index;
-  out.set(s.value, 1);
-  return out;
-}
-function sealRosterHash(keccak2562, clusterId, t, n, roster) {
-  const chunks = [ROSTER_DOMAIN, u32le(clusterId), Uint8Array.of(t), Uint8Array.of(n)];
-  for (const { operatorIndex, ek } of roster) {
-    chunks.push(Uint8Array.of(operatorIndex), ek);
-  }
-  return keccak2562(concatBytes2(...chunks));
-}
-function encodeSealEnvelope(env) {
-  const chunks = [];
-  chunks.push(u32le(env.clusterId));
-  chunks.push(u64le(env.epoch));
-  chunks.push(expectBytes(env.rosterHash, 32, "rosterHash"));
-  chunks.push(Uint8Array.of(env.t));
-  chunks.push(Uint8Array.of(env.n));
-  pushAeadBody(chunks, env.aeadBody);
-  chunks.push(u64le(BigInt(env.recipients.length)));
-  for (const r of env.recipients) {
-    chunks.push(Uint8Array.of(r.operatorIndex));
-    chunks.push(u64le(BigInt(r.kemCt.length)));
-    chunks.push(r.kemCt);
-    pushAeadBody(chunks, r.wrapped);
-  }
-  return concatBytes2(...chunks);
-}
-function pushAeadBody(chunks, body) {
-  chunks.push(expectBytes(body.nonce, SEAL_NONCE_LEN, "aead nonce"));
-  chunks.push(u64le(BigInt(body.ct.length)));
-  chunks.push(body.ct);
-  chunks.push(expectBytes(body.commitment, SEAL_COMMIT_LEN, "aead commitment"));
-}
-function sealToCluster(args) {
-  const { plaintext, recipientEks, t, clusterId } = args;
-  const epoch = args.epoch;
-  const rosterHash = expectBytes(args.rosterHash, 32, "rosterHash");
-  const rng = args.rng ?? cryptoRandomSource();
-  const n = recipientEks.length;
-  if (!Number.isInteger(t) || t < 1 || t > n || n < 1 || n > 255) {
-    throw new Error(`invalid threshold/recipient count: t=${t} n=${n}`);
-  }
-  for (let i = 0; i < n; i++) {
-    expectBytes(recipientEks[i], SEAL_EK_LEN, `recipientEks[${i}]`);
-  }
-  const ctx = { clusterId, epoch, rosterHash };
-  const bodyKey = new Uint8Array(SEAL_KEY_LEN);
-  rng.fillBytes(bodyKey);
-  const aad = bodyAad(ctx, t, n);
-  const bodyNonce = deriveNonce(new TextEncoder().encode("body"), aad);
-  const aeadBody = aeadSeal(bodyKey, bodyNonce, plaintext, aad);
-  const shares = shamirSplit(bodyKey, t, n, rng);
-  const recipients = [];
-  for (let i = 0; i < n; i++) {
-    const opIndex = i + 1 & 255;
-    const m = new Uint8Array(32);
-    rng.fillBytes(m);
-    const { cipherText: kemCt, sharedSecret } = mlKem_js.ml_kem768.encapsulate(recipientEks[i], m);
-    const kek = deriveKek(sharedSecret, rosterHash, clusterId, epoch, opIndex);
-    const sAad = shareAad(ctx, opIndex);
-    const wrapNonce = deriveNonce(new TextEncoder().encode("share"), sAad);
-    const wrapped = aeadSeal(kek, wrapNonce, shareToBytes(shares[i]), sAad);
-    recipients.push({ operatorIndex: opIndex, kemCt, wrapped });
-    sharedSecret.fill(0);
-    kek.fill(0);
-  }
-  bodyKey.fill(0);
-  return {
-    clusterId,
-    epoch,
-    rosterHash,
-    t,
-    n,
-    aeadBody,
-    recipients
-  };
-}
-
-// src/crypto/seal.ts
-var CLUSTER_MLKEM_SHAMIR_ALGO = "cluster-mlkem768-shamir";
-function parseClusterSealKeys(source) {
-  const n = source.roster.length;
-  if (n === 0) {
-    throw new Error("cluster seal roster is empty");
-  }
-  if (source.n !== n) {
-    throw new Error(`cluster seal roster n=${source.n} disagrees with ${n} entries`);
-  }
-  if (!Number.isInteger(source.t) || source.t < 2 || source.t > n) {
-    throw new Error(`cluster seal threshold t=${source.t} out of range 2..=${n}`);
-  }
-  const sorted = [...source.roster].sort((a, b) => a.operatorIndex - b.operatorIndex);
-  const recipientEks = [];
-  const hashInput = [];
-  for (let i = 0; i < n; i++) {
-    const entry = sorted[i];
-    if (entry.operatorIndex !== i + 1) {
-      throw new Error(
-        `cluster seal roster operator indices must be 1..=${n}; got ${entry.operatorIndex} at slot ${i + 1}`
-      );
-    }
-    const ek = expectBytes(hexToBytes2(entry.mlKemEk, `operator ${entry.operatorIndex} mlKemEk`), SEAL_EK_LEN, `operator ${entry.operatorIndex} ek`);
-    recipientEks.push(ek);
-    hashInput.push({ operatorIndex: entry.operatorIndex, ek });
-  }
-  const recomputed = sealRosterHash(keccak256, source.clusterId, source.t, n, hashInput);
-  if (source.rosterHash !== void 0) {
-    const supplied = expectBytes(hexToBytes2(source.rosterHash, "rosterHash"), 32, "rosterHash");
-    if (!bytesEqual(supplied, recomputed)) {
-      throw new Error(
-        `cluster seal roster hash mismatch: source ${bytesToHex2(supplied)} != recomputed ${bytesToHex2(recomputed)} (the roster hash does not commit to this ek set)`
-      );
-    }
-  }
-  return {
-    algo: source.algo ?? CLUSTER_MLKEM_SHAMIR_ALGO,
-    clusterId: source.clusterId,
-    epoch: toBigInt(source.epoch),
-    rosterHash: recomputed,
-    t: source.t,
-    n,
-    recipientEks
-  };
-}
-async function sealTransaction(args) {
-  const keys = args.clusterSealKeys;
-  const senderPubkey = expectBytes(args.senderPubkey, ML_DSA_65_PUBLIC_KEY_LEN, "senderPubkey");
-  const senderAddress = expectBytes(args.senderAddress, 20, "senderAddress");
-  const env = sealToCluster({
-    plaintext: args.signedTxBincode,
-    recipientEks: keys.recipientEks,
-    t: keys.t,
-    clusterId: keys.clusterId,
-    epoch: keys.epoch,
-    rosterHash: keys.rosterHash,
-    rng: args.rng
-  });
-  const ciphertext = encodeSealEnvelope(env);
-  const decryptionHint = { epoch: keys.epoch, scheme: CLUSTER_MLKEM_SHAMIR };
-  const digest = outerSigDigest(args.aad, ciphertext, decryptionHint, senderPubkey);
-  const outerSignature = expectBytes(
-    await args.signOuterDigest(digest),
-    ML_DSA_65_SIGNATURE_LEN,
-    "outerSignature"
-  );
-  const envelope = {
-    nonceAad: args.aad,
-    ciphertext,
-    decryptionHint,
-    senderPubkey,
-    outerSignature,
-    sender: senderAddress
-  };
-  const envelopeWireBytes = bincodeEncryptedEnvelope(envelope);
-  return {
-    envelopeWireHex: `0x${bytesToHex2(envelopeWireBytes).slice(2)}`,
-    envelopeWireBytes,
-    ciphertextBytes: ciphertext.length
-  };
-}
-function keccak256(input) {
-  return sha3_js.keccak_256(input);
-}
-function toBigInt(value) {
-  if (typeof value === "bigint") return value;
-  return BigInt(value);
-}
-function bytesEqual(a, b) {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i]) return false;
-  }
-  return true;
-}
-
-// src/crypto/submission.ts
-async function fetchEncryptionKey(client) {
-  const result = await client.call(
-    "lyth_getEncryptionKey",
-    []
-  );
-  return {
-    algo: result.algo ?? "ml-kem-768",
-    epoch: typeof result.epoch === "string" ? BigInt(result.epoch) : BigInt(result.epoch),
-    encapsulationKey: hexToBytes2(result.encapsulationKey, "encapsulationKey")
-  };
-}
-var ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE = "private submission requires cluster seal keys; pass clusterSealKeysSource or enable lyth_getClusterSealKeys";
-async function buildEncryptedSubmission(args) {
-  const signed = args.backend.signEvmTx(args.tx);
-  const clusterSealKeys = await resolveClusterSealKeys(args);
-  const aad = nonceAadForTx(args.tx, args.backend.addressBytes(), args.class);
-  const sealed = await sealTransaction({
-    signedTxBincode: signed.wireBytes,
-    clusterSealKeys,
-    aad,
-    senderAddress: args.backend.addressBytes(),
-    senderPubkey: args.backend.publicKey(),
-    signOuterDigest: (digest) => args.backend.signPrehash(digest)
-  });
-  return {
-    envelopeWireHex: sealed.envelopeWireHex,
-    innerSighashHex: bytesToHex2(signed.sighash),
-    innerTxHashHex: bytesToHex2(signed.txHash),
-    innerWireBytes: signed.wireBytes.length
-  };
-}
-async function submitEncryptedEnvelope(client, envelopeWireHex) {
-  return client.call("lyth_submitEncrypted", [envelopeWireHex]);
-}
-function buildPlaintextSubmission(args) {
-  const signed = args.backend.signEvmTx(args.tx);
-  return {
-    signedTxWireHex: `0x${signed.wireHex}`,
-    innerTxHashHex: bytesToHex2(signed.txHash),
-    innerSighashHex: bytesToHex2(signed.sighash),
-    innerWireBytes: signed.wireBytes.length
-  };
-}
-async function submitPlaintextTransaction(client, signedTxWireHex, expectedTxHashHex) {
-  const returned = await client.call("mesh_submitTx", [signedTxWireHex]);
-  const returnedBytes = hexToBytes2(returned, "mesh_submitTx tx hash");
-  if (returnedBytes.length !== 32) {
-    throw new Error(
-      `mesh_submitTx tx hash must be 32 bytes, got ${returnedBytes.length}`
-    );
-  }
-  const expectedBytes = hexToBytes2(expectedTxHashHex, "expected tx hash");
-  if (!bytesEqual2(returnedBytes, expectedBytes)) {
-    throw new Error(
-      `mesh_submitTx returned tx hash ${bytesToHex2(returnedBytes)} but the locally computed canonical hash is ${bytesToHex2(expectedBytes)}`
-    );
-  }
-  return bytesToHex2(returnedBytes);
-}
-function bytesEqual2(a, b) {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i]) return false;
-  }
-  return true;
-}
-async function resolveClusterSealKeys(args) {
-  if (args.clusterSealKeys !== void 0) return args.clusterSealKeys;
-  if (args.clusterSealKeysSource !== void 0) {
-    return parseClusterSealKeys(args.clusterSealKeysSource);
-  }
-  if (args.client === void 0) {
-    throw new Error(ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE);
-  }
-  const clusterId = args.clusterId ?? 0;
-  const result = await args.client.call(
-    "lyth_getClusterSealKeys",
-    [clusterId]
-  );
-  return parseClusterSealKeys({ ...result, clusterId: result.clusterId ?? clusterId });
-}
-function nonceAadForTx(tx, sender, mempoolClass) {
-  return {
-    sender,
-    nonce: parseBigint(tx.nonce, "nonce"),
-    chainId: parseBigint(tx.chainId, "chainId"),
-    class: mempoolClass ?? inferMempoolClass(tx),
-    maxFeePerGas: parseBigint(tx.maxFeePerGas, "maxFeePerGas"),
-    maxPriorityFeePerGas: parseBigint(tx.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
-    gasLimit: parseBigint(tx.gasLimit, "gasLimit")
-  };
-}
-function inferMempoolClass(tx) {
-  if (tx.to === null || hasInput(tx.input)) return MempoolClass.ContractCall;
-  return MempoolClass.Transfer;
-}
-function hasInput(input) {
-  if (input === void 0) return false;
-  if (typeof input === "string") {
-    const stripped = input.startsWith("0x") || input.startsWith("0X") ? input.slice(2) : input;
-    return stripped.length > 0;
-  }
-  return input.length > 0;
-}
 
 // src/mrv.ts
 var MRV_FORMAT_VERSION = 1;
@@ -3029,29 +2393,28 @@ function buildMrvNativeFeePreview(executionUnitLimit, maxExecutionFeeLythoshi, p
 async function submitMrvDeployNativeTx(client, backend, artifactBytes, options) {
   const plan = buildMrvDeployNativeTxPlan(artifactBytes, options);
   assertMrvDeployNativeSubmissionPlan(plan);
-  return submitMrvEncryptedNativeTxGated(client, backend, plan, options);
+  return submitMrvPlaintextNativeTx(client, backend, plan);
 }
 async function submitMrvDeployPayloadNativeTx(client, backend, artifactBytes, options) {
   const plan = buildMrvDeployPayloadNativeTxPlan(artifactBytes, options);
   assertMrvDeployNativeSubmissionPlan(plan);
-  return submitMrvEncryptedNativeTxGated(client, backend, plan, options);
+  return submitMrvPlaintextNativeTx(client, backend, plan);
 }
 async function submitMrvCallNativeTx(client, backend, contractAddress, input, options) {
   const plan = buildMrvCallNativeTxPlan(contractAddress, input, options);
   assertMrvCallNativeSubmissionPlan(plan);
-  return submitMrvEncryptedNativeTxGated(client, backend, plan, options);
+  return submitMrvPlaintextNativeTx(client, backend, plan);
 }
-async function submitMrvEncryptedNativeTxGated(client, backend, plan, options) {
-  const submission = await buildEncryptedSubmission({
-    backend,
-    tx: plan.tx,
-    encryptionKey: options.encryptionKey ?? await fetchEncryptionKey(client),
-    class: options.class
-  });
+async function submitMrvPlaintextNativeTx(client, backend, plan) {
+  const submission = buildPlaintextSubmission({ backend, tx: plan.tx });
   return {
     ...plan,
     ...submission,
-    txHash: await submitEncryptedEnvelope(client, submission.envelopeWireHex)
+    txHash: await submitPlaintextTransaction(
+      client,
+      submission.signedTxWireHex,
+      submission.innerTxHashHex
+    )
   };
 }
 function assertMrvNativeSubmissionEnvelope(plan) {
@@ -3399,6 +2762,220 @@ function concatBytes3(...parts) {
 }
 function isIdentifier(value) {
   return /^[a-z][a-z0-9_]*$/.test(value);
+}
+
+// src/crypto/tx.ts
+function encodeTransactionForHash(fields, tag) {
+  const n = normalizeTxFields(fields);
+  return concatBytes2(
+    Uint8Array.of(tag),
+    bigintToBeBytes(n.chainId, 8, "chainId"),
+    bigintToBeBytes(n.nonce, 8, "nonce"),
+    bigintToBeBytes(n.maxPriorityFeePerGas, 32, "maxPriorityFeePerGas"),
+    bigintToBeBytes(n.maxFeePerGas, 32, "maxFeePerGas"),
+    bigintToBeBytes(n.gasLimit, 8, "gasLimit"),
+    n.to === null ? Uint8Array.of(0) : concatBytes2(Uint8Array.of(1), n.to),
+    bigintToBeBytes(n.value, 32, "value"),
+    bigintToBeBytes(BigInt(n.input.length), 4, "input.length"),
+    n.input,
+    new Uint8Array(4),
+    // access_list length
+    encodeExtensionsForHash(n.extensions)
+  );
+}
+function bincodeSignedTransaction(fields, signature, publicKey) {
+  const n = normalizeTxFields(fields);
+  const sig = expectBytes(signature, ML_DSA_65_SIGNATURE_LEN, "ML-DSA-65 signature");
+  const pk = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key");
+  const w = new BincodeWriter();
+  w.u64(n.chainId);
+  w.u64(n.nonce);
+  w.bytes(uint256Be(n.maxPriorityFeePerGas, "maxPriorityFeePerGas"));
+  w.bytes(uint256Be(n.maxFeePerGas, "maxFeePerGas"));
+  w.u64(n.gasLimit);
+  if (n.to === null) {
+    w.u8(0);
+  } else {
+    w.u8(1);
+    w.bytes(n.to);
+  }
+  w.bytes(uint256Be(n.value, "value"));
+  w.bytes(n.input);
+  w.u64(0n);
+  w.u64(BigInt(n.extensions.length));
+  for (const ext of n.extensions) bincodeTypedExtensionInto(w, ext);
+  bincodeMlDsa65OpaqueInto(w, sig);
+  bincodeMlDsa65OpaqueInto(w, pk);
+  return w.toBytes();
+}
+function normalizeTxFields(fields) {
+  return {
+    chainId: parseBigint(fields.chainId, "chainId"),
+    nonce: parseBigint(fields.nonce, "nonce"),
+    maxPriorityFeePerGas: parseBigint(fields.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
+    maxFeePerGas: parseBigint(fields.maxFeePerGas, "maxFeePerGas"),
+    gasLimit: parseBigint(fields.gasLimit, "gasLimit"),
+    to: normalizeTo(fields.to),
+    value: parseBigint(fields.value, "value"),
+    input: normalizeBytes(fields.input ?? new Uint8Array(0), "input"),
+    extensions: normalizeExtensions(fields.extensions)
+  };
+}
+function normalizeTo(value) {
+  if (value === null) return null;
+  const bytes = normalizeBytes(value, "to");
+  return expectBytes(bytes, 20, "to");
+}
+function normalizeBytes(value, label) {
+  if (typeof value === "string") return hexToBytes2(value, label);
+  return value instanceof Uint8Array ? value : Uint8Array.from(value);
+}
+function normalizeExtensions(value) {
+  if (value === void 0) return [];
+  return value.map((ext, index) => {
+    if (!Number.isInteger(ext.kind) || ext.kind < 0 || ext.kind > 255) {
+      throw new Error(`extensions[${index}].kind out of u8 range`);
+    }
+    const body = normalizeBytes("bodyHex" in ext ? ext.bodyHex : ext.body, `extensions[${index}].body`);
+    if (body.length > 4294967295) {
+      throw new Error(`extensions[${index}].body exceeds u32 length`);
+    }
+    return { kind: ext.kind, body };
+  });
+}
+function encodeExtensionsForHash(extensions) {
+  const chunks = [bigintToBeBytes(BigInt(extensions.length), 4, "extensions.length")];
+  for (const ext of extensions) {
+    chunks.push(
+      Uint8Array.of(ext.kind),
+      bigintToBeBytes(BigInt(ext.body.length), 4, "extension.body.length"),
+      ext.body
+    );
+  }
+  return concatBytes2(...chunks);
+}
+function uint256Be(value, label) {
+  if (value < 0n || value >= 1n << 256n) throw new Error(`${label} out of u256 range`);
+  const out = new Uint8Array(32);
+  let v = value;
+  for (let i = 31; i >= 0; i--) {
+    out[i] = Number(v & 0xffn);
+    v >>= 8n;
+  }
+  return out;
+}
+function bincodeMlDsa65OpaqueInto(w, raw) {
+  w.enumVariant(ENUM_VARIANT_INDEX_ML_DSA_65);
+  w.u16(STANDARD_ALGO_NUMBER_ML_DSA_65);
+  w.bytes(raw);
+}
+function bincodeTypedExtensionInto(w, ext) {
+  w.u8(ext.kind);
+  w.bytes(ext.body);
+}
+
+// src/crypto/ml-dsa.ts
+var ML_DSA_65_SEED_LEN = 32;
+var ML_DSA_65_SIGNING_KEY_LEN = 4032;
+var ML_DSA_65_PUBLIC_KEY_LEN = 1952;
+var ML_DSA_65_SIGNATURE_LEN = 3309;
+var STANDARD_ALGO_NUMBER_ML_DSA_65 = 1001;
+var ENUM_VARIANT_INDEX_ML_DSA_65 = 3;
+var ADDRESS_DERIVATION_DOMAIN = "MONO_ADDRESS_BLAKE3_20_V1";
+var ADDRESS_DERIVATION_DOMAIN_BYTES = new TextEncoder().encode(ADDRESS_DERIVATION_DOMAIN);
+var MlDsa65Backend = class _MlDsa65Backend {
+  #secretKey;
+  #publicKey;
+  #addressBytes;
+  #disposed = false;
+  constructor(secretKey, publicKey) {
+    this.#secretKey = expectBytes(secretKey, ML_DSA_65_SIGNING_KEY_LEN, "ML-DSA-65 secret key").slice();
+    this.#publicKey = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key").slice();
+    this.#addressBytes = mlDsa65AddressBytes(this.#publicKey);
+  }
+  static fromSeed(seed) {
+    const kp = mlDsa_js.ml_dsa65.keygen(expectBytes(seed, ML_DSA_65_SEED_LEN, "ML-DSA-65 seed"));
+    return new _MlDsa65Backend(kp.secretKey, kp.publicKey);
+  }
+  publicKey() {
+    return this.#publicKey.slice();
+  }
+  addressBytes() {
+    return this.#addressBytes.slice();
+  }
+  getAddress() {
+    return bytesToHex2(this.#addressBytes);
+  }
+  sign(message) {
+    if (this.#disposed) {
+      throw new Error("MlDsa65Backend disposed");
+    }
+    return mlDsa_js.ml_dsa65.sign(message, this.#secretKey, { extraEntropy: false });
+  }
+  /**
+   * Best-effort deterministic wipe of the in-memory secret key. Zeroes the
+   * SDK-held `#secretKey` copy and makes any subsequent `sign()` /
+   * `signPrehash()` / `signEvmTx()` throw `"MlDsa65Backend disposed"` rather
+   * than signing with a zeroed key. Idempotent. Public material
+   * (`publicKey()` / `getAddress()` / `verify()`) stays usable.
+   *
+   * Defense-in-depth (S1-01): narrows the post-lock residency window of the
+   * ML-DSA-65 secret in the JS heap. `@noble/post-quantum`'s internal
+   * transient keygen/sign buffers are out of scope; the SDK-held copy is the
+   * meaningful residency win.
+   */
+  dispose() {
+    this.#secretKey.fill(0);
+    this.#disposed = true;
+  }
+  /** Alias for {@link dispose}. */
+  zeroize() {
+    this.dispose();
+  }
+  /** Whether {@link dispose} has been called (the secret key is wiped). */
+  get disposed() {
+    return this.#disposed;
+  }
+  signPrehash(digest) {
+    return this.sign(expectBytes(digest, 32, "prehash"));
+  }
+  verify(message, signature) {
+    return mlDsa_js.ml_dsa65.verify(
+      expectBytes(signature, ML_DSA_65_SIGNATURE_LEN, "ML-DSA-65 signature"),
+      message,
+      this.#publicKey
+    );
+  }
+  signEvmTx(fields) {
+    const txHashPreimage = encodeTransactionForHash(fields, 1);
+    const sighash = sha3_js.keccak_256(txHashPreimage);
+    const signature = this.sign(sighash);
+    const wireBytes = bincodeSignedTransaction(fields, signature, this.#publicKey);
+    const txHash = sha3_js.keccak_256(
+      concatBytes2(
+        encodeTransactionForHash(fields, 2),
+        signature,
+        this.#publicKey
+      )
+    );
+    return {
+      wireHex: bytesToHex2(wireBytes).slice(2),
+      wireBytes,
+      sighash,
+      txHash
+    };
+  }
+};
+function mlDsa65AddressFromPublicKey(publicKey) {
+  return bytesToHex2(mlDsa65AddressBytes(publicKey));
+}
+function mlDsa65AddressBytes(publicKey) {
+  const bytes = expectBytes(publicKey, ML_DSA_65_PUBLIC_KEY_LEN, "ML-DSA-65 public key");
+  return blake3_js.blake3(concatBytes2(
+    ADDRESS_DERIVATION_DOMAIN_BYTES,
+    bigintToBeBytes(BigInt(STANDARD_ALGO_NUMBER_ML_DSA_65), 2, "ML-DSA-65 algo id"),
+    bytes
+  )).slice(0, 20);
 }
 
 // src/registry.ts
@@ -4988,14 +4565,6 @@ var RpcClient = class _RpcClient {
    */
   async lythSubmitPendingChange(envelope) {
     return this.call("lyth_submitPendingChange", [envelope]);
-  }
-  /** `lyth_submitEncrypted` — submit a bincode-encoded encrypted envelope hex. */
-  async lythSubmitEncrypted(envelopeHex) {
-    return this.call("lyth_submitEncrypted", [envelopeHex]);
-  }
-  /** `lyth_getEncryptionKey` — cluster ML-KEM encapsulation key. */
-  async lythGetEncryptionKey() {
-    return this.call("lyth_getEncryptionKey", []);
   }
   /** `lyth_syncStatus` — DAG-sync driver snapshot. */
   async lythSyncStatus() {
@@ -8153,7 +7722,7 @@ function verifyBoundedReceiptProof(proof) {
   }
   const actualRoot = computeNoEvmReceiptsRoot(receipts);
   const expectedRoot = decodeHash(proof.receiptsRoot, "receiptsRoot");
-  if (!bytesEqual3(expectedRoot, decodeHash(actualRoot, "computedReceiptsRoot"))) {
+  if (!bytesEqual2(expectedRoot, decodeHash(actualRoot, "computedReceiptsRoot"))) {
     throw new NoEvmReceiptProofError(
       "receipts_root_mismatch",
       `receiptsRoot mismatch: expected ${proof.receiptsRoot}, computed ${actualRoot}`
@@ -8161,7 +7730,7 @@ function verifyBoundedReceiptProof(proof) {
   }
   const actualTargetHash = computeNoEvmTargetReceiptHash(targetReceipt);
   const expectedTargetHash = decodeHash(proof.targetReceiptHash, "targetReceiptHash");
-  if (!bytesEqual3(expectedTargetHash, decodeHash(actualTargetHash, "computedTargetReceiptHash"))) {
+  if (!bytesEqual2(expectedTargetHash, decodeHash(actualTargetHash, "computedTargetReceiptHash"))) {
     throw new NoEvmReceiptProofError(
       "target_receipt_hash_mismatch",
       `targetReceiptHash mismatch: expected ${proof.targetReceiptHash}, computed ${actualTargetHash}`
@@ -8218,7 +7787,7 @@ function verifyCompactReceiptProof(proof) {
   const targetReceipt = decodeHexBytes(targetReceiptBytes, "targetReceiptBytes");
   const actualTargetHash = computeNoEvmTargetReceiptHash(targetReceipt);
   const expectedTargetHash = decodeHash(proof.targetReceiptHash, "targetReceiptHash");
-  if (!bytesEqual3(expectedTargetHash, decodeHash(actualTargetHash, "computedTargetReceiptHash"))) {
+  if (!bytesEqual2(expectedTargetHash, decodeHash(actualTargetHash, "computedTargetReceiptHash"))) {
     throw new NoEvmReceiptProofError(
       "target_receipt_hash_mismatch",
       `targetReceiptHash mismatch: expected ${proof.targetReceiptHash}, computed ${actualTargetHash}`
@@ -8229,7 +7798,7 @@ function verifyCompactReceiptProof(proof) {
     compactProof.leafHash,
     "compactInclusionProof.leafHash"
   );
-  if (!bytesEqual3(expectedLeafHashBytes, actualLeafHashBytes)) {
+  if (!bytesEqual2(expectedLeafHashBytes, actualLeafHashBytes)) {
     throw new NoEvmReceiptProofError(
       "compact_leaf_hash_mismatch",
       `compactInclusionProof.leafHash mismatch: expected ${compactProof.leafHash}, computed ${bytesToHex6(
@@ -8239,7 +7808,7 @@ function verifyCompactReceiptProof(proof) {
   }
   const compactRootBytes = decodeHash(compactProof.root, "compactInclusionProof.root");
   const receiptsRootBytes = decodeHash(proof.receiptsRoot, "receiptsRoot");
-  if (!bytesEqual3(receiptsRootBytes, compactRootBytes)) {
+  if (!bytesEqual2(receiptsRootBytes, compactRootBytes)) {
     throw new NoEvmReceiptProofError(
       "compact_root_mismatch",
       `receiptsRoot must equal compactInclusionProof.root: receiptsRoot ${proof.receiptsRoot}, compact root ${compactProof.root}`
@@ -8262,7 +7831,7 @@ function verifyCompactReceiptProof(proof) {
     siblingHashes,
     pathSides
   );
-  if (!bytesEqual3(actualRootBytes, compactRootBytes)) {
+  if (!bytesEqual2(actualRootBytes, compactRootBytes)) {
     throw new NoEvmReceiptProofError(
       "compact_path_mismatch",
       `compact inclusion path mismatch: expected ${compactProof.root}, computed ${bytesToHex6(
@@ -8416,7 +7985,7 @@ function validateCoveringSnapshotObject(snapshot, archiveContentHash, proofBlock
       "archiveProof.coveringSnapshot.checkpointTo must match blockHeight"
     );
   }
-  if (!bytesEqual3(checkpointContentHash, archiveContentHash)) {
+  if (!bytesEqual2(checkpointContentHash, archiveContentHash)) {
     throw new NoEvmReceiptProofError(
       "invalid_proof_shape",
       "archiveProof.coveringSnapshot.checkpointContentHash must match archiveProof.contentHash"
@@ -8615,7 +8184,7 @@ function validateFinalityBlockReference(blockReference, round, proofBlockHash) {
   );
   if (proofBlockHash !== void 0) {
     const blockHash = decodeHash(proofBlockHash, "blockHash");
-    if (!bytesEqual3(digest, blockHash)) {
+    if (!bytesEqual2(digest, blockHash)) {
       throw new NoEvmReceiptProofError(
         "invalid_proof_shape",
         "finalityEvidence.blockReference.digest must match blockHash"
@@ -8965,7 +8534,7 @@ function assertHashBytes(value, field2) {
 function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function bytesEqual3(a, b) {
+function bytesEqual2(a, b) {
   if (a.length !== b.length) return false;
   let diff = 0;
   for (let index = 0; index < a.length; index++) {
@@ -8979,6 +8548,191 @@ function bytesToHex6(bytes) {
     out += bytes[index].toString(16).padStart(2, "0");
   }
   return out;
+}
+var TREE_TAG_LEAF = 0;
+var TREE_TAG_INTERNAL = 1;
+var TREE_TERMINATOR = new Uint8Array(32);
+var HASH_BYTE_LENGTH2 = 32;
+var PROOF_KIND_BINARY = "binary";
+var ProofVerifyError = class extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+    this.name = "ProofVerifyError";
+  }
+  code;
+};
+function hashValue(data) {
+  return blake3_js.blake3(data);
+}
+function hashLeaf(path, valueHash) {
+  const buf = new Uint8Array(1 + 32 + 32);
+  buf[0] = TREE_TAG_LEAF;
+  buf.set(path, 1);
+  buf.set(valueHash, 33);
+  return blake3_js.blake3(buf);
+}
+function compress(left, right) {
+  if (isTerminator(left) && isTerminator(right)) {
+    return TREE_TERMINATOR;
+  }
+  const buf = new Uint8Array(1 + 32 + 32);
+  buf[0] = TREE_TAG_INTERNAL;
+  buf.set(left, 1);
+  buf.set(right, 33);
+  return blake3_js.blake3(buf);
+}
+function isTerminator(hash) {
+  for (let i = 0; i < hash.length; i++) {
+    if (hash[i] !== 0) return false;
+  }
+  return true;
+}
+function pathBit(path, depth) {
+  const byte = path[depth >>> 3];
+  return byte >>> 7 - (depth & 7) & 1;
+}
+function foldToRoot(target, current, siblings) {
+  const depth = siblings.length;
+  let node = current;
+  for (let i = 0; i < depth; i++) {
+    const level = depth - 1 - i;
+    const sibling = siblings[i];
+    node = pathBit(target, level) === 0 ? compress(node, sibling) : compress(sibling, node);
+  }
+  return node;
+}
+function bytesEqual3(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+function decodeHash2(value, field2) {
+  let bytes;
+  try {
+    bytes = hexToBytes2(value, field2);
+  } catch (cause) {
+    throw new ProofVerifyError("invalid_hex", `${field2} is not valid hex: ${String(cause)}`);
+  }
+  if (bytes.length !== HASH_BYTE_LENGTH2) {
+    throw new ProofVerifyError(
+      "invalid_hash_length",
+      `${field2} must be ${HASH_BYTE_LENGTH2} bytes, got ${bytes.length}`
+    );
+  }
+  return bytes;
+}
+function decodeSiblings(siblings) {
+  return siblings.map((sib, index) => decodeHash2(sib, `siblings[${index}]`));
+}
+function assertBinaryKind(proofKind) {
+  if (proofKind !== PROOF_KIND_BINARY) {
+    throw new ProofVerifyError(
+      "unsupported_proof_kind",
+      `unsupported proofKind: ${proofKind} (expected ${PROOF_KIND_BINARY})`
+    );
+  }
+}
+var ProofVerifier = class {
+  /**
+   * Verify a {@link ProofEnvelope} inclusion proof against `stateRoot`.
+   *
+   * @returns `true` when the proof binds `(key, value)` to `stateRoot`.
+   */
+  verifyInclusion(stateRoot, proof) {
+    assertBinaryKind(proof.proofKind);
+    const root = toHashBytes(stateRoot, "stateRoot");
+    const key = decodeHex(proof.key, "proof.key");
+    const value = decodeHex(proof.value, "proof.value");
+    const siblings = decodeSiblings(proof.siblings);
+    const target = hashValue(key);
+    const leaf = hashLeaf(target, hashValue(value));
+    return bytesEqual3(foldToRoot(target, leaf, siblings), root);
+  }
+  /**
+   * Verify a {@link ProofEnvelope} inclusion proof, throwing a
+   * {@link ProofVerifyError} on failure (the loud variant for wallets).
+   */
+  assertInclusion(stateRoot, proof) {
+    if (!this.verifyInclusion(stateRoot, proof)) {
+      throw new ProofVerifyError(
+        "proof_verify_failed",
+        `inclusion proof for key ${proof.key} does not verify against the state root`
+      );
+    }
+  }
+  /**
+   * Verify a {@link NonInclusionProofEnvelope} against `stateRoot`.
+   *
+   * Returns `false` for a `found` endpoint (that is an inclusion, not
+   * absence) or an `otherLeaf` whose path equals the queried key. Mirrors
+   * `protocore_state::verify_binary_non_inclusion`.
+   */
+  verifyNonInclusion(stateRoot, proof) {
+    assertBinaryKind(proof.proofKind);
+    const root = toHashBytes(stateRoot, "stateRoot");
+    const key = decodeHex(proof.key, "proof.key");
+    const siblings = decodeSiblings(proof.siblings);
+    const target = hashValue(key);
+    let endpointHash;
+    switch (proof.endpoint.kind) {
+      case "found":
+        return false;
+      case "terminator":
+        endpointHash = TREE_TERMINATOR;
+        break;
+      case "otherLeaf": {
+        const path = decodeHash2(proof.endpoint.path, "endpoint.path");
+        if (bytesEqual3(path, target)) return false;
+        endpointHash = hashLeaf(path, decodeHash2(proof.endpoint.valueHash, "endpoint.valueHash"));
+        break;
+      }
+    }
+    return bytesEqual3(foldToRoot(target, endpointHash, siblings), root);
+  }
+  /**
+   * Verify a non-inclusion proof, throwing a {@link ProofVerifyError} on
+   * failure.
+   */
+  assertNonInclusion(stateRoot, proof) {
+    if (!this.verifyNonInclusion(stateRoot, proof)) {
+      throw new ProofVerifyError(
+        "non_inclusion_verify_failed",
+        `non-inclusion proof for key ${proof.key} does not verify against the state root`
+      );
+    }
+  }
+};
+var proofVerifier = new ProofVerifier();
+function toHashBytes(value, field2) {
+  if (typeof value === "string") return decodeHash2(value, field2);
+  return expectBytes(value, HASH_BYTE_LENGTH2, field2);
+}
+function decodeHex(value, field2) {
+  try {
+    return hexToBytes2(value, field2);
+  } catch (cause) {
+    throw new ProofVerifyError("invalid_hex", `${field2} is not valid hex: ${String(cause)}`);
+  }
+}
+function asBinaryProofEnvelope(proof) {
+  if (proof == null || typeof proof !== "object") return null;
+  const obj = proof;
+  if (obj.proofKind !== PROOF_KIND_BINARY) return null;
+  if (typeof obj.key !== "string" || typeof obj.value !== "string" || !Array.isArray(obj.siblings) || obj.siblings.some((s) => typeof s !== "string")) {
+    return null;
+  }
+  return {
+    proofKind: PROOF_KIND_BINARY,
+    siblings: obj.siblings,
+    key: obj.key,
+    value: obj.value
+  };
+}
+function hashToHex(hash) {
+  return bytesToHex2(hash);
 }
 
 // src/native-dev.ts
@@ -9238,7 +8992,6 @@ function pqm1MnemonicToMlDsa65Backend(mnemonic) {
 
 // src/cluster-join.ts
 var DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT = REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT;
-var DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT = REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT;
 var ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 var MAX_UINT32 = (1n << 32n) - 1n;
 function deriveClusterJoinOperatorId(operatorPubkey) {
@@ -9346,24 +9099,6 @@ function buildVoteClusterAdmitTxFields(args) {
     })
   };
 }
-function buildPublishOperatorSealKeyTxFields(args) {
-  return {
-    chainId: args.chainId,
-    nonce: args.nonce,
-    maxFeePerGas: parseBigint(args.fee.maxFeePerGas, "maxFeePerGas"),
-    maxPriorityFeePerGas: parseBigint(args.fee.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
-    gasLimit: parseBigint(
-      args.fee.gasLimit ?? DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT,
-      "gasLimit"
-    ),
-    to: nodeRegistryAddressHex(),
-    value: 0n,
-    input: encodePublishOperatorSealKeyCalldata({
-      peerId: normalizeOperatorId(args.peerId),
-      sealEk: normalizeOperatorSealEk(args.sealEk)
-    })
-  };
-}
 async function submitRequestClusterJoin(args) {
   const clusterId = parseUint32(args.clusterId, "clusterId");
   const operatorPubkey = normalizeConsensusPubkey(args.operatorPubkey, "operatorPubkey");
@@ -9390,7 +9125,7 @@ async function submitRequestClusterJoin(args) {
     operatorPubkey,
     bondLythoshi: args.bondLythoshi
   });
-  return submitClusterJoinTx(args.client, backend, tx, clusterId, operatorIdHex, args);
+  return submitClusterJoinTx(args.client, backend, tx, clusterId, operatorIdHex);
 }
 async function submitVoteClusterAdmit(args) {
   const clusterId = parseUint32(args.clusterId, "clusterId");
@@ -9417,62 +9152,9 @@ async function submitVoteClusterAdmit(args) {
     operatorId: operatorIdHex,
     voterPubkey: args.voterPubkey
   });
-  return submitClusterJoinTx(args.client, backend, tx, clusterId, operatorIdHex, args);
+  return submitClusterJoinTx(args.client, backend, tx, clusterId, operatorIdHex);
 }
-async function submitPublishOperatorSealKey(args) {
-  const operatorIdHex = normalizeOperatorId(args.peerId);
-  const sealEk = normalizeOperatorSealEk(args.sealEk);
-  const backend = pqm1MnemonicToMlDsa65Backend(args.mnemonic);
-  const senderAddress = addressToTypedBech32("user", backend.addressBytes());
-  const [chainId, nonce, quote] = await Promise.all([
-    args.client.ethChainId(),
-    args.client.lythGetTransactionCount(senderAddress),
-    args.client.lythExecutionUnitPrice()
-  ]);
-  const tx = buildPublishOperatorSealKeyTxFields({
-    chainId,
-    nonce,
-    fee: resolveClusterJoinExecutionFee(quote, {
-      ...args,
-      executionUnitLimit: args.executionUnitLimit ?? DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT
-    }),
-    peerId: operatorIdHex,
-    sealEk
-  });
-  const plaintext = buildPlaintextSubmission({ backend, tx });
-  const txHash = await submitPlaintextTransaction(
-    args.client,
-    plaintext.signedTxWireHex,
-    plaintext.innerTxHashHex
-  );
-  return {
-    txHash,
-    operatorIdHex,
-    innerSighashHex: plaintext.innerSighashHex,
-    signedTxWireBytes: plaintext.innerWireBytes
-  };
-}
-async function submitClusterJoinTx(client, backend, tx, clusterId, operatorIdHex, options) {
-  if (options.private !== false) {
-    const encrypted = await buildEncryptedSubmission({
-      client,
-      backend,
-      tx,
-      clusterId: Number(clusterId),
-      clusterSealKeys: options.clusterSealKeys,
-      clusterSealKeysSource: options.clusterSealKeysSource,
-      class: MempoolClass.ContractCall
-    });
-    assertRpcHash(await submitEncryptedEnvelope(client, encrypted.envelopeWireHex));
-    return {
-      txHash: encrypted.innerTxHashHex,
-      clusterId: clusterId.toString(10),
-      operatorIdHex,
-      innerSighashHex: encrypted.innerSighashHex,
-      signedTxWireBytes: encrypted.innerWireBytes,
-      envelopeWireBytes: hexByteLength(encrypted.envelopeWireHex)
-    };
-  }
+async function submitClusterJoinTx(client, backend, tx, clusterId, operatorIdHex) {
   const plaintext = buildPlaintextSubmission({ backend, tx });
   const txHash = await submitPlaintextTransaction(
     client,
@@ -9486,16 +9168,6 @@ async function submitClusterJoinTx(client, backend, tx, clusterId, operatorIdHex
     innerSighashHex: plaintext.innerSighashHex,
     signedTxWireBytes: plaintext.innerWireBytes
   };
-}
-function hexByteLength(value) {
-  const clean = value.startsWith("0x") || value.startsWith("0X") ? value.slice(2) : value;
-  return clean.length / 2;
-}
-function assertRpcHash(value) {
-  const bytes = hexToBytes2(value, "lyth_submitEncrypted tx hash");
-  if (bytes.length !== 32) {
-    throw new Error(`lyth_submitEncrypted tx hash must be 32 bytes, got ${bytes.length}`);
-  }
 }
 function adaptNativeClusterJoinRequest(request) {
   return {
@@ -9538,10 +9210,6 @@ function normalizeConsensusPubkey(value, label) {
 function normalizeOperatorId(value) {
   const bytes = typeof value === "string" ? hexToBytes2(value, "operatorId") : value;
   return bytesToHex2(expectBytes(bytes, 32, "operatorId"));
-}
-function normalizeOperatorSealEk(value) {
-  const bytes = typeof value === "string" ? hexToBytes2(value, "sealEk") : value;
-  return expectBytes(bytes, NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES, "sealEk").slice();
 }
 function parseUint32(value, label) {
   const parsed = parseBigint(value, label);
@@ -11051,6 +10719,12 @@ function wordToBigint(word) {
   }
   return out;
 }
+
+// src/crypto/envelope.ts
+var MempoolClass = {
+  CLOBOp: 3};
+
+// src/market-actions.ts
 var CLOB_MARKET_ID_DOMAIN_TAG = 193;
 var NATIVE_MARKET_MODULE_ADDRESS_BYTES = "0x4d41524b45545f4e41544956455f4d4f445f5631";
 var NATIVE_MARKET_MODULE_ADDRESS = addressToTypedBech32(
@@ -12402,7 +12076,6 @@ exports.CLOB_MARKET_ID_DOMAIN_TAG = CLOB_MARKET_ID_DOMAIN_TAG;
 exports.CLOB_SELECTORS = CLOB_SELECTORS;
 exports.CLUSTER_FORMED_EVENT_SIG = CLUSTER_FORMED_EVENT_SIG;
 exports.DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT = DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT;
-exports.DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT = DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT;
 exports.DELEGATION_REVERT_TAGS = DELEGATION_REVERT_TAGS;
 exports.DELEGATION_SELECTORS = DELEGATION_SELECTORS;
 exports.DIVERSITY_SCORE_MAX = DIVERSITY_SCORE_MAX;
@@ -12524,6 +12197,7 @@ exports.OperatorTrustError = OperatorTrustError;
 exports.OracleEventError = OracleEventError;
 exports.PENDING_CHANGE_KIND_CODES = PENDING_CHANGE_KIND_CODES;
 exports.PRECOMPILE_ADDRESSES = PRECOMPILE_ADDRESSES;
+exports.PROOF_KIND_BINARY = PROOF_KIND_BINARY;
 exports.PROTOCOL_MAX_OPERATOR_FEE_BPS = PROTOCOL_MAX_OPERATOR_FEE_BPS;
 exports.PROVER_MARKET_ADDRESS = PROVER_MARKET_ADDRESS;
 exports.PROVER_MARKET_BID_DOMAIN = PROVER_MARKET_BID_DOMAIN;
@@ -12535,6 +12209,8 @@ exports.PROVER_SLASH_REASON_BAD_PROOF = PROVER_SLASH_REASON_BAD_PROOF;
 exports.PROVER_SLASH_REASON_NON_DELIVERY = PROVER_SLASH_REASON_NON_DELIVERY;
 exports.PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN = PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN;
 exports.PUBKEY_REGISTRY_SELECTORS = PUBKEY_REGISTRY_SELECTORS;
+exports.ProofVerifier = ProofVerifier;
+exports.ProofVerifyError = ProofVerifyError;
 exports.ProverMarketError = ProverMarketError;
 exports.PubkeyRegistryError = PubkeyRegistryError;
 exports.QUARANTINED_RPC_CODE = QUARANTINED_RPC_CODE;
@@ -12575,6 +12251,7 @@ exports.allowRootFor = allowRootFor;
 exports.apiEndpointFromRpcEndpoint = apiEndpointFromRpcEndpoint;
 exports.archiveMerkleInnerHash = archiveMerkleInnerHash;
 exports.archiveMerkleLeafHash = archiveMerkleLeafHash;
+exports.asBinaryProofEnvelope = asBinaryProofEnvelope;
 exports.assembleMultisigSigned = assembleMultisigSigned;
 exports.assembleMultisigWitness = assembleMultisigWitness;
 exports.assertMrvCallNativeSubmissionPlan = assertMrvCallNativeSubmissionPlan;
@@ -12640,7 +12317,6 @@ exports.buildPlaceLimitOrderViaPlan = buildPlaceLimitOrderViaPlan;
 exports.buildPlaceSpotLimitOrderPlan = buildPlaceSpotLimitOrderPlan;
 exports.buildPlaceSpotMarketOrderExPlan = buildPlaceSpotMarketOrderExPlan;
 exports.buildPlaceSpotMarketOrderPlan = buildPlaceSpotMarketOrderPlan;
-exports.buildPublishOperatorSealKeyTxFields = buildPublishOperatorSealKeyTxFields;
 exports.buildRequestClusterJoinTxFields = buildRequestClusterJoinTxFields;
 exports.buildVoteClusterAdmitTxFields = buildVoteClusterAdmitTxFields;
 exports.categoryRoot = categoryRoot;
@@ -12831,6 +12507,7 @@ exports.getChainInfo = getChainInfo;
 exports.getNoEvmReceiptTrustPolicy = getNoEvmReceiptTrustPolicy;
 exports.getP2pSeeds = getP2pSeeds;
 exports.getRpcEndpoints = getRpcEndpoints;
+exports.hashToHex = hashToHex;
 exports.hexToAddressBytes = hexToAddressBytes;
 exports.isBridgeAdminLockedRevert = isBridgeAdminLockedRevert;
 exports.isBridgeCooldownZeroRevert = isBridgeCooldownZeroRevert;
@@ -12886,6 +12563,7 @@ exports.parseQuantityBig = parseQuantityBig;
 exports.preflightClusterJoinRequest = preflightClusterJoinRequest;
 exports.previewRequestClusterJoin = previewRequestClusterJoin;
 exports.previewVoteClusterAdmit = previewVoteClusterAdmit;
+exports.proofVerifier = proofVerifier;
 exports.protocolNonceForEpoch = protocolNonceForEpoch;
 exports.proverMarketStateFromByte = proverMarketStateFromByte;
 exports.pubkeyRegistryAddressHex = pubkeyRegistryAddressHex;
@@ -12919,7 +12597,6 @@ exports.spendingPolicyAddressHex = spendingPolicyAddressHex;
 exports.submitMrvCallNativeTx = submitMrvCallNativeTx;
 exports.submitMrvDeployNativeTx = submitMrvDeployNativeTx;
 exports.submitMrvDeployPayloadNativeTx = submitMrvDeployPayloadNativeTx;
-exports.submitPublishOperatorSealKey = submitPublishOperatorSealKey;
 exports.submitRequestClusterJoin = submitRequestClusterJoin;
 exports.submitSighash = submitSighash;
 exports.submitVoteClusterAdmit = submitVoteClusterAdmit;

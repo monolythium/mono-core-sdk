@@ -1,10 +1,8 @@
 import { blake3 } from "@noble/hashes/blake3.js";
 import { ADDRESS_KIND_HRPS, addressToTypedBech32, typedBech32ToAddress } from "./address.js";
 import {
-  buildEncryptedSubmission,
-  fetchEncryptionKey,
-  submitEncryptedEnvelope,
-  type EncryptionKey,
+  buildPlaintextSubmission,
+  submitPlaintextTransaction,
 } from "./crypto/submission.js";
 import { BincodeWriter } from "./crypto/bincode.js";
 
@@ -47,7 +45,6 @@ import type { MrvResolvedSyscall } from "./bindings/MrvResolvedSyscall.js";
 import type { MrvTransactionExtension } from "./bindings/MrvTransactionExtension.js";
 import type { MrvValidatedArtifactMetadata } from "./bindings/MrvValidatedArtifactMetadata.js";
 import type { RpcClient } from "./client.js";
-import type { MempoolClass } from "./crypto/envelope.js";
 import type { MlDsa65Backend } from "./crypto/ml-dsa.js";
 import type { NativeEvmTxFields, NativeTxExtensionLike } from "./crypto/tx.js";
 import type { NativeReceiptFee } from "./client.js";
@@ -147,32 +144,23 @@ export interface MrvCallNativeTxPlan extends MrvCallPlan {
   tx: NativeEvmTxFields;
 }
 
-export interface MrvEncryptedSubmissionResult {
-  envelopeWireHex: string;
+export interface MrvSubmissionResult {
+  signedTxWireHex: string;
   innerSighashHex: string;
   innerTxHashHex: string;
   innerWireBytes: number;
   txHash: string;
 }
 
-export type MrvDeploySubmitOptions = MrvDeployNativeTxOptions & {
-  encryptionKey?: EncryptionKey;
-  class?: MempoolClass;
-};
+export type MrvDeploySubmitOptions = MrvDeployNativeTxOptions;
 
-export type MrvDeployPayloadSubmitOptions = MrvDeployPayloadNativeTxOptions & {
-  encryptionKey?: EncryptionKey;
-  class?: MempoolClass;
-};
+export type MrvDeployPayloadSubmitOptions = MrvDeployPayloadNativeTxOptions;
 
-export type MrvCallSubmitOptions = MrvCallNativeTxOptions & {
-  encryptionKey?: EncryptionKey;
-  class?: MempoolClass;
-};
+export type MrvCallSubmitOptions = MrvCallNativeTxOptions;
 
-export type MrvDeploySubmission = MrvDeployNativeTxPlan & MrvEncryptedSubmissionResult;
-export type MrvDeployPayloadSubmission = MrvDeployNativeTxPlan & MrvEncryptedSubmissionResult;
-export type MrvCallSubmission = MrvCallNativeTxPlan & MrvEncryptedSubmissionResult;
+export type MrvDeploySubmission = MrvDeployNativeTxPlan & MrvSubmissionResult;
+export type MrvDeployPayloadSubmission = MrvDeployNativeTxPlan & MrvSubmissionResult;
+export type MrvCallSubmission = MrvCallNativeTxPlan & MrvSubmissionResult;
 
 export const MRV_FORMAT_VERSION = 1 as const;
 export const MRV_DEPLOY_PAYLOAD_VERSION = 1 as const;
@@ -814,13 +802,9 @@ export async function submitMrvDeployNativeTx(
   artifactBytes: MrvBytesLike,
   options: MrvDeploySubmitOptions,
 ): Promise<MrvDeploySubmission> {
-  // MB-3 gate: the encrypted-submit path is unavailable until the chain runs
-  // Ferveo threshold decryption. Validate the plan (so callers still get plan
-  // errors loud) then route through buildEncryptedSubmission, which throws
-  // ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE before any envelope is produced.
   const plan = buildMrvDeployNativeTxPlan(artifactBytes, options);
   assertMrvDeployNativeSubmissionPlan(plan);
-  return submitMrvEncryptedNativeTxGated(client, backend, plan, options);
+  return submitMrvPlaintextNativeTx(client, backend, plan);
 }
 
 export async function submitMrvDeployPayloadNativeTx(
@@ -831,7 +815,7 @@ export async function submitMrvDeployPayloadNativeTx(
 ): Promise<MrvDeployPayloadSubmission> {
   const plan = buildMrvDeployPayloadNativeTxPlan(artifactBytes, options);
   assertMrvDeployNativeSubmissionPlan(plan);
-  return submitMrvEncryptedNativeTxGated(client, backend, plan, options);
+  return submitMrvPlaintextNativeTx(client, backend, plan);
 }
 
 export async function submitMrvCallNativeTx(
@@ -843,33 +827,29 @@ export async function submitMrvCallNativeTx(
 ): Promise<MrvCallSubmission> {
   const plan = buildMrvCallNativeTxPlan(contractAddress, input, options);
   assertMrvCallNativeSubmissionPlan(plan);
-  return submitMrvEncryptedNativeTxGated(client, backend, plan, options);
+  return submitMrvPlaintextNativeTx(client, backend, plan);
 }
 
 /**
- * Shared MB-3 gate body for the MRV encrypted-submit helpers.
+ * Shared submit body for the MRV native-tx helpers.
  *
- * Builds the encrypted submission through the single chokepoint
- * ({@link buildEncryptedSubmission}), which currently throws
- * {@link ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE} so no `scheme: 0` envelope
- * is ever produced. When MB-3 Ferveo threshold decryption activates and the
- * chokepoint is unblocked, this body submits the envelope and returns the
- * admission tx hash without further changes here.
+ * Builds the plaintext submission (the sole submit path since the v2
+ * re-genesis dropped the encrypted mempool), forwards it through
+ * `mesh_submitTx`, and returns the plan plus the node-echoed-and-validated
+ * canonical native tx hash.
  */
-async function submitMrvEncryptedNativeTxGated<
+async function submitMrvPlaintextNativeTx<
   P extends MrvDeployNativeTxPlan | MrvCallNativeTxPlan,
-  O extends { encryptionKey?: EncryptionKey; class?: MempoolClass },
->(client: RpcClient, backend: MlDsa65Backend, plan: P, options: O): Promise<P & MrvEncryptedSubmissionResult> {
-  const submission = await buildEncryptedSubmission({
-    backend,
-    tx: plan.tx,
-    encryptionKey: options.encryptionKey ?? (await fetchEncryptionKey(client)),
-    class: options.class,
-  });
+>(client: RpcClient, backend: MlDsa65Backend, plan: P): Promise<P & MrvSubmissionResult> {
+  const submission = buildPlaintextSubmission({ backend, tx: plan.tx });
   return {
     ...plan,
     ...submission,
-    txHash: await submitEncryptedEnvelope(client, submission.envelopeWireHex),
+    txHash: await submitPlaintextTransaction(
+      client,
+      submission.signedTxWireHex,
+      submission.innerTxHashHex,
+    ),
   };
 }
 

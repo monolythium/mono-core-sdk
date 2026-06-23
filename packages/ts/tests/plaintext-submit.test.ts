@@ -1,14 +1,13 @@
 /**
- * Unit tests for the plaintext submit path + the privacy toggle, and
- * the registry/tx fee-default resolver. These mirror the Rust SDK's
- * `TxClient::submit_plaintext` / `build_sign_submit_with_privacy` and
- * the registry per-unit-price + clamp logic. No network is touched —
- * the RPC client uses a stub `fetch` that records the wire call.
+ * Unit tests for the plaintext submit path (the sole submit path since the
+ * v2 re-genesis dropped the encrypted mempool) and the registry/tx
+ * fee-default resolver. These mirror the Rust SDK's
+ * `TxClient::submit_plaintext` / `build_sign_submit` and the registry
+ * per-unit-price + clamp logic. No network is touched — the RPC client
+ * uses a stub `fetch` that records the wire call.
  */
 
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import {
   REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT,
   RpcClient,
@@ -19,12 +18,10 @@ import {
 } from "../src/index.js";
 import {
   ML_DSA_65_SEED_LEN,
-  MempoolClass,
   MlDsa65Backend,
   buildPlaintextSubmission,
   submitPlaintextTransaction,
-  submitTransactionWithPrivacy,
-  type ClusterSealKeysSource,
+  submitTransaction,
 } from "../src/crypto/index.js";
 
 interface CapturedCall {
@@ -82,33 +79,6 @@ const TX_FIELDS = {
   value: 1_000n,
   input: "0x",
 } as const;
-
-interface LythiumSealVector {
-  cluster_id: number;
-  epoch: number;
-  t: number;
-  n: number;
-  roster_hash_hex: string;
-  roster_eks_hex: string[];
-}
-
-const vectorsPath = fileURLToPath(new URL("./lythiumseal-vectors.json", import.meta.url));
-const sealVectors = JSON.parse(readFileSync(vectorsPath, "utf8")) as LythiumSealVector[];
-
-function clusterSealKeysSource(): ClusterSealKeysSource {
-  const v = sealVectors[0]!;
-  return {
-    clusterId: v.cluster_id,
-    epoch: v.epoch,
-    rosterHash: `0x${v.roster_hash_hex}`,
-    t: v.t,
-    n: v.n,
-    roster: v.roster_eks_hex.map((mlKemEk, i) => ({
-      operatorIndex: i + 1,
-      mlKemEk: `0x${mlKemEk}`,
-    })),
-  };
-}
 
 describe("plaintext submission", () => {
   it("builds a 0x-prefixed bincode SignedTransaction and the canonical hashes", () => {
@@ -168,66 +138,28 @@ describe("plaintext submission", () => {
   });
 });
 
-describe("privacy toggle (default plaintext)", () => {
-  it("routes through mesh_submitTx when private === false", async () => {
+describe("submitTransaction (plaintext)", () => {
+  it("builds, signs, and routes through mesh_submitTx", async () => {
     const b = backend();
     const expectedHash = b.signEvmTx(TX_FIELDS).txHash;
     const expectedHashHex = `0x${[...expectedHash].map((x) => x.toString(16).padStart(2, "0")).join("")}`;
     const { fetch, calls } = mockFetch(expectedHashHex);
     const client = new RpcClient("http://x", { fetch });
 
-    const hash = await submitTransactionWithPrivacy({
-      client,
-      backend: b,
-      tx: TX_FIELDS,
-      private: false,
-    });
+    const hash = await submitTransaction({ client, backend: b, tx: TX_FIELDS });
 
     expect(hash).toBe(expectedHashHex);
     expect(calls.map((c) => c.method)).toEqual(["mesh_submitTx"]);
   });
 
-  it("submits a scheme-3 sealed envelope when private === true", async () => {
+  it("rejects a mismatched echoed canonical hash", async () => {
     const b = backend();
-    const expectedHashHex = b.signEvmTx(TX_FIELDS).txHash;
-    const expectedInnerHashHex = `0x${[...expectedHashHex].map((x) => x.toString(16).padStart(2, "0")).join("")}`;
-    const { fetch, calls } = mockFetch(`0x${"44".repeat(32)}`);
-    const client = new RpcClient("http://x", { fetch });
-
-    const hash = await submitTransactionWithPrivacy({
-      client,
-      backend: b,
-      tx: TX_FIELDS,
-      private: true,
-      clusterSealKeysSource: clusterSealKeysSource(),
-      class: MempoolClass.Transfer,
-    });
-
-    expect(hash).toBe(expectedInnerHashHex);
-    expect(calls.map((c) => c.method)).toEqual(["lyth_submitEncrypted"]);
-    const params = calls[0]!.params as string[];
-    expect(params).toHaveLength(1);
-    expect(params[0]!.startsWith("0x")).toBe(true);
-    expect(params[0]!.length).toBeGreaterThan(2);
-  });
-
-  it("requires cluster seal keys when private === true and the roster RPC is unavailable", async () => {
-    const b = backend();
-    const { fetch, calls } = mockFetchByMethod({
-      lyth_getClusterSealKeys: {
-        clusterId: 0,
-        epoch: 0,
-        t: 2,
-        n: 0,
-        roster: [],
-      },
-    });
+    const { fetch } = mockFetch(`0x${"44".repeat(32)}`);
     const client = new RpcClient("http://x", { fetch });
 
     await expect(
-      submitTransactionWithPrivacy({ client, backend: b, tx: TX_FIELDS, private: true }),
-    ).rejects.toThrow(/cluster seal roster is empty/);
-    expect(calls.map((c) => c.method)).toEqual(["lyth_getClusterSealKeys"]);
+      submitTransaction({ client, backend: b, tx: TX_FIELDS }),
+    ).rejects.toThrow(/returned tx hash .* but the locally computed canonical hash is/);
   });
 });
 

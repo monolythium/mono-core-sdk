@@ -1,5 +1,5 @@
-import { L as MlDsa65Backend } from '../submission-B4FmDnm_.js';
-export { kb as ADDRESS_DERIVATION_DOMAIN, kc as CLUSTER_MLKEM_SHAMIR, kd as CLUSTER_MLKEM_SHAMIR_ALGO, ke as ClusterSealKeyEntryInput, U as ClusterSealKeys, V as ClusterSealKeysSource, kf as DKG_AEAD_TAG_LEN, kg as DKG_NONCE_LEN, kh as DecryptHint, ki as ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE, kj as ENUM_VARIANT_INDEX_ML_DSA_65, kk as EncryptedEnvelope, kl as EncryptedSubmission, I as EncryptionKey, km as JsonRpcCallClient, kn as LythiumSealEnvelope, ko as ML_DSA_65_PUBLIC_KEY_LEN, kp as ML_DSA_65_SEED_LEN, kq as ML_DSA_65_SIGNATURE_LEN, kr as ML_DSA_65_SIGNING_KEY_LEN, ks as ML_KEM_768_CIPHERTEXT_LEN, kt as ML_KEM_768_ENCAPSULATION_KEY_LEN, ku as ML_KEM_768_SHARED_SECRET_LEN, J as MempoolClass, H as NativeEvmTxFields, kv as NativeTxExtension, kw as NativeTxExtensionDescriptor, kx as NativeTxExtensionLike, ky as NonceAad, kz as OperatorSealKeypair, kA as PlaintextSubmission, kB as SEAL_COMMIT_LEN, kC as SEAL_DK_LEN, kD as SEAL_EK_LEN, kE as SEAL_KEM_CT_LEN, kF as SEAL_KEM_SEED_LEN, kG as SEAL_KEY_LEN, kH as SEAL_NONCE_LEN, kI as SEAL_SHARE_LEN, kJ as SEAL_TAG_LEN, kK as STANDARD_ALGO_NUMBER_ML_DSA_65, kL as SealRandomSource, kM as SealRecipient, kN as SealedSubmission, kO as bincodeDecryptHint, kP as bincodeEncryptedEnvelope, kQ as bincodeNonceAad, kR as bincodeSignedTransaction, kS as buildEncryptedEnvelope, kT as buildEncryptedSubmission, kU as buildPlaintextSubmission, kV as cryptoRandomSource, kW as encodeMlDsa65Opaque, kX as encodeSealEnvelope, kY as encodeTransactionForHash, kZ as encryptInnerTx, k_ as fetchEncryptionKey, k$ as generateOperatorSealKeypair, l0 as getClusterSealKeys, l1 as mlDsa65AddressBytes, l2 as mlDsa65AddressFromPublicKey, l3 as outerSigDigest, l4 as parseClusterSealKeys, l5 as sealRosterHash, l6 as sealToCluster, l7 as sealTransaction, l8 as submitEncryptedEnvelope, l9 as submitPlaintextTransaction, la as submitSealedTransaction, lb as submitTransactionWithPrivacy } from '../submission-B4FmDnm_.js';
+import { a as MlDsa65Backend, N as NativeEvmTxFields } from '../ml-dsa-Drcmrw5h.js';
+export { A as ADDRESS_DERIVATION_DOMAIN, E as ENUM_VARIANT_INDEX_ML_DSA_65, b as ML_DSA_65_PUBLIC_KEY_LEN, c as ML_DSA_65_SEED_LEN, d as ML_DSA_65_SIGNATURE_LEN, e as ML_DSA_65_SIGNING_KEY_LEN, M as MempoolClass, f as NativeTxExtension, g as NativeTxExtensionDescriptor, h as NativeTxExtensionLike, S as STANDARD_ALGO_NUMBER_ML_DSA_65, i as bincodeSignedTransaction, j as encodeMlDsa65Opaque, k as encodeTransactionForHash, m as mlDsa65AddressBytes, l as mlDsa65AddressFromPublicKey } from '../ml-dsa-Drcmrw5h.js';
 
 declare class BincodeWriter {
     #private;
@@ -51,4 +51,76 @@ declare function pqm1MnemonicToMlDsa65Backend(mnemonic: string): MlDsa65Backend;
 declare function pqm1MnemonicToAddress(mnemonic: string): string;
 declare function generatePqm1Mnemonic(rng?: Pqm1Rng): string;
 
-export { BincodeWriter, MlDsa65Backend, PQM1_ALGO_TAG_FALCON512_RESERVED, PQM1_ALGO_TAG_MLDSA65, PQM1_ALGO_TAG_MLDSA87_RESERVED, PQM1_ALGO_TAG_SLHDSA128S_RESERVED, PQM1_ENTROPY_LEN, PQM1_PAYLOAD_LEN, PQM1_V1_MLDSA65_DOMAIN_TAG, PQM1_V1_MNEMONIC_WORDS, PQM1_VERSION_V1, Pqm1Error, type Pqm1ErrorKind, type Pqm1Payload, type Pqm1Rng, assemblePqm1Payload, bytesToHex, concatBytes, derivePqm1MlDsa65SeedFromPayload, expectBytes, generatePqm1Mnemonic, hexToBytes, parsePqm1Payload, pqm1MnemonicToAddress, pqm1MnemonicToMlDsa65Backend, pqm1MnemonicToMlDsa65Seed, pqm1MnemonicToPayload, pqm1PayloadToMnemonic };
+interface JsonRpcCallClient {
+    call<T>(method: string, params?: unknown): Promise<T>;
+}
+/**
+ * A built plaintext submission — the bincode-encoded chain-side
+ * `SignedTransaction` (`0x`-prefixed hex) ready to hand to
+ * `mesh_submitTx`, plus the canonical hashes the wallet validates the
+ * node echo against.
+ *
+ * Mirrors the chain-side artefacts produced by the Rust SDK's
+ * `build_chain_signed_tx` (`mono-core/crates/core/sdk/src/tx.rs`): the
+ * ML-DSA-65 signature is taken over the canonical chain-side `sighash`
+ * (keccak-256 of the 0x01-tagged preimage) and the canonical native tx
+ * hash is the keccak-256 of the 0x02-tagged preimage with the signature
+ * and public key appended.
+ */
+interface PlaintextSubmission {
+    /** Bincode `SignedTransaction` wire bytes, `0x`-prefixed. */
+    signedTxWireHex: string;
+    /** Canonical native tx hash the node echoes on admission. */
+    innerTxHashHex: string;
+    /** Canonical chain-side sighash that was signed. */
+    innerSighashHex: string;
+    /** Length in bytes of the bincode `SignedTransaction`. */
+    innerWireBytes: number;
+}
+/**
+ * Build a PLAINTEXT submission — the sole submit path since the v2
+ * re-genesis dropped the encrypted (LythiumSeal) mempool.
+ *
+ * It re-shapes the native tx into the chain-side `SignedTransaction`,
+ * signs over the canonical `sighash` with the ML-DSA-65 backend,
+ * bincode-serializes the result, and `0x`-hex-encodes it. The bytes are
+ * forwarded verbatim through `mesh_submitTx` (the node routes them to
+ * `MempoolTx::plaintext` via `submit_raw`).
+ *
+ * Mirrors `TxClient::submit_plaintext` in the Rust SDK.
+ */
+declare function buildPlaintextSubmission(args: {
+    backend: MlDsa65Backend;
+    tx: NativeEvmTxFields;
+}): PlaintextSubmission;
+/**
+ * Submit a bincode-encoded chain-side `SignedTransaction` (`0x`-hex)
+ * through the plaintext `mesh_submitTx` path and validate the node's
+ * echoed canonical tx hash against the locally computed one.
+ *
+ * Mirrors the validation in `TxClient::submit_plaintext`: the node
+ * echoes the 32-byte canonical native tx hash on admission, and any
+ * mismatch (or non-32-byte response) is rejected loud so a wallet never
+ * trusts a hash it did not derive itself.
+ *
+ * @returns the validated canonical native tx hash (`0x`-prefixed).
+ */
+declare function submitPlaintextTransaction(client: JsonRpcCallClient, signedTxWireHex: string, expectedTxHashHex: string): Promise<string>;
+/**
+ * Build, sign, and submit a native transaction through the plaintext
+ * `mesh_submitTx` path.
+ *
+ * Mirrors `TxClient::build_sign_submit` in the Rust SDK. The encrypted
+ * (LythiumSeal) submit path was removed at the v2 re-genesis, so this is
+ * the single build-sign-submit entry point.
+ *
+ * @returns the node-echoed-and-validated canonical native tx hash
+ *   (`0x`-prefixed).
+ */
+declare function submitTransaction(args: {
+    client: JsonRpcCallClient;
+    backend: MlDsa65Backend;
+    tx: NativeEvmTxFields;
+}): Promise<string>;
+
+export { BincodeWriter, type JsonRpcCallClient, MlDsa65Backend, NativeEvmTxFields, PQM1_ALGO_TAG_FALCON512_RESERVED, PQM1_ALGO_TAG_MLDSA65, PQM1_ALGO_TAG_MLDSA87_RESERVED, PQM1_ALGO_TAG_SLHDSA128S_RESERVED, PQM1_ENTROPY_LEN, PQM1_PAYLOAD_LEN, PQM1_V1_MLDSA65_DOMAIN_TAG, PQM1_V1_MNEMONIC_WORDS, PQM1_VERSION_V1, type PlaintextSubmission, Pqm1Error, type Pqm1ErrorKind, type Pqm1Payload, type Pqm1Rng, assemblePqm1Payload, buildPlaintextSubmission, bytesToHex, concatBytes, derivePqm1MlDsa65SeedFromPayload, expectBytes, generatePqm1Mnemonic, hexToBytes, parsePqm1Payload, pqm1MnemonicToAddress, pqm1MnemonicToMlDsa65Backend, pqm1MnemonicToMlDsa65Seed, pqm1MnemonicToPayload, pqm1PayloadToMnemonic, submitPlaintextTransaction, submitTransaction };

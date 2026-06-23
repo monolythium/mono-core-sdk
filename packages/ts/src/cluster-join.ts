@@ -4,29 +4,24 @@
  * The low-level ABI encoders live in `node-registry.ts`. This module adds
  * the wallet-facing guardrails around those calls: ask the node's native
  * operator-onboarding preview surface first, fail before signing if CJ-1 is
- * unavailable or the request state is not admissible, then submit a sealed
- * native transaction by default.
+ * unavailable or the request state is not admissible, then submit a
+ * plaintext native transaction (the sole submit path since the v2
+ * re-genesis dropped the encrypted mempool).
  */
 
 import { blake3 } from "@noble/hashes/blake3.js";
 import { addressToTypedBech32 } from "./address.js";
 import type { ExecutionUnitPriceResponse } from "./client.js";
 import { bytesToHex, expectBytes, hexToBytes, parseBigint } from "./crypto/bytes.js";
-import { MempoolClass } from "./crypto/envelope.js";
-import type { ClusterSealKeys, ClusterSealKeysSource } from "./crypto/seal.js";
 import {
-  buildEncryptedSubmission,
   buildPlaintextSubmission,
-  submitEncryptedEnvelope,
   submitPlaintextTransaction,
 } from "./crypto/submission.js";
 import type { NativeEvmTxFields } from "./crypto/tx.js";
 import { pqm1MnemonicToMlDsa65Backend } from "./crypto/pqm1.js";
 import {
   NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
-  NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES,
   type ClusterJoinRequestView,
-  encodePublishOperatorSealKeyCalldata,
   encodeRequestClusterJoinCalldata,
   encodeVoteClusterAdmitCalldata,
   nodeRegistryAddressHex,
@@ -39,8 +34,6 @@ import {
 } from "./tx-fee.js";
 
 export const DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT =
-  REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT;
-export const DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT =
   REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT;
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -69,12 +62,6 @@ export interface ClusterJoinFeeOptions {
   safetyMultiplier?: bigint | number | string;
 }
 
-export interface ClusterJoinPrivacyOptions {
-  private?: boolean;
-  clusterSealKeys?: ClusterSealKeys;
-  clusterSealKeysSource?: ClusterSealKeysSource;
-}
-
 export interface BuildRequestClusterJoinTxFieldsArgs {
   chainId: bigint | number | string;
   nonce: bigint | number | string;
@@ -93,16 +80,7 @@ export interface BuildVoteClusterAdmitTxFieldsArgs {
   voterPubkey: string | Uint8Array | readonly number[];
 }
 
-export interface BuildPublishOperatorSealKeyTxFieldsArgs {
-  chainId: bigint | number | string;
-  nonce: bigint | number | string;
-  fee: ClusterJoinTxFee;
-  peerId: string | Uint8Array | readonly number[];
-  sealEk: string | Uint8Array | readonly number[];
-}
-
-export interface SubmitRequestClusterJoinArgs
-  extends ClusterJoinFeeOptions, ClusterJoinPrivacyOptions {
+export interface SubmitRequestClusterJoinArgs extends ClusterJoinFeeOptions {
   client: ClusterJoinSubmitClient;
   mnemonic: string;
   clusterId: bigint | number | string;
@@ -110,8 +88,7 @@ export interface SubmitRequestClusterJoinArgs
   bondLythoshi: bigint | number | string;
 }
 
-export interface SubmitVoteClusterAdmitArgs
-  extends ClusterJoinFeeOptions, ClusterJoinPrivacyOptions {
+export interface SubmitVoteClusterAdmitArgs extends ClusterJoinFeeOptions {
   client: ClusterJoinSubmitClient;
   mnemonic: string;
   clusterId: bigint | number | string;
@@ -119,24 +96,9 @@ export interface SubmitVoteClusterAdmitArgs
   voterPubkey: string | Uint8Array | readonly number[];
 }
 
-export interface SubmitPublishOperatorSealKeyArgs extends ClusterJoinFeeOptions {
-  client: ClusterJoinSubmitClient;
-  mnemonic: string;
-  peerId: string | Uint8Array | readonly number[];
-  sealEk: string | Uint8Array | readonly number[];
-}
-
 export interface ClusterJoinSubmitResult {
   txHash: string;
   clusterId: string;
-  operatorIdHex: string;
-  innerSighashHex: string;
-  signedTxWireBytes: number;
-  envelopeWireBytes?: number;
-}
-
-export interface OperatorSealKeySubmitResult {
-  txHash: string;
   operatorIdHex: string;
   innerSighashHex: string;
   signedTxWireBytes: number;
@@ -337,27 +299,6 @@ export function buildVoteClusterAdmitTxFields(
   };
 }
 
-export function buildPublishOperatorSealKeyTxFields(
-  args: BuildPublishOperatorSealKeyTxFieldsArgs,
-): NativeEvmTxFields {
-  return {
-    chainId: args.chainId,
-    nonce: args.nonce,
-    maxFeePerGas: parseBigint(args.fee.maxFeePerGas, "maxFeePerGas"),
-    maxPriorityFeePerGas: parseBigint(args.fee.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
-    gasLimit: parseBigint(
-      args.fee.gasLimit ?? DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT,
-      "gasLimit",
-    ),
-    to: nodeRegistryAddressHex(),
-    value: 0n,
-    input: encodePublishOperatorSealKeyCalldata({
-      peerId: normalizeOperatorId(args.peerId),
-      sealEk: normalizeOperatorSealEk(args.sealEk),
-    }),
-  };
-}
-
 export async function submitRequestClusterJoin(
   args: SubmitRequestClusterJoinArgs,
 ): Promise<ClusterJoinSubmitResult> {
@@ -387,7 +328,7 @@ export async function submitRequestClusterJoin(
     operatorPubkey,
     bondLythoshi: args.bondLythoshi,
   });
-  return submitClusterJoinTx(args.client, backend, tx, clusterId, operatorIdHex, args);
+  return submitClusterJoinTx(args.client, backend, tx, clusterId, operatorIdHex);
 }
 
 export async function submitVoteClusterAdmit(
@@ -418,43 +359,7 @@ export async function submitVoteClusterAdmit(
     operatorId: operatorIdHex,
     voterPubkey: args.voterPubkey,
   });
-  return submitClusterJoinTx(args.client, backend, tx, clusterId, operatorIdHex, args);
-}
-
-export async function submitPublishOperatorSealKey(
-  args: SubmitPublishOperatorSealKeyArgs,
-): Promise<OperatorSealKeySubmitResult> {
-  const operatorIdHex = normalizeOperatorId(args.peerId);
-  const sealEk = normalizeOperatorSealEk(args.sealEk);
-  const backend = pqm1MnemonicToMlDsa65Backend(args.mnemonic);
-  const senderAddress = addressToTypedBech32("user", backend.addressBytes());
-  const [chainId, nonce, quote] = await Promise.all([
-    args.client.ethChainId(),
-    args.client.lythGetTransactionCount(senderAddress),
-    args.client.lythExecutionUnitPrice(),
-  ]);
-  const tx = buildPublishOperatorSealKeyTxFields({
-    chainId,
-    nonce,
-    fee: resolveClusterJoinExecutionFee(quote, {
-      ...args,
-      executionUnitLimit: args.executionUnitLimit ?? DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT,
-    }),
-    peerId: operatorIdHex,
-    sealEk,
-  });
-  const plaintext = buildPlaintextSubmission({ backend, tx });
-  const txHash = await submitPlaintextTransaction(
-    args.client,
-    plaintext.signedTxWireHex,
-    plaintext.innerTxHashHex,
-  );
-  return {
-    txHash,
-    operatorIdHex,
-    innerSighashHex: plaintext.innerSighashHex,
-    signedTxWireBytes: plaintext.innerWireBytes,
-  };
+  return submitClusterJoinTx(args.client, backend, tx, clusterId, operatorIdHex);
 }
 
 async function submitClusterJoinTx(
@@ -463,28 +368,7 @@ async function submitClusterJoinTx(
   tx: NativeEvmTxFields,
   clusterId: bigint,
   operatorIdHex: string,
-  options: ClusterJoinPrivacyOptions,
 ): Promise<ClusterJoinSubmitResult> {
-  if (options.private !== false) {
-    const encrypted = await buildEncryptedSubmission({
-      client,
-      backend,
-      tx,
-      clusterId: Number(clusterId),
-      clusterSealKeys: options.clusterSealKeys,
-      clusterSealKeysSource: options.clusterSealKeysSource,
-      class: MempoolClass.ContractCall,
-    });
-    assertRpcHash(await submitEncryptedEnvelope(client, encrypted.envelopeWireHex));
-    return {
-      txHash: encrypted.innerTxHashHex,
-      clusterId: clusterId.toString(10),
-      operatorIdHex,
-      innerSighashHex: encrypted.innerSighashHex,
-      signedTxWireBytes: encrypted.innerWireBytes,
-      envelopeWireBytes: hexByteLength(encrypted.envelopeWireHex),
-    };
-  }
   const plaintext = buildPlaintextSubmission({ backend, tx });
   const txHash = await submitPlaintextTransaction(
     client,
@@ -498,18 +382,6 @@ async function submitClusterJoinTx(
     innerSighashHex: plaintext.innerSighashHex,
     signedTxWireBytes: plaintext.innerWireBytes,
   };
-}
-
-function hexByteLength(value: string): number {
-  const clean = value.startsWith("0x") || value.startsWith("0X") ? value.slice(2) : value;
-  return clean.length / 2;
-}
-
-function assertRpcHash(value: string): void {
-  const bytes = hexToBytes(value, "lyth_submitEncrypted tx hash");
-  if (bytes.length !== 32) {
-    throw new Error(`lyth_submitEncrypted tx hash must be 32 bytes, got ${bytes.length}`);
-  }
 }
 
 function adaptNativeClusterJoinRequest(
@@ -565,11 +437,6 @@ function normalizeConsensusPubkey(
 function normalizeOperatorId(value: string | Uint8Array | readonly number[]): string {
   const bytes = typeof value === "string" ? hexToBytes(value, "operatorId") : value;
   return bytesToHex(expectBytes(bytes, 32, "operatorId"));
-}
-
-function normalizeOperatorSealEk(value: string | Uint8Array | readonly number[]): Uint8Array {
-  const bytes = typeof value === "string" ? hexToBytes(value, "sealEk") : value;
-  return expectBytes(bytes, NODE_REGISTRY_OPERATOR_SEAL_EK_BYTES, "sealEk").slice();
 }
 
 function parseUint32(value: bigint | number | string, label: string): bigint {

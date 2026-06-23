@@ -1,29 +1,9 @@
-import { bytesToHex, hexToBytes, parseBigint } from "./bytes.js";
-import { MempoolClass, type NonceAad } from "./envelope.js";
+import { bytesToHex, hexToBytes } from "./bytes.js";
 import type { MlDsa65Backend } from "./ml-dsa.js";
-import {
-  parseClusterSealKeys,
-  sealTransaction,
-  type ClusterSealKeys,
-  type ClusterSealKeysSource,
-} from "./seal.js";
 import type { NativeEvmTxFields } from "./tx.js";
 
 export interface JsonRpcCallClient {
   call<T>(method: string, params?: unknown): Promise<T>;
-}
-
-export interface EncryptionKey {
-  algo: string;
-  epoch: bigint;
-  encapsulationKey: Uint8Array;
-}
-
-export interface EncryptedSubmission {
-  envelopeWireHex: string;
-  innerSighashHex: string;
-  innerTxHashHex: string;
-  innerWireBytes: number;
 }
 
 /**
@@ -50,84 +30,15 @@ export interface PlaintextSubmission {
   innerWireBytes: number;
 }
 
-export async function fetchEncryptionKey(client: JsonRpcCallClient): Promise<EncryptionKey> {
-  const result = await client.call<{ algo?: string; epoch: number | string; encapsulationKey: string }>(
-    "lyth_getEncryptionKey",
-    [],
-  );
-  return {
-    algo: result.algo ?? "ml-kem-768",
-    epoch: typeof result.epoch === "string" ? BigInt(result.epoch) : BigInt(result.epoch),
-    encapsulationKey: hexToBytes(result.encapsulationKey, "encapsulationKey"),
-  };
-}
-
 /**
- * Error message returned when an encrypted-mempool submission is attempted.
+ * Build a PLAINTEXT submission — the sole submit path since the v2
+ * re-genesis dropped the encrypted (LythiumSeal) mempool.
  *
- * Scheme-3 encrypted submission needs a cluster seal roster. Public node
- * profiles may keep `lyth_getClusterSealKeys` disabled, in which case callers
- * should pass a roster source from the pinned genesis/chain registry.
- */
-export const ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE =
-  "private submission requires cluster seal keys; pass clusterSealKeysSource or enable lyth_getClusterSealKeys";
-
-/**
- * Build a scheme-3 LythiumSeal encrypted-mempool submission.
- *
- * The caller may pass already parsed cluster keys, a JSON roster source, or
- * allow the SDK to fetch `lyth_getClusterSealKeys(clusterId)`. The single-key
- * envelope path stays retired; this function only emits the threshold
- * cluster-sealed envelope accepted by `lyth_submitEncrypted`.
- */
-export async function buildEncryptedSubmission(args: {
-  client?: JsonRpcCallClient;
-  backend: MlDsa65Backend;
-  tx: NativeEvmTxFields;
-  encryptionKey?: EncryptionKey;
-  clusterId?: number;
-  clusterSealKeys?: ClusterSealKeys;
-  clusterSealKeysSource?: ClusterSealKeysSource;
-  class?: MempoolClass;
-}): Promise<EncryptedSubmission> {
-  const signed = args.backend.signEvmTx(args.tx);
-  const clusterSealKeys = await resolveClusterSealKeys(args);
-  const aad = nonceAadForTx(args.tx, args.backend.addressBytes(), args.class);
-  const sealed = await sealTransaction({
-    signedTxBincode: signed.wireBytes,
-    clusterSealKeys,
-    aad,
-    senderAddress: args.backend.addressBytes(),
-    senderPubkey: args.backend.publicKey(),
-    signOuterDigest: (digest) => args.backend.signPrehash(digest),
-  });
-  return {
-    envelopeWireHex: sealed.envelopeWireHex,
-    innerSighashHex: bytesToHex(signed.sighash),
-    innerTxHashHex: bytesToHex(signed.txHash),
-    innerWireBytes: signed.wireBytes.length,
-  };
-}
-
-export async function submitEncryptedEnvelope(
-  client: JsonRpcCallClient,
-  envelopeWireHex: string,
-): Promise<string> {
-  return client.call("lyth_submitEncrypted", [envelopeWireHex]);
-}
-
-/**
- * Build a PLAINTEXT submission — the opt-OUT-of-privacy counterpart to
- * {@link buildEncryptedSubmission}.
- *
- * Unlike the encrypted path, this never engages the Ferveo
- * threshold-decrypt pipeline. It re-shapes the native tx into the
- * chain-side `SignedTransaction`, signs over the canonical `sighash`
- * with the ML-DSA-65 backend, bincode-serializes the result, and
- * `0x`-hex-encodes it. The bytes are forwarded verbatim through
- * `mesh_submitTx` (the node routes them to `MempoolTx::plaintext` via
- * `submit_raw`) — the functional inclusion path on a chain running with
- * `encrypted_mempool_required = false`.
+ * It re-shapes the native tx into the chain-side `SignedTransaction`,
+ * signs over the canonical `sighash` with the ML-DSA-65 backend,
+ * bincode-serializes the result, and `0x`-hex-encodes it. The bytes are
+ * forwarded verbatim through `mesh_submitTx` (the node routes them to
+ * `MempoolTx::plaintext` via `submit_raw`).
  *
  * Mirrors `TxClient::submit_plaintext` in the Rust SDK.
  */
@@ -178,43 +89,21 @@ export async function submitPlaintextTransaction(
 }
 
 /**
- * Build, sign, and submit a native transaction with an explicit
- * encryption toggle. `private == false` routes through the plaintext
- * `mesh_submitTx` path; `private == true` routes through the scheme-3
- * LythiumSeal encrypted pipeline.
+ * Build, sign, and submit a native transaction through the plaintext
+ * `mesh_submitTx` path.
  *
- * Mirrors `TxClient::build_sign_submit_with_privacy` in the Rust SDK.
+ * Mirrors `TxClient::build_sign_submit` in the Rust SDK. The encrypted
+ * (LythiumSeal) submit path was removed at the v2 re-genesis, so this is
+ * the single build-sign-submit entry point.
  *
- * @returns for the plaintext path, the node-echoed-and-validated canonical
- *   native tx hash (`0x`-prefixed); for the private path, the locally computed
- *   inner native tx hash after the encrypted envelope is admitted.
+ * @returns the node-echoed-and-validated canonical native tx hash
+ *   (`0x`-prefixed).
  */
-export async function submitTransactionWithPrivacy(args: {
+export async function submitTransaction(args: {
   client: JsonRpcCallClient;
   backend: MlDsa65Backend;
   tx: NativeEvmTxFields;
-  private: boolean;
-  encryptionKey?: EncryptionKey;
-  clusterId?: number;
-  clusterSealKeys?: ClusterSealKeys;
-  clusterSealKeysSource?: ClusterSealKeysSource;
-  class?: MempoolClass;
 }): Promise<string> {
-  if (args.private) {
-    const built = await buildEncryptedSubmission({
-      client: args.client,
-      backend: args.backend,
-      tx: args.tx,
-      encryptionKey: args.encryptionKey,
-      clusterId: args.clusterId,
-      clusterSealKeys: args.clusterSealKeys,
-      clusterSealKeysSource: args.clusterSealKeysSource,
-      class: args.class,
-    });
-    const returned = await submitEncryptedEnvelope(args.client, built.envelopeWireHex);
-    assertRpcHash(returned, "lyth_submitEncrypted tx hash");
-    return built.innerTxHashHex;
-  }
   const plaintext = buildPlaintextSubmission({ backend: args.backend, tx: args.tx });
   return submitPlaintextTransaction(
     args.client,
@@ -229,62 +118,4 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
     if (a[i] !== b[i]) return false;
   }
   return true;
-}
-
-async function resolveClusterSealKeys(args: {
-  client?: JsonRpcCallClient;
-  clusterId?: number;
-  clusterSealKeys?: ClusterSealKeys;
-  clusterSealKeysSource?: ClusterSealKeysSource;
-}): Promise<ClusterSealKeys> {
-  if (args.clusterSealKeys !== undefined) return args.clusterSealKeys;
-  if (args.clusterSealKeysSource !== undefined) {
-    return parseClusterSealKeys(args.clusterSealKeysSource);
-  }
-  if (args.client === undefined) {
-    throw new Error(ENCRYPTED_SUBMISSION_UNAVAILABLE_MESSAGE);
-  }
-  const clusterId = args.clusterId ?? 0;
-  const result = await args.client.call<ClusterSealKeysSource & { clusterId?: number }>(
-    "lyth_getClusterSealKeys",
-    [clusterId],
-  );
-  return parseClusterSealKeys({ ...result, clusterId: result.clusterId ?? clusterId });
-}
-
-function nonceAadForTx(
-  tx: NativeEvmTxFields,
-  sender: Uint8Array,
-  mempoolClass?: MempoolClass,
-): NonceAad {
-  return {
-    sender,
-    nonce: parseBigint(tx.nonce, "nonce"),
-    chainId: parseBigint(tx.chainId, "chainId"),
-    class: mempoolClass ?? inferMempoolClass(tx),
-    maxFeePerGas: parseBigint(tx.maxFeePerGas, "maxFeePerGas"),
-    maxPriorityFeePerGas: parseBigint(tx.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
-    gasLimit: parseBigint(tx.gasLimit, "gasLimit"),
-  };
-}
-
-function inferMempoolClass(tx: NativeEvmTxFields): MempoolClass {
-  if (tx.to === null || hasInput(tx.input)) return MempoolClass.ContractCall;
-  return MempoolClass.Transfer;
-}
-
-function hasInput(input: NativeEvmTxFields["input"]): boolean {
-  if (input === undefined) return false;
-  if (typeof input === "string") {
-    const stripped = input.startsWith("0x") || input.startsWith("0X") ? input.slice(2) : input;
-    return stripped.length > 0;
-  }
-  return input.length > 0;
-}
-
-function assertRpcHash(value: string, label: string): void {
-  const bytes = hexToBytes(value, label);
-  if (bytes.length !== 32) {
-    throw new Error(`${label} must be 32 bytes, got ${bytes.length}`);
-  }
 }

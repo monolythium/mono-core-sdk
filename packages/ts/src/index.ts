@@ -322,6 +322,20 @@ export type {
   NoEvmReceiptTrustedSigner,
 } from "./receipt-proof.js";
 export {
+  PROOF_KIND_BINARY,
+  ProofVerifier,
+  ProofVerifyError,
+  asBinaryProofEnvelope,
+  hashToHex,
+  proofVerifier,
+} from "./proof.js";
+export type {
+  BinaryProofEndpoint,
+  NonInclusionProofEnvelope,
+  ProofEnvelope,
+  ProofVerifyErrorCode,
+} from "./proof.js";
+export {
   NATIVE_MARKET_EVENT_FAMILY,
   consumeNativeEvents,
   isNativeDecodedEvent,
@@ -407,8 +421,6 @@ export {
 export type { PrecompileName, PrecompileAddress } from "./consts.js";
 export {
   DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT,
-  DEFAULT_OPERATOR_SEAL_KEY_EXECUTION_UNIT_LIMIT,
-  buildPublishOperatorSealKeyTxFields,
   buildRequestClusterJoinTxFields,
   buildVoteClusterAdmitTxFields,
   clusterJoinRequestExists,
@@ -418,12 +430,10 @@ export {
   previewVoteClusterAdmit,
   readClusterJoinRequest,
   resolveClusterJoinExecutionFee,
-  submitPublishOperatorSealKey,
   submitRequestClusterJoin,
   submitVoteClusterAdmit,
 } from "./cluster-join.js";
 export type {
-  BuildPublishOperatorSealKeyTxFieldsArgs,
   BuildRequestClusterJoinTxFieldsArgs,
   BuildVoteClusterAdmitTxFieldsArgs,
   ClusterJoinFeeOptions,
@@ -431,9 +441,7 @@ export type {
   ClusterJoinSubmitClient,
   ClusterJoinSubmitResult,
   ClusterJoinTxFee,
-  OperatorSealKeySubmitResult,
   OperatorOnboardingPreview,
-  SubmitPublishOperatorSealKeyArgs,
   SubmitRequestClusterJoinArgs,
   SubmitVoteClusterAdmitArgs,
 } from "./cluster-join.js";

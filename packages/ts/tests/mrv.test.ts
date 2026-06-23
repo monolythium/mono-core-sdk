@@ -33,17 +33,13 @@ import {
   mrvCodeHashHex,
   mrvV1TransactionExtension,
   parseLythToLythoshi,
-  submitMrvCallNativeTx,
   submitMrvDeployNativeTx,
-  submitMrvDeployPayloadNativeTx,
   validateMrvArtifactMetadata,
   validateMrvCallRequest,
   validateMrvDeployRequest,
 } from "../src/index.js";
 import {
   ML_DSA_65_SEED_LEN,
-  ML_KEM_768_ENCAPSULATION_KEY_LEN,
-  MempoolClass,
   MlDsa65Backend,
   bytesToHex,
 } from "../src/crypto/index.js";
@@ -555,7 +551,7 @@ describe("MRV/RISC-V SDK helpers", () => {
     expect(appWire).not.toMatch(/gas|gwei|wei/i);
   });
 
-  it("guards MRV encrypted submission plans before signing", () => {
+  it("guards MRV native submission plans before signing", () => {
     const user = addressToTypedBech32("user", "0x1111111111111111111111111111111111111111");
     const contract = addressToTypedBech32("contract", "0x2222222222222222222222222222222222222222");
     const deploy = buildMrvDeployNativeTxPlan("0x13000000", {
@@ -604,66 +600,36 @@ describe("MRV/RISC-V SDK helpers", () => {
     expect(() => assertMrvDeployNativeSubmissionPlan(tooLargeFee)).toThrow(/u128/);
   });
 
-  it("requires a cluster seal roster for MRV encrypted-submit helpers", async () => {
+  it("submits MRV native txs through the plaintext mesh_submitTx path", async () => {
     const backend = MlDsa65Backend.fromSeed(new Uint8Array(ML_DSA_65_SEED_LEN).fill(0x41));
     const user = addressToTypedBech32("user", backend.getAddress());
-    const contract = addressToTypedBech32("contract", "0x2222222222222222222222222222222222222222");
-    const encryptionKey = {
-      algo: "ml-kem-768",
-      epoch: 9n,
-      encapsulationKey: new Uint8Array(ML_KEM_768_ENCAPSULATION_KEY_LEN).fill(0x33),
-    };
-    // The encrypted-submit helpers route through buildEncryptedSubmission.
-    // Passing only the legacy single-key encryptionKey must reject before any
-    // scheme-0 envelope can be built; callers must supply cluster seal keys.
-    const { fetch, calls } = mockFetchSequence([
-      {
-        algo: encryptionKey.algo,
-        epoch: encryptionKey.epoch.toString(),
-        encapsulationKey: bytesToHex(encryptionKey.encapsulationKey),
-      },
-    ]);
+
+    const plan = buildMrvDeployNativeTxPlan("0x13000000", {
+      from: user,
+      chainId: 69_420n,
+      nonce: 7n,
+      executionUnitLimit: 100_000n,
+      maxExecutionFeeLythoshi: "25",
+      priorityTipLythoshi: "1",
+    });
+    const expectedTxHash = bytesToHex(backend.signEvmTx(plan.tx).txHash);
+
+    const { fetch, calls } = mockFetchSequence([expectedTxHash]);
     const client = new RpcClient("http://node", { fetch });
 
-    await expect(
-      submitMrvDeployNativeTx(client, backend, "0x13000000", {
-        from: user,
-        chainId: 69_420n,
-        nonce: 7n,
-        executionUnitLimit: 100_000n,
-        maxExecutionFeeLythoshi: "25",
-        priorityTipLythoshi: "1",
-        class: MempoolClass.ContractCall,
-        encryptionKey,
-      }),
-    ).rejects.toThrow(/private submission requires cluster seal keys/);
+    const result = await submitMrvDeployNativeTx(client, backend, "0x13000000", {
+      from: user,
+      chainId: 69_420n,
+      nonce: 7n,
+      executionUnitLimit: 100_000n,
+      maxExecutionFeeLythoshi: "25",
+      priorityTipLythoshi: "1",
+    });
 
-    await expect(
-      submitMrvDeployPayloadNativeTx(client, backend, "0x13000000", {
-        from: user,
-        chainId: 69_420n,
-        nonce: 9n,
-        executionUnitLimit: 100_000n,
-        maxExecutionFeeLythoshi: "25",
-        constructorInput: [0x01, 0x02],
-        encryptionKey,
-      }),
-    ).rejects.toThrow(/private submission requires cluster seal keys/);
-
-    await expect(
-      submitMrvCallNativeTx(client, backend, contract, [0x01, 0x02], {
-        from: user,
-        chainId: 69_420n,
-        nonce: 8n,
-        executionUnitLimit: 50_000n,
-        maxExecutionFeeLythoshi: "10",
-        valueLythoshi: "3",
-        encryptionKey,
-      }),
-    ).rejects.toThrow(/private submission requires cluster seal keys/);
-
-    // Guard: with an explicit encryptionKey supplied, no encrypted envelope is
-    // ever submitted to the node (lyth_submitEncrypted never called).
+    expect(result.txHash).toBe(expectedTxHash);
+    expect(result.signedTxWireHex.startsWith("0x")).toBe(true);
+    expect(calls.map((c) => c.method)).toEqual(["mesh_submitTx"]);
+    // The encrypted-submit path was removed at the v2 re-genesis.
     expect(calls.map((c) => c.method)).not.toContain("lyth_submitEncrypted");
   });
 });

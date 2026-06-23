@@ -85,7 +85,6 @@ import type {
   DelegationCapResponse,
   DelegationHistoryRecord,
   DelegationsResponse,
-  EncryptionKeyResponse,
   EntityRatchetResponse,
   FeeHistoryResponse,
   GapRecordsResponse,
@@ -2396,16 +2395,6 @@ export class RpcClient {
    */
   async lythSubmitPendingChange(envelope: unknown): Promise<unknown> {
     return this.call("lyth_submitPendingChange", [envelope]);
-  }
-
-  /** `lyth_submitEncrypted` — submit a bincode-encoded encrypted envelope hex. */
-  async lythSubmitEncrypted(envelopeHex: string): Promise<string> {
-    return this.call("lyth_submitEncrypted", [envelopeHex]);
-  }
-
-  /** `lyth_getEncryptionKey` — cluster ML-KEM encapsulation key. */
-  async lythGetEncryptionKey(): Promise<EncryptionKeyResponse> {
-    return this.call("lyth_getEncryptionKey", []);
   }
 
   /** `lyth_syncStatus` — DAG-sync driver snapshot. */
