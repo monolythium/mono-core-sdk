@@ -26,7 +26,9 @@ use monolythium_core_sdk::mrv::{
     MrvTypedAddress, MrvValidatedArtifactMetadata,
 };
 use monolythium_core_sdk::node_registry::{
-    ClusterDiversity, ClusterFormedEvent, NodeHostingClass, OperatorNetworkMetadata,
+    ClusterDiversity, ClusterFormedEvent, NodeHostingClass, OpenSeat, OperatorNetworkMetadata,
+    SeatAdvertisedEvent, SeatApplication, SeatAppliedEvent, SeatClosedEvent, SeatFilledEvent,
+    SeatKind, SeatStatus,
 };
 use monolythium_core_sdk::oracle::OracleEvent;
 use monolythium_core_sdk::prover_market::{ProofRequestView, ProverBidView, ProverMarketState};
@@ -104,6 +106,15 @@ fn export_bindings() {
     OperatorNetworkMetadata::export_all_to(&out).expect("OperatorNetworkMetadata");
     ClusterDiversity::export_all_to(&out).expect("ClusterDiversity");
     ClusterFormedEvent::export_all_to(&out).expect("ClusterFormedEvent");
+    // L6 open-seat marketplace read + event types.
+    SeatKind::export_all_to(&out).expect("SeatKind");
+    SeatStatus::export_all_to(&out).expect("SeatStatus");
+    OpenSeat::export_all_to(&out).expect("OpenSeat");
+    SeatApplication::export_all_to(&out).expect("SeatApplication");
+    SeatAdvertisedEvent::export_all_to(&out).expect("SeatAdvertisedEvent");
+    SeatAppliedEvent::export_all_to(&out).expect("SeatAppliedEvent");
+    SeatFilledEvent::export_all_to(&out).expect("SeatFilledEvent");
+    SeatClosedEvent::export_all_to(&out).expect("SeatClosedEvent");
     // MB-6 oracle event decode type.
     OracleEvent::export_all_to(&out).expect("OracleEvent");
     // MB-4 prover-market read + state types.
