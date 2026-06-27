@@ -1,6 +1,6 @@
 {
   "name": "@monolythium/core-sdk",
-  "version": "0.4.24",
+  "version": "0.5.0",
   "description": "Official TypeScript SDK for Monolythium / LythiumDAG-BFT",
   "license": "Apache-2.0",
   "repository": {
