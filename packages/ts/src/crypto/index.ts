@@ -19,31 +19,19 @@ export {
   mlDsa65AddressFromPublicKey,
 } from "./ml-dsa.js";
 export {
-  PQM1_ALGO_TAG_FALCON512_RESERVED,
-  PQM1_ALGO_TAG_MLDSA65,
-  PQM1_ALGO_TAG_MLDSA87_RESERVED,
-  PQM1_ALGO_TAG_SLHDSA128S_RESERVED,
-  PQM1_ENTROPY_LEN,
-  PQM1_PAYLOAD_LEN,
-  PQM1_VERSION_V1,
-  PQM1_V1_MLDSA65_DOMAIN_TAG,
-  PQM1_V1_MNEMONIC_WORDS,
-  Pqm1Error,
-  assemblePqm1Payload,
-  derivePqm1MlDsa65SeedFromPayload,
-  generatePqm1Mnemonic,
-  parsePqm1Payload,
-  pqm1MnemonicToAddress,
-  pqm1MnemonicToMlDsa65Backend,
-  pqm1MnemonicToMlDsa65Seed,
-  pqm1MnemonicToPayload,
-  pqm1PayloadToMnemonic,
-} from "./pqm1.js";
+  MLDSA65_MNEMONIC_WORDS,
+  MLDSA65_SEED_DOMAIN,
+  MnemonicError,
+  generateMnemonic,
+  mnemonicToAddress,
+  mnemonicToMlDsa65Backend,
+  mnemonicToMlDsa65Seed,
+  validateMnemonic,
+} from "./mnemonic.js";
 export type {
-  Pqm1ErrorKind,
-  Pqm1Payload,
-  Pqm1Rng,
-} from "./pqm1.js";
+  MnemonicErrorKind,
+  MnemonicRng,
+} from "./mnemonic.js";
 export {
   MempoolClass,
 } from "./envelope.js";

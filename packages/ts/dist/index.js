@@ -2,7 +2,7 @@ import { blake3 } from '@noble/hashes/blake3.js';
 import { keccak_256, shake256 } from '@noble/hashes/sha3.js';
 import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js';
 import { bls12_381 } from '@noble/curves/bls12-381.js';
-import { mnemonicToEntropy } from '@scure/bip39';
+import { validateMnemonic, mnemonicToSeedSync } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 
 // src/error.ts
@@ -2917,8 +2917,8 @@ var TESTNET_69420 = {
   network: "testnet-69420",
   display_name: "Monolythium Testnet",
   description: "Public Monolythium testnet. Testnet state may reset without notice; do not store value on this network.",
-  genesis_hash: "0xd56f9763ca849c5482cae27c7e2551f891684063b89afd53aadeb55868453959",
-  binary_sha: "25513326",
+  genesis_hash: "0xb52b59d667a0ad97c531607b840b7082547ba3151aa11a819eb6916b080b1ca9",
+  binary_sha: "6f33aa30",
   rpc: [
     {
       url: "http://178.105.12.9:8545",
@@ -8859,67 +8859,43 @@ function assertWholeNumber(field2, value) {
     throw new Error(`${field2} must be a whole number`);
   }
 }
-var PQM1_ALGO_TAG_MLDSA65 = 1;
-var PQM1_VERSION_V1 = 1;
-var PQM1_PAYLOAD_LEN = 32;
-var PQM1_V1_MNEMONIC_WORDS = 24;
-var PQM1_V1_MLDSA65_DOMAIN_TAG = "monolythium.pqm1.v1.mldsa65";
-var Pqm1Error = class extends Error {
+var MLDSA65_MNEMONIC_WORDS = 24;
+var MLDSA65_SEED_DOMAIN = "monolythium.mldsa65.v1";
+var DOMAIN_BYTES = new TextEncoder().encode(MLDSA65_SEED_DOMAIN);
+var MnemonicError = class extends Error {
   constructor(kind, message) {
     super(message);
     this.kind = kind;
-    this.name = "Pqm1Error";
+    this.name = "MnemonicError";
   }
   kind;
 };
-var DOMAIN_BYTES = new TextEncoder().encode(PQM1_V1_MLDSA65_DOMAIN_TAG);
 function normalizeMnemonic(mnemonic) {
   return mnemonic.trim().toLowerCase().replace(/\s+/g, " ");
 }
-function ensureSupportedPayload(bytes) {
-  if (bytes.length !== PQM1_PAYLOAD_LEN) {
-    throw new Pqm1Error("badPayloadLength", `PQM-1 payload must be ${PQM1_PAYLOAD_LEN} bytes, got ${bytes.length}`);
-  }
-  if (bytes[0] !== PQM1_ALGO_TAG_MLDSA65) {
-    throw new Pqm1Error("unsupportedAlgorithm", `unsupported PQM-1 algorithm tag 0x${bytes[0].toString(16).padStart(2, "0")}`);
-  }
-  if (bytes[1] !== PQM1_VERSION_V1) {
-    throw new Pqm1Error("unsupportedVersion", `unsupported PQM-1 version 0x${bytes[1].toString(16).padStart(2, "0")}`);
-  }
+function wordCount(normalized) {
+  return normalized.length === 0 ? 0 : normalized.split(" ").length;
 }
-function parsePqm1Payload(payload) {
-  const bytes = expectBytes(payload, PQM1_PAYLOAD_LEN, "PQM-1 payload").slice();
-  ensureSupportedPayload(bytes);
-  return {
-    algoTag: PQM1_ALGO_TAG_MLDSA65,
-    version: PQM1_VERSION_V1,
-    entropy: bytes.slice(2),
-    bytes
-  };
-}
-function pqm1MnemonicToPayload(mnemonic) {
+function mnemonicToMlDsa65Seed(mnemonic) {
   const normalized = normalizeMnemonic(mnemonic);
-  const words = normalized.length === 0 ? [] : normalized.split(" ");
-  if (words.length !== PQM1_V1_MNEMONIC_WORDS) {
-    throw new Pqm1Error("badWordCount", `PQM-1 mnemonic must be ${PQM1_V1_MNEMONIC_WORDS} words, got ${words.length}`);
+  const words = wordCount(normalized);
+  if (words !== MLDSA65_MNEMONIC_WORDS) {
+    throw new MnemonicError(
+      "badWordCount",
+      `mnemonic must be ${MLDSA65_MNEMONIC_WORDS} words, got ${words}`
+    );
   }
-  let payload;
-  try {
-    payload = mnemonicToEntropy(normalized, wordlist);
-  } catch (e) {
-    throw new Pqm1Error("bip39Decode", `invalid PQM-1 mnemonic: ${e.message}`);
+  if (!validateMnemonic(normalized, wordlist)) {
+    throw new MnemonicError(
+      "bip39Decode",
+      "invalid BIP-39 mnemonic (unknown word or bad checksum)"
+    );
   }
-  return parsePqm1Payload(payload);
+  const seed64 = mnemonicToSeedSync(normalized, "");
+  return shake256(concatBytes2(DOMAIN_BYTES, seed64), { dkLen: ML_DSA_65_SEED_LEN });
 }
-function derivePqm1MlDsa65SeedFromPayload(payload) {
-  const parsed = parsePqm1Payload(payload);
-  return shake256(concatBytes2(DOMAIN_BYTES, parsed.bytes), { dkLen: ML_DSA_65_SEED_LEN });
-}
-function pqm1MnemonicToMlDsa65Seed(mnemonic) {
-  return derivePqm1MlDsa65SeedFromPayload(pqm1MnemonicToPayload(mnemonic).bytes);
-}
-function pqm1MnemonicToMlDsa65Backend(mnemonic) {
-  return MlDsa65Backend.fromSeed(pqm1MnemonicToMlDsa65Seed(mnemonic));
+function mnemonicToMlDsa65Backend(mnemonic) {
+  return MlDsa65Backend.fromSeed(mnemonicToMlDsa65Seed(mnemonic));
 }
 
 // src/cluster-join.ts
@@ -9035,7 +9011,7 @@ async function submitRequestClusterJoin(args) {
   const clusterId = parseUint32(args.clusterId, "clusterId");
   const operatorPubkey = normalizeConsensusPubkey(args.operatorPubkey, "operatorPubkey");
   const operatorIdHex = deriveClusterJoinOperatorId(operatorPubkey);
-  const backend = pqm1MnemonicToMlDsa65Backend(args.mnemonic);
+  const backend = mnemonicToMlDsa65Backend(args.mnemonic);
   const senderAddress = addressToTypedBech32("user", backend.addressBytes());
   const preview = await previewRequestClusterJoin(args.client, {
     from: senderAddress,
@@ -9062,7 +9038,7 @@ async function submitRequestClusterJoin(args) {
 async function submitVoteClusterAdmit(args) {
   const clusterId = parseUint32(args.clusterId, "clusterId");
   const operatorIdHex = normalizeOperatorId(args.operatorId);
-  const backend = pqm1MnemonicToMlDsa65Backend(args.mnemonic);
+  const backend = mnemonicToMlDsa65Backend(args.mnemonic);
   const senderAddress = addressToTypedBech32("user", backend.addressBytes());
   const preview = await previewVoteClusterAdmit(args.client, {
     from: senderAddress,

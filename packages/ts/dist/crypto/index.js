@@ -1,7 +1,7 @@
 import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js';
 import { blake3 } from '@noble/hashes/blake3.js';
 import { keccak_256, shake256 } from '@noble/hashes/sha3.js';
-import { entropyToMnemonic, mnemonicToEntropy } from '@scure/bip39';
+import { entropyToMnemonic, validateMnemonic as validateMnemonic$1, mnemonicToSeedSync } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 
 // src/crypto/bincode.ts
@@ -350,98 +350,66 @@ function encodeMlDsa65Opaque(raw) {
   out.set(bytes, 14);
   return out;
 }
-var PQM1_ALGO_TAG_MLDSA65 = 1;
-var PQM1_ALGO_TAG_MLDSA87_RESERVED = 2;
-var PQM1_ALGO_TAG_SLHDSA128S_RESERVED = 3;
-var PQM1_ALGO_TAG_FALCON512_RESERVED = 4;
-var PQM1_VERSION_V1 = 1;
-var PQM1_PAYLOAD_LEN = 32;
-var PQM1_ENTROPY_LEN = 30;
-var PQM1_V1_MNEMONIC_WORDS = 24;
-var PQM1_V1_MLDSA65_DOMAIN_TAG = "monolythium.pqm1.v1.mldsa65";
-var Pqm1Error = class extends Error {
+var MLDSA65_MNEMONIC_WORDS = 24;
+var MLDSA65_SEED_DOMAIN = "monolythium.mldsa65.v1";
+var MLDSA65_ENTROPY_LEN = 32;
+var DOMAIN_BYTES = new TextEncoder().encode(MLDSA65_SEED_DOMAIN);
+var MnemonicError = class extends Error {
   constructor(kind, message) {
     super(message);
     this.kind = kind;
-    this.name = "Pqm1Error";
+    this.name = "MnemonicError";
   }
   kind;
 };
-var DOMAIN_BYTES = new TextEncoder().encode(PQM1_V1_MLDSA65_DOMAIN_TAG);
 function normalizeMnemonic(mnemonic) {
   return mnemonic.trim().toLowerCase().replace(/\s+/g, " ");
 }
-function ensureSupportedPayload(bytes) {
-  if (bytes.length !== PQM1_PAYLOAD_LEN) {
-    throw new Pqm1Error("badPayloadLength", `PQM-1 payload must be ${PQM1_PAYLOAD_LEN} bytes, got ${bytes.length}`);
-  }
-  if (bytes[0] !== PQM1_ALGO_TAG_MLDSA65) {
-    throw new Pqm1Error("unsupportedAlgorithm", `unsupported PQM-1 algorithm tag 0x${bytes[0].toString(16).padStart(2, "0")}`);
-  }
-  if (bytes[1] !== PQM1_VERSION_V1) {
-    throw new Pqm1Error("unsupportedVersion", `unsupported PQM-1 version 0x${bytes[1].toString(16).padStart(2, "0")}`);
-  }
+function wordCount(normalized) {
+  return normalized.length === 0 ? 0 : normalized.split(" ").length;
 }
 function defaultRandomFill(bytes) {
   const cryptoObj = globalThis.crypto;
   if (!cryptoObj?.getRandomValues) {
-    throw new Pqm1Error("missingRandom", "globalThis.crypto.getRandomValues is unavailable");
+    throw new MnemonicError("missingRandom", "globalThis.crypto.getRandomValues is unavailable");
   }
   cryptoObj.getRandomValues(bytes);
 }
-function assemblePqm1Payload(entropy) {
-  const ent = expectBytes(entropy, PQM1_ENTROPY_LEN, "PQM-1 entropy");
-  const payload = new Uint8Array(PQM1_PAYLOAD_LEN);
-  payload[0] = PQM1_ALGO_TAG_MLDSA65;
-  payload[1] = PQM1_VERSION_V1;
-  payload.set(ent, 2);
-  return payload;
-}
-function parsePqm1Payload(payload) {
-  const bytes = expectBytes(payload, PQM1_PAYLOAD_LEN, "PQM-1 payload").slice();
-  ensureSupportedPayload(bytes);
-  return {
-    algoTag: PQM1_ALGO_TAG_MLDSA65,
-    version: PQM1_VERSION_V1,
-    entropy: bytes.slice(2),
-    bytes
-  };
-}
-function pqm1PayloadToMnemonic(payload) {
-  const parsed = parsePqm1Payload(payload);
-  return entropyToMnemonic(parsed.bytes, wordlist);
-}
-function pqm1MnemonicToPayload(mnemonic) {
-  const normalized = normalizeMnemonic(mnemonic);
-  const words = normalized.length === 0 ? [] : normalized.split(" ");
-  if (words.length !== PQM1_V1_MNEMONIC_WORDS) {
-    throw new Pqm1Error("badWordCount", `PQM-1 mnemonic must be ${PQM1_V1_MNEMONIC_WORDS} words, got ${words.length}`);
-  }
-  let payload;
-  try {
-    payload = mnemonicToEntropy(normalized, wordlist);
-  } catch (e) {
-    throw new Pqm1Error("bip39Decode", `invalid PQM-1 mnemonic: ${e.message}`);
-  }
-  return parsePqm1Payload(payload);
-}
-function derivePqm1MlDsa65SeedFromPayload(payload) {
-  const parsed = parsePqm1Payload(payload);
-  return shake256(concatBytes(DOMAIN_BYTES, parsed.bytes), { dkLen: ML_DSA_65_SEED_LEN });
-}
-function pqm1MnemonicToMlDsa65Seed(mnemonic) {
-  return derivePqm1MlDsa65SeedFromPayload(pqm1MnemonicToPayload(mnemonic).bytes);
-}
-function pqm1MnemonicToMlDsa65Backend(mnemonic) {
-  return MlDsa65Backend.fromSeed(pqm1MnemonicToMlDsa65Seed(mnemonic));
-}
-function pqm1MnemonicToAddress(mnemonic) {
-  return pqm1MnemonicToMlDsa65Backend(mnemonic).getAddress();
-}
-function generatePqm1Mnemonic(rng = defaultRandomFill) {
-  const entropy = new Uint8Array(PQM1_ENTROPY_LEN);
+function generateMnemonic(rng = defaultRandomFill) {
+  const entropy = new Uint8Array(MLDSA65_ENTROPY_LEN);
   rng(entropy);
-  return pqm1PayloadToMnemonic(assemblePqm1Payload(entropy));
+  return entropyToMnemonic(entropy, wordlist);
+}
+function validateMnemonic(mnemonic) {
+  const normalized = normalizeMnemonic(mnemonic);
+  if (wordCount(normalized) !== MLDSA65_MNEMONIC_WORDS) {
+    return false;
+  }
+  return validateMnemonic$1(normalized, wordlist);
+}
+function mnemonicToMlDsa65Seed(mnemonic) {
+  const normalized = normalizeMnemonic(mnemonic);
+  const words = wordCount(normalized);
+  if (words !== MLDSA65_MNEMONIC_WORDS) {
+    throw new MnemonicError(
+      "badWordCount",
+      `mnemonic must be ${MLDSA65_MNEMONIC_WORDS} words, got ${words}`
+    );
+  }
+  if (!validateMnemonic$1(normalized, wordlist)) {
+    throw new MnemonicError(
+      "bip39Decode",
+      "invalid BIP-39 mnemonic (unknown word or bad checksum)"
+    );
+  }
+  const seed64 = mnemonicToSeedSync(normalized, "");
+  return shake256(concatBytes(DOMAIN_BYTES, seed64), { dkLen: ML_DSA_65_SEED_LEN });
+}
+function mnemonicToMlDsa65Backend(mnemonic) {
+  return MlDsa65Backend.fromSeed(mnemonicToMlDsa65Seed(mnemonic));
+}
+function mnemonicToAddress(mnemonic) {
+  return mnemonicToMlDsa65Backend(mnemonic).getAddress();
 }
 
 // src/crypto/envelope.ts
@@ -499,6 +467,6 @@ function bytesEqual(a, b) {
   return true;
 }
 
-export { ADDRESS_DERIVATION_DOMAIN, BincodeWriter, ENUM_VARIANT_INDEX_ML_DSA_65, ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SEED_LEN, ML_DSA_65_SIGNATURE_LEN, ML_DSA_65_SIGNING_KEY_LEN, MempoolClass, MlDsa65Backend, PQM1_ALGO_TAG_FALCON512_RESERVED, PQM1_ALGO_TAG_MLDSA65, PQM1_ALGO_TAG_MLDSA87_RESERVED, PQM1_ALGO_TAG_SLHDSA128S_RESERVED, PQM1_ENTROPY_LEN, PQM1_PAYLOAD_LEN, PQM1_V1_MLDSA65_DOMAIN_TAG, PQM1_V1_MNEMONIC_WORDS, PQM1_VERSION_V1, Pqm1Error, STANDARD_ALGO_NUMBER_ML_DSA_65, assemblePqm1Payload, bincodeSignedTransaction, buildPlaintextSubmission, bytesToHex, concatBytes, derivePqm1MlDsa65SeedFromPayload, encodeMlDsa65Opaque, encodeTransactionForHash, expectBytes, generatePqm1Mnemonic, hexToBytes, mlDsa65AddressBytes, mlDsa65AddressFromPublicKey, parsePqm1Payload, pqm1MnemonicToAddress, pqm1MnemonicToMlDsa65Backend, pqm1MnemonicToMlDsa65Seed, pqm1MnemonicToPayload, pqm1PayloadToMnemonic, submitPlaintextTransaction, submitTransaction };
+export { ADDRESS_DERIVATION_DOMAIN, BincodeWriter, ENUM_VARIANT_INDEX_ML_DSA_65, MLDSA65_MNEMONIC_WORDS, MLDSA65_SEED_DOMAIN, ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SEED_LEN, ML_DSA_65_SIGNATURE_LEN, ML_DSA_65_SIGNING_KEY_LEN, MempoolClass, MlDsa65Backend, MnemonicError, STANDARD_ALGO_NUMBER_ML_DSA_65, bincodeSignedTransaction, buildPlaintextSubmission, bytesToHex, concatBytes, encodeMlDsa65Opaque, encodeTransactionForHash, expectBytes, generateMnemonic, hexToBytes, mlDsa65AddressBytes, mlDsa65AddressFromPublicKey, mnemonicToAddress, mnemonicToMlDsa65Backend, mnemonicToMlDsa65Seed, submitPlaintextTransaction, submitTransaction, validateMnemonic };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

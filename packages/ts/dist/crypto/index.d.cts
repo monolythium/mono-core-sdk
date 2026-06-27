@@ -20,36 +20,49 @@ declare function bytesToHex(bytes: Uint8Array): string;
 declare function hexToBytes(hex: string, label?: string): Uint8Array;
 declare function expectBytes(value: Uint8Array | readonly number[], len: number, label: string): Uint8Array;
 
-declare const PQM1_ALGO_TAG_MLDSA65 = 1;
-declare const PQM1_ALGO_TAG_MLDSA87_RESERVED = 2;
-declare const PQM1_ALGO_TAG_SLHDSA128S_RESERVED = 3;
-declare const PQM1_ALGO_TAG_FALCON512_RESERVED = 4;
-declare const PQM1_VERSION_V1 = 1;
-declare const PQM1_PAYLOAD_LEN = 32;
-declare const PQM1_ENTROPY_LEN = 30;
-declare const PQM1_V1_MNEMONIC_WORDS = 24;
-declare const PQM1_V1_MLDSA65_DOMAIN_TAG = "monolythium.pqm1.v1.mldsa65";
-type Pqm1ErrorKind = "badWordCount" | "bip39Decode" | "badPayloadLength" | "unsupportedAlgorithm" | "unsupportedVersion" | "missingRandom";
-declare class Pqm1Error extends Error {
-    readonly kind: Pqm1ErrorKind;
-    constructor(kind: Pqm1ErrorKind, message: string);
+/**
+ * Standard BIP-39 -> ML-DSA-65 wallet key derivation.
+ *
+ * A wallet mnemonic is a plain 24-word English BIP-39 phrase (256-bit /
+ * 32-byte entropy) with NO custom header bytes. The signing seed is derived
+ * from the standard BIP-39 PBKDF2 seed via a domain-separated SHAKE256:
+ *
+ *   seed64      = BIP-39 PBKDF2 seed = mnemonicToSeedSync(mnemonic, "")
+ *                 (HMAC-SHA512, 2048 rounds, 64 bytes)
+ *   mldsa65Seed = shake256( utf8("monolythium.mldsa65.v1") || seed64,
+ *                           { dkLen: 32 } )
+ *
+ * `MlDsa65Backend.fromSeed(mldsa65Seed)` then yields the deterministic
+ * ML-DSA-65 keypair / address. This is the SDK foundation imported by every
+ * wallet + monarch-desktop through `@monolythium/core-sdk/crypto`.
+ */
+/** Number of words in a Monolythium wallet mnemonic (256-bit BIP-39). */
+declare const MLDSA65_MNEMONIC_WORDS = 24;
+/** Domain-separation tag mixed into the ML-DSA-65 seed derivation. */
+declare const MLDSA65_SEED_DOMAIN = "monolythium.mldsa65.v1";
+type MnemonicErrorKind = "badWordCount" | "bip39Decode" | "missingRandom";
+declare class MnemonicError extends Error {
+    readonly kind: MnemonicErrorKind;
+    constructor(kind: MnemonicErrorKind, message: string);
 }
-interface Pqm1Payload {
-    algoTag: typeof PQM1_ALGO_TAG_MLDSA65;
-    version: typeof PQM1_VERSION_V1;
-    entropy: Uint8Array;
-    bytes: Uint8Array;
-}
-type Pqm1Rng = (bytes: Uint8Array) => void;
-declare function assemblePqm1Payload(entropy: Uint8Array | readonly number[]): Uint8Array;
-declare function parsePqm1Payload(payload: Uint8Array | readonly number[]): Pqm1Payload;
-declare function pqm1PayloadToMnemonic(payload: Uint8Array | readonly number[]): string;
-declare function pqm1MnemonicToPayload(mnemonic: string): Pqm1Payload;
-declare function derivePqm1MlDsa65SeedFromPayload(payload: Uint8Array | readonly number[]): Uint8Array;
-declare function pqm1MnemonicToMlDsa65Seed(mnemonic: string): Uint8Array;
-declare function pqm1MnemonicToMlDsa65Backend(mnemonic: string): MlDsa65Backend;
-declare function pqm1MnemonicToAddress(mnemonic: string): string;
-declare function generatePqm1Mnemonic(rng?: Pqm1Rng): string;
+type MnemonicRng = (bytes: Uint8Array) => void;
+/** Generate a fresh 24-word BIP-39 mnemonic from 32 bytes of entropy. */
+declare function generateMnemonic(rng?: MnemonicRng): string;
+/**
+ * Returns `true` only when `mnemonic` is exactly 24 words AND passes the
+ * BIP-39 wordlist + checksum validation.
+ */
+declare function validateMnemonic(mnemonic: string): boolean;
+/**
+ * Derive the 32-byte ML-DSA-65 seed from a 24-word BIP-39 mnemonic.
+ * Throws a typed {@link MnemonicError} when the input is not a valid 24-word
+ * mnemonic.
+ */
+declare function mnemonicToMlDsa65Seed(mnemonic: string): Uint8Array;
+/** Derive the ML-DSA-65 signing backend from a 24-word BIP-39 mnemonic. */
+declare function mnemonicToMlDsa65Backend(mnemonic: string): MlDsa65Backend;
+/** Derive the wallet address (0x-hex) from a 24-word BIP-39 mnemonic. */
+declare function mnemonicToAddress(mnemonic: string): string;
 
 interface JsonRpcCallClient {
     call<T>(method: string, params?: unknown): Promise<T>;
@@ -123,4 +136,4 @@ declare function submitTransaction(args: {
     tx: NativeEvmTxFields;
 }): Promise<string>;
 
-export { BincodeWriter, type JsonRpcCallClient, MlDsa65Backend, NativeEvmTxFields, PQM1_ALGO_TAG_FALCON512_RESERVED, PQM1_ALGO_TAG_MLDSA65, PQM1_ALGO_TAG_MLDSA87_RESERVED, PQM1_ALGO_TAG_SLHDSA128S_RESERVED, PQM1_ENTROPY_LEN, PQM1_PAYLOAD_LEN, PQM1_V1_MLDSA65_DOMAIN_TAG, PQM1_V1_MNEMONIC_WORDS, PQM1_VERSION_V1, type PlaintextSubmission, Pqm1Error, type Pqm1ErrorKind, type Pqm1Payload, type Pqm1Rng, assemblePqm1Payload, buildPlaintextSubmission, bytesToHex, concatBytes, derivePqm1MlDsa65SeedFromPayload, expectBytes, generatePqm1Mnemonic, hexToBytes, parsePqm1Payload, pqm1MnemonicToAddress, pqm1MnemonicToMlDsa65Backend, pqm1MnemonicToMlDsa65Seed, pqm1MnemonicToPayload, pqm1PayloadToMnemonic, submitPlaintextTransaction, submitTransaction };
+export { BincodeWriter, type JsonRpcCallClient, MLDSA65_MNEMONIC_WORDS, MLDSA65_SEED_DOMAIN, MlDsa65Backend, MnemonicError, type MnemonicErrorKind, type MnemonicRng, NativeEvmTxFields, type PlaintextSubmission, buildPlaintextSubmission, bytesToHex, concatBytes, expectBytes, generateMnemonic, hexToBytes, mnemonicToAddress, mnemonicToMlDsa65Backend, mnemonicToMlDsa65Seed, submitPlaintextTransaction, submitTransaction, validateMnemonic };

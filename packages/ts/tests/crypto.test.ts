@@ -7,22 +7,12 @@ import {
   ML_DSA_65_SEED_LEN,
   ML_DSA_65_SIGNATURE_LEN,
   MlDsa65Backend,
-  Pqm1Error,
   STANDARD_ALGO_NUMBER_ML_DSA_65,
-  assemblePqm1Payload,
   bytesToHex,
   bincodeSignedTransaction,
   concatBytes,
-  derivePqm1MlDsa65SeedFromPayload,
   encodeTransactionForHash,
-  generatePqm1Mnemonic,
   mlDsa65AddressFromPublicKey,
-  parsePqm1Payload,
-  pqm1MnemonicToAddress,
-  pqm1MnemonicToMlDsa65Backend,
-  pqm1MnemonicToMlDsa65Seed,
-  pqm1MnemonicToPayload,
-  pqm1PayloadToMnemonic,
 } from "../src/crypto/index.js";
 
 describe("crypto subpath", () => {
@@ -165,50 +155,4 @@ describe("crypto subpath", () => {
     expect(bytesToHex(wire.slice(-80))).toBe(MRV_NATIVE_TX_VECTOR.wireSuffix);
   });
 
-  it("round-trips PQM-1 v1 ML-DSA-65 mnemonics using the Rust payload layout", () => {
-    const payload = assemblePqm1Payload(new Uint8Array(30));
-    const mnemonic = pqm1PayloadToMnemonic(payload);
-
-    expect(mnemonic).toBe(
-      "absurd amount abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon armor",
-    );
-
-    const parsed = pqm1MnemonicToPayload(mnemonic);
-    expect(parsed.algoTag).toBe(0x01);
-    expect(parsed.version).toBe(0x01);
-    expect(bytesToHex(parsed.entropy)).toBe(`0x${"00".repeat(30)}`);
-    expect(bytesToHex(parsed.bytes)).toBe(bytesToHex(payload));
-  });
-
-  it("derives deterministic PQM-1 ML-DSA-65 seed and address helpers", () => {
-    const payload = assemblePqm1Payload(new Uint8Array(30).fill(0x22));
-    const mnemonic = pqm1PayloadToMnemonic(payload);
-    const seedA = derivePqm1MlDsa65SeedFromPayload(payload);
-    const seedB = pqm1MnemonicToMlDsa65Seed(mnemonic);
-    const backend = pqm1MnemonicToMlDsa65Backend(mnemonic);
-
-    expect(seedA).toHaveLength(ML_DSA_65_SEED_LEN);
-    expect(bytesToHex(seedA)).toBe(bytesToHex(seedB));
-    expect(pqm1MnemonicToAddress(mnemonic)).toBe(backend.getAddress());
-  });
-
-  it("matches the ADR-0038 BLAKE3 PQM-1 address vector", () => {
-    const rustMnemonic =
-      "absurd aspect pioneer ozone extra early cross pony aisle example deer erode cat employ that trouble able correct body battle version tag elegant kitchen";
-    expect(pqm1MnemonicToAddress(rustMnemonic)).toBe("0xbcb96e78fc65d3811e95f815139605ad6cbc857a");
-  });
-
-  it("generates PQM-1 mnemonics from injected entropy", () => {
-    const mnemonic = generatePqm1Mnemonic((out) => out.fill(0x7a));
-    const parsed = pqm1MnemonicToPayload(mnemonic);
-    expect(bytesToHex(parsed.bytes)).toBe(`0x0101${"7a".repeat(30)}`);
-  });
-
-  it("rejects unsupported PQM-1 tags and malformed word counts", () => {
-    const badAlgoPayload = new Uint8Array(32);
-    badAlgoPayload[0] = 0xfe;
-    badAlgoPayload[1] = 0x01;
-    expect(() => parsePqm1Payload(badAlgoPayload)).toThrow(Pqm1Error);
-    expect(() => pqm1MnemonicToPayload("abandon abandon")).toThrow(Pqm1Error);
-  });
 });
