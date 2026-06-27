@@ -124,6 +124,34 @@ export const NODE_REGISTRY_SELECTORS = {
   getProbeAuthority: "0x" + selectorHex("getProbeAuthority()"),
   /** `attestServiceProbe(bytes32,uint32,uint8,uint64)` — Component C attested score-eligibility path. */
   attestServiceProbe: "0x" + selectorHex("attestServiceProbe(bytes32,uint32,uint8,uint64)"),
+  /**
+   * `advertiseSeat(uint32,uint8,uint32,uint128,uint32,bytes32)` returns
+   * `uint32 seatId` (L6 open-seat marketplace). Publishes a vacancy
+   * listing; caller must own an active member op-hash of the cluster.
+   */
+  advertiseSeat: "0x" + selectorHex("advertiseSeat(uint32,uint8,uint32,uint128,uint32,bytes32)"),
+  /**
+   * `applyForSeat(uint32,uint32,bytes)` returns `bytes32 appKey` (L6).
+   * Payable — the native `value` carries the refundable application
+   * escrow ({@link NODE_REGISTRY_SEAT_APPLICATION_ESCROW_LYTHOSHI}).
+   */
+  applyForSeat: "0x" + selectorHex("applyForSeat(uint32,uint32,bytes)"),
+  /**
+   * `voteSeatAdmit(uint32,bytes32,bytes)` returns `uint16 voteCount`
+   * (L6). Active-member admission vote; the 7-of-10 threshold-reaching
+   * vote fills the seat and admits the operator.
+   */
+  voteSeatAdmit: "0x" + selectorHex("voteSeatAdmit(uint32,bytes32,bytes)"),
+  /**
+   * `withdrawSeatApplication(uint32,bytes32)` returns `bool` (L6) —
+   * applicant withdrawal that refunds the escrow.
+   */
+  withdrawSeatApplication: "0x" + selectorHex("withdrawSeatApplication(uint32,bytes32)"),
+  /**
+   * `closeSeat(uint32,uint32)` returns `bool` (L6) — advertiser rescind
+   * of an `Open` listing.
+   */
+  closeSeat: "0x" + selectorHex("closeSeat(uint32,uint32)"),
 } as const;
 
 /** Cluster-member reference width used by genesis and formation rosters. */
@@ -1986,6 +2014,587 @@ export function deriveClusterAnchorAddress(
     parts.push(member);
   }
   return bytesToHex(blake3(concatBytes(...parts)).slice(0, 20));
+}
+
+// --------------------------------------------------------------------
+// L6 — open-seat marketplace primitive (node-registry, tag 0x32).
+//
+// The advertise → apply → vote → roster-append loop layered over the
+// existing CJ-1 signed-consent admission. These selectors are gated by
+// the `open_seat_market_height` milestone: below the activation height
+// they resolve to the byte-identical `UnknownSelector` revert (no typed
+// `…NotActivated` variant), so a node replaying pre-activation history
+// behaves exactly like a binary that predates them.
+// --------------------------------------------------------------------
+
+/**
+ * Storage-slot tag byte for the open-seat family (under `0x1005`).
+ * Mirrors mono-core `cluster_seat::TAG_CLUSTER_SEAT` — the next tag after
+ * `TAG_CLUSTER_CHARTER` (`0x31`). Seat slots derive as
+ * `keccak256(0x32 || clusterId_be32 || seatId_be32 || field_u8)`, a
+ * distinct preimage shape from the archive-challenge family that reuses
+ * the same tag byte under a different namespace.
+ */
+export const NODE_REGISTRY_TAG_CLUSTER_SEAT = 0x32;
+
+/**
+ * Refundable application escrow charged by `applyForSeat`, in lythoshi
+ * (`100 LYTH`). Mirrors mono-core
+ * `cluster_seat::APPLICATION_ESCROW_LYTHOSHI`. This is an anti-spam
+ * escrow only — it is refunded on withdraw/reject and is DISTINCT from
+ * the {@link NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI} self-bond, which is
+ * bound only when the seat is filled (on admit), NOT at apply time.
+ */
+export const NODE_REGISTRY_SEAT_APPLICATION_ESCROW_LYTHOSHI = 100n * 1_000_000_000_000_000_000n;
+
+/**
+ * Operator self-bond floor in lythoshi (`5,000 LYTH`). Mirrors mono-core
+ * `bond::MIN_SELF_BOND_LYTHOSHI` — the constitutional floor (raise-only;
+ * lowering it is a hard fork). It is bound into the operator's bond at
+ * seat-fill (admit), not escrowed at apply. NOTE: the 50,000 / 75,000
+ * figures in the legacy design surfaces are stale fiction — the SDK
+ * carries the on-chain floor only.
+ */
+export const NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI = 5_000n * 1_000_000_000_000_000_000n;
+
+/** Active-vacancy seat kind (`kind=0`). Mirrors `cluster_seat::SEAT_KIND_ACTIVE`. */
+export const NODE_REGISTRY_SEAT_KIND_ACTIVE = 0;
+/** Standby-vacancy seat kind (`kind=1`). Mirrors `cluster_seat::SEAT_KIND_STANDBY`. */
+export const NODE_REGISTRY_SEAT_KIND_STANDBY = 1;
+
+/** Decoded open-seat kind. Mirrors `cluster_seat::SeatKind`. */
+export type SeatKind = "active" | "standby";
+
+/** Decode a raw seat-kind byte. `0` → `active`, `1` → `standby`. */
+export function seatKindFromByte(b: number): SeatKind {
+  return b === NODE_REGISTRY_SEAT_KIND_STANDBY ? "standby" : "active";
+}
+
+/** Encode a {@link SeatKind} to its raw `u8` byte. */
+export function seatKindToByte(kind: SeatKind): number {
+  return kind === "standby" ? NODE_REGISTRY_SEAT_KIND_STANDBY : NODE_REGISTRY_SEAT_KIND_ACTIVE;
+}
+
+/**
+ * Lifecycle status of an `OpenSeat` record. Mirrors
+ * `cluster_seat::SeatStatus` (`None=0`, `Open=1`, `Filled=2`, `Closed=3`).
+ */
+export type SeatStatus = "none" | "open" | "filled" | "closed";
+
+/** Numeric seat-status codes, mirroring `cluster_seat::SeatStatus::as_u8`. */
+export const SEAT_STATUS_CODES: Record<Exclude<SeatStatus, never>, number> = {
+  none: 0,
+  open: 1,
+  filled: 2,
+  closed: 3,
+} as const;
+
+/** Decode a raw seat-status byte. Any value outside `0..=3` → `none`. */
+export function seatStatusFromByte(b: number): SeatStatus {
+  switch (b) {
+    case 1:
+      return "open";
+    case 2:
+      return "filled";
+    case 3:
+      return "closed";
+    default:
+      return "none";
+  }
+}
+
+/** Canonical `SeatAdvertised` event signature (L6). */
+export const SEAT_ADVERTISED_EVENT_SIG =
+  "SeatAdvertised(uint32,uint32,bytes32,uint8,uint32,uint128,uint32,bytes32)" as const;
+/** Canonical `SeatApplied` event signature (L6). */
+export const SEAT_APPLIED_EVENT_SIG = "SeatApplied(uint32,uint32,bytes32,address,uint128)" as const;
+/** Canonical `SeatFilled` event signature (L6). */
+export const SEAT_FILLED_EVENT_SIG = "SeatFilled(uint32,uint32,bytes32,uint16,uint16)" as const;
+/** Canonical `SeatClosed` event signature (L6). */
+export const SEAT_CLOSED_EVENT_SIG = "SeatClosed(uint32,uint32,uint8)" as const;
+
+/** Args for `advertiseSeat(uint32,uint8,uint32,uint128,uint32,bytes32)` (L6). */
+export interface AdvertiseSeatCalldataArgs {
+  clusterId: bigint | number | string;
+  /** `0` = active vacancy, `1` = standby vacancy (see {@link SeatKind}). */
+  kind: SeatKind | number;
+  /** How many identical seats this listing offers. */
+  seatCount: bigint | number | string;
+  /** Minimum bond in lythoshi (`>= 5,000 LYTH` for active seats). */
+  minBondLythoshi: bigint | number | string;
+  /** Service-tier capability bitmask the cluster needs (low-16 bitfield). */
+  capabilityMask: number;
+  /** `keccak`/`blake3` digest over the offered charter-share + off-chain terms (32 bytes). */
+  termsHash: string | Uint8Array | readonly number[];
+}
+
+/** Args for `applyForSeat(uint32,uint32,bytes)` (L6, payable). */
+export interface ApplyForSeatCalldataArgs {
+  clusterId: bigint | number | string;
+  /** Target seat id from the advertised listing. */
+  seatId: bigint | number | string;
+  /** The applicant's 1952-byte ML-DSA-65 consensus pubkey. */
+  operatorPubkey: string | Uint8Array | readonly number[];
+}
+
+/** Args for `voteSeatAdmit(uint32,bytes32,bytes)` (L6). */
+export interface VoteSeatAdmitCalldataArgs {
+  clusterId: bigint | number | string;
+  /** The application key (`bytes32` op-hash) returned by `applyForSeat`. */
+  appKey: string | Uint8Array | readonly number[];
+  /** The voting member's 1952-byte ML-DSA-65 consensus pubkey. */
+  voterPubkey: string | Uint8Array | readonly number[];
+}
+
+/** Args for `withdrawSeatApplication(uint32,bytes32)` (L6). */
+export interface WithdrawSeatApplicationCalldataArgs {
+  clusterId: bigint | number | string;
+  /** The application key (`bytes32` op-hash) to withdraw + refund. */
+  appKey: string | Uint8Array | readonly number[];
+}
+
+/** Args for `closeSeat(uint32,uint32)` (L6). */
+export interface CloseSeatCalldataArgs {
+  clusterId: bigint | number | string;
+  /** The seat id to rescind. */
+  seatId: bigint | number | string;
+}
+
+/**
+ * Encode `advertiseSeat(uint32,uint8,uint32,uint128,uint32,bytes32)`
+ * calldata (L6). Flat 6-word head — `clusterId`, `kind` (`u8`),
+ * `seatCount`, `minBond` (`u128`), `capabilityMask`, `termsHash`.
+ * Byte-identical to mono-core's `advertise_seat` decode order.
+ */
+export function encodeAdvertiseSeatCalldata(args: AdvertiseSeatCalldataArgs): string {
+  const kindByte = typeof args.kind === "number" ? args.kind : seatKindToByte(args.kind);
+  if (!Number.isInteger(kindByte) || kindByte < 0 || kindByte > 0xff) {
+    throw new NodeRegistryError("kind must be a u8 seat kind (0 = active, 1 = standby)");
+  }
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.advertiseSeat),
+      uint32Word(toUint32(args.clusterId, "clusterId")),
+      uint8Word(kindByte),
+      uint32Word(toUint32(args.seatCount, "seatCount")),
+      uint128Word(args.minBondLythoshi, "minBondLythoshi"),
+      uint32Word(toUint32(args.capabilityMask, "capabilityMask")),
+      expectLength(toBytes(args.termsHash), 32, "termsHash"),
+    ),
+  );
+}
+
+/**
+ * Encode `applyForSeat(uint32,uint32,bytes)` calldata (L6). Head:
+ * `clusterId`, `seatId`, then the `bytes opPubkey` offset (`3*32`).
+ * Tail: the 1952-byte consensus pubkey (length word + padded). This is
+ * the `requestClusterJoin` shape with an extra `seatId` word — the call
+ * is payable; the native escrow value rides the transaction, not the
+ * calldata.
+ */
+export function encodeApplyForSeatCalldata(args: ApplyForSeatCalldataArgs): string {
+  const operatorPubkey = expectLength(
+    toBytes(args.operatorPubkey),
+    NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "operatorPubkey",
+  );
+  const operatorPubkeyPadded = padToWord(operatorPubkey);
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.applyForSeat),
+      uint32Word(toUint32(args.clusterId, "clusterId")),
+      uint32Word(toUint32(args.seatId, "seatId")),
+      uint64Word(3n * 32n, "operatorPubkeyOffset"),
+      uint64Word(BigInt(operatorPubkey.length), "operatorPubkeyLength"),
+      operatorPubkeyPadded,
+    ),
+  );
+}
+
+/**
+ * Encode `voteSeatAdmit(uint32,bytes32,bytes)` calldata (L6). Identical
+ * wire layout to `voteClusterAdmit`: head `clusterId`, `appKey`
+ * (`bytes32`), `voterPubkey` offset (`3*32`); tail the 1952-byte voter
+ * pubkey (length word + padded).
+ */
+export function encodeVoteSeatAdmitCalldata(args: VoteSeatAdmitCalldataArgs): string {
+  const appKey = expectLength(toBytes(args.appKey), 32, "appKey");
+  const voterPubkey = expectLength(
+    toBytes(args.voterPubkey),
+    NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "voterPubkey",
+  );
+  const voterPubkeyPadded = padToWord(voterPubkey);
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.voteSeatAdmit),
+      uint32Word(toUint32(args.clusterId, "clusterId")),
+      appKey,
+      uint64Word(3n * 32n, "voterPubkeyOffset"),
+      uint64Word(BigInt(voterPubkey.length), "voterPubkeyLength"),
+      voterPubkeyPadded,
+    ),
+  );
+}
+
+/**
+ * Encode `withdrawSeatApplication(uint32,bytes32)` calldata (L6). Flat
+ * 2-word head — `clusterId`, `appKey`.
+ */
+export function encodeWithdrawSeatApplicationCalldata(
+  args: WithdrawSeatApplicationCalldataArgs,
+): string {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.withdrawSeatApplication),
+      uint32Word(toUint32(args.clusterId, "clusterId")),
+      expectLength(toBytes(args.appKey), 32, "appKey"),
+    ),
+  );
+}
+
+/**
+ * Encode `closeSeat(uint32,uint32)` calldata (L6). Flat 2-word head —
+ * `clusterId`, `seatId`.
+ */
+export function encodeCloseSeatCalldata(args: CloseSeatCalldataArgs): string {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.closeSeat),
+      uint32Word(toUint32(args.clusterId, "clusterId")),
+      uint32Word(toUint32(args.seatId, "seatId")),
+    ),
+  );
+}
+
+/**
+ * Derive the `bytes32` application key for an `applyForSeat` call — the
+ * operator op-hash `BLAKE3(consensusPubkey)`, identical to the CJ-1
+ * operator id. `voteSeatAdmit` / `withdrawSeatApplication` reference an
+ * application by this key.
+ */
+export function deriveSeatApplicationKey(
+  operatorPubkey: string | Uint8Array | readonly number[],
+): string {
+  return bytesToHex(
+    blake3(expectLength(toBytes(operatorPubkey), NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES, "operatorPubkey")),
+  );
+}
+
+/**
+ * De-fictionalized open-seat listing row. The chain stores the `OpenSeat`
+ * record (tag `0x32`) and emits {@link SeatAdvertised}/{@link SeatFilled}/
+ * {@link SeatClosed}; the §18.4 indexer projects those into this shape.
+ *
+ * NOTE: this revision of the primitive (#147) ships NO on-chain
+ * `getOpenSeat` view selector — open-seat discovery is event/indexer
+ * backed. {@link openSeatFromAdvertised} projects a fresh listing from a
+ * `SeatAdvertised` log; fill/close state folds in from later events.
+ *
+ * Economic numerics are in lythoshi (`1e18`). The advisory fields the
+ * legacy design surfaces show (reputation, expected reward, diversity
+ * bonus) are off-chain projections and are intentionally NOT carried on
+ * this on-chain-faithful shape.
+ */
+export interface OpenSeatView {
+  /** Cluster the seat belongs to. */
+  clusterId: number;
+  /** Per-cluster monotonic seat id. */
+  seatId: number;
+  /** Advertiser op-hash (`0x` 32 bytes). */
+  advertiser: string;
+  /** Active or standby vacancy. */
+  kind: SeatKind;
+  /** Identical seats this listing offers. */
+  seatCount: number;
+  /** Seats already filled. */
+  filledCount: number;
+  /** Minimum bond in lythoshi (`>= 5,000 LYTH` for active seats). */
+  minBondLythoshi: bigint;
+  /** Service-tier capability bitmask the cluster needs. */
+  capabilityMask: number;
+  /** Terms digest (`0x` 32 bytes). */
+  termsHash: string;
+  /** Listing lifecycle status. */
+  status: SeatStatus;
+}
+
+/**
+ * A pending seat application, projected from {@link SeatApplied} + the
+ * reused CJ-1 vote tally. The application reuses the CJ-1
+ * `(cluster, operatorId)` keying, so its lifecycle status is a
+ * {@link ClusterJoinRequestStatus}. `threshold` is the snapshot 7-of-10
+ * admission threshold frozen at apply.
+ */
+export interface SeatApplicationView {
+  /** Cluster the application targets. */
+  clusterId: number;
+  /** Targeted seat id. */
+  seatId: number;
+  /** Application key = operator op-hash (`0x` 32 bytes). */
+  appKey: string;
+  /** Application owner address (`0x` 20 bytes). */
+  owner: string;
+  /** Escrow currently held in lythoshi. */
+  bondEscrowedLythoshi: bigint;
+  /** Admit votes recorded so far. */
+  voteCount: number;
+  /** Frozen admission threshold (7 for a 10-member cluster). */
+  threshold: number;
+  /** CJ-1 request lifecycle status. */
+  status: ClusterJoinRequestStatus;
+}
+
+/** Decoded `SeatAdvertised` event (L6). Mirrors `events::SEAT_ADVERTISED`. */
+export interface SeatAdvertisedEvent {
+  /** Cluster identifier (indexed topic 1). */
+  clusterId: number;
+  /** Seat identifier (indexed topic 2). */
+  seatId: number;
+  /** Advertiser op-hash (`0x` 32 bytes). */
+  advertiser: string;
+  /** Raw seat-kind byte (`0` active, `1` standby). */
+  kind: number;
+  /** Identical seats offered. */
+  seatCount: number;
+  /** Minimum bond in lythoshi. */
+  minBondLythoshi: bigint;
+  /** Service-tier capability bitmask. */
+  capabilityMask: number;
+  /** Terms digest (`0x` 32 bytes). */
+  termsHash: string;
+}
+
+/** Decoded `SeatApplied` event (L6). Mirrors `events::SEAT_APPLIED`. */
+export interface SeatAppliedEvent {
+  /** Cluster identifier (indexed topic 1). */
+  clusterId: number;
+  /** Seat identifier (indexed topic 2). */
+  seatId: number;
+  /** Application key = operator op-hash (indexed topic 3, `0x` 32 bytes). */
+  operatorId: string;
+  /** Application owner address (`0x` 20 bytes). */
+  owner: string;
+  /** Escrow held in lythoshi. */
+  escrowLythoshi: bigint;
+}
+
+/** Decoded `SeatFilled` event (L6). Mirrors `events::SEAT_FILLED`. */
+export interface SeatFilledEvent {
+  /** Cluster identifier (indexed topic 1). */
+  clusterId: number;
+  /** Seat identifier (indexed topic 2). */
+  seatId: number;
+  /** Admitted operator op-hash (indexed topic 3, `0x` 32 bytes). */
+  operatorId: string;
+  /** Seats filled after this admission. */
+  filledCount: number;
+  /** Total seats in the listing. */
+  seatCount: number;
+}
+
+/** Decoded `SeatClosed` event (L6). Mirrors `events::SEAT_CLOSED`. */
+export interface SeatClosedEvent {
+  /** Cluster identifier (indexed topic 1). */
+  clusterId: number;
+  /** Seat identifier (indexed topic 2). */
+  seatId: number;
+  /** Raw seat-status byte after close (`3` = closed). */
+  status: number;
+}
+
+/**
+ * Decode a `SeatAdvertised` log (L6). Indexed topics: `clusterId`,
+ * `seatId`. Data: `(bytes32 advertiser, uint8 kind, uint32 seatCount,
+ * uint128 minBond, uint32 capabilityMask, bytes32 termsHash)` — 6 words.
+ */
+export function decodeSeatAdvertisedEvent(
+  topics: readonly (string | Uint8Array | readonly number[])[],
+  data: string | Uint8Array | readonly number[],
+): SeatAdvertisedEvent {
+  const { clusterId, seatId } = decodeSeatClusterSeatTopics(topics, SEAT_ADVERTISED_EVENT_SIG, 3);
+  const body = toBytes(data);
+  if (body.length < 6 * 32) {
+    throw new NodeRegistryError("SeatAdvertised data shorter than the 6-word body");
+  }
+  const word = (i: number) => body.slice(i * 32, (i + 1) * 32);
+  return {
+    clusterId,
+    seatId,
+    advertiser: bytesToHex(word(0)),
+    kind: numberFromWord(word(1), "kind", 0xff),
+    seatCount: u32FromWord(word(2)),
+    minBondLythoshi: uintFromWord(word(3)),
+    capabilityMask: u32FromWord(word(4)),
+    termsHash: bytesToHex(word(5)),
+  };
+}
+
+/**
+ * Decode a `SeatApplied` log (L6). Indexed topics: `clusterId`, `seatId`,
+ * `operatorId`. Data: `(address owner, uint128 escrow)` — 2 words.
+ */
+export function decodeSeatAppliedEvent(
+  topics: readonly (string | Uint8Array | readonly number[])[],
+  data: string | Uint8Array | readonly number[],
+): SeatAppliedEvent {
+  const { clusterId, seatId, operatorId } = decodeSeatClusterSeatOperatorTopics(
+    topics,
+    SEAT_APPLIED_EVENT_SIG,
+  );
+  const body = toBytes(data);
+  if (body.length < 2 * 32) {
+    throw new NodeRegistryError("SeatApplied data shorter than the 2-word body");
+  }
+  return {
+    clusterId,
+    seatId,
+    operatorId,
+    owner: bytesToHex(body.slice(12, 32)),
+    escrowLythoshi: uintFromWord(body.slice(32, 64)),
+  };
+}
+
+/**
+ * Decode a `SeatFilled` log (L6). Indexed topics: `clusterId`, `seatId`,
+ * `operatorId`. Data: `(uint16 filledCount, uint16 seatCount)` — 2 words.
+ */
+export function decodeSeatFilledEvent(
+  topics: readonly (string | Uint8Array | readonly number[])[],
+  data: string | Uint8Array | readonly number[],
+): SeatFilledEvent {
+  const { clusterId, seatId, operatorId } = decodeSeatClusterSeatOperatorTopics(
+    topics,
+    SEAT_FILLED_EVENT_SIG,
+  );
+  const body = toBytes(data);
+  if (body.length < 2 * 32) {
+    throw new NodeRegistryError("SeatFilled data shorter than the 2-word body");
+  }
+  return {
+    clusterId,
+    seatId,
+    operatorId,
+    filledCount: numberFromWord(body.slice(0, 32), "filledCount", 0xffff),
+    seatCount: numberFromWord(body.slice(32, 64), "seatCount", 0xffff),
+  };
+}
+
+/**
+ * Decode a `SeatClosed` log (L6). Indexed topics: `clusterId`, `seatId`.
+ * Data: `(uint8 status)` — 1 word.
+ */
+export function decodeSeatClosedEvent(
+  topics: readonly (string | Uint8Array | readonly number[])[],
+  data: string | Uint8Array | readonly number[],
+): SeatClosedEvent {
+  const { clusterId, seatId } = decodeSeatClusterSeatTopics(topics, SEAT_CLOSED_EVENT_SIG, 3);
+  const body = toBytes(data);
+  if (body.length < 32) {
+    throw new NodeRegistryError("SeatClosed data shorter than the 1-word body");
+  }
+  return {
+    clusterId,
+    seatId,
+    status: numberFromWord(body.slice(0, 32), "status", 0xff),
+  };
+}
+
+/**
+ * Project a fresh {@link OpenSeatView} from a `SeatAdvertised` event — a
+ * just-listed seat is `Open` with `filledCount = 0`. Subsequent
+ * {@link SeatFilled}/{@link SeatClosed} events fold in over the indexer's
+ * projection; this gives the live listing shape a wallet renders before
+ * any application lands.
+ */
+export function openSeatFromAdvertised(event: SeatAdvertisedEvent): OpenSeatView {
+  return {
+    clusterId: event.clusterId,
+    seatId: event.seatId,
+    advertiser: event.advertiser,
+    kind: seatKindFromByte(event.kind),
+    seatCount: event.seatCount,
+    filledCount: 0,
+    minBondLythoshi: event.minBondLythoshi,
+    capabilityMask: event.capabilityMask,
+    termsHash: event.termsHash,
+    status: "open",
+  };
+}
+
+/** Validate a seat event's `clusterId`/`seatId` indexed topics. */
+function decodeSeatClusterSeatTopics(
+  topics: readonly (string | Uint8Array | readonly number[])[],
+  sig: string,
+  expectedCount: number,
+): { clusterId: number; seatId: number } {
+  if (topics.length !== expectedCount) {
+    throw new NodeRegistryError(`${sig} expects ${expectedCount} topics, got ${topics.length}`);
+  }
+  assertEventTopic0(topics[0], sig);
+  return {
+    clusterId: u32FromWord(expectLength(toBytes(topics[1]), 32, "clusterId topic")),
+    seatId: u32FromWord(expectLength(toBytes(topics[2]), 32, "seatId topic")),
+  };
+}
+
+/** Validate a seat event's `clusterId`/`seatId`/`operatorId` indexed topics. */
+function decodeSeatClusterSeatOperatorTopics(
+  topics: readonly (string | Uint8Array | readonly number[])[],
+  sig: string,
+): { clusterId: number; seatId: number; operatorId: string } {
+  if (topics.length !== 4) {
+    throw new NodeRegistryError(`${sig} expects 4 topics, got ${topics.length}`);
+  }
+  assertEventTopic0(topics[0], sig);
+  return {
+    clusterId: u32FromWord(expectLength(toBytes(topics[1]), 32, "clusterId topic")),
+    seatId: u32FromWord(expectLength(toBytes(topics[2]), 32, "seatId topic")),
+    operatorId: bytesToHex(expectLength(toBytes(topics[3]), 32, "operatorId topic")),
+  };
+}
+
+/** Assert `topic0` equals `keccak256(sig)`. */
+function assertEventTopic0(topic0: string | Uint8Array | readonly number[], sig: string): void {
+  const got = bytesToHex(expectLength(toBytes(topic0), 32, "topic0"));
+  const want = bytesToHex(keccak_256(new TextEncoder().encode(sig)));
+  if (got !== want) {
+    throw new NodeRegistryError(`unexpected topic0 for ${sig}`);
+  }
+}
+
+/** Right-align a `uint128` value into a 32-byte word. */
+function uint128Word(value: bigint | number | string, name: string): Uint8Array {
+  const n = toUint128(value, name);
+  const out = new Uint8Array(32);
+  let rest = n;
+  for (let i = 31; i >= 16; i--) {
+    out[i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  return out;
+}
+
+function toUint128(value: bigint | number | string, name: string): bigint {
+  let parsed: bigint;
+  if (typeof value === "bigint") {
+    parsed = value;
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) {
+      throw new NodeRegistryError(`${name} must be a safe integer`);
+    }
+    parsed = BigInt(value);
+  } else {
+    const trimmed = value.trim();
+    if (!/^\d+$/u.test(trimmed)) {
+      throw new NodeRegistryError(`${name} must be a decimal uint128`);
+    }
+    parsed = BigInt(trimmed);
+  }
+  if (parsed < 0n || parsed >= 1n << 128n) {
+    throw new NodeRegistryError(`${name} must fit uint128`);
+  }
+  return parsed;
 }
 
 /** Stable selector hex (without `0x`) for a canonical signature. */
