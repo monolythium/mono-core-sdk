@@ -1512,7 +1512,9 @@ type DecodeTxResponse = {
      */
     clusterId: number | null;
     /**
-     * Opaque round attestation payload.
+     * Opaque round attestation payload (the consensus round certificate;
+     * renamed from the legacy `blsAttestation` to match the node, which emits
+     * `roundAttestation` after the BLS -> RoundCert consensus rename).
      */
     roundAttestation: unknown | null;
     /**

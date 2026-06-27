@@ -18,7 +18,7 @@ import {
   submitPlaintextTransaction,
 } from "./crypto/submission.js";
 import type { NativeEvmTxFields } from "./crypto/tx.js";
-import { pqm1MnemonicToMlDsa65Backend } from "./crypto/pqm1.js";
+import { mnemonicToMlDsa65Backend } from "./crypto/mnemonic.js";
 import {
   NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
   type ClusterJoinRequestView,
@@ -305,7 +305,7 @@ export async function submitRequestClusterJoin(
   const clusterId = parseUint32(args.clusterId, "clusterId");
   const operatorPubkey = normalizeConsensusPubkey(args.operatorPubkey, "operatorPubkey");
   const operatorIdHex = deriveClusterJoinOperatorId(operatorPubkey);
-  const backend = pqm1MnemonicToMlDsa65Backend(args.mnemonic);
+  const backend = mnemonicToMlDsa65Backend(args.mnemonic);
   const senderAddress = addressToTypedBech32("user", backend.addressBytes());
   const preview = await previewRequestClusterJoin(args.client, {
     from: senderAddress,
@@ -336,7 +336,7 @@ export async function submitVoteClusterAdmit(
 ): Promise<ClusterJoinSubmitResult> {
   const clusterId = parseUint32(args.clusterId, "clusterId");
   const operatorIdHex = normalizeOperatorId(args.operatorId);
-  const backend = pqm1MnemonicToMlDsa65Backend(args.mnemonic);
+  const backend = mnemonicToMlDsa65Backend(args.mnemonic);
   const senderAddress = addressToTypedBech32("user", backend.addressBytes());
   const preview = await previewVoteClusterAdmit(args.client, {
     from: senderAddress,
@@ -364,7 +364,7 @@ export async function submitVoteClusterAdmit(
 
 async function submitClusterJoinTx(
   client: ClusterJoinSubmitClient,
-  backend: ReturnType<typeof pqm1MnemonicToMlDsa65Backend>,
+  backend: ReturnType<typeof mnemonicToMlDsa65Backend>,
   tx: NativeEvmTxFields,
   clusterId: bigint,
   operatorIdHex: string,

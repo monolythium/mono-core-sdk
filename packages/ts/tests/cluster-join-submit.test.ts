@@ -15,10 +15,9 @@ import {
   type OperatorOnboardingPreview,
 } from "../src/index.js";
 import {
-  assemblePqm1Payload,
   buildPlaintextSubmission,
-  pqm1MnemonicToMlDsa65Backend,
-  pqm1PayloadToMnemonic,
+  generateMnemonic,
+  mnemonicToMlDsa65Backend,
 } from "../src/crypto/index.js";
 
 interface CapturedCall {
@@ -26,7 +25,7 @@ interface CapturedCall {
   params: unknown;
 }
 
-const mnemonic = pqm1PayloadToMnemonic(assemblePqm1Payload(new Uint8Array(30).fill(0x31)));
+const mnemonic = generateMnemonic((out) => out.fill(0x31));
 const operatorPubkey = new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0x44);
 const voterPubkey = new Uint8Array(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).fill(0x55);
 const operatorId = deriveClusterJoinOperatorId(operatorPubkey);
@@ -100,7 +99,7 @@ function preview(
 }
 
 function expectedRequestPlaintextTxHash(): string {
-  const backend = pqm1MnemonicToMlDsa65Backend(mnemonic);
+  const backend = mnemonicToMlDsa65Backend(mnemonic);
   const tx = buildRequestClusterJoinTxFields({
     chainId: 69_420n,
     nonce: 18n,
@@ -113,7 +112,7 @@ function expectedRequestPlaintextTxHash(): string {
 }
 
 function expectedVotePlaintextTxHash(): string {
-  const backend = pqm1MnemonicToMlDsa65Backend(mnemonic);
+  const backend = mnemonicToMlDsa65Backend(mnemonic);
   const tx = buildVoteClusterAdmitTxFields({
     chainId: 69_420n,
     nonce: 18n,

@@ -290,21 +290,29 @@ const readiness = bridgeQuoteSubmitReadiness(intent, routeDisclosures);
 console.log(readiness.routeSelectionReady, readiness.quoteReady, readiness.blockedReasons);
 ```
 
-### PQM-1 + ML-DSA-65 helpers
+### BIP-39 + ML-DSA-65 helpers
 
-Wallets and faucets can derive deterministic ML-DSA-65 backends directly in
-TypeScript from PQM-1 mnemonics.
+Wallets and faucets derive deterministic ML-DSA-65 backends directly in
+TypeScript from standard 24-word BIP-39 mnemonics. The signing seed is the
+domain-separated SHAKE256 of the standard BIP-39 PBKDF2 seed:
+
+```text
+seed64      = mnemonicToSeedSync(mnemonic, "")            // HMAC-SHA512, 2048 rounds, 64 bytes
+mldsa65Seed = shake256("monolythium.mldsa65.v1" || seed64, { dkLen: 32 })
+```
 
 ```ts
 import {
-  generatePqm1Mnemonic,
-  pqm1MnemonicToAddress,
-  pqm1MnemonicToMlDsa65Backend,
+  generateMnemonic,
+  validateMnemonic,
+  mnemonicToAddress,
+  mnemonicToMlDsa65Backend,
 } from "@monolythium/core-sdk/crypto";
 
-const mnemonic = generatePqm1Mnemonic();
-const address = pqm1MnemonicToAddress(mnemonic);
-const backend = pqm1MnemonicToMlDsa65Backend(mnemonic);
+const mnemonic = generateMnemonic(); // 24 words, 256-bit BIP-39
+validateMnemonic(mnemonic); // true (checksum + 24-word count)
+const address = mnemonicToAddress(mnemonic);
+const backend = mnemonicToMlDsa65Backend(mnemonic);
 const signature = backend.sign(new Uint8Array([1, 2, 3]));
 ```
 

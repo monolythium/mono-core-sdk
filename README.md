@@ -41,8 +41,8 @@ The SDK tracks the live `mono-core` RPC and precompile surface. Wire types under
 - Bridge route disclosure helpers for deterministic route selection plus an
   explicit quote/submit readiness boundary. Live bridge quote and submit remain
   blocked until `mono-core` exposes API/runtime primitives for them.
-- TypeScript PQM-1 + ML-DSA-65 helpers for mnemonic payloads, deterministic
-  seed derivation, address derivation, and signing backends.
+- TypeScript standard BIP-39 + ML-DSA-65 helpers for recovery phrases,
+  deterministic seed derivation, address derivation, and signing backends.
 
 ## Install
 
@@ -359,23 +359,27 @@ These helpers only build canonical calldata and validate obvious wire-shape
 errors. The chain still enforces authorization, epoch timing, swap-intent
 state, and DKG threshold verification.
 
-## PQM-1 And ML-DSA-65
+## Recovery Phrases And ML-DSA-65
 
-The TypeScript package exposes deterministic PQM-1 helpers for wallets and
-faucets that need to import or derive testnet accounts without calling into
-Rust.
+The TypeScript package exposes deterministic **standard BIP-39 → ML-DSA-65**
+helpers for wallets and faucets that need to import or derive testnet accounts
+without calling into Rust. A 24-word recovery phrase is a plain BIP-39 mnemonic
+(no bespoke payload/header format); the ML-DSA-65 seed is
+`SHAKE256("monolythium.mldsa65.v1" || bip39Seed)` truncated to 32 bytes.
 
 ```ts
 import {
   MlDsa65Backend,
-  generatePqm1Mnemonic,
-  pqm1MnemonicToAddress,
-  pqm1MnemonicToMlDsa65Backend,
+  generateMnemonic,
+  validateMnemonic,
+  mnemonicToAddress,
+  mnemonicToMlDsa65Backend,
 } from "@monolythium/core-sdk/crypto";
 
-const mnemonic = generatePqm1Mnemonic();
-const address = pqm1MnemonicToAddress(mnemonic);
-const backend: MlDsa65Backend = pqm1MnemonicToMlDsa65Backend(mnemonic);
+const mnemonic = generateMnemonic();            // 24-word standard BIP-39
+validateMnemonic(mnemonic);                     // true (24 words + BIP-39 checksum)
+const address = mnemonicToAddress(mnemonic);
+const backend: MlDsa65Backend = mnemonicToMlDsa65Backend(mnemonic);
 const signature = backend.sign(new Uint8Array([1, 2, 3]));
 ```
 
