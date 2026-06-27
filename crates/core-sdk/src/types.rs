@@ -5023,8 +5023,8 @@ struct DecodeTxResponseWire {
     round: Option<u64>,
     #[serde(rename = "clusterId")]
     cluster_id: Option<u32>,
-    #[serde(rename = "blsAttestation")]
-    bls_attestation: Option<serde_json::Value>,
+    #[serde(rename = "roundAttestation")]
+    round_attestation: Option<serde_json::Value>,
     #[serde(rename = "pqAttestation")]
     pq_attestation: Option<DecodeTxPqAttestation>,
     #[serde(rename = "finalityProof")]
@@ -5056,7 +5056,7 @@ impl From<DecodeTxResponseWire> for DecodeTxResponse {
             extensions: wire.extensions.or(wire.tx_extensions).unwrap_or_default(),
             round: wire.round,
             cluster_id: wire.cluster_id,
-            bls_attestation: wire.bls_attestation,
+            round_attestation: wire.round_attestation,
             pq_attestation: wire.pq_attestation,
             finality_proof: wire.finality_proof,
             logs: wire.logs,
@@ -5118,10 +5118,12 @@ pub struct DecodeTxResponse {
     /// Cluster id associated with finality, when available.
     #[serde(rename = "clusterId")]
     pub cluster_id: Option<u32>,
-    /// Opaque BLS attestation payload.
-    #[serde(rename = "blsAttestation")]
+    /// Opaque round attestation payload (the consensus round certificate;
+    /// renamed from the legacy `blsAttestation` to match the node, which emits
+    /// `roundAttestation` after the BLS -> RoundCert consensus rename).
+    #[serde(rename = "roundAttestation")]
     #[cfg_attr(feature = "ts-bindings", ts(type = "unknown | null"))]
-    pub bls_attestation: Option<serde_json::Value>,
+    pub round_attestation: Option<serde_json::Value>,
     /// PQ-finality attestation payload.
     #[serde(rename = "pqAttestation")]
     pub pq_attestation: Option<DecodeTxPqAttestation>,
@@ -8180,7 +8182,7 @@ mod tests {
             }],
             "round": 7,
             "clusterId": null,
-            "blsAttestation": null,
+            "roundAttestation": null,
             "pqAttestation": null,
             "finalityProof": null,
             "logs": [],
@@ -8226,7 +8228,7 @@ mod tests {
             "memo": null,
             "round": 7,
             "clusterId": null,
-            "blsAttestation": null,
+            "roundAttestation": null,
             "pqAttestation": null,
             "finalityProof": null,
             "logs": [],
@@ -8234,6 +8236,73 @@ mod tests {
             "errorCode": null
         });
         assert!(serde_json::from_value::<DecodeTxResponse>(stale).is_err());
+    }
+
+    #[test]
+    fn decode_tx_round_attestation_populates_from_node_key() {
+        // Regression for the blsAttestation -> roundAttestation drift: the node
+        // emits `roundAttestation`, so a populated value must decode to `Some`.
+        // Under the old `#[serde(rename = "blsAttestation")]` it silently read
+        // `None`. A response using the LEGACY `blsAttestation` key must NOT
+        // populate the field (no silent acceptance of the stale name).
+        let base = serde_json::json!({
+            "txHash": format!("0x{}", "11".repeat(32)),
+            "blockHash": format!("0x{}", "22".repeat(32)),
+            "blockNumber": 12,
+            "txIndex": 0,
+            "from": "mono1sender",
+            "to": null,
+            "value": "0x5f5e100",
+            "nonce": 1,
+            "executionUnitLimit": 21_000,
+            "maxExecutionFeeLythoshi": "10000000000",
+            "priorityTipLythoshi": "1",
+            "executionUnitsUsed": 20_500,
+            "fee": {
+                "total_lythoshi": "20500",
+                "total_lyth": "0.0000000000000205",
+                "cycles_used": 20_500,
+                "base_price_per_cycle_lythoshi": "1",
+                "state_io_units": 0,
+                "state_io_price_per_unit_lythoshi": "0",
+                "priority_tip_lythoshi": "0"
+            },
+            "decodedCalldata": null,
+            "memo": null,
+            "round": 7,
+            "clusterId": null,
+            "pqAttestation": null,
+            "finalityProof": null,
+            "logs": [],
+            "status": "success",
+            "errorCode": null
+        });
+        let attestation = serde_json::json!({
+            "round": 77,
+            "signer_count": 2,
+            "signer_indices": [0, 1]
+        });
+
+        let mut current = base.clone();
+        current
+            .as_object_mut()
+            .unwrap()
+            .insert("roundAttestation".to_owned(), attestation.clone());
+        let decoded: DecodeTxResponse = serde_json::from_value(current).unwrap();
+        assert_eq!(
+            decoded.round_attestation.as_ref(),
+            Some(&attestation),
+            "the node's roundAttestation key must populate round_attestation"
+        );
+
+        // The retired key is ignored (no silent fallback to the old name).
+        let mut legacy = base;
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .insert("blsAttestation".to_owned(), attestation);
+        let legacy_decoded: DecodeTxResponse = serde_json::from_value(legacy).unwrap();
+        assert!(legacy_decoded.round_attestation.is_none());
     }
 
     #[test]
