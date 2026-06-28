@@ -28,6 +28,26 @@ export const DELEGATION_REVERT_TAGS = {
   unexpectedValue: "0x020e",
 } as const;
 
+/** Solidity-style signature of the `Claimed` event emitted by the delegation
+ *  precompile when a wallet settles + withdraws its pending rewards. */
+export const CLAIMED_EVENT_SIG = "Claimed(address,uint256,bool)" as const;
+
+/** `topic0` for the {@link CLAIMED_EVENT_SIG} event — `keccak256` of the
+ *  signature. Mirrors the chain emit site (delegation precompile events). */
+export const CLAIMED_EVENT_TOPIC0 =
+  "0xfa8256f7c08bb01a03ea96f8b3a904a4450311c9725d1c52cdbe21ed3dc42dcc" as const;
+
+/** Decoded `Claimed(address indexed wallet, uint256 amount, bool autoCompound)`
+ *  log. `delegator` is the wallet that claimed (the indexed topic). */
+export interface ClaimedEvent {
+  /** `0x`-prefixed 20-byte address of the wallet that claimed. */
+  delegator: string;
+  /** Amount of rewards settled + withdrawn, in base units. */
+  amount: bigint;
+  /** Whether the claim re-delegated (auto-compounded) the rewards. */
+  autoCompound: boolean;
+}
+
 export class DelegationPrecompileError extends Error {
   constructor(message: string) {
     super(message);
@@ -110,6 +130,44 @@ export function isUnexpectedValueRevert(data: string | Uint8Array | readonly num
   return bytesToHex(toBytes(data)).toLowerCase() === DELEGATION_REVERT_TAGS.unexpectedValue;
 }
 
+/**
+ * Decode a `Claimed` log into a typed {@link ClaimedEvent}.
+ *
+ * The log has **2 topics** (`topic0`, indexed `wallet`) and a 64-byte data
+ * payload `(uint256 amount, bool autoCompound)`. Mirrors the
+ * `decode*Event` pattern in the other precompile modules so wallets reading
+ * the raw log (e.g. an optimistic pre-confirm claim row) do not hand-roll the
+ * topic/data slicing.
+ */
+export function decodeClaimedEvent(
+  topics: readonly (string | Uint8Array | readonly number[])[],
+  data: string | Uint8Array | readonly number[],
+): ClaimedEvent {
+  if (topics.length !== 2) {
+    throw new DelegationPrecompileError(`Claimed expects 2 topics, got ${topics.length}`);
+  }
+  const topic0 = toBytes(topics[0]);
+  if (topic0.length !== 32) {
+    throw new DelegationPrecompileError("Claimed topic0 must be 32 bytes");
+  }
+  if (bytesToHex(topic0).toLowerCase() !== CLAIMED_EVENT_TOPIC0) {
+    throw new DelegationPrecompileError("unexpected topic0 for Claimed");
+  }
+  const walletWord = toBytes(topics[1]);
+  if (walletWord.length !== 32) {
+    throw new DelegationPrecompileError("Claimed wallet topic must be 32 bytes");
+  }
+  const body = toBytes(data);
+  if (body.length < 64) {
+    throw new DelegationPrecompileError("Claimed data shorter than amount + autoCompound words");
+  }
+  // Indexed address words are left-padded; the address is the trailing 20 bytes.
+  const delegator = bytesToHex(walletWord.slice(12, 32));
+  const amount = u256FromWord(body.slice(0, 32));
+  const autoCompound = body.slice(32, 64).some((b) => b !== 0);
+  return { delegator, amount, autoCompound };
+}
+
 function uint32Word(value: bigint | number | string, name: string): Uint8Array {
   const n = toBigint(value, name);
   if (n < 0n || n > 0xffff_ffffn) {
@@ -150,6 +208,14 @@ function toBigint(value: bigint | number | string, name: string): bigint {
     throw new DelegationPrecompileError(`${name} must be an integer string`);
   }
   return BigInt(value);
+}
+
+function u256FromWord(word: Uint8Array): bigint {
+  let out = 0n;
+  for (const b of word) {
+    out = (out << 8n) | BigInt(b);
+  }
+  return out;
 }
 
 function toBytes(value: string | Uint8Array | readonly number[]): Uint8Array {

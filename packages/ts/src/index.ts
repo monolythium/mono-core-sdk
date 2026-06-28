@@ -798,9 +798,12 @@ export type {
   MultisigWitness,
 } from "./multisig.js";
 export {
+  CLAIMED_EVENT_SIG,
+  CLAIMED_EVENT_TOPIC0,
   DELEGATION_REVERT_TAGS,
   DELEGATION_SELECTORS,
   DelegationPrecompileError,
+  decodeClaimedEvent,
   delegationAddressHex,
   encodeClaimCalldata,
   encodeDelegateCalldata,
@@ -809,6 +812,7 @@ export {
   encodeUndelegateCalldata,
   isUnexpectedValueRevert,
 } from "./delegation.js";
+export type { ClaimedEvent } from "./delegation.js";
 export {
   ML_DSA_65_PUBLIC_KEY_LEN,
   ML_DSA_65_SIGNATURE_LEN,
