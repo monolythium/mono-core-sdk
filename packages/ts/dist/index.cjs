@@ -404,7 +404,35 @@ var NODE_REGISTRY_SELECTORS = {
   /** `getProbeAuthority()` view — Component C configured probe-authority address. */
   getProbeAuthority: "0x" + selectorHex("getProbeAuthority()"),
   /** `attestServiceProbe(bytes32,uint32,uint8,uint64)` — Component C attested score-eligibility path. */
-  attestServiceProbe: "0x" + selectorHex("attestServiceProbe(bytes32,uint32,uint8,uint64)")
+  attestServiceProbe: "0x" + selectorHex("attestServiceProbe(bytes32,uint32,uint8,uint64)"),
+  /**
+   * `advertiseSeat(uint32,uint8,uint32,uint128,uint32,bytes32)` returns
+   * `uint32 seatId` (L6 open-seat marketplace). Publishes a vacancy
+   * listing; caller must own an active member op-hash of the cluster.
+   */
+  advertiseSeat: "0x" + selectorHex("advertiseSeat(uint32,uint8,uint32,uint128,uint32,bytes32)"),
+  /**
+   * `applyForSeat(uint32,uint32,bytes)` returns `bytes32 appKey` (L6).
+   * Payable — the native `value` escrows the full operator self-bond at
+   * apply ({@link NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI}).
+   */
+  applyForSeat: "0x" + selectorHex("applyForSeat(uint32,uint32,bytes)"),
+  /**
+   * `voteSeatAdmit(uint32,bytes32,bytes)` returns `uint16 voteCount`
+   * (L6). Active-member admission vote; the 7-of-10 threshold-reaching
+   * vote fills the seat and admits the operator.
+   */
+  voteSeatAdmit: "0x" + selectorHex("voteSeatAdmit(uint32,bytes32,bytes)"),
+  /**
+   * `withdrawSeatApplication(uint32,bytes32)` returns `bool` (L6) —
+   * applicant withdrawal that refunds the escrow.
+   */
+  withdrawSeatApplication: "0x" + selectorHex("withdrawSeatApplication(uint32,bytes32)"),
+  /**
+   * `closeSeat(uint32,uint32)` returns `bool` (L6) — advertiser rescind
+   * of an `Open` listing.
+   */
+  closeSeat: "0x" + selectorHex("closeSeat(uint32,uint32)")
 };
 var NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES = 48;
 var NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES = NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES;
@@ -1350,6 +1378,252 @@ function deriveClusterAnchorAddress(roster, threshold) {
     parts.push(member);
   }
   return bytesToHex(blake3_js.blake3(concatBytes(...parts)).slice(0, 20));
+}
+var NODE_REGISTRY_TAG_CLUSTER_SEAT = 50;
+var NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI = 5000n * 1000000000000000000n;
+var NODE_REGISTRY_SEAT_KIND_ACTIVE = 0;
+var NODE_REGISTRY_SEAT_KIND_STANDBY = 1;
+function seatKindFromByte(b) {
+  return b === NODE_REGISTRY_SEAT_KIND_STANDBY ? "standby" : "active";
+}
+function seatKindToByte(kind) {
+  return kind === "standby" ? NODE_REGISTRY_SEAT_KIND_STANDBY : NODE_REGISTRY_SEAT_KIND_ACTIVE;
+}
+var SEAT_STATUS_CODES = {
+  none: 0,
+  open: 1,
+  filled: 2,
+  closed: 3
+};
+function seatStatusFromByte(b) {
+  switch (b) {
+    case 1:
+      return "open";
+    case 2:
+      return "filled";
+    case 3:
+      return "closed";
+    default:
+      return "none";
+  }
+}
+var SEAT_ADVERTISED_EVENT_SIG = "SeatAdvertised(uint32,uint32,bytes32,uint8,uint32,uint128,uint32,bytes32)";
+var SEAT_APPLIED_EVENT_SIG = "SeatApplied(uint32,uint32,bytes32,address,uint128)";
+var SEAT_FILLED_EVENT_SIG = "SeatFilled(uint32,uint32,bytes32,uint16,uint16)";
+var SEAT_CLOSED_EVENT_SIG = "SeatClosed(uint32,uint32,uint8)";
+function encodeAdvertiseSeatCalldata(args) {
+  const kindByte = typeof args.kind === "number" ? args.kind : seatKindToByte(args.kind);
+  if (!Number.isInteger(kindByte) || kindByte < 0 || kindByte > 255) {
+    throw new NodeRegistryError("kind must be a u8 seat kind (0 = active, 1 = standby)");
+  }
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.advertiseSeat),
+      uint32Word(toUint32(args.clusterId, "clusterId")),
+      uint8Word(kindByte),
+      uint32Word(toUint32(args.seatCount, "seatCount")),
+      uint128Word(args.minBondLythoshi, "minBondLythoshi"),
+      uint32Word(toUint32(args.capabilityMask, "capabilityMask")),
+      expectLength2(toBytes(args.termsHash), 32, "termsHash")
+    )
+  );
+}
+function encodeApplyForSeatCalldata(args) {
+  const operatorPubkey = expectLength2(
+    toBytes(args.operatorPubkey),
+    NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "operatorPubkey"
+  );
+  const operatorPubkeyPadded = padToWord(operatorPubkey);
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.applyForSeat),
+      uint32Word(toUint32(args.clusterId, "clusterId")),
+      uint32Word(toUint32(args.seatId, "seatId")),
+      uint64Word(3n * 32n, "operatorPubkeyOffset"),
+      uint64Word(BigInt(operatorPubkey.length), "operatorPubkeyLength"),
+      operatorPubkeyPadded
+    )
+  );
+}
+function encodeVoteSeatAdmitCalldata(args) {
+  const appKey = expectLength2(toBytes(args.appKey), 32, "appKey");
+  const voterPubkey = expectLength2(
+    toBytes(args.voterPubkey),
+    NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
+    "voterPubkey"
+  );
+  const voterPubkeyPadded = padToWord(voterPubkey);
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.voteSeatAdmit),
+      uint32Word(toUint32(args.clusterId, "clusterId")),
+      appKey,
+      uint64Word(3n * 32n, "voterPubkeyOffset"),
+      uint64Word(BigInt(voterPubkey.length), "voterPubkeyLength"),
+      voterPubkeyPadded
+    )
+  );
+}
+function encodeWithdrawSeatApplicationCalldata(args) {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.withdrawSeatApplication),
+      uint32Word(toUint32(args.clusterId, "clusterId")),
+      expectLength2(toBytes(args.appKey), 32, "appKey")
+    )
+  );
+}
+function encodeCloseSeatCalldata(args) {
+  return bytesToHex(
+    concatBytes(
+      hexToBytes(NODE_REGISTRY_SELECTORS.closeSeat),
+      uint32Word(toUint32(args.clusterId, "clusterId")),
+      uint32Word(toUint32(args.seatId, "seatId"))
+    )
+  );
+}
+function deriveSeatApplicationKey(operatorPubkey) {
+  return bytesToHex(
+    blake3_js.blake3(expectLength2(toBytes(operatorPubkey), NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES, "operatorPubkey"))
+  );
+}
+function decodeSeatAdvertisedEvent(topics, data) {
+  const { clusterId, seatId } = decodeSeatClusterSeatTopics(topics, SEAT_ADVERTISED_EVENT_SIG, 3);
+  const body = toBytes(data);
+  if (body.length < 6 * 32) {
+    throw new NodeRegistryError("SeatAdvertised data shorter than the 6-word body");
+  }
+  const word = (i) => body.slice(i * 32, (i + 1) * 32);
+  return {
+    clusterId,
+    seatId,
+    advertiser: bytesToHex(word(0)),
+    kind: numberFromWord(word(1), "kind", 255),
+    seatCount: u32FromWord(word(2)),
+    minBondLythoshi: uintFromWord(word(3)),
+    capabilityMask: u32FromWord(word(4)),
+    termsHash: bytesToHex(word(5))
+  };
+}
+function decodeSeatAppliedEvent(topics, data) {
+  const { clusterId, seatId, operatorId } = decodeSeatClusterSeatOperatorTopics(
+    topics,
+    SEAT_APPLIED_EVENT_SIG
+  );
+  const body = toBytes(data);
+  if (body.length < 2 * 32) {
+    throw new NodeRegistryError("SeatApplied data shorter than the 2-word body");
+  }
+  return {
+    clusterId,
+    seatId,
+    operatorId,
+    owner: bytesToHex(body.slice(12, 32)),
+    bondLythoshi: uintFromWord(body.slice(32, 64))
+  };
+}
+function decodeSeatFilledEvent(topics, data) {
+  const { clusterId, seatId, operatorId } = decodeSeatClusterSeatOperatorTopics(
+    topics,
+    SEAT_FILLED_EVENT_SIG
+  );
+  const body = toBytes(data);
+  if (body.length < 2 * 32) {
+    throw new NodeRegistryError("SeatFilled data shorter than the 2-word body");
+  }
+  return {
+    clusterId,
+    seatId,
+    operatorId,
+    filledCount: numberFromWord(body.slice(0, 32), "filledCount", 65535),
+    seatCount: numberFromWord(body.slice(32, 64), "seatCount", 65535)
+  };
+}
+function decodeSeatClosedEvent(topics, data) {
+  const { clusterId, seatId } = decodeSeatClusterSeatTopics(topics, SEAT_CLOSED_EVENT_SIG, 3);
+  const body = toBytes(data);
+  if (body.length < 32) {
+    throw new NodeRegistryError("SeatClosed data shorter than the 1-word body");
+  }
+  return {
+    clusterId,
+    seatId,
+    status: numberFromWord(body.slice(0, 32), "status", 255)
+  };
+}
+function openSeatFromAdvertised(event) {
+  return {
+    clusterId: event.clusterId,
+    seatId: event.seatId,
+    advertiser: event.advertiser,
+    kind: seatKindFromByte(event.kind),
+    seatCount: event.seatCount,
+    filledCount: 0,
+    minBondLythoshi: event.minBondLythoshi,
+    capabilityMask: event.capabilityMask,
+    termsHash: event.termsHash,
+    status: "open"
+  };
+}
+function decodeSeatClusterSeatTopics(topics, sig, expectedCount) {
+  if (topics.length !== expectedCount) {
+    throw new NodeRegistryError(`${sig} expects ${expectedCount} topics, got ${topics.length}`);
+  }
+  assertEventTopic0(topics[0], sig);
+  return {
+    clusterId: u32FromWord(expectLength2(toBytes(topics[1]), 32, "clusterId topic")),
+    seatId: u32FromWord(expectLength2(toBytes(topics[2]), 32, "seatId topic"))
+  };
+}
+function decodeSeatClusterSeatOperatorTopics(topics, sig) {
+  if (topics.length !== 4) {
+    throw new NodeRegistryError(`${sig} expects 4 topics, got ${topics.length}`);
+  }
+  assertEventTopic0(topics[0], sig);
+  return {
+    clusterId: u32FromWord(expectLength2(toBytes(topics[1]), 32, "clusterId topic")),
+    seatId: u32FromWord(expectLength2(toBytes(topics[2]), 32, "seatId topic")),
+    operatorId: bytesToHex(expectLength2(toBytes(topics[3]), 32, "operatorId topic"))
+  };
+}
+function assertEventTopic0(topic0, sig) {
+  const got = bytesToHex(expectLength2(toBytes(topic0), 32, "topic0"));
+  const want = bytesToHex(sha3_js.keccak_256(new TextEncoder().encode(sig)));
+  if (got !== want) {
+    throw new NodeRegistryError(`unexpected topic0 for ${sig}`);
+  }
+}
+function uint128Word(value, name) {
+  const n = toUint128(value, name);
+  const out = new Uint8Array(32);
+  let rest = n;
+  for (let i = 31; i >= 16; i--) {
+    out[i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  return out;
+}
+function toUint128(value, name) {
+  let parsed;
+  if (typeof value === "bigint") {
+    parsed = value;
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) {
+      throw new NodeRegistryError(`${name} must be a safe integer`);
+    }
+    parsed = BigInt(value);
+  } else {
+    const trimmed = value.trim();
+    if (!/^\d+$/u.test(trimmed)) {
+      throw new NodeRegistryError(`${name} must be a decimal uint128`);
+    }
+    parsed = BigInt(trimmed);
+  }
+  if (parsed < 0n || parsed >= 1n << 128n) {
+    throw new NodeRegistryError(`${name} must fit uint128`);
+  }
+  return parsed;
 }
 function selectorHex(sig) {
   return [...sha3_js.keccak_256(new TextEncoder().encode(sig)).slice(0, 4)].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -2919,7 +3193,7 @@ var TESTNET_69420 = {
   network: "testnet-69420",
   display_name: "Monolythium Testnet",
   description: "Public Monolythium testnet. Testnet state may reset without notice; do not store value on this network.",
-  genesis_hash: "0xb52b59d667a0ad97c531607b840b7082547ba3151aa11a819eb6916b080b1ca9",
+  genesis_hash: "0xaabb0f1ea0e9cae9dcc4fbd3e2af577c3568b209061207f919d159c2ab4ba995",
   binary_sha: "6f33aa30",
   rpc: [
     {
@@ -9138,6 +9412,77 @@ function parseU256(value, label) {
 function errorMessage(cause) {
   return cause instanceof Error ? cause.message : String(cause);
 }
+
+// src/cluster-seat.ts
+var DEFAULT_SEAT_EXECUTION_UNIT_LIMIT = REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT;
+function resolveSeatExecutionFee(quote, options = {}) {
+  const quoted = parseBigint(quote.executionUnitPriceLythoshi, "executionUnitPriceLythoshi");
+  const floor = options.minPriceLythoshi === void 0 ? MIN_EXECUTION_UNIT_PRICE_LYTHOSHI : parseBigint(options.minPriceLythoshi, "minPriceLythoshi");
+  const multiplier = options.safetyMultiplier === void 0 ? EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER : parseBigint(options.safetyMultiplier, "safetyMultiplier");
+  if (multiplier <= 0n) throw new Error("safetyMultiplier must be greater than zero");
+  const base = quoted > floor ? quoted : floor;
+  const maxFeePerGas = base * multiplier;
+  const tip = options.priorityTipLythoshi === void 0 ? maxFeePerGas : clampPriorityTip(options.priorityTipLythoshi, maxFeePerGas);
+  return {
+    maxFeePerGas,
+    maxPriorityFeePerGas: tip,
+    gasLimit: options.executionUnitLimit ?? DEFAULT_SEAT_EXECUTION_UNIT_LIMIT
+  };
+}
+function buildAdvertiseSeatTxFields(args) {
+  return {
+    ...seatTxEnvelope(args.chainId, args.nonce, args.fee),
+    value: 0n,
+    input: encodeAdvertiseSeatCalldata(args)
+  };
+}
+function buildApplyForSeatTxFields(args) {
+  const selfBond = args.selfBondLythoshi === void 0 ? NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI : parseU2562(args.selfBondLythoshi, "selfBondLythoshi");
+  return {
+    ...seatTxEnvelope(args.chainId, args.nonce, args.fee),
+    value: selfBond,
+    input: encodeApplyForSeatCalldata(args)
+  };
+}
+function buildVoteSeatAdmitTxFields(args) {
+  return {
+    ...seatTxEnvelope(args.chainId, args.nonce, args.fee),
+    value: 0n,
+    input: encodeVoteSeatAdmitCalldata(args)
+  };
+}
+function buildWithdrawSeatApplicationTxFields(args) {
+  return {
+    ...seatTxEnvelope(args.chainId, args.nonce, args.fee),
+    value: 0n,
+    input: encodeWithdrawSeatApplicationCalldata(args)
+  };
+}
+function buildCloseSeatTxFields(args) {
+  return {
+    ...seatTxEnvelope(args.chainId, args.nonce, args.fee),
+    value: 0n,
+    input: encodeCloseSeatCalldata(args)
+  };
+}
+var SEAT_KINDS = ["active", "standby"];
+function seatTxEnvelope(chainId, nonce, fee) {
+  return {
+    chainId,
+    nonce,
+    maxFeePerGas: parseBigint(fee.maxFeePerGas, "maxFeePerGas"),
+    maxPriorityFeePerGas: parseBigint(fee.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
+    gasLimit: parseBigint(fee.gasLimit ?? DEFAULT_SEAT_EXECUTION_UNIT_LIMIT, "gasLimit"),
+    to: nodeRegistryAddressHex()
+  };
+}
+function parseU2562(value, label) {
+  const parsed = parseBigint(value, label);
+  if (parsed < 0n || parsed >= 1n << 256n) {
+    throw new Error(`${label} out of 256-bit range`);
+  }
+  return parsed;
+}
 var ORACLE_EVENT_SIGS = {
   oracleRoundFinalized: "OracleRoundFinalized(bytes32,uint64,uint256,uint64,uint32)",
   observationSubmitted: "ObservationSubmitted(bytes32,uint64,address,uint256,uint64)",
@@ -11986,6 +12331,7 @@ exports.CLOB_MARKET_ID_DOMAIN_TAG = CLOB_MARKET_ID_DOMAIN_TAG;
 exports.CLOB_SELECTORS = CLOB_SELECTORS;
 exports.CLUSTER_FORMED_EVENT_SIG = CLUSTER_FORMED_EVENT_SIG;
 exports.DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT = DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT;
+exports.DEFAULT_SEAT_EXECUTION_UNIT_LIMIT = DEFAULT_SEAT_EXECUTION_UNIT_LIMIT;
 exports.DELEGATION_REVERT_TAGS = DELEGATION_REVERT_TAGS;
 exports.DELEGATION_SELECTORS = DELEGATION_SELECTORS;
 exports.DIVERSITY_SCORE_MAX = DIVERSITY_SCORE_MAX;
@@ -12072,15 +12418,19 @@ exports.NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH = NODE_REGISTRY_MAX_MERKLE_PROOF_DE
 exports.NODE_REGISTRY_MERKLE_INNER_DOMAIN = NODE_REGISTRY_MERKLE_INNER_DOMAIN;
 exports.NODE_REGISTRY_MERKLE_LEAF_DOMAIN = NODE_REGISTRY_MERKLE_LEAF_DOMAIN;
 exports.NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT = NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT;
+exports.NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI = NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI;
 exports.NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES = NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES;
 exports.NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES = NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES;
 exports.NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID = NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID;
 exports.NODE_REGISTRY_PUBLIC_SERVICE_MASK = NODE_REGISTRY_PUBLIC_SERVICE_MASK;
+exports.NODE_REGISTRY_SEAT_KIND_ACTIVE = NODE_REGISTRY_SEAT_KIND_ACTIVE;
+exports.NODE_REGISTRY_SEAT_KIND_STANDBY = NODE_REGISTRY_SEAT_KIND_STANDBY;
 exports.NODE_REGISTRY_SELECTORS = NODE_REGISTRY_SELECTORS;
 exports.NODE_REGISTRY_SUBKIND_CHARTER_DELEGATOR_BPS = NODE_REGISTRY_SUBKIND_CHARTER_DELEGATOR_BPS;
 exports.NODE_REGISTRY_SUBKIND_CHARTER_MEMBER_SHARES = NODE_REGISTRY_SUBKIND_CHARTER_MEMBER_SHARES;
 exports.NODE_REGISTRY_TAG_ARCHIVE_CHALLENGE = NODE_REGISTRY_TAG_ARCHIVE_CHALLENGE;
 exports.NODE_REGISTRY_TAG_CLUSTER_CHARTER = NODE_REGISTRY_TAG_CLUSTER_CHARTER;
+exports.NODE_REGISTRY_TAG_CLUSTER_SEAT = NODE_REGISTRY_TAG_CLUSTER_SEAT;
 exports.NODE_REGISTRY_TAG_SERVICE_SCORE = NODE_REGISTRY_TAG_SERVICE_SCORE;
 exports.NODE_REGISTRY_TAG_TREASURY = NODE_REGISTRY_TAG_TREASURY;
 exports.NODE_REGISTRY_UPDATE_CHARTER_MESSAGE_DOMAIN = NODE_REGISTRY_UPDATE_CHARTER_MESSAGE_DOMAIN;
@@ -12126,6 +12476,12 @@ exports.QUARANTINED_RPC_CODE = QUARANTINED_RPC_CODE;
 exports.REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT = REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT;
 exports.RESERVED_ADDRESS_HRPS = RESERVED_ADDRESS_HRPS;
 exports.RpcClient = RpcClient;
+exports.SEAT_ADVERTISED_EVENT_SIG = SEAT_ADVERTISED_EVENT_SIG;
+exports.SEAT_APPLIED_EVENT_SIG = SEAT_APPLIED_EVENT_SIG;
+exports.SEAT_CLOSED_EVENT_SIG = SEAT_CLOSED_EVENT_SIG;
+exports.SEAT_FILLED_EVENT_SIG = SEAT_FILLED_EVENT_SIG;
+exports.SEAT_KINDS = SEAT_KINDS;
+exports.SEAT_STATUS_CODES = SEAT_STATUS_CODES;
 exports.SERVES_GPU_PROVE = SERVES_GPU_PROVE;
 exports.SERVICE_PROBE_STATUS = SERVICE_PROBE_STATUS;
 exports.SET_POLICY_CLAIM_DOMAIN_TAG = SET_POLICY_CLAIM_DOMAIN_TAG;
@@ -12180,8 +12536,11 @@ exports.bridgeDrainRemaining = bridgeDrainRemaining;
 exports.bridgeQuoteSubmitReadiness = bridgeQuoteSubmitReadiness;
 exports.bridgeRoutesReadiness = bridgeRoutesReadiness;
 exports.bridgeTransferCandidates = bridgeTransferCandidates;
+exports.buildAdvertiseSeatTxFields = buildAdvertiseSeatTxFields;
+exports.buildApplyForSeatTxFields = buildApplyForSeatTxFields;
 exports.buildBridgeRouteCatalogue = buildBridgeRouteCatalogue;
 exports.buildCancelSpotOrderPlan = buildCancelSpotOrderPlan;
+exports.buildCloseSeatTxFields = buildCloseSeatTxFields;
 exports.buildMrvCallNativeTxPlan = buildMrvCallNativeTxPlan;
 exports.buildMrvCallPlan = buildMrvCallPlan;
 exports.buildMrvCallRequest = buildMrvCallRequest;
@@ -12228,6 +12587,8 @@ exports.buildPlaceSpotMarketOrderExPlan = buildPlaceSpotMarketOrderExPlan;
 exports.buildPlaceSpotMarketOrderPlan = buildPlaceSpotMarketOrderPlan;
 exports.buildRequestClusterJoinTxFields = buildRequestClusterJoinTxFields;
 exports.buildVoteClusterAdmitTxFields = buildVoteClusterAdmitTxFields;
+exports.buildVoteSeatAdmitTxFields = buildVoteSeatAdmitTxFields;
+exports.buildWithdrawSeatApplicationTxFields = buildWithdrawSeatApplicationTxFields;
 exports.categoryRoot = categoryRoot;
 exports.checkMrvFeeDisplayConformance = checkMrvFeeDisplayConformance;
 exports.checkMrvStructuredFeeConformance = checkMrvStructuredFeeConformance;
@@ -12262,6 +12623,10 @@ exports.decodeOracleEvent = decodeOracleEvent;
 exports.decodePendingCharter = decodePendingCharter;
 exports.decodeProbeAuthority = decodeProbeAuthority;
 exports.decodeScoreServiceProbe = decodeScoreServiceProbe;
+exports.decodeSeatAdvertisedEvent = decodeSeatAdvertisedEvent;
+exports.decodeSeatAppliedEvent = decodeSeatAppliedEvent;
+exports.decodeSeatClosedEvent = decodeSeatClosedEvent;
+exports.decodeSeatFilledEvent = decodeSeatFilledEvent;
 exports.decodeTimeWindow = decodeTimeWindow;
 exports.decodeTokenFactoryTokenId = decodeTokenFactoryTokenId;
 exports.decodeTxFeedResponse = decodeTxFeedResponse;
@@ -12278,9 +12643,12 @@ exports.deriveMultisigAddress = deriveMultisigAddress;
 exports.deriveMultisigAddressBytes = deriveMultisigAddressBytes;
 exports.deriveNativeSpotMarketId = deriveNativeSpotMarketId;
 exports.deriveNativeSpotOrderId = deriveNativeSpotOrderId;
+exports.deriveSeatApplicationKey = deriveSeatApplicationKey;
 exports.deriveTokenFactoryTokenId = deriveTokenFactoryTokenId;
 exports.destinationRoot = destinationRoot;
+exports.encodeAdvertiseSeatCalldata = encodeAdvertiseSeatCalldata;
 exports.encodeAnswerArchiveChallengeCalldata = encodeAnswerArchiveChallengeCalldata;
+exports.encodeApplyForSeatCalldata = encodeApplyForSeatCalldata;
 exports.encodeAttestDkgReshareCalldata = encodeAttestDkgReshareCalldata;
 exports.encodeAttestServiceProbeCalldata = encodeAttestServiceProbeCalldata;
 exports.encodeBlockSelector = encodeBlockSelector;
@@ -12291,6 +12659,7 @@ exports.encodeCancelOrderCalldata = encodeCancelOrderCalldata;
 exports.encodeCancelPendingChangeCalldata = encodeCancelPendingChangeCalldata;
 exports.encodeClaimCalldata = encodeClaimCalldata;
 exports.encodeClaimPolicyByAddressCalldata = encodeClaimPolicyByAddressCalldata;
+exports.encodeCloseSeatCalldata = encodeCloseSeatCalldata;
 exports.encodeClusterCharter = encodeClusterCharter;
 exports.encodeCommitArchiveRootCalldata = encodeCommitArchiveRootCalldata;
 exports.encodeCreateFixedSupplyMrc20Calldata = encodeCreateFixedSupplyMrc20Calldata;
@@ -12397,7 +12766,9 @@ exports.encodeTokenFactoryTransferOwnershipCalldata = encodeTokenFactoryTransfer
 exports.encodeUndelegateCalldata = encodeUndelegateCalldata;
 exports.encodeUpdateCharterCalldata = encodeUpdateCharterCalldata;
 exports.encodeVoteClusterAdmitCalldata = encodeVoteClusterAdmitCalldata;
+exports.encodeVoteSeatAdmitCalldata = encodeVoteSeatAdmitCalldata;
 exports.encodeVrfEvaluateCalldata = encodeVrfEvaluateCalldata;
+exports.encodeWithdrawSeatApplicationCalldata = encodeWithdrawSeatApplicationCalldata;
 exports.exportBridgeRouteCatalogueJson = exportBridgeRouteCatalogueJson;
 exports.fetchChainInfoLatest = fetchChainInfoLatest;
 exports.fetchChainRegistryLatest = fetchChainRegistryLatest;
@@ -12454,6 +12825,7 @@ exports.nodeRegistryAddressHex = nodeRegistryAddressHex;
 exports.normalizeAddressHex = normalizeAddressHex;
 exports.normalizeBridgeRouteCatalogue = normalizeBridgeRouteCatalogue;
 exports.normalizePendingChangeKind = normalizePendingChangeKind;
+exports.openSeatFromAdvertised = openSeatFromAdvertised;
 exports.oracleAddressHex = oracleAddressHex;
 exports.oraclePriceToNumber = oraclePriceToNumber;
 exports.packTimeWindow = packTimeWindow;
@@ -12483,7 +12855,11 @@ exports.resolveClusterJoinExecutionFee = resolveClusterJoinExecutionFee;
 exports.resolveExecutionFee = resolveExecutionFee;
 exports.resolveMaxExecutionUnitPrice = resolveMaxExecutionUnitPrice;
 exports.resolveRegistryExecutionFee = resolveRegistryExecutionFee;
+exports.resolveSeatExecutionFee = resolveSeatExecutionFee;
 exports.resolveStudioHostStatus = resolveStudioHostStatus;
+exports.seatKindFromByte = seatKindFromByte;
+exports.seatKindToByte = seatKindToByte;
+exports.seatStatusFromByte = seatStatusFromByte;
 exports.selectBridgeTransferRoute = selectBridgeTransferRoute;
 exports.selectTrustedOperator = selectTrustedOperator;
 exports.selectTrustedOperatorForNetwork = selectTrustedOperatorForNetwork;
