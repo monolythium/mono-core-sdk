@@ -772,7 +772,12 @@ export {
   typedBech32ToAddress,
   validateAddress,
 } from "./address.js";
-export type { AddressKind, AddressValidation, TypedAddress } from "./address.js";
+export type {
+  AddressKind,
+  AddressValidation,
+  TypedAddress,
+  ValidateAddressOptions,
+} from "./address.js";
 export {
   MAX_MULTISIG_MEMBERS,
   MIN_MULTISIG_MEMBERS,
