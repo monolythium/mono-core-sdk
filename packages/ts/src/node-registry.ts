@@ -156,8 +156,6 @@ export const NODE_REGISTRY_SELECTORS = {
 export const NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES = 48;
 /** @deprecated Use NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES. */
 export const NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES = NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES;
-/** @deprecated Use NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES. */
-export const NODE_REGISTRY_BLS_PUBKEY_BYTES = NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES;
 /** Full ML-DSA-65 consensus pubkey width used by register and pending-change calldata. */
 export const NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES = 1952;
 /** ML-DSA-65 consensus signature width. */

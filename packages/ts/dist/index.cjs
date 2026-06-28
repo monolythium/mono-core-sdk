@@ -3,7 +3,6 @@
 var blake3_js = require('@noble/hashes/blake3.js');
 var sha3_js = require('@noble/hashes/sha3.js');
 var mlDsa_js = require('@noble/post-quantum/ml-dsa.js');
-var bls12381_js = require('@noble/curves/bls12-381.js');
 var bip39 = require('@scure/bip39');
 var english_js = require('@scure/bip39/wordlists/english.js');
 
@@ -440,7 +439,6 @@ var NODE_REGISTRY_SELECTORS = {
 };
 var NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES = 48;
 var NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES = NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES;
-var NODE_REGISTRY_BLS_PUBKEY_BYTES = NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES;
 var NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES = 1952;
 var NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES = 3309;
 var NODE_REGISTRY_CONSENSUS_POP_BYTES = 3309;
@@ -3125,7 +3123,6 @@ function mlDsa65AddressBytes(publicKey) {
 }
 
 // src/registry.ts
-var BLS_PUBLIC_KEY_BYTE_LENGTH = 48;
 var TESTNET_69420 = {
   chain_id: 69420,
   network: "testnet-69420",
@@ -3296,7 +3293,7 @@ function getNoEvmReceiptTrustPolicy(network, registry = CHAIN_REGISTRY) {
 }
 function noEvmReceiptTrustPolicyFromChainInfo(info) {
   const trust = info.receipt_proof_trust;
-  if (trust == null || trust.archive == null && trust.finality == null) return null;
+  if (trust == null || trust.archive == null) return null;
   const policy = { chainId: info.chain_id };
   if (trust.archive != null) {
     policy.archive = {
@@ -3318,65 +3315,6 @@ function noEvmReceiptTrustPolicyFromChainInfo(info) {
         validToHeight: signer.valid_to_height
       }))
     };
-  }
-  if (trust.finality != null) {
-    const threshold = assertSafeIntegerAtLeast(
-      trust.finality.threshold,
-      1,
-      "receipt_proof_trust.finality.threshold"
-    );
-    const chainId = trust.finality.chain_id ?? info.chain_id;
-    if (trust.finality.mode === "cluster") {
-      if (trust.finality.cluster_public_key == null) {
-        throw new Error(
-          "receipt_proof_trust.finality.cluster_public_key is required for cluster mode"
-        );
-      }
-      policy.finality = {
-        mode: "cluster",
-        chainId,
-        threshold,
-        validFromRound: trust.finality.valid_from_round,
-        validToRound: trust.finality.valid_to_round,
-        committeeSize: assertSafeIntegerAtLeast(
-          trust.finality.committee_size,
-          1,
-          "receipt_proof_trust.finality.committee_size"
-        ),
-        clusterPublicKey: decodeFixedHex(
-          trust.finality.cluster_public_key,
-          BLS_PUBLIC_KEY_BYTE_LENGTH,
-          "receipt_proof_trust.finality.cluster_public_key"
-        )
-      };
-    } else if (trust.finality.mode === "multisig") {
-      const signers = trust.finality.signers ?? [];
-      policy.finality = {
-        mode: "multisig",
-        chainId,
-        threshold,
-        validFromRound: trust.finality.valid_from_round,
-        validToRound: trust.finality.valid_to_round,
-        trustedSigners: signers.map((signer, index) => ({
-          authorityIndex: assertSafeIntegerAtLeast(
-            signer.authority_index,
-            0,
-            `receipt_proof_trust.finality.signers[${index}].authority_index`
-          ),
-          publicKey: decodeFixedHex(
-            signer.public_key,
-            BLS_PUBLIC_KEY_BYTE_LENGTH,
-            `receipt_proof_trust.finality.signers[${index}].public_key`
-          ),
-          validFromRound: signer.valid_from_round,
-          validToRound: signer.valid_to_round
-        }))
-      };
-    } else {
-      throw new Error(
-        `unsupported receipt_proof_trust.finality.mode: ${String(trust.finality.mode)}`
-      );
-    }
   }
   return policy;
 }
@@ -3432,26 +3370,6 @@ function parseChainRegistryToml(input) {
       trust.archive.signers.push({ public_key: "" });
       continue;
     }
-    if (line === "[receipt_proof_trust.finality]") {
-      section = "receipt_proof_trust.finality";
-      ensureReceiptProofTrust(info).finality ??= {
-        mode: "cluster",
-        threshold: 0
-      };
-      continue;
-    }
-    if (line === "[[receipt_proof_trust.finality.signers]]") {
-      section = "receipt_proof_trust.finality.signers";
-      const trust = ensureReceiptProofTrust(info);
-      trust.finality ??= {
-        mode: "multisig",
-        threshold: 0,
-        signers: []
-      };
-      trust.finality.signers ??= [];
-      trust.finality.signers.push({ authority_index: 0, public_key: "" });
-      continue;
-    }
     const match = /^([A-Za-z0-9_]+)\s*=\s*(.+)$/.exec(line);
     if (!match) continue;
     const [, key, rawValue] = match;
@@ -3472,19 +3390,6 @@ function parseChainRegistryToml(input) {
         signers: []
       };
       const target = archive.signers[archive.signers.length - 1];
-      target[key] = value;
-    } else if (section === "receipt_proof_trust.finality") {
-      const trust = ensureReceiptProofTrust(info);
-      trust.finality ??= { mode: "cluster", threshold: 0 };
-      trust.finality[key] = value;
-    } else {
-      const finality = ensureReceiptProofTrust(info).finality ??= {
-        mode: "multisig",
-        threshold: 0,
-        signers: []
-      };
-      finality.signers ??= [];
-      const target = finality.signers[finality.signers.length - 1];
       target[key] = value;
     }
   }
@@ -3529,8 +3434,8 @@ function ensureReceiptProofTrust(info) {
 }
 function normalizeReceiptProofTrust(trust) {
   const out = {};
-  if (trust.archive == null || trust.finality == null) {
-    throw new Error("receipt_proof_trust must include both archive and finality policies");
+  if (trust.archive == null) {
+    throw new Error("receipt_proof_trust must include an archive policy");
   }
   if (trust.archive != null) {
     const threshold = assertSafeIntegerAtLeast(
@@ -3580,86 +3485,6 @@ function normalizeReceiptProofTrust(trust) {
       })
     };
   }
-  if (trust.finality != null) {
-    const mode = trust.finality.mode;
-    if (mode !== "cluster" && mode !== "multisig") {
-      throw new Error(`unsupported receipt_proof_trust.finality.mode: ${String(mode)}`);
-    }
-    const finality = {
-      mode,
-      chain_id: optionalSafeInteger(trust.finality.chain_id),
-      threshold: assertSafeIntegerAtLeast(
-        trust.finality.threshold,
-        1,
-        "receipt_proof_trust.finality.threshold"
-      ),
-      valid_from_round: optionalSafeInteger(trust.finality.valid_from_round),
-      valid_to_round: optionalSafeInteger(trust.finality.valid_to_round)
-    };
-    assertOptionalRange(
-      trust.finality.valid_from_round,
-      trust.finality.valid_to_round,
-      "receipt_proof_trust.finality"
-    );
-    if (mode === "cluster") {
-      finality.committee_size = assertSafeIntegerAtLeast(
-        trust.finality.committee_size,
-        1,
-        "receipt_proof_trust.finality.committee_size"
-      );
-      if (finality.threshold > finality.committee_size) {
-        throw new Error("receipt_proof_trust.finality.threshold exceeds committee_size");
-      }
-      finality.cluster_public_key = assertString(
-        trust.finality.cluster_public_key,
-        "receipt_proof_trust.finality.cluster_public_key"
-      );
-      if ((trust.finality.signers ?? []).length > 0) {
-        throw new Error("receipt_proof_trust.finality.signers are invalid in cluster mode");
-      }
-    } else {
-      const signers = trust.finality.signers ?? [];
-      if (signers.length === 0 || signers.some((s) => !s.public_key)) {
-        throw new Error("receipt_proof_trust.finality.signers must contain complete signer rows");
-      }
-      if (finality.threshold > signers.length) {
-        throw new Error("receipt_proof_trust.finality.threshold exceeds signer count");
-      }
-      if (trust.finality.committee_size != null || trust.finality.cluster_public_key != null) {
-        throw new Error("receipt_proof_trust.finality cluster fields are invalid in multisig mode");
-      }
-      assertUniqueNumbers(
-        signers.map((signer) => signer.authority_index),
-        "receipt_proof_trust.finality.signers.authority_index"
-      );
-      assertUniqueStrings(
-        signers.map((signer) => signer.public_key),
-        "receipt_proof_trust.finality.signers.public_key"
-      );
-      finality.signers = signers.map((signer) => {
-        assertOptionalRange(
-          signer.valid_from_round,
-          signer.valid_to_round,
-          "receipt_proof_trust.finality.signers"
-        );
-        return {
-          authority_index: assertSafeIntegerAtLeast(
-            signer.authority_index,
-            0,
-            "receipt_proof_trust.finality.signers.authority_index"
-          ),
-          public_key: assertString(
-            signer.public_key,
-            "receipt_proof_trust.finality.signers.public_key"
-          ),
-          valid_from_round: optionalSafeInteger(signer.valid_from_round),
-          valid_to_round: optionalSafeInteger(signer.valid_to_round),
-          notes: optionalString(signer.notes)
-        };
-      });
-    }
-    out.finality = finality;
-  }
   return out;
 }
 function decodeFixedHex(value, expectedLength, field2) {
@@ -3702,16 +3527,6 @@ function assertUniqueStrings(values, field2) {
   const seen = /* @__PURE__ */ new Set();
   for (const value of values) {
     const normalized = assertString(value, field2).toLowerCase();
-    if (seen.has(normalized)) {
-      throw new Error(`${field2} values must be unique`);
-    }
-    seen.add(normalized);
-  }
-}
-function assertUniqueNumbers(values, field2) {
-  const seen = /* @__PURE__ */ new Set();
-  for (const value of values) {
-    const normalized = assertSafeIntegerAtLeast(value, 0, field2);
     if (seen.has(normalized)) {
       throw new Error(`${field2} values must be unique`);
     }
@@ -4782,10 +4597,6 @@ var RpcClient = class _RpcClient {
   /** `lyth_getRoundCertificate` — round-advancement certificate. */
   async lythGetRoundCertificate(round) {
     return this.call("lyth_getRoundCertificate", [encodeRpcInteger(round)]);
-  }
-  /** @deprecated Use lythGetRoundCertificate. */
-  async lythGetBlsRoundCertificate(round) {
-    return this.lythGetRoundCertificate(round);
   }
   /** `lyth_getLeaderCertificate` — leader-vote certificate for a block ref. */
   async lythGetLeaderCertificate(round, authority, digest) {
@@ -7325,17 +7136,12 @@ var NO_EVM_COMPACT_INCLUSION_PROOF_SCHEMA = "mono.no_evm_receipt_compact_inclusi
 var NO_EVM_COMPACT_INCLUSION_TREE_ALGORITHM = "binary-keccak-receipt-tree";
 var NO_EVM_ARCHIVE_PROOF_SCHEMA = "mono.no_evm_receipt_archive_binding.v1";
 var NO_EVM_ARCHIVE_SIGNATURE_SCHEME = "mono.snapshot.sig.v1";
-var NO_EVM_FINALITY_EVIDENCE_SCHEMA = "mono.no_evm_receipt_finality.v1";
-var NO_EVM_FINALITY_EVIDENCE_SOURCE = "roundCertificate";
 var EMPTY_ROOT_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPTS_ROOT_DOMAIN);
 var LEAF_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPT_LEAF_DOMAIN);
 var NODE_DOMAIN_BYTES = new TextEncoder().encode(NO_EVM_RECEIPT_NODE_DOMAIN);
 var UINT32_MAX = 4294967295;
 var HASH_BYTE_LENGTH = 32;
 var ARCHIVE_SIGNATURE_SIGNER_ID_BYTE_LENGTH = 20;
-var BLS_PUBLIC_KEY_BYTE_LENGTH2 = 48;
-var BLS_SIGNATURE_BYTE_LENGTH = 96;
-var BLS_DST = "BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
 var HEX_RE = /^[0-9a-fA-F]*$/u;
 var NoEvmReceiptProofError = class extends Error {
   constructor(code, message) {
@@ -7506,221 +7312,10 @@ function verifyNoEvmArchiveProofSignatures(archiveProof, trustedSigners, thresho
     issues
   };
 }
-function computeNoEvmRoundFinalityMessage(chainId, round) {
-  const preimage = new Uint8Array(5 + 8 + 8);
-  preimage.set(new TextEncoder().encode("round"), 0);
-  writeU64Le(preimage, 5, chainId, "chainId");
-  writeU64Le(preimage, 13, round, "round");
-  return blake3_js.blake3(preimage);
-}
-function computeNoEvmLeaderFinalityMessage(chainId, blockReference) {
-  return computeNoEvmBlockFinalityMessage("leader", chainId, blockReference);
-}
-function computeNoEvmDacFinalityMessage(chainId, blockReference) {
-  return computeNoEvmBlockFinalityMessage("dac", chainId, blockReference);
-}
-function computeNoEvmBlockFinalityMessage(domain, chainId, blockReference) {
-  const domainBytes = new TextEncoder().encode(domain);
-  const digest = decodeHash(
-    blockReference.digest,
-    "finalityEvidence.blockReference.digest"
-  );
-  const preimage = new Uint8Array(domainBytes.length + 8 + 2 + 8 + HASH_BYTE_LENGTH);
-  let offset = 0;
-  preimage.set(domainBytes, offset);
-  offset += domainBytes.length;
-  writeU64Le(preimage, offset, chainId, "chainId");
-  offset += 8;
-  writeU16Le(preimage, offset, blockReference.authority, "finalityEvidence.blockReference.authority");
-  offset += 2;
-  writeU64Le(preimage, offset, blockReference.round, "finalityEvidence.blockReference.round");
-  offset += 8;
-  preimage.set(digest, offset);
-  return blake3_js.blake3(preimage);
-}
-function verifyNoEvmFinalityEvidenceThreshold(finalityEvidence, options) {
-  validateFinalityThreshold(options.threshold, options.committeeSize);
-  const clusterPublicKey = expectBlsBytes(
-    options.clusterPublicKey,
-    BLS_PUBLIC_KEY_BYTE_LENGTH2,
-    "clusterPublicKey"
-  );
-  validateFinalityEvidenceForVerification(finalityEvidence);
-  const message = computeNoEvmRoundFinalityMessage(options.chainId, finalityEvidence.round);
-  return verifyFinalityCertificateThreshold(
-    finalityEvidence.certificate,
-    "finalityEvidence.certificate",
-    message,
-    clusterPublicKey,
-    options.committeeSize,
-    options.threshold
-  );
-}
-function verifyNoEvmFinalityEvidenceMultisig(finalityEvidence, options) {
-  validateFinalityThreshold(options.threshold, options.trustedSigners.length);
-  validateFinalityEvidenceForVerification(finalityEvidence);
-  const message = computeNoEvmRoundFinalityMessage(options.chainId, finalityEvidence.round);
-  return verifyFinalityCertificateMultisig(
-    finalityEvidence.certificate,
-    "finalityEvidence.certificate",
-    message,
-    options.trustedSigners,
-    options.threshold
-  );
-}
-function verifyNoEvmBlockFinalityEvidenceThreshold(finalityEvidence, options) {
-  validateFinalityThreshold(options.threshold, options.committeeSize);
-  validateFinalityEvidenceForVerification(finalityEvidence);
-  const clusterPublicKey = expectBlsBytes(
-    options.clusterPublicKey,
-    BLS_PUBLIC_KEY_BYTE_LENGTH2,
-    "clusterPublicKey"
-  );
-  const blockReference = requireBlockReference(finalityEvidence);
-  const leaderCertificate = requireBlockFinalityCertificate(
-    finalityEvidence.leaderCertificate,
-    "finalityEvidence.leaderCertificate"
-  );
-  const dacCertificate = requireBlockFinalityCertificate(
-    finalityEvidence.dacCertificate,
-    "finalityEvidence.dacCertificate"
-  );
-  const leaderMessage = computeNoEvmLeaderFinalityMessage(options.chainId, blockReference);
-  const dacMessage = computeNoEvmDacFinalityMessage(options.chainId, blockReference);
-  const leaderVerification = verifyFinalityCertificateThreshold(
-    leaderCertificate,
-    "finalityEvidence.leaderCertificate",
-    leaderMessage,
-    clusterPublicKey,
-    options.committeeSize,
-    options.threshold
-  );
-  const dacVerification = verifyFinalityCertificateThreshold(
-    dacCertificate,
-    "finalityEvidence.dacCertificate",
-    dacMessage,
-    clusterPublicKey,
-    options.committeeSize,
-    options.threshold
-  );
-  return {
-    blockReference,
-    leaderCertificate: leaderVerification,
-    dacCertificate: dacVerification,
-    verified: leaderVerification.verified && dacVerification.verified
-  };
-}
-function verifyNoEvmBlockFinalityEvidenceMultisig(finalityEvidence, options) {
-  validateFinalityThreshold(options.threshold, options.trustedSigners.length);
-  validateFinalityEvidenceForVerification(finalityEvidence);
-  const blockReference = requireBlockReference(finalityEvidence);
-  const leaderCertificate = requireBlockFinalityCertificate(
-    finalityEvidence.leaderCertificate,
-    "finalityEvidence.leaderCertificate"
-  );
-  const dacCertificate = requireBlockFinalityCertificate(
-    finalityEvidence.dacCertificate,
-    "finalityEvidence.dacCertificate"
-  );
-  const leaderMessage = computeNoEvmLeaderFinalityMessage(options.chainId, blockReference);
-  const dacMessage = computeNoEvmDacFinalityMessage(options.chainId, blockReference);
-  const leaderVerification = verifyFinalityCertificateMultisig(
-    leaderCertificate,
-    "finalityEvidence.leaderCertificate",
-    leaderMessage,
-    options.trustedSigners,
-    options.threshold
-  );
-  const dacVerification = verifyFinalityCertificateMultisig(
-    dacCertificate,
-    "finalityEvidence.dacCertificate",
-    dacMessage,
-    options.trustedSigners,
-    options.threshold
-  );
-  return {
-    blockReference,
-    leaderCertificate: leaderVerification,
-    dacCertificate: dacVerification,
-    verified: leaderVerification.verified && dacVerification.verified
-  };
-}
-function verifyFinalityCertificateMultisig(certificate, field2, message, trustedSigners, threshold) {
-  const signature = decodeFinalityCertificateSignature(certificate, field2);
-  const signerIndices = signerIndicesFromBitmap(
-    decodeHexBytes(certificate.signersBitmap, `${field2}.signersBitmap`)
-  );
-  const committeeSize = trustedSigners.reduce((max, signer) => Math.max(max, signer.authorityIndex), -1) + 1;
-  const base = finalityCertificateVerificationBase(
-    certificate,
-    signerIndices,
-    committeeSize,
-    threshold
-  );
-  const roster = /* @__PURE__ */ new Map();
-  trustedSigners.forEach((signer, index) => {
-    assertUint32(signer.authorityIndex, `trustedSigners[${index}].authorityIndex`);
-    if (signer.authorityIndex > 65535) {
-      throw new NoEvmReceiptProofError(
-        "invalid_proof_shape",
-        `trustedSigners[${index}].authorityIndex must fit u16`
-      );
-    }
-    if (roster.has(signer.authorityIndex)) {
-      throw new NoEvmReceiptProofError(
-        "invalid_proof_shape",
-        `trustedSigners contains duplicate authority index ${signer.authorityIndex}`
-      );
-    }
-    roster.set(
-      signer.authorityIndex,
-      expectBlsBytes(
-        signer.publicKey,
-        BLS_PUBLIC_KEY_BYTE_LENGTH2,
-        `trustedSigners[${index}].publicKey`
-      )
-    );
-  });
-  const publicKeys = [];
-  let allSignersTrusted = true;
-  signerIndices.forEach((signerIndex) => {
-    const publicKey = roster.get(signerIndex);
-    if (publicKey === void 0) {
-      allSignersTrusted = false;
-    } else {
-      publicKeys.push(publicKey);
-    }
-  });
-  const signatureValid = allSignersTrusted && publicKeys.length > 0 && verifyBlsAggregateSignature(publicKeys, message, signature);
-  return finalizeBlsFinalityVerification({
-    ...base,
-    allSignersTrusted,
-    signatureValid
-  });
-}
-function verifyFinalityCertificateThreshold(certificate, field2, message, clusterPublicKey, committeeSize, threshold) {
-  const signature = decodeFinalityCertificateSignature(certificate, field2);
-  const signerIndices = signerIndicesFromBitmap(
-    decodeHexBytes(certificate.signersBitmap, `${field2}.signersBitmap`)
-  );
-  const base = finalityCertificateVerificationBase(
-    certificate,
-    signerIndices,
-    committeeSize,
-    threshold
-  );
-  const signatureValid = base.signerIndicesInRange && verifyBlsSignature(clusterPublicKey, message, signature);
-  return finalizeBlsFinalityVerification({
-    ...base,
-    allSignersTrusted: base.signerIndicesInRange,
-    signatureValid
-  });
-}
 function verifyNoEvmReceiptProofTrust(proof, policy) {
   const receiptProof = verifyNoEvmReceiptProof(proof);
   const issues = [];
   let archiveSignatures = null;
-  let finalityEvidence = null;
   if (receiptProof == null) {
     issues.push({
       code: "missing_receipt_proof",
@@ -7764,74 +7359,10 @@ function verifyNoEvmReceiptProofTrust(proof, policy) {
       }
     }
   }
-  if (policy.finality != null) {
-    const proofFinality = proof == null ? null : proof.finalityEvidence;
-    if (proofFinality == null) {
-      issues.push({
-        code: "missing_finality_evidence",
-        message: "native receipt proof does not carry BLS finality evidence"
-      });
-    } else {
-      const chainId = policy.finality.chainId ?? policy.chainId;
-      if (chainId == null) {
-        issues.push({
-          code: "missing_finality_chain_id",
-          message: "finality trust policy requires a chain id"
-        });
-      } else if (policy.finality.mode === "cluster") {
-        const round = BigInt(proofFinality.round);
-        const finalityPolicyValid = isWithinOptionalBounds(
-          round,
-          policy.finality.validFromRound,
-          policy.finality.validToRound
-        );
-        if (!finalityPolicyValid) {
-          issues.push({
-            code: "finality_policy_not_valid_at_round",
-            message: `finality trust policy is not valid at round ${proofFinality.round}`
-          });
-        }
-        finalityEvidence = verifyNoEvmFinalityEvidenceThreshold(proofFinality, {
-          chainId,
-          clusterPublicKey: policy.finality.clusterPublicKey,
-          committeeSize: policy.finality.committeeSize,
-          threshold: policy.finality.threshold
-        });
-      } else {
-        const round = BigInt(proofFinality.round);
-        const finalityPolicyValid = isWithinOptionalBounds(
-          round,
-          policy.finality.validFromRound,
-          policy.finality.validToRound
-        );
-        const activeTrustedSigners = policy.finality.trustedSigners.filter(
-          (signer) => isWithinOptionalBounds(round, signer.validFromRound, signer.validToRound)
-        );
-        if (!finalityPolicyValid) {
-          issues.push({
-            code: "finality_policy_not_valid_at_round",
-            message: `finality trust policy is not valid at round ${proofFinality.round}`
-          });
-        }
-        finalityEvidence = verifyNoEvmFinalityEvidenceMultisig(proofFinality, {
-          chainId,
-          trustedSigners: activeTrustedSigners,
-          threshold: policy.finality.threshold
-        });
-      }
-      if (finalityEvidence != null && !finalityEvidence.verified) {
-        issues.push({
-          code: "finality_verification_failed",
-          message: "BLS finality evidence did not satisfy the trusted policy"
-        });
-      }
-    }
-  }
   return {
     verified: receiptProof != null && issues.length === 0,
     receiptProof,
     archiveSignatures,
-    finalityEvidence,
     issues
   };
 }
@@ -8009,7 +7540,6 @@ function validateCommonProofMetadata(proof) {
     "receiptCodec",
     "unsupported_receipt_codec"
   );
-  validateOptionalFinalityEvidence(proof);
 }
 function validateBoundedHistorySource(proof) {
   const historySource = getOptionalHistorySource(proof);
@@ -8217,311 +7747,6 @@ function expectArchivePublicKey(value, field2) {
     );
   }
   return value instanceof Uint8Array ? value : Uint8Array.from(value);
-}
-function validateOptionalFinalityEvidence(proof) {
-  const finalityEvidence = proof.finalityEvidence;
-  if (finalityEvidence == null) return;
-  if (!isRecord3(finalityEvidence)) {
-    throw new NoEvmReceiptProofError(
-      "invalid_proof_shape",
-      "finalityEvidence must be an object when present"
-    );
-  }
-  assertSupported(
-    finalityEvidence["schema"],
-    NO_EVM_FINALITY_EVIDENCE_SCHEMA,
-    "finalityEvidence.schema",
-    "unsupported_schema"
-  );
-  assertSupported(
-    finalityEvidence["source"],
-    NO_EVM_FINALITY_EVIDENCE_SOURCE,
-    "finalityEvidence.source",
-    "unsupported_schema"
-  );
-  assertUint32(finalityEvidence["round"], "finalityEvidence.round");
-  const round = finalityEvidence["round"];
-  validateFinalityCertificateObject(
-    finalityEvidence["certificate"],
-    round,
-    "finalityEvidence.certificate"
-  );
-  validateOptionalBlockFinalityFields(finalityEvidence, round, proof.blockHash);
-}
-function validateFinalityEvidenceForVerification(finalityEvidence) {
-  if (!isRecord3(finalityEvidence)) {
-    throw new NoEvmReceiptProofError(
-      "invalid_proof_shape",
-      "finalityEvidence must be an object"
-    );
-  }
-  assertSupported(
-    finalityEvidence.schema,
-    NO_EVM_FINALITY_EVIDENCE_SCHEMA,
-    "finalityEvidence.schema",
-    "unsupported_schema"
-  );
-  assertSupported(
-    finalityEvidence.source,
-    NO_EVM_FINALITY_EVIDENCE_SOURCE,
-    "finalityEvidence.source",
-    "unsupported_schema"
-  );
-  assertUint32(finalityEvidence.round, "finalityEvidence.round");
-  validateFinalityCertificateObject(
-    finalityEvidence.certificate,
-    finalityEvidence.round,
-    "finalityEvidence.certificate"
-  );
-  validateOptionalBlockFinalityFields(
-    finalityEvidence,
-    finalityEvidence.round
-  );
-}
-function validateOptionalBlockFinalityFields(finalityEvidence, round, proofBlockHash) {
-  const blockReference = finalityEvidence["blockReference"];
-  if (blockReference != null) {
-    validateFinalityBlockReference(blockReference, round, proofBlockHash);
-  } else if (finalityEvidence["leaderCertificate"] != null || finalityEvidence["dacCertificate"] != null) {
-    throw new NoEvmReceiptProofError(
-      "invalid_proof_shape",
-      "finalityEvidence.blockReference is required for block-bound certificates"
-    );
-  }
-  if (finalityEvidence["leaderCertificate"] != null) {
-    validateFinalityCertificateObject(
-      finalityEvidence["leaderCertificate"],
-      round,
-      "finalityEvidence.leaderCertificate"
-    );
-  }
-  if (finalityEvidence["dacCertificate"] != null) {
-    validateFinalityCertificateObject(
-      finalityEvidence["dacCertificate"],
-      round,
-      "finalityEvidence.dacCertificate"
-    );
-  }
-}
-function validateFinalityBlockReference(blockReference, round, proofBlockHash) {
-  if (!isRecord3(blockReference)) {
-    throw new NoEvmReceiptProofError(
-      "invalid_proof_shape",
-      "finalityEvidence.blockReference must be an object"
-    );
-  }
-  assertUint32(blockReference["round"], "finalityEvidence.blockReference.round");
-  if (blockReference["round"] !== round) {
-    throw new NoEvmReceiptProofError(
-      "invalid_proof_shape",
-      "finalityEvidence.blockReference.round must match finalityEvidence.round"
-    );
-  }
-  assertUint32(blockReference["authority"], "finalityEvidence.blockReference.authority");
-  if (blockReference["authority"] > 65535) {
-    throw new NoEvmReceiptProofError(
-      "invalid_proof_shape",
-      "finalityEvidence.blockReference.authority must fit u16"
-    );
-  }
-  const digest = decodeHash(
-    blockReference["digest"],
-    "finalityEvidence.blockReference.digest"
-  );
-  if (proofBlockHash !== void 0) {
-    const blockHash = decodeHash(proofBlockHash, "blockHash");
-    if (!bytesEqual2(digest, blockHash)) {
-      throw new NoEvmReceiptProofError(
-        "invalid_proof_shape",
-        "finalityEvidence.blockReference.digest must match blockHash"
-      );
-    }
-  }
-}
-function validateFinalityCertificateObject(certificate, round, field2) {
-  if (!isRecord3(certificate)) {
-    throw new NoEvmReceiptProofError("invalid_proof_shape", `${field2} must be an object`);
-  }
-  assertUint32(certificate["round"], `${field2}.round`);
-  if (certificate["round"] !== round) {
-    throw new NoEvmReceiptProofError(
-      "invalid_proof_shape",
-      `${field2}.round must match finalityEvidence.round`
-    );
-  }
-  decodeHexBytes(certificate["signature"], `${field2}.signature`);
-  decodeHexBytes(certificate["signersBitmap"], `${field2}.signersBitmap`);
-  const signerIndices = certificate["signerIndices"];
-  if (!Array.isArray(signerIndices)) {
-    throw new NoEvmReceiptProofError(
-      "invalid_proof_shape",
-      `${field2}.signerIndices must be an array`
-    );
-  }
-  signerIndices.forEach((index, signerIndex) => {
-    assertUint32(index, `${field2}.signerIndices[${signerIndex}]`);
-    if (index > 65535) {
-      throw new NoEvmReceiptProofError(
-        "invalid_proof_shape",
-        `${field2}.signerIndices[${signerIndex}] must fit u16`
-      );
-    }
-  });
-  assertUint32(certificate["signerCount"], `${field2}.signerCount`);
-  if (certificate["signerCount"] > 65535) {
-    throw new NoEvmReceiptProofError("invalid_proof_shape", `${field2}.signerCount must fit u16`);
-  }
-  if (certificate["signerCount"] !== signerIndices.length) {
-    throw new NoEvmReceiptProofError(
-      "invalid_proof_shape",
-      `${field2}.signerCount must match signerIndices length`
-    );
-  }
-}
-function validateFinalityThreshold(threshold, trustedCapacity) {
-  if (!Number.isSafeInteger(threshold) || threshold < 1) {
-    throw new NoEvmReceiptProofError(
-      "invalid_proof_shape",
-      "finality evidence threshold must be at least 1"
-    );
-  }
-  if (!Number.isSafeInteger(trustedCapacity) || trustedCapacity < 0 || trustedCapacity > 65535) {
-    throw new NoEvmReceiptProofError(
-      "invalid_proof_shape",
-      "finality evidence trusted signer capacity must fit u16"
-    );
-  }
-  if (threshold > trustedCapacity) {
-    throw new NoEvmReceiptProofError(
-      "invalid_proof_shape",
-      `finality evidence threshold ${threshold} exceeds trusted signer capacity ${trustedCapacity}`
-    );
-  }
-}
-function requireBlockReference(finalityEvidence) {
-  const blockReference = finalityEvidence.blockReference;
-  if (blockReference == null) {
-    throw new NoEvmReceiptProofError(
-      "invalid_proof_shape",
-      "finalityEvidence.blockReference is required for block-bound finality verification"
-    );
-  }
-  validateFinalityBlockReference(blockReference, finalityEvidence.round);
-  return blockReference;
-}
-function requireBlockFinalityCertificate(certificate, field2) {
-  if (certificate == null) {
-    throw new NoEvmReceiptProofError(
-      "invalid_proof_shape",
-      `${field2} is required for block-bound finality verification`
-    );
-  }
-  return certificate;
-}
-function decodeFinalityCertificateSignature(certificate, field2) {
-  const signature = decodeHexBytes(certificate.signature, `${field2}.signature`);
-  if (signature.length !== BLS_SIGNATURE_BYTE_LENGTH) {
-    throw new NoEvmReceiptProofError(
-      "invalid_hash_length",
-      `${field2}.signature must be ${BLS_SIGNATURE_BYTE_LENGTH} bytes, got ${signature.length}`
-    );
-  }
-  return signature;
-}
-function signerIndicesFromBitmap(bitmap) {
-  const out = [];
-  bitmap.forEach((byte, byteIndex) => {
-    for (let bitIndex = 0; bitIndex < 8; bitIndex += 1) {
-      if ((byte & 1 << bitIndex) === 0) continue;
-      const signerIndex = byteIndex * 8 + bitIndex;
-      if (signerIndex > 65535) {
-        throw new NoEvmReceiptProofError(
-          "invalid_proof_shape",
-          "finalityEvidence signer bitmap index exceeds u16 authority range"
-        );
-      }
-      out.push(signerIndex);
-    }
-  });
-  return out;
-}
-function finalityCertificateVerificationBase(certificate, bitmapSignerIndices, committeeSize, threshold) {
-  const signerCountMatches = certificate.signerCount === certificate.signerIndices.length && certificate.signerCount === bitmapSignerIndices.length;
-  const signerBitmapMatchesIndices = arraysEqual(certificate.signerIndices, bitmapSignerIndices);
-  const signerIndicesInRange = bitmapSignerIndices.every(
-    (signerIndex) => signerIndex < committeeSize
-  );
-  const acceptedSignatureCount = bitmapSignerIndices.length;
-  return {
-    finalityEvidencePresent: true,
-    signerCountMatches,
-    signerBitmapMatchesIndices,
-    signerIndicesInRange,
-    allSignersTrusted: false,
-    thresholdMet: acceptedSignatureCount >= threshold,
-    signatureValid: false,
-    acceptedSignatureCount,
-    requiredSignatureCount: threshold
-  };
-}
-function finalizeBlsFinalityVerification(verification) {
-  return {
-    ...verification,
-    verified: verification.finalityEvidencePresent && verification.signerCountMatches && verification.signerBitmapMatchesIndices && verification.signerIndicesInRange && verification.allSignersTrusted && verification.thresholdMet && verification.signatureValid
-  };
-}
-function verifyBlsSignature(publicKey, message, signature) {
-  try {
-    const hashedMessage = bls12381_js.bls12_381.longSignatures.hash(message, BLS_DST);
-    return bls12381_js.bls12_381.longSignatures.verify(signature, hashedMessage, publicKey);
-  } catch {
-    return false;
-  }
-}
-function verifyBlsAggregateSignature(publicKeys, message, signature) {
-  try {
-    const aggregatePublicKey = bls12381_js.bls12_381.longSignatures.aggregatePublicKeys([...publicKeys]);
-    return verifyBlsSignature(
-      aggregatePublicKey.toBytes(),
-      message,
-      signature
-    );
-  } catch {
-    return false;
-  }
-}
-function expectBlsBytes(value, expectedLength, field2) {
-  const bytes = value instanceof Uint8Array ? value : Uint8Array.from(value);
-  if (bytes.length !== expectedLength) {
-    throw new NoEvmReceiptProofError(
-      "invalid_hash_length",
-      `${field2} must be ${expectedLength} bytes, got ${bytes.length}`
-    );
-  }
-  return bytes;
-}
-function writeU64Le(out, offset, value, field2) {
-  if (typeof value === "number" && (!Number.isSafeInteger(value) || value < 0)) {
-    throw new NoEvmReceiptProofError("invalid_uint32", `${field2} must fit u64`);
-  }
-  const big = typeof value === "bigint" ? value : BigInt(value);
-  if (big < 0n || big > 0xffffffffffffffffn) {
-    throw new NoEvmReceiptProofError("invalid_uint32", `${field2} must fit u64`);
-  }
-  for (let i = 0; i < 8; i += 1) {
-    out[offset + i] = Number(big >> BigInt(i * 8) & 0xffn);
-  }
-}
-function writeU16Le(out, offset, value, field2) {
-  if (!Number.isInteger(value) || value < 0 || value > 65535) {
-    throw new NoEvmReceiptProofError("invalid_uint32", `${field2} must fit u16`);
-  }
-  const int = value;
-  out[offset] = int & 255;
-  out[offset + 1] = int >> 8 & 255;
-}
-function arraysEqual(a, b) {
-  return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 function getCompactInclusionProof(proof) {
   const compactProof = proof.compactInclusionProof;
@@ -12364,7 +11589,6 @@ exports.NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC = NATIVE_MARKET_ORDER_BOOK_STREAM_
 exports.NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN = NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN;
 exports.NODE_REGISTRY_ARCHIVE_KIND_EPOCH_SEED = NODE_REGISTRY_ARCHIVE_KIND_EPOCH_SEED;
 exports.NODE_REGISTRY_ARCHIVE_NONCE_DOMAIN = NODE_REGISTRY_ARCHIVE_NONCE_DOMAIN;
-exports.NODE_REGISTRY_BLS_PUBKEY_BYTES = NODE_REGISTRY_BLS_PUBKEY_BYTES;
 exports.NODE_REGISTRY_CAPABILITIES = NODE_REGISTRY_CAPABILITIES;
 exports.NODE_REGISTRY_CAPABILITY_MASK = NODE_REGISTRY_CAPABILITY_MASK;
 exports.NODE_REGISTRY_CHALLENGE_EPOCH_WINDOW = NODE_REGISTRY_CHALLENGE_EPOCH_WINDOW;
@@ -12406,8 +11630,6 @@ exports.NODE_REGISTRY_UPDATE_CHARTER_MESSAGE_DOMAIN = NODE_REGISTRY_UPDATE_CHART
 exports.NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD = NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD;
 exports.NO_EVM_ARCHIVE_PROOF_SCHEMA = NO_EVM_ARCHIVE_PROOF_SCHEMA;
 exports.NO_EVM_ARCHIVE_SIGNATURE_SCHEME = NO_EVM_ARCHIVE_SIGNATURE_SCHEME;
-exports.NO_EVM_FINALITY_EVIDENCE_SCHEMA = NO_EVM_FINALITY_EVIDENCE_SCHEMA;
-exports.NO_EVM_FINALITY_EVIDENCE_SOURCE = NO_EVM_FINALITY_EVIDENCE_SOURCE;
 exports.NO_EVM_RECEIPTS_ROOT_DOMAIN = NO_EVM_RECEIPTS_ROOT_DOMAIN;
 exports.NO_EVM_RECEIPT_CODEC = NO_EVM_RECEIPT_CODEC;
 exports.NO_EVM_RECEIPT_PROOF_SCHEMA = NO_EVM_RECEIPT_PROOF_SCHEMA;
@@ -12568,10 +11790,7 @@ exports.clusterApyPercent = clusterApyPercent;
 exports.clusterJoinRequestExists = clusterJoinRequestExists;
 exports.compareNativeDevVersions = compareNativeDevVersions;
 exports.composeClaimBoundMessage = composeClaimBoundMessage;
-exports.computeNoEvmDacFinalityMessage = computeNoEvmDacFinalityMessage;
-exports.computeNoEvmLeaderFinalityMessage = computeNoEvmLeaderFinalityMessage;
 exports.computeNoEvmReceiptsRoot = computeNoEvmReceiptsRoot;
-exports.computeNoEvmRoundFinalityMessage = computeNoEvmRoundFinalityMessage;
 exports.computeNoEvmTargetReceiptHash = computeNoEvmTargetReceiptHash;
 exports.computeQuoteLiquidity = computeQuoteLiquidity;
 exports.consumeNativeEvents = consumeNativeEvents;
@@ -12863,10 +12082,6 @@ exports.validateMrvDeployRequest = validateMrvDeployRequest;
 exports.validateMultisigRoster = validateMultisigRoster;
 exports.validateTokenFactoryFlags = validateTokenFactoryFlags;
 exports.verifyNoEvmArchiveProofSignatures = verifyNoEvmArchiveProofSignatures;
-exports.verifyNoEvmBlockFinalityEvidenceMultisig = verifyNoEvmBlockFinalityEvidenceMultisig;
-exports.verifyNoEvmBlockFinalityEvidenceThreshold = verifyNoEvmBlockFinalityEvidenceThreshold;
-exports.verifyNoEvmFinalityEvidenceMultisig = verifyNoEvmFinalityEvidenceMultisig;
-exports.verifyNoEvmFinalityEvidenceThreshold = verifyNoEvmFinalityEvidenceThreshold;
 exports.verifyNoEvmReceiptProof = verifyNoEvmReceiptProof;
 exports.verifyNoEvmReceiptProofTrust = verifyNoEvmReceiptProofTrust;
 exports.verifyOperatorGenesis = verifyOperatorGenesis;

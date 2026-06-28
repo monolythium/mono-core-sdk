@@ -168,7 +168,7 @@ export async function resolveExecutionFee(
  * Convenience wrapper for registry / register writes: the same fee
  * resolution as {@link resolveExecutionFee} but defaulting the
  * execution-unit limit to {@link REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT}
- * so the `register_op` BLS-PoP pairing verify does not revert.
+ * so the `register_op` ML-DSA-65 proof-of-possession verify does not revert.
  */
 export async function resolveRegistryExecutionFee(
   client: RpcClient,

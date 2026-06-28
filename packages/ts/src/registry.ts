@@ -15,8 +15,6 @@ import type { NoEvmReceiptTrustPolicy } from "./receipt-proof.js";
 
 export type NetworkSlug = "testnet-69420";
 
-const BLS_PUBLIC_KEY_BYTE_LENGTH = 48;
-
 export interface RpcEndpoint {
   url: string;
   provider: string;
@@ -53,28 +51,8 @@ export interface ReceiptProofTrustArchivePolicy {
   signers: ReceiptProofTrustArchiveSigner[];
 }
 
-export interface ReceiptProofTrustFinalitySigner {
-  authority_index: number;
-  public_key: string;
-  valid_from_round?: number;
-  valid_to_round?: number;
-  notes?: string;
-}
-
-export interface ReceiptProofTrustFinalityPolicy {
-  mode: "cluster" | "multisig";
-  chain_id?: number;
-  threshold: number;
-  committee_size?: number;
-  cluster_public_key?: string;
-  valid_from_round?: number;
-  valid_to_round?: number;
-  signers?: ReceiptProofTrustFinalitySigner[];
-}
-
 export interface ReceiptProofTrustPolicy {
   archive?: ReceiptProofTrustArchivePolicy;
-  finality?: ReceiptProofTrustFinalityPolicy;
 }
 
 export interface ChainInfo {
@@ -289,7 +267,7 @@ export function noEvmReceiptTrustPolicyFromChainInfo(
   info: ChainInfo,
 ): NoEvmReceiptTrustPolicy | null {
   const trust = info.receipt_proof_trust;
-  if (trust == null || (trust.archive == null && trust.finality == null)) return null;
+  if (trust == null || trust.archive == null) return null;
 
   const policy: NoEvmReceiptTrustPolicy = { chainId: info.chain_id };
   if (trust.archive != null) {
@@ -312,65 +290,6 @@ export function noEvmReceiptTrustPolicyFromChainInfo(
         validToHeight: signer.valid_to_height,
       })),
     };
-  }
-  if (trust.finality != null) {
-    const threshold = assertSafeIntegerAtLeast(
-      trust.finality.threshold,
-      1,
-      "receipt_proof_trust.finality.threshold",
-    );
-    const chainId = trust.finality.chain_id ?? info.chain_id;
-    if (trust.finality.mode === "cluster") {
-      if (trust.finality.cluster_public_key == null) {
-        throw new Error(
-          "receipt_proof_trust.finality.cluster_public_key is required for cluster mode",
-        );
-      }
-      policy.finality = {
-        mode: "cluster",
-        chainId,
-        threshold,
-        validFromRound: trust.finality.valid_from_round,
-        validToRound: trust.finality.valid_to_round,
-        committeeSize: assertSafeIntegerAtLeast(
-          trust.finality.committee_size,
-          1,
-          "receipt_proof_trust.finality.committee_size",
-        ),
-        clusterPublicKey: decodeFixedHex(
-          trust.finality.cluster_public_key,
-          BLS_PUBLIC_KEY_BYTE_LENGTH,
-          "receipt_proof_trust.finality.cluster_public_key",
-        ),
-      };
-    } else if (trust.finality.mode === "multisig") {
-      const signers = trust.finality.signers ?? [];
-      policy.finality = {
-        mode: "multisig",
-        chainId,
-        threshold,
-        validFromRound: trust.finality.valid_from_round,
-        validToRound: trust.finality.valid_to_round,
-        trustedSigners: signers.map((signer, index) => ({
-          authorityIndex: assertSafeIntegerAtLeast(
-            signer.authority_index,
-            0,
-            `receipt_proof_trust.finality.signers[${index}].authority_index`,
-          ),
-          publicKey: decodeFixedHex(
-            signer.public_key,
-            BLS_PUBLIC_KEY_BYTE_LENGTH,
-            `receipt_proof_trust.finality.signers[${index}].public_key`,
-          ),
-          validFromRound: signer.valid_from_round,
-          validToRound: signer.valid_to_round,
-        })),
-      };
-    } else {
-      throw new Error(
-        `unsupported receipt_proof_trust.finality.mode: ${String(trust.finality.mode)}`,
-      );
-    }
   }
 
   return policy;
@@ -421,9 +340,7 @@ export function parseChainRegistryToml(input: string): ChainInfo {
     | "p2p"
     | "explorer"
     | "receipt_proof_trust.archive"
-    | "receipt_proof_trust.archive.signers"
-    | "receipt_proof_trust.finality"
-    | "receipt_proof_trust.finality.signers" = "root";
+    | "receipt_proof_trust.archive.signers" = "root";
   for (const rawLine of input.split(/\r?\n/)) {
     const line = rawLine.replace(/\s+#.*$/, "").trim();
     if (!line || line.startsWith("#")) continue;
@@ -454,26 +371,6 @@ export function parseChainRegistryToml(input: string): ChainInfo {
       trust.archive.signers.push({ public_key: "" });
       continue;
     }
-    if (line === "[receipt_proof_trust.finality]") {
-      section = "receipt_proof_trust.finality";
-      ensureReceiptProofTrust(info).finality ??= {
-        mode: "cluster",
-        threshold: 0,
-      };
-      continue;
-    }
-    if (line === "[[receipt_proof_trust.finality.signers]]") {
-      section = "receipt_proof_trust.finality.signers";
-      const trust = ensureReceiptProofTrust(info);
-      trust.finality ??= {
-        mode: "multisig",
-        threshold: 0,
-        signers: [],
-      };
-      trust.finality.signers ??= [];
-      trust.finality.signers.push({ authority_index: 0, public_key: "" });
-      continue;
-    }
     const match = /^([A-Za-z0-9_]+)\s*=\s*(.+)$/.exec(line);
     if (!match) continue;
     const [, key, rawValue] = match;
@@ -494,22 +391,6 @@ export function parseChainRegistryToml(input: string): ChainInfo {
         signers: [],
       };
       const target = archive.signers[archive.signers.length - 1] as unknown as Record<
-        string,
-        unknown
-      >;
-      target[key] = value;
-    } else if (section === "receipt_proof_trust.finality") {
-      const trust = ensureReceiptProofTrust(info);
-      trust.finality ??= { mode: "cluster", threshold: 0 };
-      (trust.finality as unknown as Record<string, unknown>)[key] = value;
-    } else {
-      const finality = ensureReceiptProofTrust(info).finality ??= {
-        mode: "multisig",
-        threshold: 0,
-        signers: [],
-      };
-      finality.signers ??= [];
-      const target = finality.signers[finality.signers.length - 1] as unknown as Record<
         string,
         unknown
       >;
@@ -562,8 +443,8 @@ function ensureReceiptProofTrust(
 
 function normalizeReceiptProofTrust(trust: ReceiptProofTrustPolicy): ReceiptProofTrustPolicy {
   const out: ReceiptProofTrustPolicy = {};
-  if (trust.archive == null || trust.finality == null) {
-    throw new Error("receipt_proof_trust must include both archive and finality policies");
+  if (trust.archive == null) {
+    throw new Error("receipt_proof_trust must include an archive policy");
   }
   if (trust.archive != null) {
     const threshold = assertSafeIntegerAtLeast(
@@ -612,86 +493,6 @@ function normalizeReceiptProofTrust(trust: ReceiptProofTrustPolicy): ReceiptProo
         };
       }),
     };
-  }
-  if (trust.finality != null) {
-    const mode = trust.finality.mode;
-    if (mode !== "cluster" && mode !== "multisig") {
-      throw new Error(`unsupported receipt_proof_trust.finality.mode: ${String(mode)}`);
-    }
-    const finality: ReceiptProofTrustFinalityPolicy = {
-      mode,
-      chain_id: optionalSafeInteger(trust.finality.chain_id),
-      threshold: assertSafeIntegerAtLeast(
-        trust.finality.threshold,
-        1,
-        "receipt_proof_trust.finality.threshold",
-      ),
-      valid_from_round: optionalSafeInteger(trust.finality.valid_from_round),
-      valid_to_round: optionalSafeInteger(trust.finality.valid_to_round),
-    };
-    assertOptionalRange(
-      trust.finality.valid_from_round,
-      trust.finality.valid_to_round,
-      "receipt_proof_trust.finality",
-    );
-    if (mode === "cluster") {
-      finality.committee_size = assertSafeIntegerAtLeast(
-        trust.finality.committee_size,
-        1,
-        "receipt_proof_trust.finality.committee_size",
-      );
-      if (finality.threshold > finality.committee_size) {
-        throw new Error("receipt_proof_trust.finality.threshold exceeds committee_size");
-      }
-      finality.cluster_public_key = assertString(
-        trust.finality.cluster_public_key,
-        "receipt_proof_trust.finality.cluster_public_key",
-      );
-      if ((trust.finality.signers ?? []).length > 0) {
-        throw new Error("receipt_proof_trust.finality.signers are invalid in cluster mode");
-      }
-    } else {
-      const signers = trust.finality.signers ?? [];
-      if (signers.length === 0 || signers.some((s) => !s.public_key)) {
-        throw new Error("receipt_proof_trust.finality.signers must contain complete signer rows");
-      }
-      if (finality.threshold > signers.length) {
-        throw new Error("receipt_proof_trust.finality.threshold exceeds signer count");
-      }
-      if (trust.finality.committee_size != null || trust.finality.cluster_public_key != null) {
-        throw new Error("receipt_proof_trust.finality cluster fields are invalid in multisig mode");
-      }
-      assertUniqueNumbers(
-        signers.map((signer) => signer.authority_index),
-        "receipt_proof_trust.finality.signers.authority_index",
-      );
-      assertUniqueStrings(
-        signers.map((signer) => signer.public_key),
-        "receipt_proof_trust.finality.signers.public_key",
-      );
-      finality.signers = signers.map((signer) => {
-        assertOptionalRange(
-          signer.valid_from_round,
-          signer.valid_to_round,
-          "receipt_proof_trust.finality.signers",
-        );
-        return {
-          authority_index: assertSafeIntegerAtLeast(
-            signer.authority_index,
-            0,
-            "receipt_proof_trust.finality.signers.authority_index",
-          ),
-          public_key: assertString(
-            signer.public_key,
-            "receipt_proof_trust.finality.signers.public_key",
-          ),
-          valid_from_round: optionalSafeInteger(signer.valid_from_round),
-          valid_to_round: optionalSafeInteger(signer.valid_to_round),
-          notes: optionalString(signer.notes),
-        };
-      });
-    }
-    out.finality = finality;
   }
   return out;
 }
@@ -749,13 +550,3 @@ function assertUniqueStrings(values: readonly string[], field: string): void {
   }
 }
 
-function assertUniqueNumbers(values: readonly number[], field: string): void {
-  const seen = new Set<number>();
-  for (const value of values) {
-    const normalized = assertSafeIntegerAtLeast(value, 0, field);
-    if (seen.has(normalized)) {
-      throw new Error(`${field} values must be unique`);
-    }
-    seen.add(normalized);
-  }
-}

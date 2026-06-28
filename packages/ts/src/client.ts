@@ -129,9 +129,6 @@ import type {
 
 export type RoundCertificateResponse = RoundCertificateResponseBinding;
 
-/** @deprecated Use {@link RoundCertificateResponse}. The JSON wire is identical. */
-export type BlsCertificateResponse = RoundCertificateResponse;
-
 export type EthCallRequest = RpcCallRequest & {
   /** Alias accepted by `eth_call` / `eth_estimateGas`; `data` is canonical. */
   input?: string;
@@ -262,30 +259,6 @@ export interface NoEvmArchiveCoveringSnapshot {
   signatures: string[];
 }
 
-export interface NoEvmFinalityCertificate {
-  round: number;
-  signature: string;
-  signersBitmap: string;
-  signerIndices: number[];
-  signerCount: number;
-}
-
-export interface NoEvmFinalityBlockReference {
-  round: number;
-  authority: number;
-  digest: string;
-}
-
-export interface NoEvmFinalityEvidence {
-  schema: "mono.no_evm_receipt_finality.v1";
-  source: "roundCertificate" | string;
-  round: number;
-  certificate: NoEvmFinalityCertificate;
-  blockReference?: NoEvmFinalityBlockReference | null;
-  leaderCertificate?: NoEvmFinalityCertificate | null;
-  dacCertificate?: NoEvmFinalityCertificate | null;
-}
-
 interface NoEvmReceiptProofBase {
   schema: "mono.no_evm_receipt_proof.v1";
   rootAlgorithm: string;
@@ -297,7 +270,6 @@ interface NoEvmReceiptProofBase {
   blockHeight: number;
   txIndex: number;
   receiptCount: number;
-  finalityEvidence?: NoEvmFinalityEvidence | null;
 }
 
 export interface NoEvmBoundedReceiptProof extends NoEvmReceiptProofBase {
@@ -2507,11 +2479,6 @@ export class RpcClient {
   /** `lyth_getRoundCertificate` — round-advancement certificate. */
   async lythGetRoundCertificate(round: number | bigint | string): Promise<RoundCertificateResponse | null> {
     return this.call("lyth_getRoundCertificate", [encodeRpcInteger(round)]);
-  }
-
-  /** @deprecated Use lythGetRoundCertificate. */
-  async lythGetBlsRoundCertificate(round: number | bigint | string): Promise<RoundCertificateResponse | null> {
-    return this.lythGetRoundCertificate(round);
   }
 
   /** `lyth_getLeaderCertificate` — leader-vote certificate for a block ref. */

@@ -1,7 +1,6 @@
 import { blake3 } from "@noble/hashes/blake3.js";
 import { describe, expect, it } from "vitest";
 import {
-  NODE_REGISTRY_BLS_PUBKEY_BYTES,
   NODE_REGISTRY_CAPABILITIES,
   NODE_REGISTRY_CLUSTER_CHARTER_BYTES,
   NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS,
@@ -100,7 +99,6 @@ describe("node-registry helpers", () => {
     expect(NODE_REGISTRY_PUBLIC_SERVICE_MASK).toBe(0x0000_011b);
     expect(nodeRegistryAddressHex()).toBe("0x0000000000000000000000000000000000001005");
     expect(NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES).toBe(48);
-    expect(NODE_REGISTRY_BLS_PUBKEY_BYTES).toBe(48);
     expect(NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES).toBe(48);
     expect(NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES).toBe(1952);
     expect(NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES).toBe(3309);

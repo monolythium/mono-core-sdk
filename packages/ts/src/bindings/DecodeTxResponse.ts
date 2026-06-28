@@ -81,9 +81,8 @@ round: bigint | null,
  */
 clusterId: number | null,
 /**
- * Opaque round attestation payload (the consensus round certificate;
- * renamed from the legacy `blsAttestation` to match the node, which emits
- * `roundAttestation` after the BLS -> RoundCert consensus rename).
+ * Opaque round attestation payload (the consensus round certificate),
+ * emitted by the node under the `roundAttestation` key.
  */
 roundAttestation: unknown | null,
 /**
