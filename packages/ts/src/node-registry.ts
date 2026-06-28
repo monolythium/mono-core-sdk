@@ -132,8 +132,8 @@ export const NODE_REGISTRY_SELECTORS = {
   advertiseSeat: "0x" + selectorHex("advertiseSeat(uint32,uint8,uint32,uint128,uint32,bytes32)"),
   /**
    * `applyForSeat(uint32,uint32,bytes)` returns `bytes32 appKey` (L6).
-   * Payable — the native `value` carries the refundable application
-   * escrow ({@link NODE_REGISTRY_SEAT_APPLICATION_ESCROW_LYTHOSHI}).
+   * Payable — the native `value` escrows the full operator self-bond at
+   * apply ({@link NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI}).
    */
   applyForSeat: "0x" + selectorHex("applyForSeat(uint32,uint32,bytes)"),
   /**
@@ -2038,22 +2038,13 @@ export function deriveClusterAnchorAddress(
 export const NODE_REGISTRY_TAG_CLUSTER_SEAT = 0x32;
 
 /**
- * Refundable application escrow charged by `applyForSeat`, in lythoshi
- * (`100 LYTH`). Mirrors mono-core
- * `cluster_seat::APPLICATION_ESCROW_LYTHOSHI`. This is an anti-spam
- * escrow only — it is refunded on withdraw/reject and is DISTINCT from
- * the {@link NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI} self-bond, which is
- * bound only when the seat is filled (on admit), NOT at apply time.
- */
-export const NODE_REGISTRY_SEAT_APPLICATION_ESCROW_LYTHOSHI = 100n * 1_000_000_000_000_000_000n;
-
-/**
  * Operator self-bond floor in lythoshi (`5,000 LYTH`). Mirrors mono-core
  * `bond::MIN_SELF_BOND_LYTHOSHI` — the constitutional floor (raise-only;
- * lowering it is a hard fork). It is bound into the operator's bond at
- * seat-fill (admit), not escrowed at apply. NOTE: the 50,000 / 75,000
- * figures in the legacy design surfaces are stale fiction — the SDK
- * carries the on-chain floor only.
+ * lowering it is a hard fork). `applyForSeat` escrows the full self-bond
+ * up front — `max(this floor, seat.minBond)` — and retains it into the
+ * operator's bond on admit. NOTE: the 50,000 / 75,000 figures in the
+ * legacy design surfaces are stale fiction — the SDK carries the on-chain
+ * floor only.
  */
 export const NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI = 5_000n * 1_000_000_000_000_000_000n;
 
@@ -2335,7 +2326,7 @@ export interface SeatApplicationView {
   appKey: string;
   /** Application owner address (`0x` 20 bytes). */
   owner: string;
-  /** Escrow currently held in lythoshi. */
+  /** Full self-bond escrowed at apply, in lythoshi. */
   bondEscrowedLythoshi: bigint;
   /** Admit votes recorded so far. */
   voteCount: number;
@@ -2375,8 +2366,8 @@ export interface SeatAppliedEvent {
   operatorId: string;
   /** Application owner address (`0x` 20 bytes). */
   owner: string;
-  /** Escrow held in lythoshi. */
-  escrowLythoshi: bigint;
+  /** Full self-bond escrowed at apply, in lythoshi. */
+  bondLythoshi: bigint;
 }
 
 /** Decoded `SeatFilled` event (L6). Mirrors `events::SEAT_FILLED`. */
@@ -2432,7 +2423,7 @@ export function decodeSeatAdvertisedEvent(
 
 /**
  * Decode a `SeatApplied` log (L6). Indexed topics: `clusterId`, `seatId`,
- * `operatorId`. Data: `(address owner, uint128 escrow)` — 2 words.
+ * `operatorId`. Data: `(address owner, uint128 bond)` — 2 words.
  */
 export function decodeSeatAppliedEvent(
   topics: readonly (string | Uint8Array | readonly number[])[],
@@ -2451,7 +2442,7 @@ export function decodeSeatAppliedEvent(
     seatId,
     operatorId,
     owner: bytesToHex(body.slice(12, 32)),
-    escrowLythoshi: uintFromWord(body.slice(32, 64)),
+    bondLythoshi: uintFromWord(body.slice(32, 64)),
   };
 }
 

@@ -11,17 +11,19 @@
  * signed-consent path — these builders add discovery + intent, no new
  * consensus surface.
  *
- * The `applyForSeat` builder defaults the native value to the refundable
- * application escrow ({@link NODE_REGISTRY_SEAT_APPLICATION_ESCROW_LYTHOSHI},
- * 100 LYTH). The 5,000 LYTH self-bond is NOT posted here — it is bound
- * only when the seat is filled on admit.
+ * The `applyForSeat` builder defaults the native value to the full
+ * operator self-bond floor ({@link NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI},
+ * 5,000 LYTH): the on-chain primitive escrows the full self-bond at apply
+ * — `max(min_self_bond_floor, seat.minBond)` — and rejects an under-funded
+ * applicant up front. When a targeted seat advertises a `minBond` above
+ * the floor, the caller must override the value with that larger figure.
  */
 
 import type { ExecutionUnitPriceResponse } from "./client.js";
 import { parseBigint } from "./crypto/bytes.js";
 import type { NativeEvmTxFields } from "./crypto/tx.js";
 import {
-  NODE_REGISTRY_SEAT_APPLICATION_ESCROW_LYTHOSHI,
+  NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI,
   type AdvertiseSeatCalldataArgs,
   type ApplyForSeatCalldataArgs,
   type CloseSeatCalldataArgs,
@@ -69,11 +71,14 @@ export interface BuildApplyForSeatTxFieldsArgs extends ApplyForSeatCalldataArgs 
   nonce: bigint | number | string;
   fee: SeatTxFee;
   /**
-   * Native escrow to attach, in lythoshi. Defaults to
-   * {@link NODE_REGISTRY_SEAT_APPLICATION_ESCROW_LYTHOSHI} (100 LYTH,
-   * refundable). The 5,000 LYTH self-bond is bound at admit, not here.
+   * Self-bond to escrow at apply, in lythoshi. Defaults to the operator
+   * self-bond floor {@link NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI}
+   * (5,000 LYTH). The on-chain primitive requires
+   * `max(min_self_bond_floor, seat.minBond)`, so when the targeted seat
+   * advertises a `minBondLythoshi` above the floor the caller MUST pass
+   * that larger amount here or the application reverts (`SeatBondTooLow`).
    */
-  escrowLythoshi?: bigint | number | string;
+  selfBondLythoshi?: bigint | number | string;
 }
 
 export interface BuildVoteSeatAdmitTxFieldsArgs extends VoteSeatAdmitCalldataArgs {
@@ -139,19 +144,22 @@ export function buildAdvertiseSeatTxFields(
 
 /**
  * Build `applyForSeat` transaction fields (operator; payable). The native
- * `value` carries the refundable application escrow — defaulting to
- * {@link NODE_REGISTRY_SEAT_APPLICATION_ESCROW_LYTHOSHI} unless an
- * explicit `escrowLythoshi` is supplied.
+ * `value` escrows the operator self-bond at apply, defaulting to the
+ * self-bond floor {@link NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI}
+ * (5,000 LYTH). The on-chain primitive requires
+ * `max(min_self_bond_floor, seat.minBond)`; when the targeted seat's
+ * `minBondLythoshi` exceeds the floor, pass that larger figure via
+ * `selfBondLythoshi` or the application reverts (`SeatBondTooLow`).
  */
 export function buildApplyForSeatTxFields(
   args: BuildApplyForSeatTxFieldsArgs,
 ): NativeEvmTxFields {
-  const escrow = args.escrowLythoshi === undefined
-    ? NODE_REGISTRY_SEAT_APPLICATION_ESCROW_LYTHOSHI
-    : parseU256(args.escrowLythoshi, "escrowLythoshi");
+  const selfBond = args.selfBondLythoshi === undefined
+    ? NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI
+    : parseU256(args.selfBondLythoshi, "selfBondLythoshi");
   return {
     ...seatTxEnvelope(args.chainId, args.nonce, args.fee),
-    value: escrow,
+    value: selfBond,
     input: encodeApplyForSeatCalldata(args),
   };
 }

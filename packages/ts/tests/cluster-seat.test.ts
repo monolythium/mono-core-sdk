@@ -5,7 +5,6 @@ import {
   DEFAULT_SEAT_EXECUTION_UNIT_LIMIT,
   NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES,
   NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI,
-  NODE_REGISTRY_SEAT_APPLICATION_ESCROW_LYTHOSHI,
   NODE_REGISTRY_SEAT_KIND_ACTIVE,
   NODE_REGISTRY_SEAT_KIND_STANDBY,
   NODE_REGISTRY_SELECTORS,
@@ -257,7 +256,6 @@ describe("open-seat marketplace — calldata encoders", () => {
 
 describe("open-seat marketplace — constants and kind/status maps", () => {
   it("mirrors the on-chain economic constants", () => {
-    expect(NODE_REGISTRY_SEAT_APPLICATION_ESCROW_LYTHOSHI).toBe(100n * 10n ** 18n);
     expect(NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI).toBe(5_000n * 10n ** 18n);
     // 5,000 — NOT the legacy 50,000 design fiction.
     expect(NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI).not.toBe(50_000n * 10n ** 18n);
@@ -331,14 +329,14 @@ describe("open-seat marketplace — event decoders", () => {
     });
   });
 
-  it("decodes a SeatApplied log (operatorId indexed, owner + escrow in data)", () => {
+  it("decodes a SeatApplied log (operatorId indexed, owner + bond in data)", () => {
     const operatorId = new Uint8Array(32).fill(0x44);
     const owner = new Uint8Array(20).fill(0x55);
     const ownerWord = new Uint8Array(32);
     ownerWord.set(owner, 12);
     const data = new Uint8Array([
       ...ownerWord,
-      ...word(NODE_REGISTRY_SEAT_APPLICATION_ESCROW_LYTHOSHI, 16),
+      ...word(NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI, 16),
     ]);
     const decoded = decodeSeatAppliedEvent(
       [TOPIC0_GOLDEN.SeatApplied, word(7), word(2), operatorId],
@@ -349,7 +347,7 @@ describe("open-seat marketplace — event decoders", () => {
       seatId: 2,
       operatorId: `0x${"44".repeat(32)}`,
       owner: `0x${"55".repeat(20)}`,
-      escrowLythoshi: NODE_REGISTRY_SEAT_APPLICATION_ESCROW_LYTHOSHI,
+      bondLythoshi: NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI,
     });
   });
 
@@ -420,7 +418,7 @@ describe("open-seat marketplace — transaction builders", () => {
     );
   });
 
-  it("builds an applyForSeat tx that defaults the escrow to 100 LYTH", () => {
+  it("builds an applyForSeat tx that defaults the value to the 5,000 LYTH self-bond floor", () => {
     const pubkey = new Uint8Array(PUBKEY_LEN).fill(0xab);
     const tx = buildApplyForSeatTxFields({
       chainId: 69420,
@@ -431,12 +429,14 @@ describe("open-seat marketplace — transaction builders", () => {
       operatorPubkey: pubkey,
     });
     expect(tx.to).toBe(NODE_REGISTRY);
-    expect(tx.value).toBe(NODE_REGISTRY_SEAT_APPLICATION_ESCROW_LYTHOSHI);
+    expect(tx.value).toBe(NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI);
     expect(tx.input).toBe(encodeApplyForSeatCalldata({ clusterId: 7, seatId: 2, operatorPubkey: pubkey }));
   });
 
-  it("applyForSeat honors an explicit escrow override", () => {
+  it("applyForSeat honors an explicit self-bond override for a seat above the floor", () => {
     const pubkey = new Uint8Array(PUBKEY_LEN).fill(0xab);
+    // A seat advertising a minBond above the floor requires `max(floor, seat.minBond)`.
+    const seatMinBond = 7_500n * 10n ** 18n;
     const tx = buildApplyForSeatTxFields({
       chainId: 69420,
       nonce: 2,
@@ -444,9 +444,9 @@ describe("open-seat marketplace — transaction builders", () => {
       clusterId: 7,
       seatId: 2,
       operatorPubkey: pubkey,
-      escrowLythoshi: 250n * 10n ** 18n,
+      selfBondLythoshi: seatMinBond,
     });
-    expect(tx.value).toBe(250n * 10n ** 18n);
+    expect(tx.value).toBe(seatMinBond);
   });
 
   it("builds non-payable vote/withdraw/close txs", () => {
