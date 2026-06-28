@@ -1,9 +1,9 @@
 {
-  "name": "@monolythium/core-sdk",
-  "version": "0.4.9",
-  "description": "Official TypeScript SDK for Monolythium / LythiumDAG-BFT",
+  "name": "@monolythium/core-sdk-workspace",
+  "version": "0.0.0-workspace",
+  "description": "Workspace root for the Monolythium / LythiumDAG-BFT SDK. The published package lives in packages/ts (@monolythium/core-sdk).",
   "license": "Apache-2.0",
-  "private": false,
+  "private": true,
   "type": "module",
   "repository": {
     "type": "git",
