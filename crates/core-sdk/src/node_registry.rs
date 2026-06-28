@@ -304,15 +304,11 @@ const SEAT_LYTHOSHI_PER_LYTH: u128 = 1_000_000_000_000_000_000;
 /// `TAG_CLUSTER_CHARTER` (`0x31`).
 pub const TAG_CLUSTER_SEAT: u8 = 0x32;
 
-/// Refundable application escrow charged by `applyForSeat`, in lythoshi
-/// (`100 LYTH`). Mirrors `cluster_seat::APPLICATION_ESCROW_LYTHOSHI`.
-/// Anti-spam only; refunded on withdraw/reject and DISTINCT from the
-/// self-bond, which is bound at seat-fill (admit), not at apply.
-pub const SEAT_APPLICATION_ESCROW_LYTHOSHI: u128 = 100 * SEAT_LYTHOSHI_PER_LYTH;
-
 /// Operator self-bond floor in lythoshi (`5,000 LYTH`). Mirrors
 /// `bond::MIN_SELF_BOND_LYTHOSHI` — the constitutional floor (raise-only;
-/// lowering it is a hard fork). NOT the legacy 50,000 design fiction.
+/// lowering it is a hard fork). `applyForSeat` escrows the full self-bond
+/// — `max(this floor, seat.min_bond)` — up front. NOT the legacy 50,000
+/// design fiction.
 pub const MIN_SELF_BOND_LYTHOSHI: u128 = 5_000 * SEAT_LYTHOSHI_PER_LYTH;
 
 /// Active-vacancy seat kind (`kind=0`). Mirrors `cluster_seat::SEAT_KIND_ACTIVE`.
@@ -480,7 +476,7 @@ pub struct SeatApplication {
     pub app_key: String,
     /// Application owner address (`0x` 20 bytes).
     pub owner: String,
-    /// Escrow currently held in lythoshi.
+    /// Full self-bond escrowed at apply, in lythoshi.
     pub bond_escrowed_lythoshi: String,
     /// Admit votes recorded so far.
     pub vote_count: u16,
@@ -531,8 +527,8 @@ pub struct SeatAppliedEvent {
     pub operator_id: String,
     /// Application owner address (`0x` 20 bytes).
     pub owner: String,
-    /// Escrow held in lythoshi.
-    pub escrow_lythoshi: String,
+    /// Full self-bond escrowed at apply, in lythoshi.
+    pub bond_lythoshi: String,
 }
 
 /// Decoded `SeatFilled` event. Mirrors `events::SEAT_FILLED`.
@@ -743,12 +739,9 @@ mod tests {
     #[test]
     fn seat_constants_mirror_mono_core() {
         assert_eq!(TAG_CLUSTER_SEAT, 0x32);
-        assert_eq!(SEAT_APPLICATION_ESCROW_LYTHOSHI, 100 * 10u128.pow(18));
         assert_eq!(MIN_SELF_BOND_LYTHOSHI, 5_000 * 10u128.pow(18));
         // 5,000 — NOT the legacy 50,000 design fiction.
         assert_ne!(MIN_SELF_BOND_LYTHOSHI, 50_000 * 10u128.pow(18));
-        // The anti-spam escrow is well below the self-bond floor.
-        assert_eq!(SEAT_APPLICATION_ESCROW_LYTHOSHI, 100 * 10u128.pow(18));
         assert_eq!(SEAT_KIND_ACTIVE, 0);
         assert_eq!(SEAT_KIND_STANDBY, 1);
     }
