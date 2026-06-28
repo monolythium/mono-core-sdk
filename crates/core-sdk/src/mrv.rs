@@ -74,10 +74,10 @@ pub const ML_KEM_768_ENCAPSULATION_KEY_LEN: usize = 1_184;
 pub const ML_KEM_768_CIPHERTEXT_LEN: usize = 1_088;
 /// ML-KEM-768 shared secret byte length.
 pub const ML_KEM_768_SHARED_SECRET_LEN: usize = 32;
-/// DKG encrypted-mempool AEAD nonce byte length.
-pub const DKG_NONCE_LEN: usize = 12;
+/// Encrypted-mempool AEAD nonce byte length.
+pub const MEMPOOL_AEAD_NONCE_LEN: usize = 12;
 /// ChaCha20-Poly1305 authentication tag byte length.
-pub const DKG_AEAD_TAG_LEN: usize = 16;
+pub const MEMPOOL_AEAD_TAG_LEN: usize = 16;
 const STANDARD_ALGO_NUMBER_ML_DSA_65: u16 = 1_001;
 // Core builds with wallet-side classical variants cfg-gated out, so the
 // bincode variant index for PublicKey::MlDsa65 and Signature::MlDsa65 is 2.
@@ -88,11 +88,11 @@ const TX_HASH_TAG_IDENTITY: u8 = 0x02;
 const MRV_CODE_HASH_DOMAIN: &[u8] = b"MONO_MRV_CODE_V1";
 const MRV_CONTRACT_ADDRESS_DOMAIN: &[u8] = b"mono:riscv:contract-address:v1";
 const ML_DSA_65_ADDRESS_DERIVATION_DOMAIN: &[u8] = b"MONO_ADDRESS_BLAKE3_20_V1";
-// Retained for the MB-3 Ferveo encrypted-submit port; the encrypted-submit
+// Retained for the MB-3 encrypted-submit port; the encrypted-submit
 // chokepoint is gated off (see `build_mrv_native_encrypted_submission`), so
 // this AEAD domain tag is currently unreferenced outside the wire-shape test.
 #[allow(dead_code)]
-const DKG_AEAD_DOMAIN_TAG: &[u8] = b"protocore/v2/mempool/dkg-mlkem768/1";
+const MEMPOOL_AEAD_DOMAIN_TAG: &[u8] = b"protocore/v2/mempool/mlkem768/1";
 const MONO_SYSCALL_MODULE: &str = "mono";
 
 /// Formatting options for app-facing LYTH display.
@@ -1538,7 +1538,7 @@ pub struct MrvEncryptedNonceAad {
 pub struct MrvEncryptedDecryptHint {
     /// Cluster encryption epoch.
     pub epoch: u64,
-    /// Decryption scheme id. `0` is the current ML-KEM-768 DKG scheme.
+    /// Decryption scheme id. `0` is the current ML-KEM-768 scheme.
     pub scheme: u16,
 }
 
@@ -2508,9 +2508,8 @@ where
     //
     // TODO(MB-3): when the chain activates threshold decryption for MRV
     // submissions, port the live LythiumSeal scheme-3 path here — the inner
-    // tx is sealed to the per-cluster ML-KEM-768 + Shamir roster fetched from
-    // `lyth_getEncryptionKey` (the deleted Ferveo/BLS12-381 threshold path is
-    // not used). Only then may an envelope be emitted.
+    // tx is sealed to the per-cluster ML-KEM-768 encryption key fetched from
+    // `lyth_getEncryptionKey`. Only then may an envelope be emitted.
     Err(MrvValidationError::EncryptedSubmissionUnavailable)
 }
 
@@ -3234,7 +3233,7 @@ fn encrypt_mrv_signed_inner_tx(
     kem_random.zeroize();
     kem_random_array.zeroize();
 
-    let mut nonce = [0u8; DKG_NONCE_LEN];
+    let mut nonce = [0u8; MEMPOOL_AEAD_NONCE_LEN];
     getrandom::fill(&mut nonce).map_err(|err| MrvValidationError::CryptoRandom {
         reason: err.to_string(),
     })?;
@@ -3251,8 +3250,9 @@ fn encrypt_mrv_signed_inner_tx(
         .map_err(|_| MrvValidationError::EncryptionFailed)?;
     shared_secret.zeroize();
 
-    let mut out =
-        Vec::with_capacity(ML_KEM_768_CIPHERTEXT_LEN + DKG_NONCE_LEN + aead_ciphertext.len());
+    let mut out = Vec::with_capacity(
+        ML_KEM_768_CIPHERTEXT_LEN + MEMPOOL_AEAD_NONCE_LEN + aead_ciphertext.len(),
+    );
     out.extend_from_slice(kem_ciphertext.as_ref());
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&aead_ciphertext);
@@ -3265,8 +3265,8 @@ fn encrypt_mrv_signed_inner_tx(
 #[allow(dead_code)]
 fn mrv_encrypted_aead_aad(nonce_aad: &MrvEncryptedNonceAad) -> Result<Vec<u8>, MrvValidationError> {
     let encoded = bincode_mrv_encrypted_nonce_aad(nonce_aad)?;
-    let mut out = Vec::with_capacity(DKG_AEAD_DOMAIN_TAG.len() + encoded.len());
-    out.extend_from_slice(DKG_AEAD_DOMAIN_TAG);
+    let mut out = Vec::with_capacity(MEMPOOL_AEAD_DOMAIN_TAG.len() + encoded.len());
+    out.extend_from_slice(MEMPOOL_AEAD_DOMAIN_TAG);
     out.extend_from_slice(&encoded);
     Ok(out)
 }
@@ -4507,7 +4507,10 @@ mod tests {
             scheme: 0,
         };
         let ciphertext =
-            vec![0x44; ML_KEM_768_CIPHERTEXT_LEN + DKG_NONCE_LEN + 4 + DKG_AEAD_TAG_LEN];
+            vec![
+                0x44;
+                ML_KEM_768_CIPHERTEXT_LEN + MEMPOOL_AEAD_NONCE_LEN + 4 + MEMPOOL_AEAD_TAG_LEN
+            ];
         let public_key = vec![0x66; ML_DSA_65_PUBLIC_KEY_LEN];
         let outer_signature = vec![0x55; ML_DSA_65_SIGNATURE_LEN];
 

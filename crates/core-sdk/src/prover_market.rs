@@ -28,7 +28,7 @@ use ts_rs::TS;
 ///
 /// Final, registered slot. (The earlier first-pass guess of `0x1110`
 /// assumed MB-5 took a new precompile address; MB-5 instead shipped
-/// `attestDkgReshare` as a selector inside node-registry `0x1005`, so
+/// its operator selectors inside node-registry `0x1005`, so
 /// the platform extension band's lowest free slot — `0x100C`, after the
 /// operator router at `0x100B` — is where the prover market binds.)
 pub const PROVER_MARKET_ADDRESS: [u8; 20] = PROVER_MARKET;

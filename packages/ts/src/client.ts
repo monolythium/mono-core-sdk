@@ -1252,7 +1252,7 @@ export interface TotalSupplyResponse {
   currentSupplyLythoshi: string;
 }
 
-/** `lyth_swapIntentStatus` response — bridge swap-intent / DKG-reshare lifecycle. */
+/** `lyth_swapIntentStatus` response — bridge swap-intent lifecycle. */
 export interface SwapIntentStatus {
   schemaVersion: number;
   /**
@@ -1268,7 +1268,6 @@ export interface SwapIntentStatus {
   destinationPubkey?: string;
   sourceEpoch?: number;
   effectiveEpoch?: number;
-  dkgAttested?: boolean;
   currentEpoch: number;
   latestHeight: number;
 }
@@ -2690,7 +2689,7 @@ export class RpcClient {
     return this.call("lyth_totalSupply", []);
   }
 
-  /** `lyth_swapIntentStatus` — bridge swap-intent / DKG-reshare lifecycle for one intent id. */
+  /** `lyth_swapIntentStatus` — bridge swap-intent lifecycle for one intent id. */
   async lythSwapIntentStatus(intentId: number | bigint | string): Promise<SwapIntentStatus> {
     // The chain accepts a JSON number, a `0x`-hex string, OR a decimal
     // string (parse_u64_maybe_hex). Ids are capped at 2^56-1, beyond JS

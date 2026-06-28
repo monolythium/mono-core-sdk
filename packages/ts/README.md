@@ -256,14 +256,13 @@ try {
 ### Node-registry lifecycle helpers
 
 Operator tooling can build canonical node-registry calldata for Monarch
-recovery, roster pending changes, cancellation, and DKG re-share attestation.
+recovery, roster pending changes, and cancellation.
 
 ```ts
 import {
   encodeRecoverOperatorNodeCalldata,
   encodeSubmitPendingChangeCalldata,
   encodeCancelPendingChangeCalldata,
-  encodeAttestDkgReshareCalldata,
 } from "@monolythium/core-sdk";
 
 const recovery = encodeRecoverOperatorNodeCalldata(peerId);
@@ -274,7 +273,6 @@ const pending = encodeSubmitPendingChangeCalldata({
   intentId: 7n,
 });
 const cancel = encodeCancelPendingChangeCalldata({ epoch: 42n, targetPubkey });
-const dkg = encodeAttestDkgReshareCalldata({ intentId: 7n, consensusPublicKeys, thresholdSig });
 ```
 
 ### Bridge route readiness

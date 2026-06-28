@@ -67,8 +67,6 @@ export const NODE_REGISTRY_SELECTORS = {
   submitPendingChange: "0x" + selectorHex("submitPendingChange(uint8,bytes,uint64,uint64)"),
   /** `cancelPendingChange(uint64,bytes)` — foundation-gated pending-change cancellation. */
   cancelPendingChange: "0x" + selectorHex("cancelPendingChange(uint64,bytes)"),
-  /** `attestDkgReshare(uint64,bytes,bytes)` — operator-signed DKG re-share attestation. */
-  attestDkgReshare: "0x" + selectorHex("attestDkgReshare(uint64,bytes,bytes)"),
   reportServiceProbe: "0xeee31bba",
   getServiceProbe: "0x1fcbfbce",
   /** `setNetworkMetadata(bytes32,uint16,bytes3,bytes)` — owner-callable (PF-6). */
@@ -166,12 +164,6 @@ export const NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES = 1952;
 export const NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES = 3309;
 /** ML-DSA-65 self-signature width used as register proof-of-possession. */
 export const NODE_REGISTRY_CONSENSUS_POP_BYTES = 3309;
-/** DKG-reshare attestation signature width. Removal is tracked outside W1. */
-export const NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES = 96;
-/** @deprecated Use NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES. */
-export const NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES = NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES;
-export const NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS = 5;
-export const NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS = 7;
 export const NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID = (1n << 56n) - 1n;
 export const NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT = 7;
 export const NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT = 3;
@@ -339,14 +331,6 @@ export interface SubmitPendingChangeCalldataArgs {
 export interface CancelPendingChangeCalldataArgs {
   epoch: bigint | number | string;
   targetPubkey: string | Uint8Array | readonly number[];
-}
-
-export interface AttestDkgReshareCalldataArgs {
-  intentId: bigint | number | string;
-  consensusPublicKeys?: string | Uint8Array | readonly number[];
-  /** @deprecated Use consensusPublicKeys. */
-  blsPublicKeys?: string | Uint8Array | readonly number[];
-  thresholdSig: string | Uint8Array | readonly number[];
 }
 
 export interface RequestClusterJoinCalldataArgs {
@@ -681,81 +665,6 @@ export function encodeCancelPendingChangeCalldata(
       uint64Word(2n * 32n, "targetPubkeyOffset"),
       uint64Word(BigInt(targetPubkey.length), "targetPubkeyLength"),
       targetPubkeyPadded,
-    ),
-  );
-}
-
-export function parseDkgResharePublicKeys(
-  consensusPublicKeys: string | Uint8Array | readonly number[],
-): Uint8Array[] {
-  const keys = toBytes(consensusPublicKeys);
-  if (keys.length % NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES !== 0) {
-    throw new NodeRegistryError(
-      `consensusPublicKeys length must be a multiple of ${NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES} bytes`,
-    );
-  }
-  const signerCount = keys.length / NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES;
-  if (
-    signerCount < NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS ||
-    signerCount > NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS
-  ) {
-    throw new NodeRegistryError(
-      `consensusPublicKeys must contain ${NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS}..${NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS} signers`,
-    );
-  }
-  const out: Uint8Array[] = [];
-  const seen = new Set<string>();
-  for (let offset = 0; offset < keys.length; offset += NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES) {
-    const key = keys.slice(offset, offset + NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES);
-    const keyHex = bytesToHex(key);
-    if (seen.has(keyHex)) {
-      throw new NodeRegistryError("consensusPublicKeys contains a duplicate signer pubkey");
-    }
-    seen.add(keyHex);
-    out.push(key);
-  }
-  return out;
-}
-
-function dkgReshareConsensusPublicKeys(
-  args: AttestDkgReshareCalldataArgs,
-): string | Uint8Array | readonly number[] {
-  if (args.consensusPublicKeys !== undefined) return args.consensusPublicKeys;
-  if (args.blsPublicKeys !== undefined) return args.blsPublicKeys;
-  throw new NodeRegistryError("consensusPublicKeys is required");
-}
-
-export function encodeAttestDkgReshareCalldata(
-  args: AttestDkgReshareCalldataArgs,
-): string {
-  const intentId = toUint64(args.intentId, "intentId");
-  if (intentId === 0n) {
-    throw new NodeRegistryError("intentId must be greater than zero");
-  }
-  if (intentId > NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID) {
-    throw new NodeRegistryError("intentId must be <= 2^56-1");
-  }
-  const publicKeys = concatBytes(...parseDkgResharePublicKeys(dkgReshareConsensusPublicKeys(args)));
-  const thresholdSig = expectLength(
-    toBytes(args.thresholdSig),
-    NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES,
-    "thresholdSig",
-  );
-  const keysPadded = padToWord(publicKeys);
-  const sigPadded = padToWord(thresholdSig);
-  const offsetKeys = 3n * 32n;
-  const offsetSig = offsetKeys + 32n + BigInt(keysPadded.length);
-
-  return bytesToHex(
-    concatBytes(
-      hexToBytes(NODE_REGISTRY_SELECTORS.attestDkgReshare),
-      uint64Word(intentId, "intentId"),
-      uint64Word(offsetKeys, "consensusPublicKeysOffset"),
-      uint64Word(offsetSig, "thresholdSigOffset"),
-      uint64Word(BigInt(publicKeys.length), "consensusPublicKeysLength"),
-      keysPadded,
-      uint64Word(BigInt(thresholdSig.length), "thresholdSigLength"),
-      sigPadded,
     ),
   );
 }

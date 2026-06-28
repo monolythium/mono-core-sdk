@@ -328,15 +328,14 @@ before activation.
 ## Node Registry Lifecycle
 
 The node-registry helpers expose the Monarch operator lifecycle calldata used by
-Desktop and release runbooks: foundation recovery, pending roster changes,
-pending-change cancellation, and operator DKG re-share attestation.
+Desktop and release runbooks: foundation recovery, pending roster changes, and
+pending-change cancellation.
 
 ```ts
 import {
   PRECOMPILE_ADDRESSES,
   encodeRecoverOperatorNodeCalldata,
   encodeSubmitPendingChangeCalldata,
-  encodeAttestDkgReshareCalldata,
 } from "@monolythium/core-sdk";
 
 const recovery = encodeRecoverOperatorNodeCalldata(peerId);
@@ -346,18 +345,13 @@ const pending = encodeSubmitPendingChangeCalldata({
   effectiveEpoch: 42n,
   intentId: 7n,
 });
-const attestation = encodeAttestDkgReshareCalldata({
-  intentId: 7n,
-  blsPublicKeys,
-  thresholdSig,
-});
 // Send each calldata payload to PRECOMPILE_ADDRESSES.NODE_REGISTRY with the
 // required foundation/operator signer for that operation.
 ```
 
 These helpers only build canonical calldata and validate obvious wire-shape
-errors. The chain still enforces authorization, epoch timing, swap-intent
-state, and DKG threshold verification.
+errors. The chain still enforces authorization, epoch timing, and swap-intent
+state.
 
 ## Recovery Phrases And ML-DSA-65
 

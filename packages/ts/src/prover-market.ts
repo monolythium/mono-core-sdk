@@ -20,7 +20,7 @@ import { PRECOMPILE_ADDRESSES } from "./consts.js";
  *
  * Final, registered slot. (The earlier first-pass guess of `0x1110`
  * assumed MB-5 took `0x1110` for a new precompile; MB-5 instead shipped
- * `attestDkgReshare` as a selector inside node-registry `0x1005`, so the
+ * its operator selectors inside node-registry `0x1005`, so the
  * platform extension band's lowest free slot — `0x100C`, after the
  * operator router at `0x100B` — is where the prover market binds.) The
  * precompile is gateable + genesis-disabled per ADR-0015 §3; activation

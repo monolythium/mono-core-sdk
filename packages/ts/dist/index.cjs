@@ -127,7 +127,7 @@ function parseAddress(address) {
   }
   return bech32ToAddressBytes(address);
 }
-function validateAddress(address) {
+function validateAddress(address, opts = {}) {
   if (typeof address !== "string" || address.length === 0) {
     return { valid: false, reason: "address cannot be empty" };
   }
@@ -136,11 +136,17 @@ function validateAddress(address) {
     return { valid: false, reason: "address cannot be empty" };
   }
   if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
+    if (!opts.allowLegacyHex) {
+      return {
+        valid: false,
+        reason: "raw 0x addresses are retired; use a typed mono\u2026 bech32m address"
+      };
+    }
     try {
       const bytes = hexToAddressBytes(trimmed);
       return {
         valid: true,
-        normalized: addressToBech32(bytes),
+        normalized: addressBytesToHex(bytes),
         kind: null,
         format: "hex",
         bytes
@@ -349,8 +355,6 @@ var NODE_REGISTRY_SELECTORS = {
   submitPendingChange: "0x" + selectorHex("submitPendingChange(uint8,bytes,uint64,uint64)"),
   /** `cancelPendingChange(uint64,bytes)` — foundation-gated pending-change cancellation. */
   cancelPendingChange: "0x" + selectorHex("cancelPendingChange(uint64,bytes)"),
-  /** `attestDkgReshare(uint64,bytes,bytes)` — operator-signed DKG re-share attestation. */
-  attestDkgReshare: "0x" + selectorHex("attestDkgReshare(uint64,bytes,bytes)"),
   reportServiceProbe: "0xeee31bba",
   getServiceProbe: "0x1fcbfbce",
   /** `setNetworkMetadata(bytes32,uint16,bytes3,bytes)` — owner-callable (PF-6). */
@@ -440,10 +444,6 @@ var NODE_REGISTRY_BLS_PUBKEY_BYTES = NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES;
 var NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES = 1952;
 var NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES = 3309;
 var NODE_REGISTRY_CONSENSUS_POP_BYTES = 3309;
-var NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES = 96;
-var NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES = NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES;
-var NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS = 5;
-var NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS = 7;
 var NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID = (1n << 56n) - 1n;
 var NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT = 7;
 var NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT = 3;
@@ -580,68 +580,6 @@ function encodeCancelPendingChangeCalldata(args) {
       uint64Word(2n * 32n, "targetPubkeyOffset"),
       uint64Word(BigInt(targetPubkey.length), "targetPubkeyLength"),
       targetPubkeyPadded
-    )
-  );
-}
-function parseDkgResharePublicKeys(consensusPublicKeys) {
-  const keys = toBytes(consensusPublicKeys);
-  if (keys.length % NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES !== 0) {
-    throw new NodeRegistryError(
-      `consensusPublicKeys length must be a multiple of ${NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES} bytes`
-    );
-  }
-  const signerCount = keys.length / NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES;
-  if (signerCount < NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS || signerCount > NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS) {
-    throw new NodeRegistryError(
-      `consensusPublicKeys must contain ${NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS}..${NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS} signers`
-    );
-  }
-  const out = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (let offset = 0; offset < keys.length; offset += NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES) {
-    const key = keys.slice(offset, offset + NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES);
-    const keyHex = bytesToHex(key);
-    if (seen.has(keyHex)) {
-      throw new NodeRegistryError("consensusPublicKeys contains a duplicate signer pubkey");
-    }
-    seen.add(keyHex);
-    out.push(key);
-  }
-  return out;
-}
-function dkgReshareConsensusPublicKeys(args) {
-  if (args.consensusPublicKeys !== void 0) return args.consensusPublicKeys;
-  if (args.blsPublicKeys !== void 0) return args.blsPublicKeys;
-  throw new NodeRegistryError("consensusPublicKeys is required");
-}
-function encodeAttestDkgReshareCalldata(args) {
-  const intentId = toUint64(args.intentId, "intentId");
-  if (intentId === 0n) {
-    throw new NodeRegistryError("intentId must be greater than zero");
-  }
-  if (intentId > NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID) {
-    throw new NodeRegistryError("intentId must be <= 2^56-1");
-  }
-  const publicKeys = concatBytes(...parseDkgResharePublicKeys(dkgReshareConsensusPublicKeys(args)));
-  const thresholdSig = expectLength2(
-    toBytes(args.thresholdSig),
-    NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES,
-    "thresholdSig"
-  );
-  const keysPadded = padToWord(publicKeys);
-  const sigPadded = padToWord(thresholdSig);
-  const offsetKeys = 3n * 32n;
-  const offsetSig = offsetKeys + 32n + BigInt(keysPadded.length);
-  return bytesToHex(
-    concatBytes(
-      hexToBytes(NODE_REGISTRY_SELECTORS.attestDkgReshare),
-      uint64Word(intentId, "intentId"),
-      uint64Word(offsetKeys, "consensusPublicKeysOffset"),
-      uint64Word(offsetSig, "thresholdSigOffset"),
-      uint64Word(BigInt(publicKeys.length), "consensusPublicKeysLength"),
-      keysPadded,
-      uint64Word(BigInt(thresholdSig.length), "thresholdSigLength"),
-      sigPadded
     )
   );
 }
@@ -4977,7 +4915,7 @@ var RpcClient = class _RpcClient {
   async lythTotalSupply() {
     return this.call("lyth_totalSupply", []);
   }
-  /** `lyth_swapIntentStatus` — bridge swap-intent / DKG-reshare lifecycle for one intent id. */
+  /** `lyth_swapIntentStatus` — bridge swap-intent lifecycle for one intent id. */
   async lythSwapIntentStatus(intentId) {
     let id;
     if (typeof intentId === "number") {
@@ -10431,6 +10369,8 @@ var DELEGATION_REVERT_TAGS = {
    *  must be sent with `value = 0`. */
   unexpectedValue: "0x020e"
 };
+var CLAIMED_EVENT_SIG = "Claimed(address,uint256,bool)";
+var CLAIMED_EVENT_TOPIC0 = "0xfa8256f7c08bb01a03ea96f8b3a904a4450311c9725d1c52cdbe21ed3dc42dcc";
 var DelegationPrecompileError = class extends Error {
   constructor(message) {
     super(message);
@@ -10480,6 +10420,30 @@ function encodeSetAutoCompoundCalldata(enabled) {
 function isUnexpectedValueRevert(data) {
   return bytesToHex9(toBytes8(data)).toLowerCase() === DELEGATION_REVERT_TAGS.unexpectedValue;
 }
+function decodeClaimedEvent(topics, data) {
+  if (topics.length !== 2) {
+    throw new DelegationPrecompileError(`Claimed expects 2 topics, got ${topics.length}`);
+  }
+  const topic0 = toBytes8(topics[0]);
+  if (topic0.length !== 32) {
+    throw new DelegationPrecompileError("Claimed topic0 must be 32 bytes");
+  }
+  if (bytesToHex9(topic0).toLowerCase() !== CLAIMED_EVENT_TOPIC0) {
+    throw new DelegationPrecompileError("unexpected topic0 for Claimed");
+  }
+  const walletWord = toBytes8(topics[1]);
+  if (walletWord.length !== 32) {
+    throw new DelegationPrecompileError("Claimed wallet topic must be 32 bytes");
+  }
+  const body = toBytes8(data);
+  if (body.length < 64) {
+    throw new DelegationPrecompileError("Claimed data shorter than amount + autoCompound words");
+  }
+  const delegator = bytesToHex9(walletWord.slice(12, 32));
+  const amount = u256FromWord(body.slice(0, 32));
+  const autoCompound = body.slice(32, 64).some((b) => b !== 0);
+  return { delegator, amount, autoCompound };
+}
 function uint32Word2(value, name) {
   const n = toBigint3(value, name);
   if (n < 0n || n > 0xffffffffn) {
@@ -10518,6 +10482,13 @@ function toBigint3(value, name) {
     throw new DelegationPrecompileError(`${name} must be an integer string`);
   }
   return BigInt(value);
+}
+function u256FromWord(word) {
+  let out = 0n;
+  for (const b of word) {
+    out = out << 8n | BigInt(b);
+  }
+  return out;
 }
 function toBytes8(value) {
   if (typeof value === "string") {
@@ -12327,6 +12298,8 @@ exports.BridgePrecompileError = BridgePrecompileError;
 exports.BridgeRouteCatalogueError = BridgeRouteCatalogueError;
 exports.CHAIN_REGISTRY = CHAIN_REGISTRY;
 exports.CHAIN_REGISTRY_RAW_BASE = CHAIN_REGISTRY_RAW_BASE;
+exports.CLAIMED_EVENT_SIG = CLAIMED_EVENT_SIG;
+exports.CLAIMED_EVENT_TOPIC0 = CLAIMED_EVENT_TOPIC0;
 exports.CLOB_MARKET_ID_DOMAIN_TAG = CLOB_MARKET_ID_DOMAIN_TAG;
 exports.CLOB_SELECTORS = CLOB_SELECTORS;
 exports.CLUSTER_FORMED_EVENT_SIG = CLUSTER_FORMED_EVENT_SIG;
@@ -12403,10 +12376,6 @@ exports.NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES = NODE_REGISTRY_CLUSTER_MEMBER_RE
 exports.NODE_REGISTRY_CONSENSUS_POP_BYTES = NODE_REGISTRY_CONSENSUS_POP_BYTES;
 exports.NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES = NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES;
 exports.NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES = NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES;
-exports.NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES = NODE_REGISTRY_DKG_ATTESTATION_SIG_BYTES;
-exports.NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS = NODE_REGISTRY_DKG_RESHARE_MAX_SIGNERS;
-exports.NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS = NODE_REGISTRY_DKG_RESHARE_MIN_SIGNERS;
-exports.NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES = NODE_REGISTRY_DKG_THRESHOLD_SIG_BYTES;
 exports.NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT = NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT;
 exports.NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT = NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT;
 exports.NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN = NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN;
@@ -12607,6 +12576,7 @@ exports.computeNoEvmTargetReceiptHash = computeNoEvmTargetReceiptHash;
 exports.computeQuoteLiquidity = computeQuoteLiquidity;
 exports.consumeNativeEvents = consumeNativeEvents;
 exports.decodeActiveCharter = decodeActiveCharter;
+exports.decodeClaimedEvent = decodeClaimedEvent;
 exports.decodeClusterCharter = decodeClusterCharter;
 exports.decodeClusterDiversity = decodeClusterDiversity;
 exports.decodeClusterFormedEvent = decodeClusterFormedEvent;
@@ -12649,7 +12619,6 @@ exports.destinationRoot = destinationRoot;
 exports.encodeAdvertiseSeatCalldata = encodeAdvertiseSeatCalldata;
 exports.encodeAnswerArchiveChallengeCalldata = encodeAnswerArchiveChallengeCalldata;
 exports.encodeApplyForSeatCalldata = encodeApplyForSeatCalldata;
-exports.encodeAttestDkgReshareCalldata = encodeAttestDkgReshareCalldata;
 exports.encodeAttestServiceProbeCalldata = encodeAttestServiceProbeCalldata;
 exports.encodeBlockSelector = encodeBlockSelector;
 exports.encodeBridgeChallengeCalldata = encodeBridgeChallengeCalldata;
@@ -12832,7 +12801,6 @@ exports.packTimeWindow = packTimeWindow;
 exports.parseAddress = parseAddress;
 exports.parseBridgeRouteCatalogueJson = parseBridgeRouteCatalogueJson;
 exports.parseChainRegistryToml = parseChainRegistryToml;
-exports.parseDkgResharePublicKeys = parseDkgResharePublicKeys;
 exports.parseLythToLythoshi = parseLythToLythoshi;
 exports.parseNameCategory = parseNameCategory;
 exports.parseNativeDecodedEvent = parseNativeDecodedEvent;
