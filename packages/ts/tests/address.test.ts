@@ -65,15 +65,29 @@ describe("address helpers", () => {
   describe("validateAddress", () => {
     const hex = "0x4242424242424242424242424242424242424242";
 
-    it("accepts canonical hex and reports format hex with null kind", () => {
+    it("rejects raw 0x hex by default to match requireTypedAddress", () => {
       const result = validateAddress(hex);
+      expect(result.valid).toBe(false);
+      if (!result.valid) expect(result.reason).toMatch(/retired/);
+    });
+
+    it("accepts hex behind allowLegacyHex and normalizes to canonical 0x hex", () => {
+      const result = validateAddress(hex, { allowLegacyHex: true });
       expect(result.valid).toBe(true);
       if (result.valid) {
         expect(result.format).toBe("hex");
         expect(result.kind).toBeNull();
-        expect(result.normalized).toBe(addressToBech32(hex));
+        // Normalized to canonical 0x hex, NOT silently fabricated into a mono1 user address.
+        expect(result.normalized).toBe(addressBytesToHex(hexToAddressBytes(hex)));
+        expect(result.normalized.startsWith("0x")).toBe(true);
         expect([...result.bytes]).toEqual([...hexToAddressBytes(hex)]);
       }
+    });
+
+    it("still surfaces malformed hex reasons under allowLegacyHex", () => {
+      const result = validateAddress("0x123", { allowLegacyHex: true });
+      expect(result.valid).toBe(false);
+      if (!result.valid) expect(result.reason).toMatch(/0x-prefixed 20-byte hex address/);
     });
 
     it("accepts typed bech32m and reports kind + format bech32m", () => {
@@ -93,9 +107,10 @@ describe("address helpers", () => {
     });
 
     it("rejects malformed hex and bad bech32m without throwing", () => {
+      // By default any 0x input is rejected as retired before length checks.
       const badHex = validateAddress("0x123");
       expect(badHex.valid).toBe(false);
-      if (!badHex.valid) expect(badHex.reason).toMatch(/0x-prefixed 20-byte hex address/);
+      if (!badHex.valid) expect(badHex.reason).toMatch(/retired/);
 
       const badBech = validateAddress("mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdcq");
       expect(badBech.valid).toBe(false);

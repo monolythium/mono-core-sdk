@@ -142,12 +142,31 @@ export type AddressValidation =
     }
   | { valid: false; reason: string };
 
+/** Options for {@link validateAddress}. */
+export interface ValidateAddressOptions {
+  /**
+   * Accept retired raw `0x` 20-byte hex input. Defaults to `false`, matching
+   * the throwing boundary {@link requireTypedAddress}, which rejects raw hex.
+   * When `true`, hex is normalized to canonical lower-case `0x` hex (never to
+   * a `mono…` address) and reported as `format: "hex"`, `kind: null` — the
+   * kind cannot be inferred from a bare 20-byte payload.
+   */
+  allowLegacyHex?: boolean;
+}
+
 /**
- * Validate an address string without throwing. Accepts both raw hex and
- * typed bech32m. On success returns the canonical bech32m form along with
- * the kind/format/bytes; on failure returns a short reason string.
+ * Validate an address string without throwing. Typed bech32m addresses are
+ * always accepted; raw `0x` hex is **rejected by default** to stay consistent
+ * with {@link requireTypedAddress} (raw 0x addresses are retired). Pass
+ * `{ allowLegacyHex: true }` to accept hex for legacy/explorer paths — it is
+ * then normalized to canonical `0x` hex with `kind: null`, never fabricated
+ * into a `mono…` user address. On success returns the normalized form along
+ * with the kind/format/bytes; on failure returns a short reason string.
  */
-export function validateAddress(address: string): AddressValidation {
+export function validateAddress(
+  address: string,
+  opts: ValidateAddressOptions = {},
+): AddressValidation {
   if (typeof address !== "string" || address.length === 0) {
     return { valid: false, reason: "address cannot be empty" };
   }
@@ -156,11 +175,17 @@ export function validateAddress(address: string): AddressValidation {
     return { valid: false, reason: "address cannot be empty" };
   }
   if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
+    if (!opts.allowLegacyHex) {
+      return {
+        valid: false,
+        reason: "raw 0x addresses are retired; use a typed mono… bech32m address",
+      };
+    }
     try {
       const bytes = hexToAddressBytes(trimmed);
       return {
         valid: true,
-        normalized: addressToBech32(bytes),
+        normalized: addressBytesToHex(bytes),
         kind: null,
         format: "hex",
         bytes,
