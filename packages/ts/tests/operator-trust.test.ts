@@ -8,7 +8,7 @@ import {
 } from "../src/operator-trust.js";
 
 const PIN =
-  "0xaabb0f1ea0e9cae9dcc4fbd3e2af577c3568b209061207f919d159c2ab4ba995";
+  "0xdc0ff48230ce904893ee3184c331b405251a2dd7491e856b1d4be3944413f315";
 const FORK =
   "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
 
