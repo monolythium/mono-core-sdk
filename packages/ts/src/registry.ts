@@ -77,8 +77,8 @@ export const TESTNET_69420: ChainInfo = {
   description:
     "Public Monolythium testnet. Testnet state may reset without notice; do not store value on this network.",
   genesis_hash:
-    "0xaabb0f1ea0e9cae9dcc4fbd3e2af577c3568b209061207f919d159c2ab4ba995",
-  binary_sha: "6f33aa30",
+    "0xdc0ff48230ce904893ee3184c331b405251a2dd7491e856b1d4be3944413f315",
+  binary_sha: "4d781ed9",
   rpc: [
     {
       url: "http://178.105.12.9:8545",
@@ -168,62 +168,62 @@ export const TESTNET_69420: ChainInfo = {
   p2p: [
     {
       multiaddr:
-        "/ip4/178.105.12.9/tcp/29898/p2p/12D3KooWGgh9vYbNSqYbci8w7bg2AAaFWx7umN1ADjjcUoUTF2Za",
+        "/ip4/178.105.12.9/tcp/29898/p2p/12D3KooWKjLNBV9pyUoAc4PvPomBPVQvFYGrhfw1zgayHKxLJWTK",
       region: "fsn1",
     },
     {
       multiaddr:
-        "/ip4/178.105.15.216/tcp/29898/p2p/12D3KooWPUMj4vt1ee1Ug2QMJQwbDHSJ936JVaqw3iLXtAqPrq7R",
+        "/ip4/178.105.15.216/tcp/29898/p2p/12D3KooWM3f4JVKD73JpLHAMat4eCjHCQ8spa2t5kbw5pr9Th14Y",
       region: "fsn1",
     },
     {
       multiaddr:
-        "/ip4/178.104.233.182/tcp/29898/p2p/12D3KooWLPNJFUZhXyc1S7YvjMiKXyrNKCN3eFegDFF5UZAio7NJ",
+        "/ip4/178.104.233.182/tcp/29898/p2p/12D3KooWEG9SgHdxXdt6UELFfuhGSoYLWz7U925MQJ3ahYbporMd",
       region: "nbg1",
     },
     {
       multiaddr:
-        "/ip4/65.108.94.1/tcp/29898/p2p/12D3KooWRAuuQa5iEAzLUpLnyZ9VM53dvZMt3FPj7smDcwXn3oxz",
+        "/ip4/65.108.94.1/tcp/29898/p2p/12D3KooWB8TwRaLvPi1bv3ELjpsU4xB9d1nBNBVnB8uNSYkt8nzM",
       region: "hel1",
     },
     {
       multiaddr:
-        "/ip4/95.216.154.155/tcp/29898/p2p/12D3KooWFc9sVuCAuLxFTVy8KN5KXhyDvPjKkU98ySK81dFyStN8",
+        "/ip4/95.216.154.155/tcp/29898/p2p/12D3KooWGgxaS4P1HeVsYurjZUXhtodknQE3UWb5FnNQvnnfNreC",
       region: "hel1",
     },
     {
       multiaddr:
-        "/ip4/87.99.145.48/tcp/29898/p2p/12D3KooWL2KLRUHybGLd736nusDRTF2V1a9waeTsxKPwF78HDCmb",
+        "/ip4/87.99.145.48/tcp/29898/p2p/12D3KooWR7WhALaKvCJHnjeDzEY2ft5RZxiZ43i3exuksFprm1ji",
       region: "ash",
     },
     {
       multiaddr:
-        "/ip4/5.223.85.76/tcp/29898/p2p/12D3KooWHvobdzzEAiKcFkgdkRfr8vWGyWYfBoWS3jnPycvfwGrK",
+        "/ip4/5.223.85.76/tcp/29898/p2p/12D3KooWBwdQRUyzscvhzArSptASgEG2NAYuYg6v6Z2gDWDQvYqu",
       region: "sin",
     },
     {
       multiaddr:
-        "/ip4/142.132.180.99/tcp/29898/p2p/12D3KooWBcAeWScYmDWPTjNM47CkKR4vEf44CNhDCcWuGpyY7Hko",
+        "/ip4/142.132.180.99/tcp/29898/p2p/12D3KooWR7Ycv69VweBup98kLCvn9UqYS6oGdLHozUH4raU96yxw",
       region: "fsn1",
     },
     {
       multiaddr:
-        "/ip4/162.55.54.198/tcp/29898/p2p/12D3KooWRBA5Wzs619GuMY2NrDD6fGoLYCK2tkXff2JAZyXn7RvR",
+        "/ip4/162.55.54.198/tcp/29898/p2p/12D3KooWCPanBgTEeBMSAxiTdnNUzRMXicZCiQRgFoBYXbUXyBxP",
       region: "fsn1",
     },
     {
       multiaddr:
-        "/ip4/95.217.156.190/tcp/29898/p2p/12D3KooWPBr8guuWoZT59AobZEBHDZqKgwHWAP3aKUzKWeGTa7Z6",
+        "/ip4/95.217.156.190/tcp/29898/p2p/12D3KooWHf9MUBuLFKRZXt3LqprV5d486fFkbn6CiRERSMEr9nYK",
       region: "hel1",
     },
     {
       multiaddr:
-        "/ip4/178.105.45.210/tcp/29898/p2p/12D3KooWQRpCMLezJmvqqpbpEu8ixGHgonqianG1aVZjw6GiStbd",
+        "/ip4/178.105.45.210/tcp/29898/p2p/12D3KooWJdD6pr9RmEndQpQSCreeA3N2dmM3D8TLkd4NzKbycMka",
       region: "fsn1",
     },
     {
       multiaddr:
-        "/ip4/65.21.252.34/tcp/29898/p2p/12D3KooWRGzTwPX21Nee2c39RWuT2ayNWb6NMX19jCx8recrNeXL",
+        "/ip4/65.21.252.34/tcp/29898/p2p/12D3KooWE88fmJMTEjCU2dP8Qxcv9jNKkao83G6BWKr7fXZPP3cQ",
       region: "hel1",
     },
   ],

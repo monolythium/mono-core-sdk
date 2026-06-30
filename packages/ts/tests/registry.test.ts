@@ -33,9 +33,9 @@ describe("chain registry snapshot", () => {
   it("vendors the public testnet RPC endpoints", () => {
     expect(TESTNET_69420.chain_id).toBe(69420);
     expect(TESTNET_69420.genesis_hash).toBe(
-      "0xaabb0f1ea0e9cae9dcc4fbd3e2af577c3568b209061207f919d159c2ab4ba995",
+      "0xdc0ff48230ce904893ee3184c331b405251a2dd7491e856b1d4be3944413f315",
     );
-    expect(TESTNET_69420.binary_sha).toBe("6f33aa30");
+    expect(TESTNET_69420.binary_sha).toBe("4d781ed9");
     expect(getRpcEndpoints("testnet-69420").map((r) => r.url)).toEqual([
       "http://178.105.12.9:8545",
       "http://178.105.15.216:8545",
@@ -52,7 +52,7 @@ describe("chain registry snapshot", () => {
     ]);
     expect(getP2pSeeds("testnet-69420")).toHaveLength(12);
     expect(getP2pSeeds("testnet-69420")[0]?.multiaddr).toBe(
-      "/ip4/178.105.12.9/tcp/29898/p2p/12D3KooWGgh9vYbNSqYbci8w7bg2AAaFWx7umN1ADjjcUoUTF2Za",
+      "/ip4/178.105.12.9/tcp/29898/p2p/12D3KooWKjLNBV9pyUoAc4PvPomBPVQvFYGrhfw1zgayHKxLJWTK",
     );
   });
 
