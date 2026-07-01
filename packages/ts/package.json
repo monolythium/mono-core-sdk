@@ -33,7 +33,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsup",
+    "gen:version": "node scripts/gen-version.mjs",
+    "build": "node scripts/gen-version.mjs && tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
