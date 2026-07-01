@@ -288,6 +288,17 @@ const readiness = bridgeQuoteSubmitReadiness(intent, routeDisclosures);
 console.log(readiness.routeSelectionReady, readiness.quoteReady, readiness.blockedReasons);
 ```
 
+### Privacy / stealth send
+
+Stealth (recipient-privacy) send is **not yet supported client-side.** The
+privacy precompile at `0x1004` is live on testnet-69420, but only the
+server-side half is shipped — there is no SDK calldata builder, selector
+constants, or reference flow for `stealthTransfer` yet, and no wallet exposes a
+stealth send. Treat stealth send as unavailable in clients until a builder
+lands here (tracked in the repo issues); a linked adoption issue will be filed
+in each wallet repo once the surface ships. Regular sends and the existing
+stealth-address read/display helpers are unaffected.
+
 ### BIP-39 + ML-DSA-65 helpers
 
 Wallets and faucets derive deterministic ML-DSA-65 backends directly in
