@@ -6,6 +6,9 @@ var mlDsa_js = require('@noble/post-quantum/ml-dsa.js');
 var bip39 = require('@scure/bip39');
 var english_js = require('@scure/bip39/wordlists/english.js');
 
+// src/version.ts
+var version = "0.6.2";
+
 // src/error.ts
 var SdkError = class _SdkError extends Error {
   kind;
@@ -3128,8 +3131,8 @@ var TESTNET_69420 = {
   network: "testnet-69420",
   display_name: "Monolythium Testnet",
   description: "Public Monolythium testnet. Testnet state may reset without notice; do not store value on this network.",
-  genesis_hash: "0xaabb0f1ea0e9cae9dcc4fbd3e2af577c3568b209061207f919d159c2ab4ba995",
-  binary_sha: "6f33aa30",
+  genesis_hash: "0xbf512609bf4cf1f3a3f24b70bd62c4e9e7ed3e0ba495ba004b7245313c1c9e65",
+  binary_sha: "eb403ed9",
   rpc: [
     {
       url: "http://178.105.12.9:8545",
@@ -3218,51 +3221,51 @@ var TESTNET_69420 = {
   ],
   p2p: [
     {
-      multiaddr: "/ip4/178.105.12.9/tcp/29898/p2p/12D3KooWGgh9vYbNSqYbci8w7bg2AAaFWx7umN1ADjjcUoUTF2Za",
+      multiaddr: "/ip4/178.105.12.9/tcp/29898/p2p/12D3KooWSMGsoojG7eYabNXbb4YMbPimvzPq3fgTwtSLcEdFZXkR",
       region: "fsn1"
     },
     {
-      multiaddr: "/ip4/178.105.15.216/tcp/29898/p2p/12D3KooWPUMj4vt1ee1Ug2QMJQwbDHSJ936JVaqw3iLXtAqPrq7R",
+      multiaddr: "/ip4/178.105.15.216/tcp/29898/p2p/12D3KooWQt2VqzfDgYduMW447AY2U3KT8U6YKq9SYAXKQrj8D6uY",
       region: "fsn1"
     },
     {
-      multiaddr: "/ip4/178.104.233.182/tcp/29898/p2p/12D3KooWLPNJFUZhXyc1S7YvjMiKXyrNKCN3eFegDFF5UZAio7NJ",
+      multiaddr: "/ip4/178.104.233.182/tcp/29898/p2p/12D3KooWAhjFgrJruXS7UDTgHZCgr6campidXS5cwLjr46H6q6WY",
       region: "nbg1"
     },
     {
-      multiaddr: "/ip4/65.108.94.1/tcp/29898/p2p/12D3KooWRAuuQa5iEAzLUpLnyZ9VM53dvZMt3FPj7smDcwXn3oxz",
+      multiaddr: "/ip4/65.108.94.1/tcp/29898/p2p/12D3KooWLvKstMi6EhNqJLY98v9MzRFkitnzDpZNALLNhUpNKmLx",
       region: "hel1"
     },
     {
-      multiaddr: "/ip4/95.216.154.155/tcp/29898/p2p/12D3KooWFc9sVuCAuLxFTVy8KN5KXhyDvPjKkU98ySK81dFyStN8",
+      multiaddr: "/ip4/95.216.154.155/tcp/29898/p2p/12D3KooWHZxbom8mpDTH9ftrPTSHFpQrxevrAjasAbEdMyaizwhA",
       region: "hel1"
     },
     {
-      multiaddr: "/ip4/87.99.145.48/tcp/29898/p2p/12D3KooWL2KLRUHybGLd736nusDRTF2V1a9waeTsxKPwF78HDCmb",
+      multiaddr: "/ip4/87.99.145.48/tcp/29898/p2p/12D3KooWT24vsjfZ8wJX54uvzi9Ac8MGo3LcRsmTj1jsp3LUTWkw",
       region: "ash"
     },
     {
-      multiaddr: "/ip4/5.223.85.76/tcp/29898/p2p/12D3KooWHvobdzzEAiKcFkgdkRfr8vWGyWYfBoWS3jnPycvfwGrK",
+      multiaddr: "/ip4/5.223.85.76/tcp/29898/p2p/12D3KooWELSD91Eetunn8s2pytWkZnn8UuaXwrfuVDVSsgpurSqe",
       region: "sin"
     },
     {
-      multiaddr: "/ip4/142.132.180.99/tcp/29898/p2p/12D3KooWBcAeWScYmDWPTjNM47CkKR4vEf44CNhDCcWuGpyY7Hko",
+      multiaddr: "/ip4/142.132.180.99/tcp/29898/p2p/12D3KooWK1JVMRU6Lk1iJfTAVj1h1YAkAdAaFPEqVgHKwVgo4GTB",
       region: "fsn1"
     },
     {
-      multiaddr: "/ip4/162.55.54.198/tcp/29898/p2p/12D3KooWRBA5Wzs619GuMY2NrDD6fGoLYCK2tkXff2JAZyXn7RvR",
+      multiaddr: "/ip4/162.55.54.198/tcp/29898/p2p/12D3KooWQaZvw56wVTWYA5cFPtfLF79zkdJFnkGw4hjUZtNJqxZv",
       region: "fsn1"
     },
     {
-      multiaddr: "/ip4/95.217.156.190/tcp/29898/p2p/12D3KooWPBr8guuWoZT59AobZEBHDZqKgwHWAP3aKUzKWeGTa7Z6",
+      multiaddr: "/ip4/95.217.156.190/tcp/29898/p2p/12D3KooWQgNPfQobQo4wcB2NLbZyj3eeYgScddEmYYrqSfDrUFqF",
       region: "hel1"
     },
     {
-      multiaddr: "/ip4/178.105.45.210/tcp/29898/p2p/12D3KooWQRpCMLezJmvqqpbpEu8ixGHgonqianG1aVZjw6GiStbd",
+      multiaddr: "/ip4/178.105.45.210/tcp/29898/p2p/12D3KooWJdD6pr9RmEndQpQSCreeA3N2dmM3D8TLkd4NzKbycMka",
       region: "fsn1"
     },
     {
-      multiaddr: "/ip4/65.21.252.34/tcp/29898/p2p/12D3KooWRGzTwPX21Nee2c39RWuT2ayNWb6NMX19jCx8recrNeXL",
+      multiaddr: "/ip4/65.21.252.34/tcp/29898/p2p/12D3KooWE88fmJMTEjCU2dP8Qxcv9jNKkao83G6BWKr7fXZPP3cQ",
       region: "hel1"
     }
   ]
@@ -11504,9 +11507,6 @@ var MONOLYTHIUM_NETWORKS = {
     name: MONOLYTHIUM_TESTNET_NETWORK_NAME
   }
 };
-
-// src/index.ts
-var version = "0.4.18";
 
 exports.ADDRESS_HRP = ADDRESS_HRP;
 exports.ADDRESS_KIND_HRPS = ADDRESS_KIND_HRPS;
