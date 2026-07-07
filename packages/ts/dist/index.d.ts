@@ -1,6 +1,6 @@
 import { M as MempoolClass, N as NativeEvmTxFields, a as MlDsa65Backend } from './ml-dsa-Drcmrw5h.js';
 
-declare const version = "0.6.6";
+declare const version = "0.6.7";
 
 /**
  * Third-party bridge route disclosure helpers.
