@@ -33,32 +33,48 @@ describe("chain registry snapshot", () => {
   it("vendors the public testnet RPC endpoints", () => {
     expect(TESTNET_69420.chain_id).toBe(69420);
     expect(TESTNET_69420.genesis_hash).toBe(
-      "0x25fd542b65f9fabc471a5bd05eb154ef52e56e57a6ea703cc5224574fcb8706e",
+      "0xbe1b3a3c25c0a40a9faa9ca1b434991406f71f0e93c76c083a0e7ba44a47d33a",
     );
-    expect(TESTNET_69420.binary_sha).toBe("81ff5a2d");
+    expect(TESTNET_69420.binary_sha).toBe("da04f8f5");
     expect(getRpcEndpoints("testnet-69420").map((r) => r.url)).toEqual([
-      "http://178.105.45.210:8545",
-      "http://65.21.252.34:8545",
+      "http://5.78.236.250:8545",
+      "http://5.78.233.163:8545",
+      "http://5.78.226.88:8545",
+      "http://5.78.195.220:8545",
+      "http://5.78.233.251:8545",
+      "http://5.78.235.111:8545",
+      "http://5.78.236.36:8545",
+      "http://5.78.229.250:8545",
       "http://178.105.12.9:8545",
-      "http://178.105.15.216:8545",
-      "http://178.104.233.182:8545",
-      "http://65.108.94.1:8545",
-      "http://95.216.154.155:8545",
-      "http://87.99.145.48:8545",
       "http://5.223.85.76:8545",
+      "http://116.202.8.181:8545",
+      "http://46.225.26.24:8545",
+      "http://168.119.181.105:8545",
+      "http://65.108.94.1:8545",
+      "http://5.78.231.123:8545",
+      "http://178.105.15.216:8545",
       "http://142.132.180.99:8545",
-      "http://95.217.156.190:8545",
+      "http://178.104.98.80:8545",
+      "http://178.105.218.151:8545",
+      "http://95.216.154.155:8545",
+      "http://46.62.214.97:8545",
+      "http://5.78.239.10:8545",
+      "http://178.104.233.182:8545",
+      "http://87.99.145.48:8545",
       "http://162.55.54.198:8545",
+      "http://49.12.14.148:8545",
+      "http://49.12.40.11:8545",
+      "http://95.217.156.190:8545",
     ]);
-    expect(getP2pSeeds("testnet-69420")).toHaveLength(12);
+    expect(getP2pSeeds("testnet-69420")).toHaveLength(28);
     expect(getP2pSeeds("testnet-69420")[0]?.multiaddr).toBe(
-      "/ip4/178.105.12.9/tcp/29898/p2p/12D3KooWMTj28KshiutQcxMxXrRRjq3tCARyn6PwtAAG11BU9FbS",
+      "/ip4/5.78.236.250/tcp/29898/p2p/12D3KooWQoTGcgyArEpPVBLWtF2F6oApy9t4fHHZtVTWfi2hTCmY",
     );
   });
 
   it("constructs a client from the first registry endpoint without probing", async () => {
     const client = await RpcClient.forNetwork("testnet-69420");
-    expect(client.endpoint).toBe("http://178.105.45.210:8545");
+    expect(client.endpoint).toBe("http://5.78.236.250:8545");
   });
 
   it("probes endpoints until one answers with the expected chain id", async () => {
