@@ -5,7 +5,7 @@ import { validateMnemonic, mnemonicToSeedSync } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 
 // src/version.ts
-var version = "0.6.4";
+var version = "0.6.6";
 
 // src/error.ts
 var SdkError = class _SdkError extends Error {
@@ -3129,147 +3129,318 @@ var TESTNET_69420 = {
   network: "testnet-69420",
   display_name: "Monolythium Testnet",
   description: "Public Monolythium testnet. Testnet state may reset without notice; do not store value on this network.",
-  genesis_hash: "0x5d5c36efebc5c18a487f6929313343a37f44562e5941b65d3c262eacf594891e",
-  binary_sha: "92a44932",
+  genesis_hash: "0xbe1b3a3c25c0a40a9faa9ca1b434991406f71f0e93c76c083a0e7ba44a47d33a",
+  binary_sha: "da04f8f5",
   rpc: [
-    // Relays lead (mirrors the chain-registry ordering, which is load-bearing:
-    // only the relays serve the COMPLETE fast-sync closure, so cold-start
-    // clients that walk this list top-to-bottom must hit them first).
+    // 4 DVT clusters x 7 operators (28 nodes) from the 2026-07-07 v0.4.0
+    // 4-cluster re-genesis. Mirrors chain-registry chains/testnet-69420.toml.
     {
-      url: "http://178.105.45.210:8545",
-      provider: "monolythium-foundation",
-      region: "fsn1",
-      tier: "official",
-      notes: "relay-1; serves complete fast-sync closure (cold-start preferred)"
-    },
-    {
-      url: "http://65.21.252.34:8545",
+      url: "http://5.78.236.250:8545",
       provider: "monolythium-foundation",
       region: "hel1",
-      tier: "official",
-      notes: "relay-2; serves complete fast-sync closure (cold-start preferred)"
-    },
-    {
-      url: "http://178.105.12.9:8545",
-      provider: "monolythium-foundation",
-      region: "fsn1",
       tier: "official",
       notes: "operator-1"
     },
     {
-      url: "http://178.105.15.216:8545",
+      url: "http://5.78.233.163:8545",
       provider: "monolythium-foundation",
-      region: "fsn1",
+      region: "hel1",
       tier: "official",
-      notes: "operator-2; primary foundation seed"
+      notes: "operator-2"
     },
     {
-      url: "http://178.104.233.182:8545",
+      url: "http://5.78.226.88:8545",
       provider: "monolythium-foundation",
-      region: "nbg1",
+      region: "hel1",
       tier: "official",
       notes: "operator-3"
     },
     {
-      url: "http://65.108.94.1:8545",
+      url: "http://5.78.195.220:8545",
       provider: "monolythium-foundation",
       region: "hel1",
       tier: "official",
       notes: "operator-4"
     },
     {
-      url: "http://95.216.154.155:8545",
+      url: "http://5.78.233.251:8545",
       provider: "monolythium-foundation",
       region: "hel1",
       tier: "official",
       notes: "operator-5"
     },
     {
-      url: "http://87.99.145.48:8545",
+      url: "http://5.78.235.111:8545",
       provider: "monolythium-foundation",
-      region: "ash",
+      region: "hel1",
       tier: "official",
-      notes: "operator-6; US east"
+      notes: "operator-6"
+    },
+    {
+      url: "http://5.78.236.36:8545",
+      provider: "monolythium-foundation",
+      region: "hel1",
+      tier: "official",
+      notes: "operator-7"
+    },
+    {
+      url: "http://5.78.229.250:8545",
+      provider: "monolythium-foundation",
+      region: "hel1",
+      tier: "official",
+      notes: "operator-8"
+    },
+    {
+      url: "http://178.105.12.9:8545",
+      provider: "monolythium-foundation",
+      region: "fsn1",
+      tier: "official",
+      notes: "operator-9"
     },
     {
       url: "http://5.223.85.76:8545",
       provider: "monolythium-foundation",
-      region: "sin",
       tier: "official",
-      notes: "operator-7; APAC"
+      notes: "operator-10"
+    },
+    {
+      url: "http://116.202.8.181:8545",
+      provider: "monolythium-foundation",
+      region: "fsn1",
+      tier: "official",
+      notes: "operator-11"
+    },
+    {
+      url: "http://46.225.26.24:8545",
+      provider: "monolythium-foundation",
+      region: "nbg1",
+      tier: "official",
+      notes: "operator-12"
+    },
+    {
+      url: "http://168.119.181.105:8545",
+      provider: "monolythium-foundation",
+      region: "fsn1",
+      tier: "official",
+      notes: "operator-13"
+    },
+    {
+      url: "http://65.108.94.1:8545",
+      provider: "monolythium-foundation",
+      region: "hel1",
+      tier: "official",
+      notes: "operator-14"
+    },
+    {
+      url: "http://5.78.231.123:8545",
+      provider: "monolythium-foundation",
+      region: "hel1",
+      tier: "official",
+      notes: "operator-15"
+    },
+    {
+      url: "http://178.105.15.216:8545",
+      provider: "monolythium-foundation",
+      region: "fsn1",
+      tier: "official",
+      notes: "operator-16"
     },
     {
       url: "http://142.132.180.99:8545",
       provider: "monolythium-foundation",
       region: "fsn1",
       tier: "official",
-      notes: "operator-8"
+      notes: "operator-17"
     },
     {
-      url: "http://95.217.156.190:8545",
+      url: "http://178.104.98.80:8545",
+      provider: "monolythium-foundation",
+      region: "nbg1",
+      tier: "official",
+      notes: "operator-18"
+    },
+    {
+      url: "http://178.105.218.151:8545",
+      provider: "monolythium-foundation",
+      region: "fsn1",
+      tier: "official",
+      notes: "operator-19"
+    },
+    {
+      url: "http://95.216.154.155:8545",
       provider: "monolythium-foundation",
       region: "hel1",
       tier: "official",
-      notes: "operator-10"
+      notes: "operator-20"
+    },
+    {
+      url: "http://46.62.214.97:8545",
+      provider: "monolythium-foundation",
+      region: "hel1",
+      tier: "official",
+      notes: "operator-21"
+    },
+    {
+      url: "http://5.78.239.10:8545",
+      provider: "monolythium-foundation",
+      region: "hel1",
+      tier: "official",
+      notes: "operator-22"
+    },
+    {
+      url: "http://178.104.233.182:8545",
+      provider: "monolythium-foundation",
+      region: "fsn1",
+      tier: "official",
+      notes: "operator-23"
+    },
+    {
+      url: "http://87.99.145.48:8545",
+      provider: "monolythium-foundation",
+      tier: "official",
+      notes: "operator-24"
     },
     {
       url: "http://162.55.54.198:8545",
       provider: "monolythium-foundation",
       region: "fsn1",
       tier: "official",
-      notes: "operator-9"
+      notes: "operator-25"
+    },
+    {
+      url: "http://49.12.14.148:8545",
+      provider: "monolythium-foundation",
+      region: "fsn1",
+      tier: "official",
+      notes: "operator-26"
+    },
+    {
+      url: "http://49.12.40.11:8545",
+      provider: "monolythium-foundation",
+      region: "fsn1",
+      tier: "official",
+      notes: "operator-27"
+    },
+    {
+      url: "http://95.217.156.190:8545",
+      provider: "monolythium-foundation",
+      region: "hel1",
+      tier: "official",
+      notes: "operator-28"
     }
   ],
   p2p: [
-    // Operator peer IDs regenerated by the 2026-07-03 v0.3.3 re-genesis
-    // (fresh libp2p identities per wipe+redeploy); the two relay identities
-    // carried over. Mirrors chain-registry chains/testnet-69420.toml.
+    // Operator peer IDs from the 2026-07-07 v0.4.0 4-cluster re-genesis
+    // (fresh libp2p identities per wipe+redeploy). Mirrors chain-registry
+    // chains/testnet-69420.toml.
     {
-      multiaddr: "/ip4/178.105.12.9/tcp/29898/p2p/12D3KooWAaLQWTeiy2Gs96ETBkPps6JxW1c9V4Hk6WK7oZ979CDu",
+      multiaddr: "/ip4/5.78.236.250/tcp/29898/p2p/12D3KooWQoTGcgyArEpPVBLWtF2F6oApy9t4fHHZtVTWfi2hTCmY",
+      region: "hel1"
+    },
+    {
+      multiaddr: "/ip4/5.78.233.163/tcp/29898/p2p/12D3KooWPeXbc1FoaYixLzsVGyN8kw363Y7EqeZD3WXUj386NXFu",
+      region: "hel1"
+    },
+    {
+      multiaddr: "/ip4/5.78.226.88/tcp/29898/p2p/12D3KooWAjsymTFv7zPeUcaNs17DKaXfyH1d3T8LsKG44W1uCa3U",
+      region: "hel1"
+    },
+    {
+      multiaddr: "/ip4/5.78.195.220/tcp/29898/p2p/12D3KooWAdT6xpqDY1MD9eYsuDoXgQKGzfR1wX7JvL4H3MQqzcTK",
+      region: "hel1"
+    },
+    {
+      multiaddr: "/ip4/5.78.233.251/tcp/29898/p2p/12D3KooWQDd8JpPPGLZZkzQZsnMEVGbEnLEX8dtJBnwKNenKZLDo",
+      region: "hel1"
+    },
+    {
+      multiaddr: "/ip4/5.78.235.111/tcp/29898/p2p/12D3KooWFXiAPUw6ncj6F3qwAkkyvrX6c8LUr1BTkR2z2HK9CUG7",
+      region: "hel1"
+    },
+    {
+      multiaddr: "/ip4/5.78.236.36/tcp/29898/p2p/12D3KooWSAyo845nZx88HYNjtDusuxE9kipSsfi54rBRVjB6Wshj",
+      region: "hel1"
+    },
+    {
+      multiaddr: "/ip4/5.78.229.250/tcp/29898/p2p/12D3KooWRSnb6cUL4akMYAdEYPNpbddY4r5Sdip3kCCLAGD1PXQh",
+      region: "hel1"
+    },
+    {
+      multiaddr: "/ip4/178.105.12.9/tcp/29898/p2p/12D3KooWMyhRQkmWCUBE5ShER5BfrFZ3A3c8baZhY5ANyBGEuzhi",
       region: "fsn1"
     },
     {
-      multiaddr: "/ip4/178.105.15.216/tcp/29898/p2p/12D3KooWNYLjmjVqrmiwWSGCaKMCFjcthdLw1fkPqDq6dfx3ZKMJ",
+      multiaddr: "/ip4/5.223.85.76/tcp/29898/p2p/12D3KooWKAWRFTUFHnK9Ti9mLniT4hcGb6j9LQmbbfwMi56EHjvK"
+    },
+    {
+      multiaddr: "/ip4/116.202.8.181/tcp/29898/p2p/12D3KooWPaoNUAxukZwTohtofKHscmu6hsh8Ue18XpBE9FYkBqzJ",
       region: "fsn1"
     },
     {
-      multiaddr: "/ip4/178.104.233.182/tcp/29898/p2p/12D3KooWLfe4bsARhMasXPa65hX6yxxEuJEJmKPocqN9HLTBd1sK",
+      multiaddr: "/ip4/46.225.26.24/tcp/29898/p2p/12D3KooWCYWHjndBGnvBomNquh4foK8VSK9MQ4uwo5bMnTnNbjUo",
       region: "nbg1"
     },
     {
-      multiaddr: "/ip4/65.108.94.1/tcp/29898/p2p/12D3KooWJj5VBJXuAifwtMdMeXFqcPZSkoCvi417nuKNfdJ2mTry",
-      region: "hel1"
-    },
-    {
-      multiaddr: "/ip4/95.216.154.155/tcp/29898/p2p/12D3KooWRmcep47BBZiN7ZELi91b3RQG4nfekcnYZ19Qdwj8C61K",
-      region: "hel1"
-    },
-    {
-      multiaddr: "/ip4/87.99.145.48/tcp/29898/p2p/12D3KooWMmWRQUTj1LN2Ncvj7pWhu1Snp3pQ4XuhXMqa8ze4iqsX",
-      region: "ash"
-    },
-    {
-      multiaddr: "/ip4/5.223.85.76/tcp/29898/p2p/12D3KooWLu4FJex7mg8w2Z6bPXAHiz2wD3E8vpnguUF5ejjVVENi",
-      region: "sin"
-    },
-    {
-      multiaddr: "/ip4/142.132.180.99/tcp/29898/p2p/12D3KooWSCZLfC4uRcHdYbxsxmPznZrqhT5rraeAvfSuizHLEZzu",
+      multiaddr: "/ip4/168.119.181.105/tcp/29898/p2p/12D3KooWFoiDFVikwEP5spaBU6ZiPdaNyr2YLEDy4zAgLiAUygKw",
       region: "fsn1"
     },
     {
-      multiaddr: "/ip4/95.217.156.190/tcp/29898/p2p/12D3KooWD7xxjoPk9oaLBhhzNNjH3VKPXMHKCU6bnZ74W2eMazDV",
+      multiaddr: "/ip4/65.108.94.1/tcp/29898/p2p/12D3KooWDjt7nfbkdHMBt5F4ZuqcWbGCADbhhRVvJocmFJ6Gv6jF",
       region: "hel1"
     },
     {
-      multiaddr: "/ip4/162.55.54.198/tcp/29898/p2p/12D3KooWQAquw7mcRc8yjFswSgNFfKb8AvQa5nkQVAcMPukDC3oB",
+      multiaddr: "/ip4/5.78.231.123/tcp/29898/p2p/12D3KooWBJkLxf7mR9vMzQXMHSJXEQeqCYixgbP3SG265NR4pjMQ",
+      region: "hel1"
+    },
+    {
+      multiaddr: "/ip4/178.105.15.216/tcp/29898/p2p/12D3KooWFJSCWzTGE9SA1mcYN45okmgAHQcGQ9bHvUhe4RE1KJ9Q",
       region: "fsn1"
     },
     {
-      multiaddr: "/ip4/178.105.45.210/tcp/29898/p2p/12D3KooWJdD6pr9RmEndQpQSCreeA3N2dmM3D8TLkd4NzKbycMka",
+      multiaddr: "/ip4/142.132.180.99/tcp/29898/p2p/12D3KooWDQgycwFBJRThjoQTC93tLkNB5ybBtAZ1DjzVjpJjGEX3",
       region: "fsn1"
     },
     {
-      multiaddr: "/ip4/65.21.252.34/tcp/29898/p2p/12D3KooWE88fmJMTEjCU2dP8Qxcv9jNKkao83G6BWKr7fXZPP3cQ",
+      multiaddr: "/ip4/178.104.98.80/tcp/29898/p2p/12D3KooWPBhe8MVCycbqpjBxGn2SDNrXE2iMKbdU3peYNi2NPZk3",
+      region: "nbg1"
+    },
+    {
+      multiaddr: "/ip4/178.105.218.151/tcp/29898/p2p/12D3KooWRyzmXpVGTRgMAv3sLodutktjtFaboeF2Ha57neVaaQXz",
+      region: "fsn1"
+    },
+    {
+      multiaddr: "/ip4/95.216.154.155/tcp/29898/p2p/12D3KooWRpuX515ozMPCMB7Mo7kMXnr3eF99eepTaE292qUZkjks",
+      region: "hel1"
+    },
+    {
+      multiaddr: "/ip4/46.62.214.97/tcp/29898/p2p/12D3KooWPKJSx2kBce9eBFxSwqygyCea2v97XczDPEgK9j5mysni",
+      region: "hel1"
+    },
+    {
+      multiaddr: "/ip4/5.78.239.10/tcp/29898/p2p/12D3KooWPckKRjojCAD9aSutLNDnVkyEVxdxAJUXMzPosKy5hrBU",
+      region: "hel1"
+    },
+    {
+      multiaddr: "/ip4/178.104.233.182/tcp/29898/p2p/12D3KooWGiR9yqaM5UkGncLVjnCcFaTDbfZrjWam3ZmyM5rNTqZ7",
+      region: "fsn1"
+    },
+    {
+      multiaddr: "/ip4/87.99.145.48/tcp/29898/p2p/12D3KooWKFxwa384Hd2JzGrf9zZqhiKY4ttCFLoGhyp4CA3b1jjd"
+    },
+    {
+      multiaddr: "/ip4/162.55.54.198/tcp/29898/p2p/12D3KooWP3Rviz3PrcSiVWASHr7kRwGZWnxwNSh4nJCQ3Fr82k6P",
+      region: "fsn1"
+    },
+    {
+      multiaddr: "/ip4/49.12.14.148/tcp/29898/p2p/12D3KooWJ3v6K15fJV58KJrqJKBg1zdHY9urV3fMsZ8QfkLPJuVn",
+      region: "fsn1"
+    },
+    {
+      multiaddr: "/ip4/49.12.40.11/tcp/29898/p2p/12D3KooWNFoe5Y6p7Y3hUSfUESUHPi65WE7mWSrR8ZgMC4jaxGTQ",
+      region: "fsn1"
+    },
+    {
+      multiaddr: "/ip4/95.217.156.190/tcp/29898/p2p/12D3KooWFy7tvDdrsH8avgDnTaekhRBzVByTb82jtbKFRk7u8rAL",
       region: "hel1"
     }
   ]
