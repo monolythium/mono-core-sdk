@@ -44,6 +44,8 @@ The SDK tracks the live `mono-core` RPC and precompile surface. Wire types under
   metadata only, not an on-chain bridge quote/submit boundary.
 - TypeScript standard BIP-39 + ML-DSA-65 helpers for recovery phrases,
   deterministic seed derivation, address derivation, and signing backends.
+- Canonical, origin- and network-bound wallet authentication V1 helpers for
+  browser wallets and relying-party services in both Rust and TypeScript.
 
 ## Install
 
