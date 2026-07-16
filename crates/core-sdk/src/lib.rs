@@ -41,6 +41,7 @@ pub mod spending_policy;
 pub mod token_factory;
 pub mod types;
 pub mod vrf;
+pub mod wallet_auth;
 
 pub use address::{
     address_to_bech32, address_to_hex, address_to_typed_bech32, bech32_to_address, hex_to_address,
@@ -197,6 +198,19 @@ pub use vrf::{
     decode_vrf_output, encode_vrf_evaluate_calldata, encode_vrf_evaluate_calldata_hex,
     vrf_address_hex, VrfCallError, VRF_ADDRESS, VRF_DOMAIN_TAG_MAX_BYTES,
     VRF_HEIGHT_NOT_FINALIZED_REVERT, VRF_OUTPUT_BYTES,
+};
+pub use wallet_auth::{
+    canonical_wallet_auth_challenge_json_v1, canonical_wallet_auth_proof_json_v1,
+    decode_wallet_auth_challenge_v1, decode_wallet_auth_proof_v1, encode_wallet_auth_challenge_v1,
+    encode_wallet_auth_proof_v1, validate_wallet_auth_challenge_v1, validate_wallet_auth_proof_v1,
+    verify_wallet_auth_proof_signature_v1, verify_wallet_auth_proof_v1_at,
+    wallet_auth_challenge_digest_v1, wallet_auth_challenge_signing_preimage_v1,
+    WalletAuthChallengeV1, WalletAuthError, WalletAuthProofV1, WALLET_AUTH_ALGORITHM,
+    WALLET_AUTH_CHALLENGE_VERSION, WALLET_AUTH_MAX_ADDRESS_BYTES,
+    WALLET_AUTH_MAX_CHALLENGE_JSON_BYTES, WALLET_AUTH_MAX_CLOCK_SKEW_SECONDS,
+    WALLET_AUTH_MAX_DOMAIN_BYTES, WALLET_AUTH_MAX_ORIGIN_BYTES, WALLET_AUTH_MAX_PROOF_JSON_BYTES,
+    WALLET_AUTH_MAX_SCOPES, WALLET_AUTH_MAX_SCOPE_BYTES, WALLET_AUTH_MAX_TTL_SECONDS,
+    WALLET_AUTH_MAX_URI_BYTES, WALLET_AUTH_NONCE_BYTES, WALLET_AUTH_SIGNING_PREFIX,
 };
 
 /// Crate version, sourced from `Cargo.toml`.

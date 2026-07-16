@@ -5,7 +5,7 @@ import { validateMnemonic, mnemonicToSeedSync } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 
 // src/version.ts
-var version = "0.6.7";
+var version = "0.6.8";
 
 // src/error.ts
 var SdkError = class _SdkError extends Error {
@@ -11813,7 +11813,344 @@ var MONOLYTHIUM_NETWORKS = {
     name: MONOLYTHIUM_TESTNET_NETWORK_NAME
   }
 };
+var WALLET_AUTH_CHALLENGE_VERSION = "1";
+var WALLET_AUTH_ALGORITHM = "ml-dsa-65";
+var WALLET_AUTH_SIGNING_PREFIX = "monolythium.wallet-auth.v1\0";
+var WALLET_AUTH_NONCE_BYTES = 32;
+var WALLET_AUTH_MAX_SCOPES = 16;
+var WALLET_AUTH_MAX_SCOPE_BYTES = 128;
+var WALLET_AUTH_MAX_TTL_SECONDS = 180;
+var WALLET_AUTH_MAX_CLOCK_SKEW_SECONDS = 30;
+var WALLET_AUTH_MAX_DOMAIN_BYTES = 512;
+var WALLET_AUTH_MAX_ORIGIN_BYTES = 528;
+var WALLET_AUTH_MAX_URI_BYTES = 529;
+var WALLET_AUTH_MAX_ADDRESS_BYTES = 128;
+var WALLET_AUTH_MAX_CHALLENGE_JSON_BYTES = 8192;
+var WALLET_AUTH_MAX_PROOF_JSON_BYTES = 24576;
+var SIGNING_PREFIX_BYTES = new TextEncoder().encode(WALLET_AUTH_SIGNING_PREFIX);
+var ASCII_RE = /^[\x00-\x7f]*$/;
+var SCOPE_RE = /^[A-Za-z0-9._:/-]+$/;
+var CHAIN_ID_RE = /^(0|[1-9][0-9]*)$/;
+var GENESIS_HASH_RE2 = /^0x[0-9a-f]{64}$/;
+var NONCE_RE = /^[A-Za-z0-9_-]{43}$/;
+var CANONICAL_TIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+var LOWER_HEX_PUBLIC_KEY_RE = new RegExp(`^0x[0-9a-f]{${ML_DSA_65_PUBLIC_KEY_LEN * 2}}$`);
+var LOWER_HEX_SIGNATURE_RE = new RegExp(`^0x[0-9a-f]{${ML_DSA_65_SIGNATURE_LEN * 2}}$`);
+var MAX_CHAIN_ID_DECIMAL = "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+var BASE64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+var CHALLENGE_KEYS = [
+  "version",
+  "domain",
+  "origin",
+  "uri",
+  "address",
+  "chainId",
+  "genesisHash",
+  "nonce",
+  "issuedAt",
+  "expirationTime",
+  "scopes"
+];
+var PROOF_KEYS = ["challenge", "algorithm", "publicKey", "signature"];
+var WalletAuthError = class extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+    this.name = "WalletAuthError";
+  }
+  code;
+};
+function fail(code, message) {
+  throw new WalletAuthError(code, message);
+}
+function isRecord4(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function assertExactKeys(value, expected, label) {
+  const actual = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  if (actual.length !== wanted.length || actual.some((key, i) => key !== wanted[i])) {
+    fail("invalid_object", `${label} must contain exactly: ${expected.join(", ")}`);
+  }
+}
+function expectString(value, field2, maxBytes) {
+  if (typeof value !== "string") fail("invalid_field", `${field2} must be a string`);
+  if (value.length > maxBytes) fail("invalid_field", `${field2} is too long`);
+  if (!ASCII_RE.test(value)) fail("invalid_field", `${field2} must contain ASCII only`);
+  return value;
+}
+function parseCanonicalTime(value, field2) {
+  const text = expectString(value, field2, 24);
+  if (!CANONICAL_TIME_RE.test(text) || Number(text.slice(0, 4)) < 1970) {
+    fail("non_canonical", `${field2} must be UTC ISO 8601 with exactly millisecond precision`);
+  }
+  const millis = Date.parse(text);
+  if (!Number.isFinite(millis) || new Date(millis).toISOString() !== text) {
+    fail("non_canonical", `${field2} is not a canonical UTC timestamp`);
+  }
+  return { value: text, millis };
+}
+function parseNow(value) {
+  if (value === void 0) return Date.now();
+  const millis = value instanceof Date ? value.getTime() : typeof value === "number" ? value : Date.parse(value);
+  if (!Number.isFinite(millis)) fail("invalid_field", "verification time is invalid");
+  return millis;
+}
+function validateOriginFields(domain, origin, uri) {
+  let parsed;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    fail("invalid_field", "origin must be an absolute HTTP(S) URL origin");
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:" || parsed.username !== "" || parsed.password !== "") {
+    fail("invalid_field", "origin must be an HTTP(S) origin without credentials");
+  }
+  if (origin !== parsed.origin || domain !== parsed.host || uri !== `${parsed.origin}/`) {
+    fail("non_canonical", "domain, origin, and uri must be the canonical URL host, origin, and origin root");
+  }
+}
+function validateScopes(value) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > WALLET_AUTH_MAX_SCOPES) {
+    fail("invalid_field", `scopes must contain 1..${WALLET_AUTH_MAX_SCOPES} entries`);
+  }
+  const scopes = value.map((scope, index) => {
+    const text = expectString(scope, `scopes[${index}]`, WALLET_AUTH_MAX_SCOPE_BYTES);
+    if (text.length > WALLET_AUTH_MAX_SCOPE_BYTES || !SCOPE_RE.test(text)) {
+      fail(
+        "invalid_field",
+        `scopes[${index}] must be a 1..${WALLET_AUTH_MAX_SCOPE_BYTES} byte ASCII scope token`
+      );
+    }
+    return text;
+  });
+  for (let i = 1; i < scopes.length; i++) {
+    if (scopes[i - 1] >= scopes[i]) {
+      fail("non_canonical", "scopes must be sorted by ASCII byte order and contain no duplicates");
+    }
+  }
+  return scopes;
+}
+function parseWalletAuthChallengeV1(value) {
+  if (!isRecord4(value)) fail("invalid_object", "challenge must be an object");
+  assertExactKeys(value, CHALLENGE_KEYS, "challenge");
+  const version2 = expectString(value.version, "version", WALLET_AUTH_CHALLENGE_VERSION.length);
+  if (version2 !== WALLET_AUTH_CHALLENGE_VERSION) fail("invalid_field", "version must be '1'");
+  const domain = expectString(value.domain, "domain", WALLET_AUTH_MAX_DOMAIN_BYTES);
+  const origin = expectString(value.origin, "origin", WALLET_AUTH_MAX_ORIGIN_BYTES);
+  const uri = expectString(value.uri, "uri", WALLET_AUTH_MAX_URI_BYTES);
+  validateOriginFields(domain, origin, uri);
+  const address = expectString(value.address, "address", WALLET_AUTH_MAX_ADDRESS_BYTES);
+  let canonicalAddress;
+  try {
+    canonicalAddress = addressToBech32(bech32ToAddressBytes(address));
+  } catch {
+    fail("invalid_field", "address must be a canonical typed mono1 bech32m address");
+  }
+  if (canonicalAddress !== address) fail("non_canonical", "address must be canonical lower-case bech32m");
+  const chainId = expectString(value.chainId, "chainId", MAX_CHAIN_ID_DECIMAL.length);
+  if (chainId.length > MAX_CHAIN_ID_DECIMAL.length || !CHAIN_ID_RE.test(chainId) || chainId.length === MAX_CHAIN_ID_DECIMAL.length && chainId > MAX_CHAIN_ID_DECIMAL) {
+    fail("non_canonical", "chainId must be an unsigned canonical uint256 decimal string");
+  }
+  const genesisHash = expectString(value.genesisHash, "genesisHash", 66);
+  if (!GENESIS_HASH_RE2.test(genesisHash)) {
+    fail("non_canonical", "genesisHash must be 0x-prefixed lowercase 32-byte hex");
+  }
+  const nonce = expectString(value.nonce, "nonce", 43);
+  if (!NONCE_RE.test(nonce) || BASE64URL_ALPHABET.indexOf(nonce.at(-1)) % 4 !== 0) {
+    fail("non_canonical", "nonce must be unpadded base64url encoding of exactly 32 bytes");
+  }
+  const issued = parseCanonicalTime(value.issuedAt, "issuedAt");
+  const expiration = parseCanonicalTime(value.expirationTime, "expirationTime");
+  if (expiration.millis <= issued.millis) {
+    fail("invalid_field", "expirationTime must be later than issuedAt");
+  }
+  if (expiration.millis - issued.millis > WALLET_AUTH_MAX_TTL_SECONDS * 1e3) {
+    fail("invalid_field", `challenge lifetime must not exceed ${WALLET_AUTH_MAX_TTL_SECONDS} seconds`);
+  }
+  return {
+    version: WALLET_AUTH_CHALLENGE_VERSION,
+    domain,
+    origin,
+    uri,
+    address,
+    chainId,
+    genesisHash,
+    nonce,
+    issuedAt: issued.value,
+    expirationTime: expiration.value,
+    scopes: validateScopes(value.scopes)
+  };
+}
+function canonicalizeWalletAuthChallengeV1(value) {
+  return parseWalletAuthChallengeV1(value);
+}
+function canonicalWalletAuthChallengeJsonV1(value) {
+  const challenge = parseWalletAuthChallengeV1(value);
+  return JSON.stringify({
+    version: challenge.version,
+    domain: challenge.domain,
+    origin: challenge.origin,
+    uri: challenge.uri,
+    address: challenge.address,
+    chainId: challenge.chainId,
+    genesisHash: challenge.genesisHash,
+    nonce: challenge.nonce,
+    issuedAt: challenge.issuedAt,
+    expirationTime: challenge.expirationTime,
+    scopes: challenge.scopes
+  });
+}
+function encodeWalletAuthChallengeV1(value) {
+  return new TextEncoder().encode(canonicalWalletAuthChallengeJsonV1(value));
+}
+function decodeWalletAuthChallengeV1(encoded) {
+  if (typeof encoded === "string" && encoded.length > WALLET_AUTH_MAX_CHALLENGE_JSON_BYTES || encoded instanceof Uint8Array && encoded.length > WALLET_AUTH_MAX_CHALLENGE_JSON_BYTES) {
+    fail("invalid_object", "challenge JSON is too large");
+  }
+  let text;
+  try {
+    text = typeof encoded === "string" ? encoded : new TextDecoder("utf-8", { fatal: true }).decode(encoded);
+  } catch {
+    fail("invalid_object", "challenge is not valid UTF-8 JSON");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    fail("invalid_object", "challenge is not valid UTF-8 JSON");
+  }
+  const challenge = parseWalletAuthChallengeV1(parsed);
+  if (canonicalWalletAuthChallengeJsonV1(challenge) !== text) {
+    fail("non_canonical", "challenge JSON is not in canonical field order/encoding");
+  }
+  return challenge;
+}
+function walletAuthChallengeSigningPreimageV1(value) {
+  return concatBytes2(SIGNING_PREFIX_BYTES, encodeWalletAuthChallengeV1(value));
+}
+function walletAuthChallengeDigestV1(value) {
+  return keccak_256(walletAuthChallengeSigningPreimageV1(value));
+}
+function encodeWalletAuthNonceV1(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length !== WALLET_AUTH_NONCE_BYTES) {
+    fail("invalid_field", `nonce source must be exactly ${WALLET_AUTH_NONCE_BYTES} bytes`);
+  }
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const a = bytes[i];
+    const b = bytes[i + 1];
+    const c = bytes[i + 2];
+    out += BASE64URL_ALPHABET[a >> 2];
+    out += BASE64URL_ALPHABET[(a & 3) << 4 | (b ?? 0) >> 4];
+    if (b !== void 0) out += BASE64URL_ALPHABET[(b & 15) << 2 | (c ?? 0) >> 6];
+    if (c !== void 0) out += BASE64URL_ALPHABET[c & 63];
+  }
+  return out;
+}
+function createWalletAuthProofV1(challengeValue, backend) {
+  const challenge = parseWalletAuthChallengeV1(challengeValue);
+  const publicKey = backend.publicKey();
+  const derivedAddress = addressToBech32(mlDsa65AddressBytes(publicKey));
+  if (derivedAddress !== challenge.address) {
+    fail("address_mismatch", "challenge address does not match the signing public key");
+  }
+  return parseWalletAuthProofV1({
+    challenge,
+    algorithm: WALLET_AUTH_ALGORITHM,
+    publicKey: bytesToHex2(publicKey),
+    signature: bytesToHex2(backend.signPrehash(walletAuthChallengeDigestV1(challenge)))
+  });
+}
+function parseWalletAuthProofV1(value) {
+  if (!isRecord4(value)) fail("invalid_object", "proof must be an object");
+  assertExactKeys(value, PROOF_KEYS, "proof");
+  const algorithm = expectString(value.algorithm, "algorithm", WALLET_AUTH_ALGORITHM.length);
+  if (algorithm !== WALLET_AUTH_ALGORITHM) fail("invalid_field", "algorithm must be 'ml-dsa-65'");
+  const publicKey = expectString(value.publicKey, "publicKey", 2 + ML_DSA_65_PUBLIC_KEY_LEN * 2);
+  if (!LOWER_HEX_PUBLIC_KEY_RE.test(publicKey)) {
+    fail("non_canonical", `publicKey must be lowercase 0x hex for exactly ${ML_DSA_65_PUBLIC_KEY_LEN} bytes`);
+  }
+  const signature = expectString(value.signature, "signature", 2 + ML_DSA_65_SIGNATURE_LEN * 2);
+  if (!LOWER_HEX_SIGNATURE_RE.test(signature)) {
+    fail("non_canonical", `signature must be lowercase 0x hex for exactly ${ML_DSA_65_SIGNATURE_LEN} bytes`);
+  }
+  return {
+    challenge: parseWalletAuthChallengeV1(value.challenge),
+    algorithm: WALLET_AUTH_ALGORITHM,
+    publicKey,
+    signature
+  };
+}
+function canonicalWalletAuthProofJsonV1(value) {
+  const proof = parseWalletAuthProofV1(value);
+  return `{"challenge":${canonicalWalletAuthChallengeJsonV1(proof.challenge)},"algorithm":"${WALLET_AUTH_ALGORITHM}","publicKey":"${proof.publicKey}","signature":"${proof.signature}"}`;
+}
+function encodeWalletAuthProofV1(value) {
+  return new TextEncoder().encode(canonicalWalletAuthProofJsonV1(value));
+}
+function decodeWalletAuthProofV1(encoded) {
+  if (typeof encoded === "string" && encoded.length > WALLET_AUTH_MAX_PROOF_JSON_BYTES || encoded instanceof Uint8Array && encoded.length > WALLET_AUTH_MAX_PROOF_JSON_BYTES) {
+    fail("invalid_object", "proof JSON is too large");
+  }
+  let text;
+  try {
+    text = typeof encoded === "string" ? encoded : new TextDecoder("utf-8", { fatal: true }).decode(encoded);
+  } catch {
+    fail("invalid_object", "proof is not valid UTF-8 JSON");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    fail("invalid_object", "proof is not valid UTF-8 JSON");
+  }
+  const proof = parseWalletAuthProofV1(parsed);
+  if (canonicalWalletAuthProofJsonV1(proof) !== text) {
+    fail("non_canonical", "proof JSON is not in canonical field order/encoding");
+  }
+  return proof;
+}
+function verifyWalletAuthProofV1(value, options = {}) {
+  const proof = parseWalletAuthProofV1(value);
+  const skew = options.clockSkewSeconds ?? 0;
+  if (!Number.isFinite(skew) || skew < 0 || skew > WALLET_AUTH_MAX_CLOCK_SKEW_SECONDS || !Number.isInteger(skew)) {
+    fail(
+      "invalid_field",
+      `clockSkewSeconds must be an integer from 0 to ${WALLET_AUTH_MAX_CLOCK_SKEW_SECONDS}`
+    );
+  }
+  const now = parseNow(options.now);
+  const issued = Date.parse(proof.challenge.issuedAt);
+  const expiration = Date.parse(proof.challenge.expirationTime);
+  if (now + skew * 1e3 < issued) fail("not_yet_valid", "wallet authentication challenge is not yet valid");
+  if (now - skew * 1e3 > expiration) fail("expired", "wallet authentication challenge has expired");
+  const publicKey = hexToBytes2(proof.publicKey, "publicKey");
+  const derivedAddress = addressToBech32(mlDsa65AddressBytes(publicKey));
+  if (derivedAddress !== proof.challenge.address) {
+    fail("address_mismatch", "challenge address does not match proof publicKey");
+  }
+  const signature = hexToBytes2(proof.signature, "signature");
+  let signatureValid;
+  try {
+    signatureValid = ml_dsa65.verify(signature, walletAuthChallengeDigestV1(proof.challenge), publicKey);
+  } catch {
+    fail("invalid_public_key", "proof publicKey is not a valid ML-DSA-65 key");
+  }
+  if (!signatureValid) {
+    fail("signature_invalid", "wallet authentication signature is invalid");
+  }
+  return proof;
+}
+function isValidWalletAuthProofV1(value, options = {}) {
+  try {
+    verifyWalletAuthProofV1(value, options);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-export { ADDRESS_HRP, ADDRESS_KIND_HRPS, API_STREAM_TOPICS, AddressError, AgentActionError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, CLAIMED_EVENT_SIG, CLAIMED_EVENT_TOPIC0, CLOB_MARKET_ID_DOMAIN_TAG, CLOB_SELECTORS, CLUSTER_FORMED_EVENT_SIG, DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT, DEFAULT_SEAT_EXECUTION_UNIT_LIMIT, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DIVERSITY_SCORE_MAX, DelegationPrecompileError, EMPTY_ROOT, EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER, FEED_ID_DOMAIN_TAG, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_MULTISIG_MEMBERS, MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES, MAX_NATIVE_RECEIPT_EVENTS, MIN_EXECUTION_UNIT_PRICE_LYTHOSHI, MIN_MULTISIG_MEMBERS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MULTISIG_ADDRESS_DERIVATION_DOMAIN, MULTISIG_ADDRESS_DERIVATION_DOMAIN2 as MULTISIG_WITNESS_ADDRESS_DERIVATION_DOMAIN, MULTISIG_WITNESS_DOMAIN, MarketActionError, MrvValidationError, MultisigError, NAME_BASE_MULTIPLIER, NAME_FALLBACK_FEE_UNIT_LYTHOSHI, NAME_LABEL_MAX_LEN, NAME_LABEL_MIN_LEN, NAME_MAX_LEN, NAME_REGISTRY_SELECTORS, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE, NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY, NATIVE_CALL_FORWARDER_RESPONSE_OFFSET, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NATIVE_MARKET_MODULE_ADDRESS, NATIVE_MARKET_MODULE_ADDRESS_BYTES, NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN, NODE_REGISTRY_ARCHIVE_KIND_EPOCH_SEED, NODE_REGISTRY_ARCHIVE_NONCE_DOMAIN, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_CHALLENGE_EPOCH_WINDOW, NODE_REGISTRY_CHARTER_COOLDOWN_EPOCHS, NODE_REGISTRY_CLUSTER_CHARTER_BYTES, NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS, NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS, NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES, NODE_REGISTRY_CONSENSUS_POP_BYTES, NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES, NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES, NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT, NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT, NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN, NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN_V2, NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT, NODE_REGISTRY_FORM_CLUSTER_THRESHOLD, NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES, NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH, NODE_REGISTRY_MERKLE_INNER_DOMAIN, NODE_REGISTRY_MERKLE_LEAF_DOMAIN, NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT, NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI, NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES, NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES, NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SEAT_KIND_ACTIVE, NODE_REGISTRY_SEAT_KIND_STANDBY, NODE_REGISTRY_SELECTORS, NODE_REGISTRY_SUBKIND_CHARTER_DELEGATOR_BPS, NODE_REGISTRY_SUBKIND_CHARTER_MEMBER_SHARES, NODE_REGISTRY_TAG_ARCHIVE_CHALLENGE, NODE_REGISTRY_TAG_CLUSTER_CHARTER, NODE_REGISTRY_TAG_CLUSTER_SEAT, NODE_REGISTRY_TAG_SERVICE_SCORE, NODE_REGISTRY_TAG_TREASURY, NODE_REGISTRY_UPDATE_CHARTER_MESSAGE_DOMAIN, NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD, NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NameRegistryError, NoEvmReceiptProofError, NodeRegistryError, OPERATOR_ROUTER_ADDRESS, OPERATOR_ROUTER_EVENT_SIGS, OPERATOR_ROUTER_SELECTORS, OPERATOR_ROUTER_SIGS, ORACLE_EVENT_SIGS, OperatorTrustError, OracleEventError, PENDING_CHANGE_KIND_CODES, PRECOMPILE_ADDRESSES, PROOF_KIND_BINARY, PROTOCOL_MAX_OPERATOR_FEE_BPS, PROVER_MARKET_ADDRESS, PROVER_MARKET_BID_DOMAIN, PROVER_MARKET_EVENT_SIGS, PROVER_MARKET_REQUEST_DOMAIN, PROVER_MARKET_SELECTORS, PROVER_MARKET_SUBMIT_DOMAIN, PROVER_SLASH_REASON_BAD_PROOF, PROVER_SLASH_REASON_NON_DELIVERY, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, ProofVerifier, ProofVerifyError, ProverMarketError, PubkeyRegistryError, QUARANTINED_RPC_CODE, REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT, RESERVED_ADDRESS_HRPS, RpcClient, SEAT_ADVERTISED_EVENT_SIG, SEAT_APPLIED_EVENT_SIG, SEAT_CLOSED_EVENT_SIG, SEAT_FILLED_EVENT_SIG, SEAT_KINDS, SEAT_STATUS_CODES, SERVES_GPU_PROVE, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, TOKEN_FACTORY_CREATE_DEPOSIT_LYTHOSHI, TOKEN_FACTORY_FLAGS, TOKEN_FACTORY_KNOWN_FLAG_MASK, TOKEN_FACTORY_MAX_CREATOR_FEE_BPS, TOKEN_FACTORY_MAX_DECIMALS, TOKEN_FACTORY_NAME_MAX_BYTES, TOKEN_FACTORY_SELECTORS, TOKEN_FACTORY_SIGS, TOKEN_FACTORY_SYMBOL_MAX_BYTES, TOKEN_FACTORY_TOKEN_ID_DOMAIN_TAG, TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT, TX_EXTENSION_KIND_MULTISIG, TX_EXTENSION_MULTISIG_V1, TokenFactoryError, V1_BRIDGE_ALLOWED_FEE_TOKEN, V1_BRIDGE_ALLOWED_PROTOCOL, VRF_DOMAIN_TAG_MAX_BYTES, VRF_HEIGHT_NOT_FINALIZED_REVERT, VRF_OUTPUT_BYTES, VrfCallError, addressBytesToHex, addressToBech32, addressToTypedBech32, allowRootFor, apiEndpointFromRpcEndpoint, archiveMerkleInnerHash, archiveMerkleLeafHash, asBinaryProofEnvelope, assembleMultisigSigned, assembleMultisigWitness, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, assertNativeMarketOrderBookStreamPayload, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bidSighash, bridgeAddressHex, bridgeDrainRemaining, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildAdvertiseSeatTxFields, buildApplyForSeatTxFields, buildBridgeRouteCatalogue, buildCancelSpotOrderPlan, buildCloseSeatTxFields, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildNativeCallForwarderArtifact, buildNativeMarketModuleCallEnvelope, buildNativeNftBuyListingForwarderInput, buildNativeNftBuyListingModuleCall, buildNativeNftCancelListingForwarderInput, buildNativeNftCancelListingModuleCall, buildNativeNftCreateListingForwarderInput, buildNativeNftCreateListingModuleCall, buildNativeNftPlaceAuctionBidForwarderInput, buildNativeNftPlaceAuctionBidModuleCall, buildNativeNftSettleAuctionForwarderInput, buildNativeNftSettleAuctionModuleCall, buildNativeNftSweepExpiredListingsForwarderInput, buildNativeNftSweepExpiredListingsModuleCall, buildNativeSpotCancelOrderForwarderInput, buildNativeSpotCancelOrderModuleCall, buildNativeSpotCreateMarketForwarderInput, buildNativeSpotCreateMarketModuleCall, buildNativeSpotLimitOrderForwarderInput, buildNativeSpotLimitOrderModuleCall, buildNativeSpotSettleLimitOrderForwarderInput, buildNativeSpotSettleLimitOrderModuleCall, buildNativeSpotSettleRoutedLimitOrderForwarderInput, buildNativeSpotSettleRoutedLimitOrderModuleCall, buildPlaceLimitOrderViaPlan, buildPlaceSpotLimitOrderPlan, buildPlaceSpotMarketOrderExPlan, buildPlaceSpotMarketOrderPlan, buildRequestClusterJoinTxFields, buildVoteClusterAdmitTxFields, buildVoteSeatAdmitTxFields, buildWithdrawSeatApplicationTxFields, categoryRoot, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, clampPriorityTip, clobAddressHex, clusterApyPercent, clusterJoinRequestExists, compareNativeDevVersions, composeClaimBoundMessage, computeNoEvmReceiptsRoot, computeNoEvmTargetReceiptHash, computeQuoteLiquidity, consumeNativeEvents, decodeActiveCharter, decodeClaimedEvent, decodeClusterCharter, decodeClusterDiversity, decodeClusterFormedEvent, decodeClusterJoinRequest, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNativeAgentStateResponse, decodeNativeMarketOrderBookDeltasResponse, decodeNativeReceiptResponse, decodeNoEvmReceiptTranscript, decodeOperatorFeeChargedEvent, decodeOperatorNetworkMetadata, decodeOracleEvent, decodePendingCharter, decodeProbeAuthority, decodeScoreServiceProbe, decodeSeatAdvertisedEvent, decodeSeatAppliedEvent, decodeSeatClosedEvent, decodeSeatFilledEvent, decodeTimeWindow, decodeTokenFactoryTokenId, decodeTxFeedResponse, decodeVrfOutput, delegationAddressHex, denyRootFor, deriveArchiveChallenge, deriveClobMarketId, deriveClusterAnchorAddress, deriveClusterJoinOperatorId, deriveFeedId, deriveMrvContractAddress, deriveMultisigAddress, deriveMultisigAddressBytes, deriveNativeSpotMarketId, deriveNativeSpotOrderId, deriveSeatApplicationKey, deriveTokenFactoryTokenId, destinationRoot, encodeAdvertiseSeatCalldata, encodeAnswerArchiveChallengeCalldata, encodeApplyForSeatCalldata, encodeAttestServiceProbeCalldata, encodeBlockSelector, encodeBridgeChallengeCalldata, encodeBridgeClaimCalldata, encodeCancelClusterJoinCalldata, encodeCancelOrderCalldata, encodeCancelPendingChangeCalldata, encodeClaimCalldata, encodeClaimPolicyByAddressCalldata, encodeCloseSeatCalldata, encodeClusterCharter, encodeCommitArchiveRootCalldata, encodeCreateFixedSupplyMrc20Calldata, encodeCreateRequestCalldata, encodeCreateRequestCanonical, encodeCreateTokenCalldata, encodeDelegateCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeExpireClusterJoinCalldata, encodeFormClusterCalldata, encodeFormClusterV2Calldata, encodeGetClusterJoinRequestCalldata, encodeGetPendingCharterCalldata, encodeGetProbeAuthorityCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeMultisigWitnessBody, encodeNameAcceptTransferCall, encodeNameProposeTransferCall, encodeNameRegisterCall, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeNativeMarketModuleForwarderInput, encodeNativeNftBuyListingCall, encodeNativeNftCancelListingCall, encodeNativeNftCreateListingCall, encodeNativeNftPlaceAuctionBidCall, encodeNativeNftSettleAuctionCall, encodeNativeNftSweepExpiredListingsCall, encodeNativeSpotCancelOrderCall, encodeNativeSpotCreateMarketCall, encodeNativeSpotLimitOrderCall, encodeNativeSpotSettleLimitOrderCall, encodeNativeSpotSettleRoutedLimitOrderCall, encodePlaceLimitOrderCalldata, encodePlaceLimitOrderViaCalldata, encodePlaceMarketOrderCalldata, encodePlaceMarketOrderExCalldata, encodeRecoverOperatorNodeCalldata, encodeRedelegateCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeRequestClusterJoinCalldata, encodeSetAutoCompoundCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetLotSizeCalldata, encodeSetMinNotionalCalldata, encodeSetOperatorDisplayCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, encodeSetProbeAuthorityCalldata, encodeSetTickSizeCalldata, encodeSubmitBridgeProofCalldata, encodeSubmitPendingChangeCalldata, encodeTokenFactoryAllowanceCalldata, encodeTokenFactoryApproveCalldata, encodeTokenFactoryBalanceOfCalldata, encodeTokenFactoryBurnCalldata, encodeTokenFactoryDecreaseAllowanceCalldata, encodeTokenFactoryDestroyCalldata, encodeTokenFactoryIncreaseAllowanceCalldata, encodeTokenFactoryMetadataCalldata, encodeTokenFactoryMintCalldata, encodeTokenFactorySetPausedCalldata, encodeTokenFactoryTotalSupplyCalldata, encodeTokenFactoryTransferCalldata, encodeTokenFactoryTransferFromCalldata, encodeTokenFactoryTransferOwnershipCalldata, encodeUndelegateCalldata, encodeUpdateCharterCalldata, encodeVoteClusterAdmitCalldata, encodeVoteSeatAdmitCalldata, encodeVrfEvaluateCalldata, encodeWithdrawSeatApplicationCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formClusterMessage, formClusterMessageHex, formClusterMessageV2, formClusterMessageV2Hex, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, formatOraclePrice, getChainInfo, getNoEvmReceiptTrustPolicy, getP2pSeeds, getRpcEndpoints, hashToHex, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isNativeMarketOrderBookStreamPayload, isQuarantineError, isSinglePublicServiceProbeMask, isUnexpectedValueRevert, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, multisigBaseSighash, multisigMemberIndex, nameLengthModifierX10, nameRegistrationCost, nameRegistryAddressHex, nativeAgentStateFilterParams, nativeDevSchemaFieldNames, nativeDevUiStrings, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nativeMarketStateFilterParams, noEvmReceiptTrustPolicyFromChainInfo, nodeHostingClassFromByte, nodeHostingClassToByte, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, normalizePendingChangeKind, openSeatFromAdvertised, oracleAddressHex, oraclePriceToNumber, packTimeWindow, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseLythToLythoshi, parseNameCategory, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, preflightClusterJoinRequest, previewRequestClusterJoin, previewVoteClusterAdmit, proofVerifier, protocolNonceForEpoch, proverMarketStateFromByte, pubkeyRegistryAddressHex, quoteOperatorFee, rankBridgeRoutes, rankMarketsByVolume, readClusterJoinRequest, requestSighash, requireTypedAddress, resolveClusterJoinExecutionFee, resolveExecutionFee, resolveMaxExecutionUnitPrice, resolveRegistryExecutionFee, resolveSeatExecutionFee, resolveStudioHostStatus, seatKindFromByte, seatKindToByte, seatStatusFromByte, selectBridgeTransferRoute, selectTrustedOperator, selectTrustedOperatorForNetwork, serviceMaskToBitIndex, serviceProbeStatusLabel, setDestinationRoot, slotArchiveChallengePass, slotClusterCharter, slotClusterCharterDelegator, slotClusterCharterMembers, slotClusterServiceScore, slotEpochChallengeSeed, slotProbeAuthority, slotScoreServiceProbe, sortMultisigMembers, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, submitRequestClusterJoin, submitSighash, submitVoteClusterAdmit, tokenFactoryAddressHex, transactionFeeExposure, typedBech32ToAddress, updateCharterMessage, updateCharterMessageHex, validateAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, validateMultisigRoster, validateTokenFactoryFlags, verifyNoEvmArchiveProofSignatures, verifyNoEvmReceiptProof, verifyNoEvmReceiptProofTrust, verifyOperatorGenesis, version, vrfAddressHex };
+export { ADDRESS_HRP, ADDRESS_KIND_HRPS, API_STREAM_TOPICS, AddressError, AgentActionError, ApiClient, BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_REVERT_TAGS, BRIDGE_SELECTORS, BRIDGE_SUBMIT_API_BLOCKED_REASON, BURN_ADDR, BridgePrecompileError, BridgeRouteCatalogueError, CHAIN_REGISTRY, CHAIN_REGISTRY_RAW_BASE, CLAIMED_EVENT_SIG, CLAIMED_EVENT_TOPIC0, CLOB_MARKET_ID_DOMAIN_TAG, CLOB_SELECTORS, CLUSTER_FORMED_EVENT_SIG, DEFAULT_CLUSTER_JOIN_EXECUTION_UNIT_LIMIT, DEFAULT_SEAT_EXECUTION_UNIT_LIMIT, DELEGATION_REVERT_TAGS, DELEGATION_SELECTORS, DIVERSITY_SCORE_MAX, DelegationPrecompileError, EMPTY_ROOT, EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER, FEED_ID_DOMAIN_TAG, LYTHOSHI_PER_LYTH, LYTH_DECIMALS, MAX_MULTISIG_MEMBERS, MAX_NATIVE_CALL_FORWARDER_REQUEST_BYTES, MAX_NATIVE_RECEIPT_EVENTS, MIN_EXECUTION_UNIT_PRICE_LYTHOSHI, MIN_MULTISIG_MEMBERS, ML_DSA_65_PUBLIC_KEY_LEN2 as ML_DSA_65_PUBLIC_KEY_LEN, ML_DSA_65_SIGNATURE_LEN2 as ML_DSA_65_SIGNATURE_LEN, MONOLYTHIUM_NETWORKS, MONOLYTHIUM_TESTNET_CHAIN_ID, MONOLYTHIUM_TESTNET_NETWORK_NAME, MRV_DEPLOY_PAYLOAD_VERSION, MRV_FORMAT_VERSION, MRV_MAX_ABI_SYMBOLS, MRV_MAX_CODE_BYTES, MRV_MAX_DEBUG_BYTES, MRV_MAX_MEMORY_PAGES, MRV_MAX_STORAGE_NAMESPACE_BYTES, MRV_MEMORY_PAGE_BYTES, MRV_PROFILE_MONO_RV32IM_V1, MRV_STRUCTURED_FEE_FIELDS, MRV_TX_EXTENSION_KIND, MRV_TX_EXTENSION_V1, MULTISIG_ADDRESS_DERIVATION_DOMAIN, MULTISIG_ADDRESS_DERIVATION_DOMAIN2 as MULTISIG_WITNESS_ADDRESS_DERIVATION_DOMAIN, MULTISIG_WITNESS_DOMAIN, MarketActionError, MrvValidationError, MultisigError, NAME_BASE_MULTIPLIER, NAME_FALLBACK_FEE_UNIT_LYTHOSHI, NAME_LABEL_MAX_LEN, NAME_LABEL_MIN_LEN, NAME_MAX_LEN, NAME_REGISTRY_SELECTORS, NATIVE_AGENT_MODULE_ADDRESS, NATIVE_AGENT_MODULE_ADDRESS_BYTES, NATIVE_CALL_FORWARDER_ARTIFACT_PROFILE, NATIVE_CALL_FORWARDER_RESPONSE_CAPACITY, NATIVE_CALL_FORWARDER_RESPONSE_OFFSET, NATIVE_DEV_HOST_API_VERSION, NATIVE_DEV_IPC_PROTOCOL_VERSION, NATIVE_DEV_MANIFEST_SCHEMA_VERSION, NATIVE_LYTH_DECIMALS, NATIVE_MARKET_EVENT_FAMILY, NATIVE_MARKET_MODULE_ADDRESS, NATIVE_MARKET_MODULE_ADDRESS_BYTES, NATIVE_MARKET_ORDER_BOOK_STREAM_TOPIC, NODE_REGISTRY_ARCHIVE_CHALLENGE_DOMAIN, NODE_REGISTRY_ARCHIVE_KIND_EPOCH_SEED, NODE_REGISTRY_ARCHIVE_NONCE_DOMAIN, NODE_REGISTRY_CAPABILITIES, NODE_REGISTRY_CAPABILITY_MASK, NODE_REGISTRY_CHALLENGE_EPOCH_WINDOW, NODE_REGISTRY_CHARTER_COOLDOWN_EPOCHS, NODE_REGISTRY_CLUSTER_CHARTER_BYTES, NODE_REGISTRY_CLUSTER_CHARTER_DELEGATOR_FLOOR_BPS, NODE_REGISTRY_CLUSTER_CHARTER_SHARE_DENOM_BPS, NODE_REGISTRY_CLUSTER_MEMBER_REF_BYTES, NODE_REGISTRY_CONSENSUS_POP_BYTES, NODE_REGISTRY_CONSENSUS_PUBKEY_BYTES, NODE_REGISTRY_CONSENSUS_SIGNATURE_BYTES, NODE_REGISTRY_FORM_CLUSTER_ACTIVE_COUNT, NODE_REGISTRY_FORM_CLUSTER_MEMBER_COUNT, NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN, NODE_REGISTRY_FORM_CLUSTER_MESSAGE_DOMAIN_V2, NODE_REGISTRY_FORM_CLUSTER_STANDBY_COUNT, NODE_REGISTRY_FORM_CLUSTER_THRESHOLD, NODE_REGISTRY_LEGACY_CLUSTER_MEMBER_PUBKEY_BYTES, NODE_REGISTRY_MAX_MERKLE_PROOF_DEPTH, NODE_REGISTRY_MERKLE_INNER_DOMAIN, NODE_REGISTRY_MERKLE_LEAF_DOMAIN, NODE_REGISTRY_MIN_ARCHIVE_LEAF_COUNT, NODE_REGISTRY_MIN_SELF_BOND_LYTHOSHI, NODE_REGISTRY_OPERATOR_ALIAS_MAX_BYTES, NODE_REGISTRY_OPERATOR_MONIKER_MAX_BYTES, NODE_REGISTRY_PENDING_CHANGE_MAX_INTENT_ID, NODE_REGISTRY_PUBLIC_SERVICE_MASK, NODE_REGISTRY_SEAT_KIND_ACTIVE, NODE_REGISTRY_SEAT_KIND_STANDBY, NODE_REGISTRY_SELECTORS, NODE_REGISTRY_SUBKIND_CHARTER_DELEGATOR_BPS, NODE_REGISTRY_SUBKIND_CHARTER_MEMBER_SHARES, NODE_REGISTRY_TAG_ARCHIVE_CHALLENGE, NODE_REGISTRY_TAG_CLUSTER_CHARTER, NODE_REGISTRY_TAG_CLUSTER_SEAT, NODE_REGISTRY_TAG_SERVICE_SCORE, NODE_REGISTRY_TAG_TREASURY, NODE_REGISTRY_UPDATE_CHARTER_MESSAGE_DOMAIN, NODE_REGISTRY_UPDATE_CHARTER_THRESHOLD, NO_EVM_ARCHIVE_PROOF_SCHEMA, NO_EVM_ARCHIVE_SIGNATURE_SCHEME, NO_EVM_RECEIPTS_ROOT_DOMAIN, NO_EVM_RECEIPT_CODEC, NO_EVM_RECEIPT_PROOF_SCHEMA, NO_EVM_RECEIPT_PROOF_TYPE, NO_EVM_RECEIPT_ROOT_ALGORITHM, NameRegistryError, NoEvmReceiptProofError, NodeRegistryError, OPERATOR_ROUTER_ADDRESS, OPERATOR_ROUTER_EVENT_SIGS, OPERATOR_ROUTER_SELECTORS, OPERATOR_ROUTER_SIGS, ORACLE_EVENT_SIGS, OperatorTrustError, OracleEventError, PENDING_CHANGE_KIND_CODES, PRECOMPILE_ADDRESSES, PROOF_KIND_BINARY, PROTOCOL_MAX_OPERATOR_FEE_BPS, PROVER_MARKET_ADDRESS, PROVER_MARKET_BID_DOMAIN, PROVER_MARKET_EVENT_SIGS, PROVER_MARKET_REQUEST_DOMAIN, PROVER_MARKET_SELECTORS, PROVER_MARKET_SUBMIT_DOMAIN, PROVER_SLASH_REASON_BAD_PROOF, PROVER_SLASH_REASON_NON_DELIVERY, PUBKEY_REGISTRY_ML_DSA_65_PUBLIC_KEY_LEN, PUBKEY_REGISTRY_SELECTORS, ProofVerifier, ProofVerifyError, ProverMarketError, PubkeyRegistryError, QUARANTINED_RPC_CODE, REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT, RESERVED_ADDRESS_HRPS, RpcClient, SEAT_ADVERTISED_EVENT_SIG, SEAT_APPLIED_EVENT_SIG, SEAT_CLOSED_EVENT_SIG, SEAT_FILLED_EVENT_SIG, SEAT_KINDS, SEAT_STATUS_CODES, SERVES_GPU_PROVE, SERVICE_PROBE_STATUS, SET_POLICY_CLAIM_DOMAIN_TAG, SPENDING_POLICY_SELECTORS, SdkError, SpendingPolicyError, TESTNET_69420, TOKEN_FACTORY_CREATE_DEPOSIT_LYTHOSHI, TOKEN_FACTORY_FLAGS, TOKEN_FACTORY_KNOWN_FLAG_MASK, TOKEN_FACTORY_MAX_CREATOR_FEE_BPS, TOKEN_FACTORY_MAX_DECIMALS, TOKEN_FACTORY_NAME_MAX_BYTES, TOKEN_FACTORY_SELECTORS, TOKEN_FACTORY_SIGS, TOKEN_FACTORY_SYMBOL_MAX_BYTES, TOKEN_FACTORY_TOKEN_ID_DOMAIN_TAG, TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT, TX_EXTENSION_KIND_MULTISIG, TX_EXTENSION_MULTISIG_V1, TokenFactoryError, V1_BRIDGE_ALLOWED_FEE_TOKEN, V1_BRIDGE_ALLOWED_PROTOCOL, VRF_DOMAIN_TAG_MAX_BYTES, VRF_HEIGHT_NOT_FINALIZED_REVERT, VRF_OUTPUT_BYTES, VrfCallError, WALLET_AUTH_ALGORITHM, WALLET_AUTH_CHALLENGE_VERSION, WALLET_AUTH_MAX_ADDRESS_BYTES, WALLET_AUTH_MAX_CHALLENGE_JSON_BYTES, WALLET_AUTH_MAX_CLOCK_SKEW_SECONDS, WALLET_AUTH_MAX_DOMAIN_BYTES, WALLET_AUTH_MAX_ORIGIN_BYTES, WALLET_AUTH_MAX_PROOF_JSON_BYTES, WALLET_AUTH_MAX_SCOPES, WALLET_AUTH_MAX_SCOPE_BYTES, WALLET_AUTH_MAX_TTL_SECONDS, WALLET_AUTH_MAX_URI_BYTES, WALLET_AUTH_NONCE_BYTES, WALLET_AUTH_SIGNING_PREFIX, WalletAuthError, addressBytesToHex, addressToBech32, addressToTypedBech32, allowRootFor, apiEndpointFromRpcEndpoint, archiveMerkleInnerHash, archiveMerkleLeafHash, asBinaryProofEnvelope, assembleMultisigSigned, assembleMultisigWitness, assertMrvCallNativeSubmissionPlan, assertMrvDeployNativeSubmissionPlan, assertMrvFeeDisplayConformance, assertMrvStructuredFeeConformance, assertNativeDevMrcTokenPlan, assertNativeDevMrvDeployPlan, assertNativeDevWalletApprovalRequest, assertNativeMarketOrderBookStreamPayload, assessBridgeRoute, bech32ToAddress, bech32ToAddressBytes, bidSighash, bridgeAddressHex, bridgeDrainRemaining, bridgeQuoteSubmitReadiness, bridgeRoutesReadiness, bridgeTransferCandidates, buildAdvertiseSeatTxFields, buildApplyForSeatTxFields, buildBridgeRouteCatalogue, buildCancelSpotOrderPlan, buildCloseSeatTxFields, buildMrvCallNativeTxPlan, buildMrvCallPlan, buildMrvCallRequest, buildMrvDeployNativeTxPlan, buildMrvDeployPayloadNativeTxPlan, buildMrvDeployPayloadPlan, buildMrvDeployPayloadRequest, buildMrvDeployPlan, buildMrvDeployRequest, buildNativeAgentCreateEscrowForwarderInput, buildNativeAgentCreateEscrowModuleCall, buildNativeAgentModuleCallEnvelope, buildNativeAgentRecordReputationForwarderInput, buildNativeAgentRecordReputationModuleCall, buildNativeAgentSetSpendingPolicyForwarderInput, buildNativeAgentSetSpendingPolicyModuleCall, buildNativeCallForwarderArtifact, buildNativeMarketModuleCallEnvelope, buildNativeNftBuyListingForwarderInput, buildNativeNftBuyListingModuleCall, buildNativeNftCancelListingForwarderInput, buildNativeNftCancelListingModuleCall, buildNativeNftCreateListingForwarderInput, buildNativeNftCreateListingModuleCall, buildNativeNftPlaceAuctionBidForwarderInput, buildNativeNftPlaceAuctionBidModuleCall, buildNativeNftSettleAuctionForwarderInput, buildNativeNftSettleAuctionModuleCall, buildNativeNftSweepExpiredListingsForwarderInput, buildNativeNftSweepExpiredListingsModuleCall, buildNativeSpotCancelOrderForwarderInput, buildNativeSpotCancelOrderModuleCall, buildNativeSpotCreateMarketForwarderInput, buildNativeSpotCreateMarketModuleCall, buildNativeSpotLimitOrderForwarderInput, buildNativeSpotLimitOrderModuleCall, buildNativeSpotSettleLimitOrderForwarderInput, buildNativeSpotSettleLimitOrderModuleCall, buildNativeSpotSettleRoutedLimitOrderForwarderInput, buildNativeSpotSettleRoutedLimitOrderModuleCall, buildPlaceLimitOrderViaPlan, buildPlaceSpotLimitOrderPlan, buildPlaceSpotMarketOrderExPlan, buildPlaceSpotMarketOrderPlan, buildRequestClusterJoinTxFields, buildVoteClusterAdmitTxFields, buildVoteSeatAdmitTxFields, buildWithdrawSeatApplicationTxFields, canonicalWalletAuthChallengeJsonV1, canonicalWalletAuthProofJsonV1, canonicalizeWalletAuthChallengeV1, categoryRoot, checkMrvFeeDisplayConformance, checkMrvStructuredFeeConformance, checkNativeDevkitCompatibility, clampPriorityTip, clobAddressHex, clusterApyPercent, clusterJoinRequestExists, compareNativeDevVersions, composeClaimBoundMessage, computeNoEvmReceiptsRoot, computeNoEvmTargetReceiptHash, computeQuoteLiquidity, consumeNativeEvents, createWalletAuthProofV1, decodeActiveCharter, decodeClaimedEvent, decodeClusterCharter, decodeClusterDiversity, decodeClusterFormedEvent, decodeClusterJoinRequest, decodeHasPubkeyReturn, decodeLookupPubkeyReturn, decodeNativeAgentStateResponse, decodeNativeMarketOrderBookDeltasResponse, decodeNativeReceiptResponse, decodeNoEvmReceiptTranscript, decodeOperatorFeeChargedEvent, decodeOperatorNetworkMetadata, decodeOracleEvent, decodePendingCharter, decodeProbeAuthority, decodeScoreServiceProbe, decodeSeatAdvertisedEvent, decodeSeatAppliedEvent, decodeSeatClosedEvent, decodeSeatFilledEvent, decodeTimeWindow, decodeTokenFactoryTokenId, decodeTxFeedResponse, decodeVrfOutput, decodeWalletAuthChallengeV1, decodeWalletAuthProofV1, delegationAddressHex, denyRootFor, deriveArchiveChallenge, deriveClobMarketId, deriveClusterAnchorAddress, deriveClusterJoinOperatorId, deriveFeedId, deriveMrvContractAddress, deriveMultisigAddress, deriveMultisigAddressBytes, deriveNativeSpotMarketId, deriveNativeSpotOrderId, deriveSeatApplicationKey, deriveTokenFactoryTokenId, destinationRoot, encodeAdvertiseSeatCalldata, encodeAnswerArchiveChallengeCalldata, encodeApplyForSeatCalldata, encodeAttestServiceProbeCalldata, encodeBlockSelector, encodeBridgeChallengeCalldata, encodeBridgeClaimCalldata, encodeCancelClusterJoinCalldata, encodeCancelOrderCalldata, encodeCancelPendingChangeCalldata, encodeClaimCalldata, encodeClaimPolicyByAddressCalldata, encodeCloseSeatCalldata, encodeClusterCharter, encodeCommitArchiveRootCalldata, encodeCreateFixedSupplyMrc20Calldata, encodeCreateRequestCalldata, encodeCreateRequestCanonical, encodeCreateTokenCalldata, encodeDelegateCalldata, encodeDisableCalldata, encodeEnableCalldata, encodeExpireClusterJoinCalldata, encodeFormClusterCalldata, encodeFormClusterV2Calldata, encodeGetClusterJoinRequestCalldata, encodeGetPendingCharterCalldata, encodeGetProbeAuthorityCalldata, encodeHasPubkeyCalldata, encodeLockBridgeConfigCalldata, encodeLookupPubkeyCalldata, encodeMrvDeployPayload, encodeMultisigWitnessBody, encodeNameAcceptTransferCall, encodeNameProposeTransferCall, encodeNameRegisterCall, encodeNativeAgentAcceptEscrowCall, encodeNativeAgentApproveEscrowCall, encodeNativeAgentArbiterGetCall, encodeNativeAgentAttestationGetCall, encodeNativeAgentAvailabilityGetCall, encodeNativeAgentCancelEscrowCall, encodeNativeAgentCloseAvailabilityCall, encodeNativeAgentConsentGetCall, encodeNativeAgentCounterEscrowCall, encodeNativeAgentCreateEscrowCall, encodeNativeAgentDeactivateServiceCall, encodeNativeAgentDisputeEscrowCall, encodeNativeAgentEscrowGetCall, encodeNativeAgentGrantConsentCall, encodeNativeAgentIssueAttestationCall, encodeNativeAgentIssuerGetCall, encodeNativeAgentListServiceCall, encodeNativeAgentModuleForwarderInput, encodeNativeAgentOpenAvailabilityCall, encodeNativeAgentRecordPolicySpendCall, encodeNativeAgentRecordReputationCall, encodeNativeAgentRegisterArbiterCall, encodeNativeAgentRegisterIssuerCall, encodeNativeAgentReputationGetCall, encodeNativeAgentResolveEscrowCall, encodeNativeAgentRevokeAttestationCall, encodeNativeAgentRevokeConsentCall, encodeNativeAgentServiceGetCall, encodeNativeAgentSetAvailabilityCall, encodeNativeAgentSetSpendingPolicyCall, encodeNativeAgentSpendingPolicyGetCall, encodeNativeAgentStartEscrowCall, encodeNativeAgentSubmitEscrowCall, encodeNativeMarketModuleForwarderInput, encodeNativeNftBuyListingCall, encodeNativeNftCancelListingCall, encodeNativeNftCreateListingCall, encodeNativeNftPlaceAuctionBidCall, encodeNativeNftSettleAuctionCall, encodeNativeNftSweepExpiredListingsCall, encodeNativeSpotCancelOrderCall, encodeNativeSpotCreateMarketCall, encodeNativeSpotLimitOrderCall, encodeNativeSpotSettleLimitOrderCall, encodeNativeSpotSettleRoutedLimitOrderCall, encodePlaceLimitOrderCalldata, encodePlaceLimitOrderViaCalldata, encodePlaceMarketOrderCalldata, encodePlaceMarketOrderExCalldata, encodeRecoverOperatorNodeCalldata, encodeRedelegateCalldata, encodeRegisterPubkeyCalldata, encodeReportServiceProbeCalldata, encodeRequestClusterJoinCalldata, encodeSetAutoCompoundCalldata, encodeSetBridgeResumeCooldownCalldata, encodeSetBridgeRouteFinalityCalldata, encodeSetLotSizeCalldata, encodeSetMinNotionalCalldata, encodeSetOperatorDisplayCalldata, encodeSetPolicyCalldata, encodeSetPolicyClaimCalldata, encodeSetProbeAuthorityCalldata, encodeSetTickSizeCalldata, encodeSubmitBridgeProofCalldata, encodeSubmitPendingChangeCalldata, encodeTokenFactoryAllowanceCalldata, encodeTokenFactoryApproveCalldata, encodeTokenFactoryBalanceOfCalldata, encodeTokenFactoryBurnCalldata, encodeTokenFactoryDecreaseAllowanceCalldata, encodeTokenFactoryDestroyCalldata, encodeTokenFactoryIncreaseAllowanceCalldata, encodeTokenFactoryMetadataCalldata, encodeTokenFactoryMintCalldata, encodeTokenFactorySetPausedCalldata, encodeTokenFactoryTotalSupplyCalldata, encodeTokenFactoryTransferCalldata, encodeTokenFactoryTransferFromCalldata, encodeTokenFactoryTransferOwnershipCalldata, encodeUndelegateCalldata, encodeUpdateCharterCalldata, encodeVoteClusterAdmitCalldata, encodeVoteSeatAdmitCalldata, encodeVrfEvaluateCalldata, encodeWalletAuthChallengeV1, encodeWalletAuthNonceV1, encodeWalletAuthProofV1, encodeWithdrawSeatApplicationCalldata, exportBridgeRouteCatalogueJson, fetchChainInfoLatest, fetchChainRegistryLatest, formClusterMessage, formClusterMessageHex, formClusterMessageV2, formClusterMessageV2Hex, formatLyth, formatLythoshi, formatNativeReceiptFeeDisplay, formatOraclePrice, getChainInfo, getNoEvmReceiptTrustPolicy, getP2pSeeds, getRpcEndpoints, hashToHex, hexToAddressBytes, isBridgeAdminLockedRevert, isBridgeCooldownZeroRevert, isBridgeFinalityZeroRevert, isBridgeResumeCooldownActiveRevert, isConcreteServiceProbeStatus, isNativeDecodedEvent, isNativeMarketOrderBookStreamPayload, isQuarantineError, isSinglePublicServiceProbeMask, isUnexpectedValueRevert, isValidNodeRegistryCapabilities, isValidPublicServiceProbeMask, isValidWalletAuthProofV1, mrvAddressToBech32, mrvBech32ToAddress, mrvCodeHashHex, mrvV1TransactionExtension, multisigBaseSighash, multisigMemberIndex, nameLengthModifierX10, nameRegistrationCost, nameRegistryAddressHex, nativeAgentStateFilterParams, nativeDevSchemaFieldNames, nativeDevUiStrings, nativeEventMatches, nativeEventsFilterParams, nativeEventsFromHistory, nativeEventsFromReceipt, nativeMarketEventFilter, nativeMarketEventsFromHistory, nativeMarketEventsFromReceipt, nativeMarketStateFilterParams, noEvmReceiptTrustPolicyFromChainInfo, nodeHostingClassFromByte, nodeHostingClassToByte, nodeRegistryAddressHex, normalizeAddressHex, normalizeBridgeRouteCatalogue, normalizePendingChangeKind, openSeatFromAdvertised, oracleAddressHex, oraclePriceToNumber, packTimeWindow, parseAddress, parseBridgeRouteCatalogueJson, parseChainRegistryToml, parseLythToLythoshi, parseNameCategory, parseNativeDecodedEvent, parseQuantity, parseQuantityBig, parseWalletAuthChallengeV1, parseWalletAuthProofV1, preflightClusterJoinRequest, previewRequestClusterJoin, previewVoteClusterAdmit, proofVerifier, protocolNonceForEpoch, proverMarketStateFromByte, pubkeyRegistryAddressHex, quoteOperatorFee, rankBridgeRoutes, rankMarketsByVolume, readClusterJoinRequest, requestSighash, requireTypedAddress, resolveClusterJoinExecutionFee, resolveExecutionFee, resolveMaxExecutionUnitPrice, resolveRegistryExecutionFee, resolveSeatExecutionFee, resolveStudioHostStatus, seatKindFromByte, seatKindToByte, seatStatusFromByte, selectBridgeTransferRoute, selectTrustedOperator, selectTrustedOperatorForNetwork, serviceMaskToBitIndex, serviceProbeStatusLabel, setDestinationRoot, slotArchiveChallengePass, slotClusterCharter, slotClusterCharterDelegator, slotClusterCharterMembers, slotClusterServiceScore, slotEpochChallengeSeed, slotProbeAuthority, slotScoreServiceProbe, sortMultisigMembers, spendingPolicyAddressHex, submitMrvCallNativeTx, submitMrvDeployNativeTx, submitMrvDeployPayloadNativeTx, submitRequestClusterJoin, submitSighash, submitVoteClusterAdmit, tokenFactoryAddressHex, transactionFeeExposure, typedBech32ToAddress, updateCharterMessage, updateCharterMessageHex, validateAddress, validateBridgeRouteCatalogue, validateMrvArtifactMetadata, validateMrvCallRequest, validateMrvDeployRequest, validateMultisigRoster, validateTokenFactoryFlags, verifyNoEvmArchiveProofSignatures, verifyNoEvmReceiptProof, verifyNoEvmReceiptProofTrust, verifyOperatorGenesis, verifyWalletAuthProofV1, version, vrfAddressHex, walletAuthChallengeDigestV1, walletAuthChallengeSigningPreimageV1 };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

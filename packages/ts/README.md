@@ -325,6 +325,31 @@ const backend = mnemonicToMlDsa65Backend(mnemonic);
 const signature = backend.sign(new Uint8Array([1, 2, 3]));
 ```
 
+### Browser-wallet authentication
+
+Wallet authentication V1 signs a canonical, short-lived challenge bound to
+the relying-party origin, active chain ID, and genesis hash. A browser wallet
+can create the proof with its existing ML-DSA-65 backend; a server verifies it
+without accepting a generic message-signing surface.
+
+```ts
+import {
+  createWalletAuthProofV1,
+  verifyWalletAuthProofV1,
+} from "@monolythium/core-sdk";
+
+const proof = createWalletAuthProofV1(challenge, backend);
+verifyWalletAuthProofV1(proof, { now: new Date(), clockSkewSeconds: 5 });
+```
+
+Cryptographic verification is only one part of login. The relying party must
+also compare the signed challenge with the exact challenge it issued, enforce
+its expected origin, chain ID, genesis hash, and scopes, then atomically consume
+the nonce before creating a session. Challenges live for at most 180 seconds;
+the verifier accepts at most 30 seconds of explicit clock tolerance. Wallets
+must derive the caller origin from their trusted browser bridge and require a
+user approval rather than accepting an origin or address supplied by the dApp.
+
 ### ethers / viem compatibility
 
 The SDK does not ship an ethers-style provider or signer. The chain
@@ -336,7 +361,7 @@ can keep using the curated `eth_*` read methods exposed by `RpcClient`
 directly (`ethBlockNumber`, `ethGetBalance`, `ethGetBlockByNumber`,
 `ethGetTransactionReceipt`, `ethGetLogs`, …). Submitting and signing
 transactions go through the native builders (`mesh_buildUnsignedTx` +
-ML-DSA-65 signer + `mesh_submitTx`, or `lyth_submitEncrypted`).
+ML-DSA-65 signer + `mesh_submitTx`).
 
 ## Development
 
