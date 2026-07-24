@@ -13,7 +13,7 @@
 //! use monolythium_core_sdk::RpcClient;
 //!
 //! # async fn run() -> Result<(), monolythium_core_sdk::SdkError> {
-//! let client = RpcClient::new("https://rpc.testnet.monolythium.com")?;
+//! let client = RpcClient::new("https://rpc.monolythium.com")?;
 //! let chain_id = client.eth_chain_id().await?;
 //! let head = client.eth_block_number().await?;
 //! println!("chain {chain_id} at height {head}");

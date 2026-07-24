@@ -1050,12 +1050,12 @@ mod tests {
     #[test]
     fn derives_api_endpoint_from_rpc_endpoint() {
         assert_eq!(
-            api_endpoint_from_rpc_endpoint("https://rpc.testnet.monolythium.com").unwrap(),
-            "https://rpc.testnet.monolythium.com/api/v1"
+            api_endpoint_from_rpc_endpoint("https://rpc.monolythium.com").unwrap(),
+            "https://rpc.monolythium.com/api/v1"
         );
         assert_eq!(
-            api_endpoint_from_rpc_endpoint("https://rpc.testnet.monolythium.com/rpc").unwrap(),
-            "https://rpc.testnet.monolythium.com/api/v1"
+            api_endpoint_from_rpc_endpoint("https://rpc.monolythium.com/rpc").unwrap(),
+            "https://rpc.monolythium.com/api/v1"
         );
         assert_eq!(
             api_endpoint_from_rpc_endpoint("https://x.example/api/v1/").unwrap(),

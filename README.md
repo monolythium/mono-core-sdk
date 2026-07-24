@@ -70,7 +70,7 @@ use monolythium_core_sdk::{types::BlockSelector, RpcClient};
 
 #[tokio::main]
 async fn main() -> Result<(), monolythium_core_sdk::SdkError> {
-    let client = RpcClient::new("https://rpc.testnet.monolythium.com")?;
+    let client = RpcClient::new("https://rpc.monolythium.com")?;
 
     let chain_id = client.eth_chain_id().await?;
     let height = client.eth_block_number().await?;
@@ -90,7 +90,7 @@ TypeScript:
 ```ts
 import { RpcClient } from "@monolythium/core-sdk";
 
-const client = new RpcClient("https://rpc.testnet.monolythium.com");
+const client = new RpcClient("https://rpc.monolythium.com");
 
 const chainId = await client.ethChainId();
 const height = await client.ethBlockNumber();
@@ -163,7 +163,7 @@ TypeScript:
 ```ts
 import { ApiClient, addressToTypedBech32 } from "@monolythium/core-sdk";
 
-const api = new ApiClient("https://rpc.testnet.monolythium.com");
+const api = new ApiClient("https://rpc.monolythium.com");
 
 const health = await api.health();
 const latest = await api.block("latest");
@@ -179,7 +179,7 @@ Rust:
 use monolythium_core_sdk::{types::BlockSelector, ApiClient};
 
 # async fn run() -> Result<(), monolythium_core_sdk::SdkError> {
-let api = ApiClient::new("https://rpc.testnet.monolythium.com")?;
+let api = ApiClient::new("https://rpc.monolythium.com")?;
 let latest = api.block(BlockSelector::LATEST).await?;
 println!("latest block {}", latest.data.block.height);
 # Ok(())

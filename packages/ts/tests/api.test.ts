@@ -137,11 +137,11 @@ function apiEnvelope<T>(data: T) {
 
 describe("ApiClient endpoint derivation", () => {
   it("derives /api/v1 from root and /rpc JSON-RPC endpoints", () => {
-    expect(apiEndpointFromRpcEndpoint("https://rpc.testnet.monolythium.com")).toBe(
-      "https://rpc.testnet.monolythium.com/api/v1",
+    expect(apiEndpointFromRpcEndpoint("https://rpc.monolythium.com")).toBe(
+      "https://rpc.monolythium.com/api/v1",
     );
-    expect(apiEndpointFromRpcEndpoint("https://rpc.testnet.monolythium.com/rpc")).toBe(
-      "https://rpc.testnet.monolythium.com/api/v1",
+    expect(apiEndpointFromRpcEndpoint("https://rpc.monolythium.com/rpc")).toBe(
+      "https://rpc.monolythium.com/api/v1",
     );
     expect(apiEndpointFromRpcEndpoint("/rpc")).toBe("/api/v1");
   });
