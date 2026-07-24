@@ -30,63 +30,32 @@ multiaddr = "/dns4/p2p.monolythium.com/tcp/29898/p2p/12D3KooWDKk9ALxqchazXGcRGbq
 `;
 
 describe("chain registry snapshot", () => {
-  it("vendors the public testnet RPC endpoints", () => {
+  it("vendors the V15 relay-first public testnet endpoints", () => {
     expect(TESTNET_69420.chain_id).toBe(69420);
     expect(TESTNET_69420.genesis_hash).toBe(
-      "0xe22733f4d7e013b93f0f825667fcf852cbf7ad1ca31a42a1bfcf1ab6d79c89a3",
+      "0xbf09dc062e1a3ce71e4fbe5833d1ebe546cce5c9dcbd4de3ee0c693690661666",
     );
-    expect(TESTNET_69420.binary_sha).toBe("da04f8f5");
+    expect(TESTNET_69420.binary_sha).toBe(
+      "6d3ab40b8c3d0680242526bc0cb9d221e1055694",
+    );
     expect(getRpcEndpoints("testnet-69420").map((r) => r.url)).toEqual([
-      "http://5.78.236.250:8545",
-      "http://5.78.233.163:8545",
-      "http://5.78.226.88:8545",
-      "http://5.78.195.220:8545",
-      "http://5.78.233.251:8545",
-      "http://5.78.235.111:8545",
-      "http://5.78.236.36:8545",
-      "http://5.78.229.250:8545",
-      "http://5.78.231.123:8545",
-      "http://5.78.239.10:8545",
-      "http://178.105.12.9:8545",
-      "http://65.108.94.1:8545",
-      "http://5.223.85.76:8545",
-      "http://95.217.156.190:8545",
-      "http://178.104.98.80:8545",
-      "http://178.105.218.151:8545",
-      "http://46.62.214.97:8545",
-      "http://157.180.92.16:8545",
-      "http://77.42.67.172:8545",
-      "http://46.62.156.131:8545",
-      "http://178.105.15.216:8545",
-      "http://95.216.154.155:8545",
-      "http://142.132.180.99:8545",
-      "http://116.202.8.181:8545",
-      "http://46.225.26.24:8545",
-      "http://168.119.181.105:8545",
-      "http://167.233.235.205:8545",
-      "http://167.233.225.50:8545",
-      "http://138.199.144.111:8545",
-      "http://167.233.224.96:8545",
-      "http://178.104.233.182:8545",
-      "http://87.99.145.48:8545",
-      "http://162.55.54.198:8545",
-      "http://49.12.14.148:8545",
-      "http://49.12.40.11:8545",
-      "http://157.180.72.92:8545",
-      "http://77.42.35.183:8545",
-      "http://46.62.132.92:8545",
-      "http://37.27.35.64:8545",
-      "http://5.223.65.201:8545",
+      "http://178.105.45.210:8545",
+      "http://65.21.252.34:8545",
+      "https://rpc.monolythium.com",
     ]);
-    expect(getP2pSeeds("testnet-69420")).toHaveLength(40);
-    expect(getP2pSeeds("testnet-69420")[0]?.multiaddr).toBe(
-      "/ip4/5.78.236.250/tcp/29898/p2p/12D3KooWKhqR2c9ip7bDXN3SHPfMaHDYMooGBUCVEBpKiVfsXzy6",
-    );
+
+    const seeds = getP2pSeeds("testnet-69420");
+    expect(seeds).toHaveLength(42);
+    expect(seeds.slice(0, 3).map((seed) => seed.multiaddr)).toEqual([
+      "/ip4/178.105.45.210/tcp/29898/p2p/12D3KooWBwRRSV5SqbFfNfio4hE7tofNkYXwihAwedKo9gV1kT7e",
+      "/ip4/65.21.252.34/tcp/29898/p2p/12D3KooWGFQs3NNG8b4x8Sr5yEEFAEjtW3bo3y812f23jPduTp8e",
+      "/ip4/5.78.236.250/tcp/29898/p2p/12D3KooWCwpUuYz9Z2S4Tx1Tv9c1TDBahqf1FYThAxTvo4FcyC6K",
+    ]);
   });
 
   it("constructs a client from the first registry endpoint without probing", async () => {
     const client = await RpcClient.forNetwork("testnet-69420");
-    expect(client.endpoint).toBe("http://5.78.236.250:8545");
+    expect(client.endpoint).toBe("http://178.105.45.210:8545");
   });
 
   it("probes endpoints until one answers with the expected chain id", async () => {

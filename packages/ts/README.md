@@ -58,7 +58,7 @@ Pass the JSON-RPC endpoint; the client derives `/api/v1` automatically.
 ```ts
 import { ApiClient, addressToTypedBech32 } from "@monolythium/core-sdk";
 
-const api = new ApiClient("https://rpc.testnet.monolythium.com");
+const api = new ApiClient("https://rpc.monolythium.com");
 
 const latest = await api.block("latest");
 const txs = await api.blockTransactions("latest", 0, 25);
